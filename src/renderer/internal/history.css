@@ -1,0 +1,172 @@
+@import '../src/tokens.css';
+
+/*
+  The history page.
+
+  Its own stylesheet rather than the chrome UI's: this is content in a sandboxed renderer, and the
+  only thing the two genuinely share is the palette.
+*/
+
+body {
+  background: var(--bg);
+  /* Unlike the chrome UI, text here is worth selecting and copying. */
+  user-select: text;
+  overflow-y: auto;
+}
+
+.history {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+.history__header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.history__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.history__search {
+  min-width: 220px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+}
+
+.history__clear {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: default;
+}
+
+.history__clear:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.history__clear:disabled {
+  opacity: 0.4;
+}
+
+.history__notice {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.history__empty {
+  margin-top: 32px;
+  color: var(--fg-dim);
+  text-align: center;
+}
+
+.history__groupTitle {
+  margin: 28px 0 8px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.history__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history__entry {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+}
+
+.history__entry:hover {
+  background: var(--bg-elevated);
+}
+
+/*
+  The whole row is the target, not just the title.
+
+  A list of addresses is scanned quickly and clicked imprecisely; a small hit area turns every
+  entry into a small act of aiming.
+*/
+.history__open {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.history__entryTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history__entryUrl {
+  color: var(--fg-dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history__entryMeta {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.history__action {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: default;
+  /* Revealed on hover, but never hidden from the keyboard or a screen reader. */
+  opacity: 0;
+}
+
+.history__entry:hover .history__action,
+.history__action:focus-visible {
+  opacity: 1;
+}
+
+.history__action:hover {
+  background: var(--bg-input);
+  color: var(--danger);
+}

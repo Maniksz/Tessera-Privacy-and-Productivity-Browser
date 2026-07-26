@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      Strict policy for an internal page: its own script, no remote origins at
+      all. Spec 1 requires favicons to come from the local cache and never from a
+      third-party service on every visit — a policy that permits no external
+      origin makes that a structural guarantee rather than a promise.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: tessera:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tessera</title>
+  </head>
+  <body>
+    <div id="start-root"></div>
+    <script type="module" src="./start.tsx"></script>
+  </body>
+</html>

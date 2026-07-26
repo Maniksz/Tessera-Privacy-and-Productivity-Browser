@@ -1,0 +1,29 @@
+{
+  /*
+    The preload, type-checked as what it is: a script that runs in a renderer.
+
+    It lived in `tsconfig.node.json` alongside the main process, which has `lib: ["ES2023"]` and no DOM
+    — deliberately, so a main-process module cannot quietly start using `document` and still compile.
+    The preload paid for that with a narrowed `globalThis` cast every time it needed `location`, which
+    was tolerable for two reads of a hostname and stopped being tolerable the moment a file needed
+    `MutationObserver`, `HTMLStyleElement` and a `<style>` element: the casts became longer than the
+    code and gave up every type they were standing in for.
+
+    A separate project keeps both properties. The preload gets real DOM types; the main process still
+    has none, so the rule that mattered is unchanged rather than relaxed.
+
+    Electron's own types come with it, because a preload is the one place that legitimately speaks both
+    `ipcRenderer` and `document`.
+  */
+  "extends": "./tsconfig.base.json",
+  "include": ["src/preload/**/*", "src/shared/**/*"],
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.preload.tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
+  }
+}

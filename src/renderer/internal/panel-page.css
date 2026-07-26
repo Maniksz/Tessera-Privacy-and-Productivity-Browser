@@ -1,0 +1,58 @@
+/*
+  Both internal pages that host a panel component: `tessera://settings` and `tessera://extensions`.
+
+  One stylesheet rather than one per page, because the thing being styled is the same in both — the
+  `.panel` markup that `SettingsView` and `ExtensionsView` render, which the in-window panels render
+  too. It was called `settings.css` while the extensions page already imported it and tagged its
+  `<main>` with `class="settingsPage"`; a class that names the wrong surface is the kind of small lie
+  that makes the next person add a second stylesheet rather than trust this one.
+
+  Imports the chrome UI's stylesheet for the panel's own classes — `.panel`, `.field`, `.iconbutton` —
+  because the view is the same component and must look the same in both hosts. Two stylesheets for one
+  component is the same trap as two components.
+
+  What this file adds is only what differs: a page is not a floating panel, so it fills the tab and
+  scrolls with it rather than being centred over a backdrop.
+*/
+@import '../src/tokens.css';
+@import '../src/styles.css';
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: var(--font-ui);
+}
+
+.panelPage {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+/*
+  The panel's floating geometry undone.
+
+  `.panel` is sized and positioned to sit over a window; inside a tab it should simply be the content.
+  Overriding here rather than parameterising the component keeps the difference where it belongs — in
+  the host's stylesheet — instead of adding a "am I a page?" branch to every rule.
+
+  The selector deliberately does not name `.panel--narrow`: it is more specific than that modifier, so
+  the extensions panel's narrower width is undone here as well. On a page there is nothing for it to be
+  narrow *against*.
+*/
+.panelPage .panel {
+  position: static;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.panelPage .panel__body {
+  max-height: none;
+  overflow: visible;
+}

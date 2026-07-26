@@ -1,0 +1,147 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "_comment": [
+    "Mutation testing: changes the source in small ways and checks that a test",
+    "notices. It answers the question coverage cannot \u2014 whether the tests actually",
+    "assert anything, or merely execute the lines.",
+    "",
+    "Scoped to the pure logic on purpose. Mutating Electron-bound code would spend",
+    "minutes producing mutants no unit test can reach, and a low score there would",
+    "say nothing about test quality. These files are where a silent mistake is",
+    "expensive: a filter that stops matching, geometry that misplaces a tile, a",
+    "permission that resolves the wrong way.",
+    "",
+    "Thresholds are deliberately high because the surface is small and pure. If",
+    "`break` starts failing, the honest reactions are to add the missing assertion",
+    "or to delete code nothing depends on \u2014 not to lower the number."
+  ],
+  "packageManager": "pnpm",
+  "_comment_ignorePatterns": [
+    "Stryker copies the project into a sandbox before mutating, and the copy is what these exclude from.",
+    "",
+    "`dist/` is the electron-builder output, and it contains a packaged `.app` whose framework directory is a",
+    "symlink Node's `copyFile` cannot follow — `ENOTSUP: operation not supported on socket`. So the whole run",
+    "died during setup, before a single mutant, and reported a copy error rather than anything about tests.",
+    "The rest are simply large and pointless to copy: nothing in them is mutated or read by a test."
+  ],
+  "ignorePatterns": [
+    "dist",
+    "out",
+    "coverage",
+    "reports",
+    ".stryker-tmp",
+    "node_modules/.cache"
+  ],
+  "_comment_plugins": [
+    "Declared explicitly because pnpm's symlinked layout defeats Stryker's default",
+    "plugin glob: without this it reports that no checker plugins were loaded."
+  ],
+  "plugins": [
+    "@stryker-mutator/vitest-runner",
+    "@stryker-mutator/typescript-checker"
+  ],
+  "testRunner": "vitest",
+  "testRunnerNodeArgs": [],
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "reporters": [
+    "progress",
+    "clear-text",
+    "html",
+    "json"
+  ],
+  "htmlReporter": {
+    "fileName": "reports/mutation/index.html"
+  },
+  "coverageAnalysis": "perTest",
+  "_comment_mutate_second_half": [
+    "Everything from `src/shared/favicons` onwards was added in one pass, after the features built",
+    "alongside the scaffold were wired up. Added deliberately and by name for the reason above: a",
+    "module left out keeps the overall score healthy while saying nothing at all about it.",
+    "",
+    "The entries live in `mutate` itself and not as comments inside that array \u2014 a comment string there",
+    "is read as a glob, and a glob that matches nothing is exactly the silent kind of wrong this",
+    "project spends its comments avoiding."
+  ],
+  "_comment_mutate": [
+    "An allowlist, not a glob over src: every entry is pure logic that unit tests can",
+    "reach. A new pure module has to be added here deliberately — an omission is",
+    "invisible, because the overall score stays healthy while saying nothing about the",
+    "code that was left out."
+  ],
+  "mutate": [
+    "src/shared/url/**/*.ts",
+    "src/shared/split/**/*.ts",
+    "src/shared/ui/anchor.ts",
+    "src/shared/split/dropzones.ts",
+    "src/shared/split/tile-fill.ts",
+    "src/shared/split/tile-bar.ts",
+    "src/shared/filters/**/*.ts",
+    "src/shared/product.ts",
+    "src/shared/overlay/surface.ts",
+    "src/shared/quicklinks/model.ts",
+    "src/shared/shortcuts/bindings.ts",
+    "src/shared/extensions/model.ts",
+    "src/main/privacy/RequestPipeline.ts",
+    "src/main/privacy/FilterEngine.ts",
+    "src/main/crypto/**/*.ts",
+    "src/main/data/HistoryStore.ts",
+    "src/shared/history/model.ts",
+    "src/main/session/headers.ts",
+    "src/main/session/permission-policy.ts",
+    "src/main/ipc/sender-policy.ts",
+    "src/main/browser/SplitController.ts",
+    "src/main/settings/describe.ts",
+    "src/main/browser/TabDragController.ts",
+    "src/main/browser/TileOccupancyController.ts",
+    "src/main/browser/TileFullscreenController.ts",
+    "src/main/data/ExtensionStore.ts",
+
+    "src/shared/favicons/model.ts",
+    "src/shared/thumbnails/model.ts",
+    "src/shared/tabgroups/model.ts",
+    "src/shared/tabgroups/palette.ts",
+    "src/shared/history/presentation.ts",
+    "src/shared/quicklinks/cards.ts",
+    "src/main/data/FaviconStore.ts",
+    "src/main/data/ThumbnailStore.ts",
+    "src/main/data/TabGroupStore.ts",
+    "src/main/data/UserRuleStore.ts",
+    "src/main/data/PermissionStore.ts",
+    "src/main/permissions/model.ts",
+    "src/main/permissions/PermissionArbiter.ts",
+    "src/main/privacy/FilterSubscription.ts",
+    "src/main/browser/TabGroupController.ts",
+    "src/main/browser/window-options.ts",
+    "src/shared/session/model.ts",
+    "src/shared/session/restore.ts",
+    "src/shared/session/tab-ids.ts",
+    "src/main/data/SessionStore.ts",
+    "src/main/session-restore/apply.ts",
+    "src/main/menu/tab-context-items.ts",
+    "src/main/menu/page-context-items.ts",
+    "src/main/menu/blocker-menu-items.ts",
+    "src/main/startup-flags.ts",
+    "src/shared/media/**/*.ts",
+    "src/main/media/**/*.ts",
+    "!**/*.d.ts"
+  ],
+  "checkers": [
+    "typescript"
+  ],
+  "tsconfigFile": "tsconfig.node.json",
+  "ignoreStatic": true,
+  "thresholds": {
+    "high": 90,
+    "low": 80,
+    "break": 70
+  },
+  "timeoutMS": 20000,
+  "concurrency": 4,
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": true,
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  }
+}

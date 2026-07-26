@@ -1,0 +1,1004 @@
+import { z } from 'zod'
+import type { EventChannel, InvokeChannel } from './channels.js'
+import {
+  chromeInsetsSchema,
+  historyEntrySchema,
+  shortcutBindingSchema,
+  splitStateSchema,
+  tabStateSchema,
+  windowStateSchema
+} from '../model.js'
+import { settingsSnapshotSchema } from '../settings/definitions.js'
+import { SETTINGS_APPLIES, SETTINGS_SECTIONS } from '../settings/sections.js'
+import { SETTING_CONTROL_KINDS } from '../settings/control.js'
+import { LAYOUT_IDS } from '../split/layout.js'
+import { localeSchema } from '../i18n/schema.js'
+import { quickLinkCardSchema, quickLinkKindSchema, quickLinkSchema } from '../quicklinks/schema.js'
+import { tabGroupColorSchema, tabGroupSchema } from '../tabgroups/schema.js'
+import { filterStatusSchema } from '../filters/status.js'
+import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
+import { userRuleSchema } from '../filters/user-rules-schema.js'
+import {
+  PERMISSION_ANSWERS,
+  PERMISSION_DEVICES,
+  PERMISSION_SUBJECTS
+} from '../overlay/permission.js'
+import {
+  mediaCancelRequestSchema,
+  mediaCancelResponseSchema,
+  mediaDescribeRequestSchema,
+  mediaDownloadReportSchema,
+  mediaDownloadRequestSchema,
+  mediaFindingListSchema,
+  mediaListRequestSchema,
+  mediaManifestReportSchema
+} from '../media/schema.js'
+import { MAX_TAB_GROUP_NAME_LENGTH } from '../tabgroups/model.js'
+import { BOOKMARK_KINDS, type Bookmark } from '../bookmarks/model.js'
+import { DOWNLOAD_STATES, type DownloadEntry } from '../downloads/model.js'
+import type { PasswordSummary } from '../passwords/model.js'
+import type { PasswordCreateResponse, PasswordListResponse } from '../passwords/api.js'
+import type { VaultStatus } from '../passwords/vault.js'
+
+/**
+ * The typing half of the UI <-> core boundary (spec 6).
+ *
+ * `satisfies Record<InvokeChannel, ...>` is doing real work here: a channel
+ * added to `channels.ts` without an entry below fails the build, and an entry
+ * below without a channel name fails too. Neither side can quietly grow a
+ * method the other does not know about.
+ *
+ * Requests are validated in the main process before a handler ever sees them,
+ * so a compromised renderer cannot smuggle an unexpected shape across.
+ */
+
+export interface InvokeDefinition<
+  Request extends z.ZodType = z.ZodType,
+  Response extends z.ZodType = z.ZodType
+> {
+  readonly request: Request
+  readonly response: Response
+}
+
+const nothing = z.void()
+const ok = z.object({ ok: z.literal(true) })
+
+const settingsKeyRequest = z.object({ key: z.string() })
+
+const rectSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number()
+})
+
+/**
+ * One member per overlay kind, discriminated so each carries exactly the data its surface
+ * needs — the layout menu needs the current layout, a future drop-zone surface will need
+ * something else, and neither has to accept the other's fields.
+ */
+const dropZoneSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['tile', 'left', 'right', 'top', 'bottom']),
+  /** Where the pointer must be for this zone to win. */
+  hit: rectSchema,
+  /** Where the page will actually end up — what the indicator draws. */
+  preview: rectSchema,
+  layout: z.enum(LAYOUT_IDS).nullable(),
+  tileIndex: z.number().int().nonnegative()
+})
+
+const overlayPresentationSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('layout-menu'),
+    /** The opening button's rect, in window coordinates. */
+    anchor: rectSchema,
+    current: z.enum(LAYOUT_IDS)
+  }),
+  z.object({
+    kind: z.literal('tab-drop'),
+    /** The overlay's own bounds origin in window space, for reporting pointer positions. */
+    origin: z.object({ x: z.number(), y: z.number() }),
+    /** Relative to the overlay's own bounds, which are the content area. */
+    zones: z.array(dropZoneSchema),
+    activeZoneId: z.string().nullable(),
+    title: z.string()
+  }),
+  /**
+   * A page asking for the camera, the microphone, its location or anything else needing consent.
+   *
+   * Everything the dialogue renders is in the message. A consent prompt must never present a button
+   * before it can say what the button agrees to, so there is no second call for the text: a surface
+   * that had to ask who was asking would, for one frame, be a dialogue about nothing.
+   */
+  z.object({
+    kind: z.literal('permission-request'),
+    /**
+     * Echoed back with the answer, so a reply can only resolve the question it was shown for.
+     *
+     * Without it, a click landing while the surface was being replaced by the next queued prompt
+     * would answer the *new* request — the user consenting to one thing and granting another.
+     */
+    requestId: z.string().min(1),
+    /** Never empty: a request whose origin cannot be established is refused rather than shown. */
+    origin: z.string().min(1),
+    subject: z.enum(PERMISSION_SUBJECTS),
+    /** Empty for everything that is not a media request. */
+    devices: z.array(z.enum(PERMISSION_DEVICES)),
+    /** How many prompts are queued behind this one, so the second does not look like a failure. */
+    waiting: z.number().int().nonnegative()
+  }),
+  /**
+   * One tile's own navigation bar (spec 2).
+   *
+   * The tab travels *with* the bar rather than being resolved when a button is pressed. In a split layout
+   * the toolbar already acts on the active tile; a second set of buttons that also did would be worse than
+   * none — the user would press back on the tile they are looking at and watch a different one navigate.
+   */
+  z.object({
+    kind: z.literal('tile-bar'),
+    tileIndex: z.number().int().nonnegative(),
+    /** The strip in window coordinates, computed with the same function that positions the tile views. */
+    bounds: rectSchema,
+    /** Never empty: a tile with no tab gets no bar, because nothing for back or an address to mean. */
+    tabId: z.string().min(1),
+    url: z.string(),
+    canGoBack: z.boolean(),
+    canGoForward: z.boolean(),
+    /** Turns the reload button into stop, exactly as the toolbar's does. */
+    loading: z.boolean(),
+    /** Keyboard invocation moves focus into the bar; a hover must not steal the caret. */
+    invokedBy: z.enum(['pointer', 'keyboard'])
+  }),
+  /**
+   * Find in page, for one tile.
+   *
+   * `matches: null` while the page has not answered yet, rather than `0`. That distinction is the whole
+   * difference between a bar that counts and one that flickers: a search in flight rendered as zero announces
+   * "no matches" on every keystroke and corrects itself a moment later.
+   */
+  z.object({
+    kind: z.literal('find-bar'),
+    /** Identity of the *search*, not of the bar: the surface keys its focus effect on it. */
+    sessionId: z.string().min(1),
+    tileIndex: z.number().int().nonnegative(),
+    bounds: rectSchema,
+    /** Never empty: there is no find bar without a page to find in. */
+    tabId: z.string().min(1),
+    query: z.string(),
+    matches: z.number().int().nonnegative().nullable(),
+    /** One-based position of the highlighted match; `0` when nothing is highlighted. */
+    activeMatch: z.number().int().nonnegative()
+  })
+])
+
+/**
+ * One recorded visit, on the wire.
+ *
+ * Restated here rather than imported, and the reason is a real structural limit: the persistence
+ * schema lives with the store in the main process, `shared` may not see `@main`, and
+ * `shared/history/model.ts` has to stay zod-free because the history page imports it at runtime.
+ * There is nowhere a single definition could sit.
+ *
+ * So the duplication is unavoidable — but it is not left unguarded. A test asserts this shape and
+ * `HistoryVisit` describe the same fields, which turns a future divergence into a red test rather
+ * than a page that silently drops a column.
+ */
+const historyVisitSchema = z.object({
+  url: z.string(),
+  title: z.string(),
+  firstVisitedAt: z.number(),
+  lastVisitedAt: z.number(),
+  visitCount: z.number().int().positive()
+})
+
+/** How many entries a deletion actually removed, so the UI can say so rather than guess. */
+const removedCount = z.object({ removed: z.number().int().nonnegative() })
+
+const extensionInfoSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  version: z.string(),
+  path: z.string()
+})
+
+/**
+ * True only when two shapes describe each other — assignable in both directions.
+ *
+ * The three features below each keep their model in a zod-free `shared` module, because their
+ * pages are renderers and an architecture test follows the value-import graph to keep the
+ * validation library out of the bundle. So the wire schema cannot live beside the interface, and
+ * the two would drift silently: a schema that grew a field the interface lacks passes validation
+ * and arrives as `unknown` at the page, and the reverse quietly drops a column.
+ *
+ * Both directions, expressed once. A single assignment would only catch drift one way, and each
+ * way has actually happened in this codebase — see the two-assignment pairs in `HistoryStore` and
+ * `BookmarkStore`, which this replaces four lines of boilerplate per shape with.
+ */
+type SameShape<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
+
+/**
+ * One bookmark or folder, on the wire.
+ *
+ * Restated here rather than imported for the reason `historyVisitSchema` gives, and guarded
+ * better: the assertion below fails to compile if `Bookmark` and this schema stop describing the
+ * same record, where history relies on a test.
+ */
+const bookmarkSchema = z.object({
+  id: z.string(),
+  kind: z.enum(BOOKMARK_KINDS),
+  title: z.string(),
+  /** Always empty for a folder; normalised by the core for a bookmark. */
+  url: z.string(),
+  /** A root id or a folder id in the same document. Never empty, never null. */
+  parentId: z.string(),
+  createdAt: z.number()
+})
+
+const _bookmarkWireMatchesModel: SameShape<z.output<typeof bookmarkSchema>, Bookmark> = true
+void _bookmarkWireMatchesModel
+
+/**
+ * One download, plus the one field that is never stored.
+ *
+ * `onDisk` is derived when the list is read and is deliberately absent from the document — a
+ * stored flag could only ever be wrong, because nothing tells the browser when a user deletes a
+ * file. See `DownloadEntry`.
+ */
+const downloadEntrySchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  fileName: z.string(),
+  savePath: z.string(),
+  mimeType: z.string(),
+  /** `0` when the server declared no length, which is what Electron reports. */
+  totalBytes: z.number(),
+  receivedBytes: z.number(),
+  state: z.enum(DOWNLOAD_STATES),
+  startedAt: z.number(),
+  endedAt: z.number().nullable(),
+  interruptReason: z.string(),
+  onDisk: z.boolean()
+})
+
+const _downloadWireMatchesModel: SameShape<z.output<typeof downloadEntrySchema>, DownloadEntry> =
+  true
+void _downloadWireMatchesModel
+
+const downloadListingSchema = z.object({
+  downloads: z.array(downloadEntrySchema),
+  /**
+   * True when the asking window is private.
+   *
+   * Sent because the page cannot know it and the difference is visible: a private window sees the
+   * stored list and its own downloads while they last, and its own leave no row behind. Without
+   * this the page could not explain why.
+   */
+  privateWindow: z.boolean()
+})
+
+const downloadIdRequest = z.object({ id: z.string().min(1) })
+/** Whether the operation did anything. `false` is an answer, not a failure — see `DownloadManager`. */
+const downloadChanged = z.object({ changed: z.boolean() })
+
+/** Never carries a password. `PasswordSummary` exists so the compiler can say so. */
+const passwordSummarySchema = z.object({
+  id: z.string(),
+  origin: z.string(),
+  username: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  lastUsedAt: z.number().nullable()
+})
+
+const _passwordSummaryWireMatchesModel: SameShape<
+  z.output<typeof passwordSummarySchema>,
+  PasswordSummary
+> = true
+void _passwordSummaryWireMatchesModel
+
+/**
+ * What a save attempt made of it.
+ *
+ * Five values, not the model's four: `locked` is the vault closing while somebody was typing, and it
+ * is separate from `rejected` because the two need different sentences and different next actions.
+ * Asserted against the API interface rather than against `SaveOutcome`, which is the *store*
+ * vocabulary and knows nothing about a lock.
+ */
+const PASSWORD_SAVE_OUTCOMES = ['created', 'updated', 'unchanged', 'rejected', 'locked'] as const
+const _saveOutcomeMatchesApi: SameShape<
+  (typeof PASSWORD_SAVE_OUTCOMES)[number],
+  PasswordCreateResponse['outcome']
+> = true
+void _saveOutcomeMatchesApi
+
+/**
+ * What the core tells the page about the lock.
+ *
+ * Carries no count of entries and no origins on purpose: it is answered while the vault may be
+ * *closed*, and a status reply saying "you have 43 saved passwords" would hand a locked vault's
+ * contents to anything that could ask. See `VaultStatus`.
+ */
+const vaultStatusSchema = z.object({
+  protection: z.enum(['keystore+master', 'master', 'keystore', 'plain']),
+  unlocked: z.boolean(),
+  /** The key file exists and cannot be opened at all — no master password will help. */
+  unreadable: z.boolean(),
+  /** Shown to the user, so a vault that locks itself is not read as a fault. */
+  idleTimeoutMs: z.number()
+})
+
+const _vaultStatusWireMatchesModel: SameShape<z.output<typeof vaultStatusSchema>, VaultStatus> = true
+void _vaultStatusWireMatchesModel
+
+const passwordListResponseSchema = z.object({
+  /** Empty while the vault is locked, and not because it was filtered: there is nothing to read. */
+  credentials: z.array(passwordSummarySchema),
+  neverSaved: z.array(z.string()),
+  /**
+   * How the vault is actually protected on this machine, and whether it is open.
+   *
+   * On the wire because it is the one fact a user cannot discover for themselves and the one that
+   * changes what these entries are worth. See `PasswordListResponse`.
+   */
+  vault: vaultStatusSchema
+})
+
+const _passwordListWireMatchesApi: SameShape<
+  z.output<typeof passwordListResponseSchema>,
+  PasswordListResponse
+> = true
+void _passwordListWireMatchesApi
+
+export const invokeContract = {
+  // --- settings ------------------------------------------------------------
+  'settings:getAll': { request: nothing, response: settingsSnapshotSchema },
+  'settings:get': { request: settingsKeyRequest, response: z.unknown() },
+  /**
+   * Rejects with an error the UI must surface when `key` is unknown or `value`
+   * fails its schema. Returns the full snapshot so the caller can never hold a
+   * stale view of what was actually stored (spec 5).
+   */
+  'settings:set': {
+    request: z.object({ key: z.string(), value: z.unknown() }),
+    response: settingsSnapshotSchema
+  },
+  'settings:reset': { request: settingsKeyRequest, response: settingsSnapshotSchema },
+  'settings:resetAll': { request: nothing, response: settingsSnapshotSchema },
+  /**
+   * How each setting should be presented, derived from its own schema in the core.
+   *
+   * The settings UI renders from this rather than from a second hand-written table:
+   * `definitions.ts` stays the single source of truth (spec 5), and the renderer
+   * never imports zod.
+   */
+  'settings:describe': {
+    request: nothing,
+    response: z.array(
+      z.object({
+        key: z.string(),
+        section: z.enum(SETTINGS_SECTIONS),
+        applies: z.enum(SETTINGS_APPLIES),
+        kind: z.enum(SETTING_CONTROL_KINDS),
+        choices: z.array(z.string()).optional(),
+        min: z.number().optional(),
+        max: z.number().optional(),
+        integer: z.boolean().optional()
+      })
+    )
+  },
+
+  // --- window --------------------------------------------------------------
+  'window:getState': { request: nothing, response: windowStateSchema },
+  'window:minimize': { request: nothing, response: ok },
+  'window:toggleMaximize': { request: nothing, response: ok },
+  'window:close': { request: nothing, response: ok },
+  'window:setChromeInsets': { request: chromeInsetsSchema, response: ok },
+  /**
+   * Suspends the content views so the chrome UI can use the whole window.
+   *
+   * Needed because tab content is rendered by native views layered *above* the
+   * chrome UI: a settings panel or a drag target drawn in the DOM would otherwise
+   * sit behind the page and receive no pointer events. Views are hidden, never
+   * unloaded — a suspended tile keeps playing and keeps its scroll position.
+   */
+  'window:setOverlay': { request: z.object({ active: z.boolean() }), response: ok },
+
+  // --- overlay surface -----------------------------------------------------
+  /**
+   * Puts a surface on the window's topmost layer.
+   *
+   * The chrome UI describes what should appear and where; the surface renderer draws it.
+   * This is the only route by which browser UI can be both visible and clickable over
+   * page content, because tab content is rendered by native views stacked above the
+   * chrome renderer.
+   */
+  'overlay:present': { request: overlayPresentationSchema, response: ok },
+  'overlay:dismiss': { request: nothing, response: ok },
+
+  // --- dragging a tab into a tile ------------------------------------------
+  /**
+   * Coordinates are in window space. The core converts them, decides which zone wins and
+   * pushes the indicator, so the two renderers reporting the gesture never have to agree
+   * on anything beyond where the pointer is.
+   */
+  'drag:start': { request: z.object({ tabId: z.string() }), response: ok },
+  'drag:move': { request: z.object({ x: z.number(), y: z.number() }), response: ok },
+  'drag:end': {
+    request: z.object({
+      x: z.number(),
+      y: z.number(),
+      /** False for a cancelled drag: the indicator goes, nothing moves. */
+      commit: z.boolean()
+    }),
+    response: ok
+  },
+
+  // --- tabs ----------------------------------------------------------------
+  'tabs:create': {
+    request: z.object({
+      url: z.string().optional(),
+      /** Assign straight into a tile; omit to place it in the active tile. */
+      tileIndex: z.number().int().nullable().optional(),
+      background: z.boolean().optional()
+    }),
+    response: z.object({ tabId: z.string() })
+  },
+  'tabs:close': { request: z.object({ tabId: z.string() }), response: ok },
+  'tabs:activate': { request: z.object({ tabId: z.string() }), response: ok },
+  'tabs:move': {
+    request: z.object({ tabId: z.string(), toIndex: z.number().int().nonnegative() }),
+    response: ok
+  },
+  'tabs:setPinned': {
+    request: z.object({ tabId: z.string(), pinned: z.boolean() }),
+    response: ok
+  },
+  'tabs:reopenClosed': { request: nothing, response: z.object({ tabId: z.string().nullable() }) },
+
+  // --- navigation ----------------------------------------------------------
+  // All of these default to the active tile's tab when `tabId` is omitted.
+  'nav:goBack': { request: z.object({ tabId: z.string().optional() }), response: ok },
+  'nav:goForward': { request: z.object({ tabId: z.string().optional() }), response: ok },
+  'nav:reload': {
+    request: z.object({ tabId: z.string().optional(), ignoreCache: z.boolean().optional() }),
+    response: ok
+  },
+  'nav:stop': { request: z.object({ tabId: z.string().optional() }), response: ok },
+  /**
+   * Takes raw omnibox input, not a URL: deciding address-versus-search happens
+   * in the core so the rule is applied in exactly one place (spec 1).
+   */
+  'nav:navigate': {
+    request: z.object({ input: z.string(), tabId: z.string().optional() }),
+    response: z.object({ url: z.string() })
+  },
+  // --- reader mode ---------------------------------------------------------
+  /**
+   * The harvested article, or the reason it was refused.
+   *
+   * Refusal is a first-class answer rather than an error: an extractor that showed three paragraphs of nine
+   * would be worse than one that says "this does not look like an article", because the reader cannot tell
+   * until the text stops.
+   */
+  'reader:get': { request: readerGetRequestSchema, response: readerOutcomeSchema },
+
+  // --- find in page --------------------------------------------------------
+  /**
+   * Opens the bar for the active tile's tab.
+   *
+   * No payload: which tile Ctrl+F means is a decision the core owns, and a renderer naming a tab here could
+   * search a page the user is not looking at.
+   */
+  'find:open': { request: nothing, response: ok },
+  /** `tabId` is required, and it is the bar's own: a query for "whatever is active" is the bug. */
+  'find:query': {
+    request: z.object({ tabId: z.string().min(1), query: z.string() }),
+    response: ok
+  },
+  /** `tabId` omitted means the active tile's tab, which is what the `findNext` shortcut sends. */
+  'find:step': {
+    request: z.object({ tabId: z.string().min(1).optional(), forward: z.boolean() }),
+    response: ok
+  },
+
+  'nav:getBackForwardList': {
+    request: z.object({ tabId: z.string().optional() }),
+    response: z.array(historyEntrySchema)
+  },
+
+  // --- split view ----------------------------------------------------------
+  'split:setLayout': {
+    request: z.object({ layout: z.enum(LAYOUT_IDS) }),
+    response: splitStateSchema
+  },
+  'split:setFractions': {
+    request: z.object({ fractions: z.record(z.string(), z.number()) }),
+    response: splitStateSchema
+  },
+  'split:setActiveTile': {
+    request: z.object({ tileIndex: z.number().int().nonnegative() }),
+    response: splitStateSchema
+  },
+  'split:assignTab': {
+    request: z.object({
+      tabId: z.string(),
+      /** null unassigns the tab without closing it (spec 2). */
+      tileIndex: z.number().int().nullable()
+    }),
+    response: splitStateSchema
+  },
+  'split:toggleTileMaximized': {
+    request: z.object({ tileIndex: z.number().int().optional() }),
+    response: splitStateSchema
+  },
+  /** One step back along the escalation chain (spec 2). */
+  'split:escape': { request: nothing, response: splitStateSchema },
+
+  // --- per-tile navigation bar ----------------------------------------------
+  /**
+   * How far the pointer is from the top of one tile.
+   *
+   * Tile-relative rather than a window coordinate, and named by tile rather than by position, because the
+   * renderer that reports it already knows which tile it is over — its own bounds *are* that tile. Sending a
+   * window point would mean the core resolving a tile from geometry the sender had already resolved, and two
+   * resolutions of one fact eventually disagree.
+   *
+   * `y` alone, with no `x`: whether a bar reveals itself depends only on vertical distance from the tile's
+   * top edge, and carrying a horizontal position nothing reads would invite something to start reading it.
+   */
+  'tiles:pointerAt': {
+    request: z.object({
+      tileIndex: z.number().int().nonnegative(),
+      y: z.number()
+    }),
+    response: ok
+  },
+
+  // --- blocker menu ---------------------------------------------------------
+  'blocker:menu': { request: nothing, response: ok },
+
+  // --- element picker and the user's own rules ------------------------------
+  /**
+   * Puts the tab into picker mode: the next click on the page writes a hiding rule.
+   *
+   * `tabId` omitted means the active tile's tab, which is what the keyboard route sends. The response says
+   * whether it started, so a caller can report "there is no page here" instead of appearing to work.
+   */
+  'picker:start': {
+    request: z.object({ tabId: z.string().optional() }),
+    response: z.object({ started: z.boolean() })
+  },
+  'picker:stop': { request: z.object({ tabId: z.string().optional() }), response: ok },
+  'userrules:list': { request: nothing, response: z.array(userRuleSchema) },
+  /** Keeps the line and stops applying it, which is how a page the user broke gets un-broken. */
+  'userrules:setEnabled': {
+    request: z.object({ id: z.string(), enabled: z.boolean() }),
+    response: ok
+  },
+  'userrules:remove': { request: z.object({ id: z.string() }), response: ok },
+
+  // --- media ---------------------------------------------------------------
+  'media:setTileMuted': {
+    request: z.object({ tileIndex: z.number().int().nonnegative(), muted: z.boolean() }),
+    response: splitStateSchema
+  },
+
+  // --- devtools ------------------------------------------------------------
+  'devtools:toggle': { request: z.object({ tabId: z.string().optional() }), response: ok },
+
+  // --- i18n ----------------------------------------------------------------
+  'i18n:getCatalog': {
+    request: nothing,
+    response: z.object({
+      locale: localeSchema,
+      messages: z.record(z.string(), z.string())
+    })
+  },
+
+  // --- shortcuts -----------------------------------------------------------
+  'shortcuts:getBindings': { request: nothing, response: z.array(shortcutBindingSchema) },
+
+  // --- tab groups ----------------------------------------------------------
+  /**
+   * Groups the given tabs, in the order given.
+   *
+   * Takes the members up front rather than creating an empty group and filling it: a group with no
+   * tabs is a chip with nothing behind it, and the model refuses one outright. The name may be
+   * empty — an unnamed group draws as a bare colour, which is the useful state while the user is
+   * still deciding, and demanding a name first would mean a dialogue before the group exists.
+   */
+  'tabgroups:create': {
+    request: z.object({
+      tabIds: z.array(z.string()).min(1),
+      name: z.string().optional(),
+      color: tabGroupColorSchema.optional()
+    }),
+    response: tabGroupSchema
+  },
+  'tabgroups:rename': {
+    // Bounded here as well as trimmed by the model: a request is untrusted input, and the bound is
+    // about what the strip can draw rather than about what the document may hold.
+    request: z.object({ id: z.string(), name: z.string().max(MAX_TAB_GROUP_NAME_LENGTH) }),
+    response: ok
+  },
+  'tabgroups:recolor': {
+    request: z.object({ id: z.string(), color: tabGroupColorSchema }),
+    response: ok
+  },
+  /** Folding a group hides its tabs and takes them out of their tiles; they stay loaded (spec 2). */
+  'tabgroups:setCollapsed': {
+    request: z.object({ id: z.string(), collapsed: z.boolean() }),
+    response: ok
+  },
+  /** Removes the group and leaves its tabs alone, ungrouped. */
+  'tabgroups:dissolve': { request: z.object({ id: z.string() }), response: ok },
+  'tabgroups:addTab': {
+    request: z.object({
+      groupId: z.string(),
+      tabId: z.string(),
+      /** Position within the group; appended when omitted. */
+      index: z.number().int().nonnegative().optional()
+    }),
+    response: ok
+  },
+  /** Takes one tab out. A group left with no members goes with it. */
+  'tabgroups:removeTab': { request: z.object({ tabId: z.string() }), response: ok },
+  /**
+   * Opens the tab's context menu at the pointer.
+   *
+   * No coordinates in the request. Electron pops a menu at the cursor by default, and a renderer-
+   * supplied position would be a second source of truth for something the OS already knows — and one
+   * that is wrong whenever the two disagree about device pixel ratio.
+   */
+  'tabs:contextMenu': { request: z.object({ tabId: z.string() }), response: ok },
+
+  // --- permissions ---------------------------------------------------------
+  /**
+   * The answer a person gave to one prompt.
+   *
+   * Chrome-only, and it must be: the request id is the only thing between a page and the ability to
+   * answer a dialogue on the user's behalf. It is checked against the prompt actually on screen, so a
+   * stale or invented id resolves nothing rather than resolving the wrong thing.
+   */
+  'permissions:answer': {
+    request: z.object({ requestId: z.string().min(1), answer: z.enum(PERMISSION_ANSWERS) }),
+    response: ok
+  },
+
+  // --- media ---------------------------------------------------------------
+  /** What this tab's page has fetched that looks like media. Reads state the core already holds. */
+  'media:list': { request: mediaListRequestSchema, response: mediaFindingListSchema },
+  /**
+   * Reads a stream's manifest to find out which qualities exist.
+   *
+   * Its own channel rather than part of `media:list`, because it is the one thing in the feature that
+   * makes a *second* request to an address the page already asked for — so it happens when somebody asks
+   * to see the qualities, not whenever a panel opens.
+   */
+  'media:describe': { request: mediaDescribeRequestSchema, response: mediaManifestReportSchema },
+  /**
+   * Resolves when the file is on disk, or when the refusal is known.
+   *
+   * A film keeps this pending for minutes, which is the honest representation: there is one answer and it
+   * arrives when it arrives. `media:cancel` is how the user takes it back.
+   */
+  'media:download': { request: mediaDownloadRequestSchema, response: mediaDownloadReportSchema },
+  'media:cancel': { request: mediaCancelRequestSchema, response: mediaCancelResponseSchema },
+
+  // --- content blocker -----------------------------------------------------
+  'filters:getStatus': { request: nothing, response: filterStatusSchema },
+  /**
+   * Answers with the same shape as `filters:getStatus`, after the refresh.
+   *
+   * One round trip rather than "refresh, then ask again": the two would race, and a settings page
+   * that showed the pre-refresh counters after clicking "update now" reads as a broken button.
+   */
+  'filters:refresh': { request: nothing, response: filterStatusSchema },
+
+  // --- quick links (start page) --------------------------------------------
+  /**
+   * Cards rather than bare links: each carries the address of its screenshot and of its icon.
+   *
+   * Built by the core because both addresses are versioned with the capture time, and only the core
+   * knows it. A page that composed them itself would get a stable address per site and Chromium would
+   * keep drawing the copy in its memory cache — a refreshed screenshot would never appear.
+   */
+  'quicklinks:list': { request: nothing, response: z.array(quickLinkCardSchema) },
+  /**
+   * `url` is raw user input; the core normalises it and rejects anything that is
+   * a search term rather than an address, so a tile never silently becomes a
+   * search for whatever was typed.
+   */
+  'quicklinks:create': {
+    request: z.object({
+      kind: quickLinkKindSchema,
+      title: z.string(),
+      url: z.string().optional(),
+      parentId: z.string().nullable().optional(),
+      index: z.number().int().nonnegative().optional()
+    }),
+    response: quickLinkSchema
+  },
+  'quicklinks:update': {
+    request: z.object({
+      id: z.string(),
+      title: z.string().optional(),
+      url: z.string().optional()
+    }),
+    response: quickLinkSchema
+  },
+  'quicklinks:remove': { request: z.object({ id: z.string() }), response: ok },
+  'quicklinks:move': {
+    request: z.object({
+      id: z.string(),
+      parentId: z.string().nullable(),
+      toIndex: z.number().int().nonnegative()
+    }),
+    response: z.array(quickLinkSchema)
+  },
+  'quicklinks:open': {
+    request: z.object({
+      id: z.string(),
+      /** Open in a new tab instead of navigating the current one. */
+      newTab: z.boolean().optional(),
+      background: z.boolean().optional()
+    }),
+    response: z.object({ url: z.string() })
+  },
+
+  // --- extensions ----------------------------------------------------------
+  'extensions:list': { request: nothing, response: z.array(extensionInfoSchema) },
+  /**
+   * Opens a folder picker and loads the chosen unpacked extension.
+   *
+   * The path is chosen through the OS picker rather than passed in, so a compromised
+   * renderer cannot ask the core to load an arbitrary directory as code.
+   */
+  'extensions:load': {
+    request: nothing,
+    response: z.object({
+      extension: extensionInfoSchema.nullable(),
+      /** Null when the user cancelled; a reason string when loading failed. */
+      error: z.string().nullable()
+    })
+  },
+  'extensions:remove': { request: z.object({ id: z.string() }), response: ok },
+
+  // --- browsing history ----------------------------------------------------
+  'history:query': {
+    request: z.object({
+      /** Matched against address and title alike; absent means everything. */
+      text: z.string().optional(),
+      from: z.number().optional(),
+      to: z.number().optional(),
+      limit: z.number().int().positive().optional()
+    }),
+    response: z.array(historyVisitSchema)
+  },
+  /**
+   * Follows an entry in the tab that asked.
+   *
+   * Deliberately not `nav:navigate`: the core resolves the target from the sender, so the history
+   * page cannot steer any other tab. Same reasoning as `quicklinks:open`.
+   */
+  'history:open': {
+    request: z.object({
+      url: z.string(),
+      newTab: z.boolean().optional(),
+      background: z.boolean().optional()
+    }),
+    response: z.object({ url: z.string() })
+  },
+  'history:removeVisit': { request: z.object({ url: z.string() }), response: removedCount },
+  'history:removeDomain': { request: z.object({ domain: z.string() }), response: removedCount },
+  'history:removeRange': {
+    request: z.object({ from: z.number(), to: z.number() }),
+    response: removedCount
+  },
+  'history:clear': { request: nothing, response: removedCount },
+
+  // --- bookmarks -----------------------------------------------------------
+  /**
+   * The whole tree, in sibling order.
+   *
+   * Unbounded-looking but bounded at ten thousand nodes, and the page needs the structure rather
+   * than a filtered list — see `bookmarks:list` in `channels.ts` and the note on `BookmarksPage`.
+   */
+  'bookmarks:list': { request: nothing, response: z.array(bookmarkSchema) },
+  /**
+   * `url` is raw user input. The core normalises it with the same classifier the address bar uses
+   * and rejects a search term, so a row can never silently become a search for whatever was typed.
+   * Ignored for a folder, which has no address.
+   */
+  'bookmarks:create': {
+    request: z.object({
+      kind: z.enum(BOOKMARK_KINDS),
+      title: z.string(),
+      url: z.string().optional(),
+      /** A root id or a folder id; the core files it under other bookmarks when omitted. */
+      parentId: z.string().optional(),
+      index: z.number().int().nonnegative().optional()
+    }),
+    response: bookmarkSchema
+  },
+  /** Title only, on purpose: the address is `bookmarks:relocate`, which keeps more. */
+  'bookmarks:update': {
+    request: z.object({ id: z.string(), title: z.string().optional() }),
+    response: bookmarkSchema
+  },
+  /** Reports how many nodes went, because deleting a folder deletes its whole subtree. */
+  'bookmarks:remove': { request: z.object({ id: z.string() }), response: removedCount },
+  /** Answers with the new tree, so the page never redraws from a position it guessed. */
+  'bookmarks:move': {
+    request: z.object({
+      id: z.string(),
+      parentId: z.string(),
+      toIndex: z.number().int().nonnegative()
+    }),
+    response: z.array(bookmarkSchema)
+  },
+  /**
+   * Points a bookmark at a new address, keeping the title, the folder and the position.
+   *
+   * Its own channel rather than a field on `bookmarks:update`, because the two differ in what they
+   * keep — and the title is only re-derived when it *was* the old address.
+   */
+  'bookmarks:relocate': {
+    request: z.object({ id: z.string(), url: z.string() }),
+    response: bookmarkSchema
+  },
+  /**
+   * Follows a bookmark in the tab that asked.
+   *
+   * Deliberately not `nav:navigate`: the core resolves the target from the sender, so the bookmarks
+   * page cannot steer any other tab. Same reasoning as `quicklinks:open` and `history:open`.
+   */
+  'bookmarks:open': {
+    request: z.object({ url: z.string() }),
+    response: z.object({ url: z.string() })
+  },
+  /**
+   * Opens the OS file picker in the core and grafts what the user chose into the tree.
+   *
+   * No payload: the path is chosen through the picker rather than passed in, so a compromised
+   * renderer cannot ask the core to read an arbitrary file and hand back its contents. The rule
+   * `extensions:load` established.
+   */
+  'bookmarks:import': {
+    request: nothing,
+    response: z.object({
+      imported: z.number().int().nonnegative(),
+      skipped: z.number().int().nonnegative(),
+      /** True when the picker was closed. Not an error, and not "nothing was imported". */
+      cancelled: z.boolean()
+    })
+  },
+
+  // --- downloads -----------------------------------------------------------
+  /**
+   * Everything the asking window may see, freshly probed.
+   *
+   * The probe cache is emptied for this call and reused for the pushed `downloads:changed`. That
+   * split is deliberate: what somebody is looking at is worth a stat call per row, what is pushed
+   * at them four times a second is not.
+   */
+  'downloads:list': { request: nothing, response: downloadListingSchema },
+  /**
+   * Opens a completed download, or reports that it cannot be opened.
+   *
+   * Re-probed here, ignoring the memo, and that makes this the authoritative check: between the row
+   * being drawn and this click the file can have been deleted. `false` plus a refreshed list is the
+   * honest answer; a native error naming a path is not.
+   */
+  'downloads:open': { request: downloadIdRequest, response: z.object({ opened: z.boolean() }) },
+  'downloads:reveal': { request: downloadIdRequest, response: z.object({ revealed: z.boolean() }) },
+  /** Forgets a row, cancelling first if it is still running. The finished file is left alone. */
+  'downloads:remove': { request: downloadIdRequest, response: z.object({ removed: z.boolean() }) },
+  /** Forgets every finished row. Anything still running stays; see `clearFinishedDownloads`. */
+  'downloads:clear': { request: nothing, response: removedCount },
+  'downloads:pause': { request: downloadIdRequest, response: downloadChanged },
+  /**
+   * Resumes a paused download, or reports that it cannot be resumed.
+   *
+   * `changed: false` when the server does not support range requests. Electron would otherwise
+   * discard what has arrived and start again — so a button that silently restarted a
+   * nine-tenths-finished file would be worse than one that says it cannot.
+   */
+  'downloads:resume': { request: downloadIdRequest, response: downloadChanged },
+  'downloads:cancel': { request: downloadIdRequest, response: downloadChanged },
+
+  // --- saved passwords -----------------------------------------------------
+  /** Origins, usernames and timestamps. No password reaches the page through this channel. */
+  'passwords:list': { request: nothing, response: passwordListResponseSchema },
+  /**
+   * Adds an entry the user typed.
+   *
+   * `rejected` is a value rather than a rejection on purpose: the causes are all things the user
+   * typed — an address with no host, an empty password — and an error built from a rejected promise
+   * would be a sentence about a password field.
+   */
+  'passwords:create': {
+    request: z.object({ url: z.string(), username: z.string(), password: z.string() }),
+    response: z.object({ outcome: z.enum(PASSWORD_SAVE_OUTCOMES) })
+  },
+  /** An absent field means "leave this alone"; it cannot move an entry to another origin. */
+  'passwords:update': {
+    request: z.object({
+      id: z.string(),
+      username: z.string().optional(),
+      password: z.string().optional()
+    }),
+    response: ok
+  },
+  'passwords:remove': {
+    request: z.object({ id: z.string() }),
+    response: z.object({ removed: z.boolean() })
+  },
+  /**
+   * One password, for one id.
+   *
+   * The only response on this whole boundary that carries a secret, and it carries exactly one.
+   * `null` for an unknown id rather than a rejection: the id came from a list the page was already
+   * holding, and an entry can be removed in another window between the row being drawn and the
+   * button being pressed. That is a race, not a fault.
+   */
+  'passwords:reveal': {
+    request: z.object({ id: z.string() }),
+    response: z.object({ password: z.string().nullable() })
+  },
+  /** Undoes a "never here", so a site the user changed their mind about can be offered again. */
+  'passwords:forgetNeverSaved': { request: z.object({ origin: z.string() }), response: ok }
+} satisfies Record<InvokeChannel, InvokeDefinition>
+
+export type InvokeContract = typeof invokeContract
+
+export type InvokeRequest<C extends InvokeChannel> = z.input<InvokeContract[C]['request']>
+export type InvokeResponse<C extends InvokeChannel> = z.output<InvokeContract[C]['response']>
+/** What a main-process handler receives: the parsed, validated request. */
+export type InvokeHandlerArg<C extends InvokeChannel> = z.output<InvokeContract[C]['request']>
+
+/**
+ * Main -> renderer notifications. Same exhaustiveness guarantee as above.
+ */
+export const eventContract = {
+  'window:stateChanged': windowStateSchema,
+  'tabs:changed': z.object({
+    tabs: z.array(tabStateSchema),
+    activeTabId: z.string().nullable()
+  }),
+  'split:changed': splitStateSchema,
+  'settings:changed': z.object({
+    /** Only what actually changed, so the UI can react narrowly. */
+    changed: z.record(z.string(), z.unknown()),
+    snapshot: settingsSnapshotSchema
+  }),
+  /**
+   * A shortcut the OS delivered to the window but that has no menu item.
+   * The renderer decides what to do, which keeps focus-sensitive behaviour
+   * (spec 9: shortcuts must not hijack text input) in the layer that knows
+   * where the caret is.
+   */
+  'shortcut:triggered': z.object({ action: z.string() }),
+  /**
+   * Pushed to the start page and to the chrome UI, so a tile added from one
+   * window appears in another without a reload.
+   */
+  'quicklinks:changed': z.object({ links: z.array(quickLinkCardSchema) }),
+  'tabgroups:changed': z.object({ groups: z.array(tabGroupSchema) }),
+  'media:changed': mediaFindingListSchema,
+  /**
+   * The download list, pushed.
+   *
+   * The same shape `downloads:list` answers with, so the page applies both through one function and
+   * cannot render a pushed list differently from a pulled one. Sent per window, because
+   * `privateWindow` is a fact about the receiver rather than about the list.
+   */
+  'downloads:changed': downloadListingSchema,
+  /** `null` means nothing is presented — an explicit state, not an absent message. */
+  'overlay:presented': z.object({ presentation: overlayPresentationSchema.nullable() })
+} satisfies Record<EventChannel, z.ZodType>
+
+export type EventContract = typeof eventContract
+
+export type EventPayload<C extends EventChannel> = z.output<EventContract[C]>

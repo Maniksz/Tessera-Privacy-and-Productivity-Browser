@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      No remote origin at all, not even for images.
+
+      This page lists every page the user chose to keep, which is a more considered profile of
+      somebody than their history is. A policy permitting any outside origin would make the page
+      itself the leak — one favicon request per row would hand a third party the whole
+      collection. `tessera:` is allowed for images so the local favicon cache can be drawn;
+      nothing else is.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: tessera:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Bookmarks</title>
+  </head>
+  <body>
+    <div id="bookmarks-root"></div>
+    <script type="module" src="./bookmarks.tsx"></script>
+  </body>
+</html>

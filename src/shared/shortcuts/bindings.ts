@@ -1,0 +1,301 @@
+import type { Platform } from '../model.js'
+import type { MessageKey } from '../i18n/catalog.js'
+
+/**
+ * Keyboard bindings (spec 9).
+ *
+ * Three hand-maintained tables, deliberately not derived from one another.
+ * Mechanically swapping Ctrl for Command produces collisions — tile switching
+ * would land on Cmd+Alt+Arrow on macOS and clobber tab switching, which is why
+ * macOS uses Ctrl+Alt+Arrow there instead.
+ *
+ * The first accelerator of an action is the primary binding shown in menus;
+ * the rest are equivalent alternatives.
+ */
+
+export const SHORTCUT_ACTIONS = [
+  // tabs & windows
+  'newTab',
+  'closeTab',
+  'reopenClosedTab',
+  'newWindow',
+  'newPrivateWindow',
+  'closeWindow',
+  'nextTab',
+  'previousTab',
+  'lastTab',
+  // navigation
+  'back',
+  'forward',
+  'reload',
+  'reloadIgnoringCache',
+  'stop',
+  'home',
+  // view
+  'focusAddressBar',
+  'findInPage',
+  'findNext',
+  'zoomIn',
+  'zoomOut',
+  'zoomReset',
+  'windowFullscreen',
+  'print',
+  'devTools',
+  // data
+  'addBookmark',
+  'toggleBookmarksBar',
+  'downloads',
+  'history',
+  'clearData',
+  'settings',
+  /** Arms the element picker for the active tile: the next click on the page writes a hiding rule. */
+  'blockElement',
+  // split view
+  'splitLayout1',
+  'splitLayout2',
+  'splitLayout3',
+  'splitLayout4',
+  'tileLeft',
+  'tileRight',
+  'tileUp',
+  'tileDown',
+  'toggleTileMaximized',
+  /**
+   * Reveals the active tile's own navigation bar and puts the focus in it.
+   *
+   * The bar's other route is a hover, which is pointer-only — and spec 7 requires complete keyboard
+   * operation, so this is not a convenience but the thing that makes the feature admissible.
+   */
+  'focusTileBar',
+  /** Reader mode for the active tile. An accelerator only fires where a menu item declares it. */
+  'readerMode',
+  'escape'
+] as const
+
+export type ShortcutAction = (typeof SHORTCUT_ACTIONS)[number]
+
+type Table = Readonly<Record<ShortcutAction, readonly string[]>>
+
+/** Ctrl+1 … Ctrl+8 select a tab by position; generated to avoid eight rows. */
+export const TAB_BY_INDEX_ACCELERATORS: Readonly<Record<Platform, readonly string[]>> = {
+  win32: ['Control+1', 'Control+2', 'Control+3', 'Control+4', 'Control+5', 'Control+6', 'Control+7', 'Control+8'],
+  linux: ['Control+1', 'Control+2', 'Control+3', 'Control+4', 'Control+5', 'Control+6', 'Control+7', 'Control+8'],
+  darwin: ['Command+1', 'Command+2', 'Command+3', 'Command+4', 'Command+5', 'Command+6', 'Command+7', 'Command+8']
+}
+
+const windowsTable = {
+  newTab: ['Control+T'],
+  closeTab: ['Control+W'],
+  reopenClosedTab: ['Control+Shift+T'],
+  newWindow: ['Control+N'],
+  newPrivateWindow: ['Control+Shift+N'],
+  closeWindow: ['Alt+F4'],
+  nextTab: ['Control+Tab', 'Control+PageDown'],
+  previousTab: ['Control+Shift+Tab', 'Control+PageUp'],
+  lastTab: ['Control+9'],
+
+  back: ['Alt+Left'],
+  forward: ['Alt+Right'],
+  reload: ['F5', 'Control+R'],
+  reloadIgnoringCache: ['Control+F5', 'Control+Shift+R'],
+  stop: ['Escape'],
+  home: ['Alt+Home'],
+
+  focusAddressBar: ['Control+L', 'Alt+D', 'F6'],
+  findInPage: ['Control+F'],
+  findNext: ['F3'],
+  zoomIn: ['Control+Plus', 'Control+numadd'],
+  zoomOut: ['Control+-', 'Control+numsub'],
+  zoomReset: ['Control+0'],
+  windowFullscreen: ['F11'],
+  print: ['Control+P'],
+  devTools: ['F12', 'Control+Shift+I'],
+
+  addBookmark: ['Control+D'],
+  toggleBookmarksBar: ['Control+Shift+B'],
+  downloads: ['Control+J'],
+  history: ['Control+H'],
+  clearData: ['Control+Shift+Delete'],
+  settings: ['Control+,'],
+  blockElement: ['Control+Shift+E'],
+
+  splitLayout1: ['Control+Shift+1'],
+  splitLayout2: ['Control+Shift+2'],
+  splitLayout3: ['Control+Shift+3'],
+  splitLayout4: ['Control+Shift+4'],
+  tileLeft: ['Control+Alt+Left'],
+  tileRight: ['Control+Alt+Right'],
+  tileUp: ['Control+Alt+Up'],
+  tileDown: ['Control+Alt+Down'],
+  toggleTileMaximized: ['Control+Shift+Return'],
+  focusTileBar: ['Control+Shift+L'],
+  readerMode: ['Control+Alt+R'],
+  escape: ['Escape']
+} as const satisfies Table
+
+/**
+ * Linux mirrors Windows for the familiar bindings, which is what users of both
+ * expect — but the tile-switching row is a known casualty of desktop
+ * environments, flagged below rather than silently broken.
+ */
+const linuxTable = {
+  ...windowsTable,
+  closeWindow: ['Control+Shift+W']
+} as const satisfies Table
+
+const macTable = {
+  newTab: ['Command+T'],
+  closeTab: ['Command+W'],
+  reopenClosedTab: ['Command+Shift+T'],
+  newWindow: ['Command+N'],
+  newPrivateWindow: ['Command+Shift+N'],
+  closeWindow: ['Command+Shift+W'],
+  nextTab: ['Control+Tab', 'Command+Alt+Right'],
+  previousTab: ['Control+Shift+Tab', 'Command+Alt+Left'],
+  lastTab: ['Command+9'],
+
+  back: ['Command+['],
+  forward: ['Command+]'],
+  reload: ['Command+R'],
+  reloadIgnoringCache: ['Command+Shift+R'],
+  stop: ['Command+.', 'Escape'],
+  home: ['Command+Shift+H'],
+
+  focusAddressBar: ['Command+L'],
+  findInPage: ['Command+F'],
+  findNext: ['Command+G'],
+  zoomIn: ['Command+Plus'],
+  zoomOut: ['Command+-'],
+  zoomReset: ['Command+0'],
+  windowFullscreen: ['Control+Command+F'],
+  print: ['Command+P'],
+  devTools: ['Command+Alt+I'],
+
+  addBookmark: ['Command+D'],
+  toggleBookmarksBar: ['Command+Shift+B'],
+  downloads: ['Command+Shift+J'],
+  history: ['Command+Y'],
+  clearData: ['Command+Shift+Backspace'],
+  settings: ['Command+,'],
+  blockElement: ['Command+Shift+E'],
+
+  splitLayout1: ['Command+Shift+1'],
+  splitLayout2: ['Command+Shift+2'],
+  splitLayout3: ['Command+Shift+3'],
+  splitLayout4: ['Command+Shift+4'],
+  // Deliberately Ctrl+Alt, not Cmd+Alt: Cmd+Alt+Arrow is tab switching above,
+  // and bare Ctrl+Arrow belongs to macOS window management.
+  tileLeft: ['Control+Alt+Left'],
+  tileRight: ['Control+Alt+Right'],
+  tileUp: ['Control+Alt+Up'],
+  tileDown: ['Control+Alt+Down'],
+  toggleTileMaximized: ['Command+Shift+Return'],
+  focusTileBar: ['Command+Shift+L'],
+  readerMode: ['Command+Alt+R'],
+  escape: ['Escape']
+} as const satisfies Table
+
+export const DEFAULT_BINDINGS: Readonly<Record<Platform, Table>> = {
+  win32: windowsTable,
+  linux: linuxTable,
+  darwin: macTable
+}
+
+/**
+ * Combinations the OS is known to intercept before the application sees them
+ * (spec 9). The settings page must show the note and the alternative rather
+ * than presenting a binding that appears set but never fires.
+ */
+export interface KnownConflict {
+  accelerator: string
+  messageKey: MessageKey
+  alternative: string
+}
+
+export const KNOWN_CONFLICTS: Readonly<Record<Platform, readonly KnownConflict[]>> = {
+  linux: [
+    // GNOME, KDE and Xfce all bind these to workspace switching by default.
+    { accelerator: 'Control+Alt+Left', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+H' },
+    { accelerator: 'Control+Alt+Right', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+L' },
+    { accelerator: 'Control+Alt+Up', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+K' },
+    { accelerator: 'Control+Alt+Down', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+J' }
+  ],
+  darwin: [
+    { accelerator: 'Control+Left', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Left' },
+    { accelerator: 'Control+Right', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Right' },
+    { accelerator: 'Control+Up', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Up' },
+    { accelerator: 'Control+Down', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Down' }
+  ],
+  win32: [
+    {
+      accelerator: 'Control+Shift+Left',
+      messageKey: 'shortcuts.conflict.windowsTextSelection',
+      alternative: 'Control+Alt+Left'
+    },
+    {
+      accelerator: 'Control+Shift+Right',
+      messageKey: 'shortcuts.conflict.windowsTextSelection',
+      alternative: 'Control+Alt+Right'
+    }
+  ]
+}
+
+export function conflictFor(platform: Platform, accelerator: string): KnownConflict | null {
+  return KNOWN_CONFLICTS[platform].find((c) => c.accelerator === accelerator) ?? null
+}
+
+/** Primary accelerator for an action, after applying user overrides. */
+export function acceleratorFor(
+  platform: Platform,
+  action: ShortcutAction,
+  overrides: Readonly<Record<string, string>> = {}
+): string {
+  const override = overrides[action]
+  if (override) return override
+  return DEFAULT_BINDINGS[platform][action][0] ?? ''
+}
+
+export function allAcceleratorsFor(
+  platform: Platform,
+  action: ShortcutAction,
+  overrides: Readonly<Record<string, string>> = {}
+): readonly string[] {
+  const override = overrides[action]
+  if (override) return [override]
+  return DEFAULT_BINDINGS[platform][action]
+}
+
+export interface BindingConflict {
+  accelerator: string
+  actions: ShortcutAction[]
+}
+
+/**
+ * Finds accelerators bound to more than one action, so the settings page can
+ * refuse a duplicate assignment instead of leaving two actions fighting over
+ * one key (spec 9).
+ */
+export function findBindingConflicts(
+  platform: Platform,
+  overrides: Readonly<Record<string, string>> = {}
+): BindingConflict[] {
+  const byAccelerator = new Map<string, ShortcutAction[]>()
+  for (const action of SHORTCUT_ACTIONS) {
+    for (const accelerator of allAcceleratorsFor(platform, action, overrides)) {
+      if (accelerator === '') continue
+      const existing = byAccelerator.get(accelerator)
+      if (existing) existing.push(action)
+      else byAccelerator.set(accelerator, [action])
+    }
+  }
+
+  const conflicts: BindingConflict[] = []
+  for (const [accelerator, actions] of byAccelerator) {
+    // `Escape` is intentionally shared between `stop` and `escape`: which one
+    // applies depends on whether a load is in flight, and the window resolves
+    // that at press time.
+    if (accelerator === 'Escape') continue
+    if (actions.length > 1) conflicts.push({ accelerator, actions })
+  }
+  return conflicts
+}

@@ -1,0 +1,113 @@
+appId: de.m3connect.tessera
+productName: tessera
+copyright: tessera contributors
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - out/**/*
+  - '!**/*.map'
+  - '!**/*.ts'
+
+# Every platform is a first-class target (spec 7): same feature set, built and
+# shipped in the format that platform's users expect.
+
+# --- Windows -----------------------------------------------------------------
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  # Named explicitly rather than left to discovery: electron-builder looks for an
+  # `icons` directory before `icon.png`, and would then derive the .ico from the
+  # largest file in build/icons (512) instead of the 1024 master.
+  # Both files come from `node scripts/make-icon.mjs`.
+  icon: build/icon.png
+  # Authenticode signing. Set WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD in CI, or
+  # point signtoolOptions at an HSM/Azure Trusted Signing profile.
+  signtoolOptions:
+    signingHashAlgorithms: [sha256]
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  # Needed so Windows offers tessera in "Default apps".
+  include: build/installer.nsh
+
+# --- Linux -------------------------------------------------------------------
+linux:
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64, arm64]
+    - target: rpm
+      arch: [x64]
+  # A directory, because Linux installs one file per hicolor size rather than one
+  # multi-resolution container.
+  icon: build/icons
+  category: Network;WebBrowser
+  synopsis: Privacy-first browser with split view
+  desktop:
+    entry:
+      MimeType: x-scheme-handler/http;x-scheme-handler/https;text/html;application/xhtml+xml
+      Categories: Network;WebBrowser
+      StartupWMClass: tessera
+      StartupNotify: 'true'
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libsecret-1-0
+rpm:
+  depends:
+    - libXScrnSaver
+    - libsecret
+
+# --- macOS -------------------------------------------------------------------
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  # electron-builder converts this to the .icns itself; 1024 is what the Retina slot
+  # needs, so the master is named rather than the smaller files in build/icons.
+  icon: build/icon.png
+  category: public.app-category.productivity
+  darkModeSupport: true
+  # Hardened runtime + notarization are mandatory: without them Gatekeeper
+  # blocks the app outright (spec 7).
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+  extendInfo:
+    NSHumanReadableCopyright: tessera contributors
+    CFBundleURLTypes:
+      - CFBundleURLName: Web site URL
+        CFBundleURLSchemes: [http, https]
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# --- Updates -----------------------------------------------------------------
+# Self-hosted generic feed: no third party learns who is running the browser.
+publish:
+  - provider: generic
+    url: https://updates.tessera.invalid/${channel}
+    channel: latest

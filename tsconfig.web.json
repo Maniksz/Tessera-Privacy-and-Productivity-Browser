@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "src/renderer/src/**/*",
+    "src/renderer/internal/**/*",
+    // The overlay layer's own components. Its entry point sat in `src/renderer/` while its surfaces grew a
+    // directory of their own, so a new file there was type-checked by nothing and linted by nothing.
+    "src/renderer/overlay/**/*",
+    "src/renderer/*.tsx",
+    "src/renderer/shared/**/*",
+    "src/shared/**/*",
+    "src/preload/api.d.ts",
+    "src/preload/internal-api.d.ts"
+  ],
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": [],
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.web.tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"],
+      "@renderer/*": ["src/renderer/src/*"],
+      "@renderer-shared/*": ["src/renderer/shared/*"]
+    }
+  }
+}

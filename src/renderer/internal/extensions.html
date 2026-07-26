@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      No remote origin at all.
+
+      This page loads unpacked extensions from disk, which is the most powerful thing any surface here
+      can do — third-party code into the normal browsing session. It is reachable from web content by a
+      link, so the policy matters: no inline script and no remote script, which means injected markup
+      cannot become injected code. The folder itself is chosen through the OS picker in the core, so
+      this page never names a path of its own.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: tessera:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Extensions</title>
+  </head>
+  <body>
+    <div id="extensions-root"></div>
+    <script type="module" src="./extensions.tsx"></script>
+  </body>
+</html>

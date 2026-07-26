@@ -1,0 +1,41 @@
+{
+  /*
+    Component tests, type-checked as web code rather than as Node code.
+
+    They render a renderer component, so they need `lib: DOM` and a JSX factory — and they must not
+    get those from `tsconfig.node.json`, because handing DOM types to every test in the project is
+    how a main-process module ends up quietly using `document` and passing the check. Same reasoning
+    as the `@vitest-environment happy-dom` docblock in the tests themselves: the DOM is opted into,
+    per file, not made ambient.
+
+    Vitest does not read this file (esbuild strips types without checking them), which is exactly why
+    it has to exist: without it a component test can be committed with type errors that only a build
+    would find.
+  */
+  "extends": "./tsconfig.base.json",
+  "include": [
+    "tests/components/**/*",
+    "src/renderer/src/**/*",
+    "src/renderer/internal/**/*",
+    // The overlay layer's surfaces, which grew a directory of their own after this file was written.
+    "src/renderer/overlay/**/*",
+    "src/renderer/shared/**/*",
+    "src/shared/**/*",
+    "src/preload/api.d.ts",
+    "src/preload/internal-api.d.ts"
+  ],
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    // `node` for Vitest's own globals, which arrive through `vitest/globals`.
+    "types": ["node"],
+    "tsBuildInfoFile": "node_modules/.tmp/tsconfig.components.tsbuildinfo",
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["src/shared/*"],
+      "@renderer/*": ["src/renderer/src/*"],
+      "@renderer-shared/*": ["src/renderer/shared/*"],
+      "@renderer-internal/*": ["src/renderer/internal/*"]
+    }
+  }
+}

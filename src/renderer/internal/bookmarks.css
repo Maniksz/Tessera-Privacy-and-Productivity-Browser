@@ -1,0 +1,248 @@
+@import '../src/tokens.css';
+
+/*
+  The bookmarks page.
+
+  Its own stylesheet rather than the chrome UI's: this is content in a sandboxed renderer, and
+  the only thing the two genuinely share is the palette.
+*/
+
+body {
+  background: var(--bg);
+  /* Unlike the chrome UI, text here is worth selecting and copying. */
+  user-select: text;
+  overflow-y: auto;
+}
+
+.bookmarks {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+.bookmarks__header {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.bookmarks__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.bookmarks__search {
+  min-width: 200px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+}
+
+.bookmarks__action,
+.bookmarks__root,
+.bookmarks__crumb {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: default;
+}
+
+.bookmarks__crumb {
+  border-color: transparent;
+  color: var(--fg-dim);
+}
+
+.bookmarks__roots {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+/* The current root is stated, not merely coloured: `aria-current` carries it to a reader too. */
+.bookmarks__root[aria-current='true'] {
+  border-color: var(--accent, var(--fg));
+  color: var(--fg);
+}
+
+.bookmarks__trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+  list-style: none;
+}
+
+.bookmarks__trail li::after {
+  content: '›';
+  margin-left: 4px;
+  color: var(--fg-dim);
+}
+
+.bookmarks__trail li:last-child::after {
+  content: '';
+}
+
+.bookmarks__notice {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.bookmarks__empty {
+  margin-top: 32px;
+  color: var(--fg-dim);
+  text-align: center;
+}
+
+.bookmarks__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bookmarks__entry {
+  display: grid;
+  grid-template-columns: 1fr repeat(5, auto);
+  align-items: center;
+  gap: 2px;
+  border-radius: 8px;
+}
+
+.bookmarks__entry:hover {
+  background: var(--bg-elevated);
+}
+
+/*
+  The whole row is the target, not just the title.
+
+  A list is scanned quickly and clicked imprecisely; a small hit area turns every row into a
+  small act of aiming.
+*/
+.bookmarks__open {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.bookmarks__entryTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmarks__entryUrl {
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmarks__entryMeta {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.bookmarks__rowAction {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+  /* Revealed on hover, but never hidden from the keyboard or a screen reader. */
+  opacity: 0;
+}
+
+.bookmarks__entry:hover .bookmarks__rowAction,
+.bookmarks__rowAction:focus-visible {
+  opacity: 1;
+}
+
+.bookmarks__rowAction:disabled {
+  opacity: 0.25;
+}
+
+.bookmarks__rowAction:hover:not(:disabled) {
+  background: var(--bg-input);
+}
+
+.bookmarks__dialog {
+  display: grid;
+  gap: 10px;
+  margin-top: 24px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+.bookmarks__dialogTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.bookmarks__field {
+  display: grid;
+  gap: 4px;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.bookmarks__field input {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+}
+
+.bookmarks__dialogButtons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.bookmarks__dialogButtons button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: default;
+}

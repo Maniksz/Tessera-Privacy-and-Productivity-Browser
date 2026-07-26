@@ -1,0 +1,411 @@
+/*
+  Start page styling.
+
+  Follows the system colour scheme rather than the browser's theme setting: this
+  page is rendered in a content view that has no access to settings beyond the
+  narrow quick-link allowlist, and inventing a second theme source would be worse
+  than following the OS.
+*/
+
+:root {
+  --bg: #17171a;
+  --bg-tile: #202024;
+  --bg-tile-hover: #26262c;
+  --bg-input: #2a2a30;
+  --fg: #e6e6ea;
+  --fg-dim: #8b8b96;
+  --border: #35353d;
+  --accent: #6da8ff;
+  --danger: #ff8b6b;
+  color-scheme: dark light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f7f9;
+    --bg-tile: #ffffff;
+    --bg-tile-hover: #eef0f4;
+    --bg-input: #ffffff;
+    --fg: #1b1b1f;
+    --fg-dim: #63636e;
+    --border: #d8d8de;
+    --accent: #2563eb;
+    --danger: #b3401f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    15px/1.5 system-ui,
+    -apple-system,
+    'Segoe UI',
+    Ubuntu,
+    sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.start {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 4rem 1.5rem 6rem;
+}
+
+.start__header {
+  text-align: center;
+  margin-bottom: 2.5rem;
+}
+
+.start__title {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.start__subtitle {
+  margin: 0.4rem 0 0;
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+}
+
+.start__breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1.2rem;
+  font-size: 0.88rem;
+}
+
+.start__crumb {
+  border: 0;
+  border-radius: 6px;
+  padding: 0.3rem 0.6rem;
+  background: var(--bg-tile);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+
+.start__crumb:hover {
+  background: var(--bg-tile-hover);
+}
+
+.start__crumbCurrent {
+  color: var(--fg-dim);
+}
+
+.start__error {
+  margin: 0 0 1.2rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--fg);
+  font-size: 0.88rem;
+}
+
+.start__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.start__empty {
+  margin-top: 2rem;
+  text-align: center;
+  color: var(--fg-dim);
+  font-size: 0.9rem;
+}
+
+.start__tail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+}
+
+.start__add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  padding: 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.start__add:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+/* --- tiles ----------------------------------------------------------------- */
+
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 112px;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-tile);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile {
+    transition: none;
+  }
+}
+
+.tile:hover {
+  background: var(--bg-tile-hover);
+}
+
+.tile--dragging {
+  opacity: 0.4;
+}
+
+/* Insertion marker for a reorder drop. */
+.tile--dropBefore {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+/* Filing a tile into a folder is a different action, so it looks different. */
+.tile--dropInto {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-tile));
+}
+
+/*
+  The card's picture area.
+
+  Full width and a fixed proportion rather than a 32 px square, because what goes in here is now a
+  screenshot: 8:5, matching `THUMBNAIL_TARGET` (480x300), so a stored picture fills it exactly and
+  nothing is cropped a second time on the way to the screen.
+
+  It keeps working as a square-ish badge for the two smaller cases — the folder glyph and the initial
+  — because both are centred rather than stretched, and `object-fit` below keeps an icon at its own
+  size instead of blowing a 32 px favicon up to card width.
+*/
+.tile__icon {
+  width: 100%;
+  aspect-ratio: 8 / 5;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--fg-dim);
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+/*
+  Two rules, because the two pictures are not interchangeable in size.
+
+  A single rule was tried and is wrong: `object-fit` scales *up* as well as down, so a 32 px favicon
+  given the full box would be inflated to card height — a blurry smear that looks worse than the
+  initial it replaced. The renderer knows which kind it is drawing because `cardImageSequence` says
+  so, which is why the kind travels with the address.
+*/
+.tile__picture--thumbnail {
+  width: 100%;
+  height: 100%;
+  /* The box is 8:5 and so is a stored screenshot, so this crops nothing; it guards a stray ratio. */
+  object-fit: cover;
+}
+
+.tile__picture--favicon {
+  width: 48px;
+  height: 48px;
+  /* An icon may be 16, 32 or 180 px square; `contain` fits it without distorting a non-square one. */
+  object-fit: contain;
+}
+
+.tile__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.tile__title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile__meta {
+  color: var(--fg-dim);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile__actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+
+/* Actions stay reachable by keyboard even while invisible to the mouse. */
+.tile:hover .tile__actions,
+.tile:focus-within .tile__actions {
+  opacity: 1;
+}
+
+.tile__action {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tile__action:hover {
+  background: var(--border);
+  color: var(--fg);
+}
+
+.tile__position {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+  color: var(--fg-dim);
+  font-size: 0.7rem;
+  opacity: 0.5;
+}
+
+/* --- dialog ---------------------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(0 0 0 / 45%);
+}
+
+.dialog {
+  width: 100%;
+  max-width: 26rem;
+  padding: 1.3rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 45%);
+}
+
+.dialog__heading {
+  margin: 0 0 1rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.dialog__field {
+  display: block;
+  margin-bottom: 1rem;
+}
+
+.dialog__label {
+  display: block;
+  margin-bottom: 0.3rem;
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+}
+
+.dialog__input {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+}
+
+.dialog__input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.dialog__input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.dialog__hint {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--fg-dim);
+  font-size: 0.76rem;
+  min-height: 1.1em;
+}
+
+.dialog__buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1.2rem;
+}
+
+.dialog__button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-tile);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.dialog__button:hover {
+  background: var(--bg-tile-hover);
+}
+
+.dialog__button--primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #0d0d10;
+  font-weight: 500;
+}
+
+.dialog__button--primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

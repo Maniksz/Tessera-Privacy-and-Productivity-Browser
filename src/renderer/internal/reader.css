@@ -1,0 +1,209 @@
+@import '../src/tokens.css';
+
+/*
+  The reader view.
+
+  Its own stylesheet, like every internal page: this is content in a sandboxed renderer and the only
+  thing it shares with the chrome UI is the palette.
+
+  Two decisions that are the point of the whole feature rather than decoration:
+
+  - **A measure, not a width.** The column is bounded in `ch`, so it holds roughly the same number of
+    characters per line whatever the user's zoom is. A `px` width would grow the column as the text
+    grew and take the comfortable line length away exactly when somebody enlarged the type because
+    they needed it.
+  - **Nothing is positioned.** No sticky bars, no floats, no absolute placement. That is what makes the
+    page print as one continuous article and behave in a narrow split tile, which are two of the three
+    reasons this is a document rather than a surface drawn over the window.
+*/
+
+body {
+  background: var(--bg);
+  /* The one page in this browser whose whole purpose is that the text can be selected and copied. */
+  user-select: text;
+  overflow-y: auto;
+}
+
+.reader {
+  max-width: 70ch;
+  margin: 0 auto;
+  padding: 48px 24px 96px;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--fg);
+}
+
+.reader__title {
+  margin: 0 0 8px;
+  font-size: 1.9em;
+  line-height: 1.2;
+  font-weight: 650;
+}
+
+.reader__meta {
+  margin: 0 0 32px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--fg-dim);
+  font-size: 0.85em;
+}
+
+.reader__article p {
+  margin: 0 0 1.2em;
+}
+
+.reader__article h2,
+.reader__article h3,
+.reader__article h4,
+.reader__article h5,
+.reader__article h6 {
+  margin: 2em 0 0.6em;
+  line-height: 1.25;
+}
+
+.reader__article a {
+  color: var(--accent);
+  /* Underlined rather than coloured only: colour alone is not a distinction everybody can see. */
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.reader__quote {
+  margin: 0 0 1.2em;
+  padding: 0 0 0 1.2em;
+  border-left: 3px solid var(--border);
+  color: var(--fg-dim);
+}
+
+.reader__list {
+  margin: 0 0 1.2em;
+  padding-left: 1.4em;
+}
+
+.reader__list li {
+  margin-bottom: 0.4em;
+}
+
+.reader__list li p {
+  margin: 0;
+}
+
+.reader__code {
+  margin: 0 0 1.4em;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  /*
+    Wrapped rather than scrolled sideways. A horizontal scrollbar inside an article is unreachable
+    from the keyboard in any obvious way, and in a narrow tile it hides most of the line.
+  */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+.reader__article code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  font-size: 0.9em;
+}
+
+.reader__code code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+/*
+  A figure with no picture in it.
+
+  The policy in `reader.html` forbids remote images, so what is left is the caption, the alternative
+  text and a link. Bordered rather than borderless so it reads as a stand-in for something rather than
+  as a stray line of the article.
+*/
+.reader__figure {
+  margin: 0 0 1.4em;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--fg-dim);
+  font-size: 0.9em;
+}
+
+.reader__figureAlt,
+.reader__caption {
+  margin: 0 0 4px;
+}
+
+.reader__caption {
+  color: var(--fg);
+}
+
+.reader__table {
+  width: 100%;
+  margin: 0 0 1.4em;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.reader__table th,
+.reader__table td {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.reader__table th {
+  background: var(--bg-elevated);
+  font-weight: 600;
+}
+
+.reader--refused .reader__reason {
+  margin: 0 0 8px;
+}
+
+.reader--refused .reader__measured {
+  margin: 0 0 24px;
+  color: var(--fg-dim);
+  font-size: 0.9em;
+}
+
+.reader__original {
+  display: inline-block;
+  margin-top: 32px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.reader--pending {
+  color: var(--fg-dim);
+}
+
+/*
+  Printing is one of the three reasons this is a document.
+
+  The link back to the original is interface rather than article, and a sheet of paper cannot be
+  clicked; the palette is dropped because printing a dark background is neither readable nor kind to
+  the cartridge.
+*/
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .reader {
+    max-width: none;
+    padding: 0;
+    color: #000;
+  }
+
+  .reader__original {
+    display: none;
+  }
+}

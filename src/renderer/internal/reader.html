@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      No remote origin at all, images included — and that is the interesting line.
+
+      This page renders content taken out of a visited website, inside a document that holds a bridge
+      to the core. Every remote subresource it were allowed to fetch would be a request the site can
+      see, made from a privileged document, with the window's cookies attached: it would tell the site
+      that the article is being read in reader mode, and it would do so from the one origin in this
+      browser that has a channel into the core. Neither is worth an inline photograph.
+
+      So a figure renders as its caption and its alternative text, with its address offered as a link
+      the user can follow deliberately. The cost is real and is named in the report: reader mode shows
+      no pictures.
+
+      `script-src 'self'` and no `unsafe-eval` matter for a second reason here. The article's text is
+      untrusted input, and the renderer builds React elements from it — never markup, never
+      `dangerouslySetInnerHTML` — so there is no sanitiser in the path to have a bug in. This policy is
+      the belt to that braces: even a defect that produced markup could not fetch or execute anything.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <!--
+      A placeholder, replaced from the message catalogue as soon as the page runs: a document title is
+      the tab's label, and `ReaderPage` sets it to the article's own headline. Static markup cannot
+      read the catalogue, and the same compromise is in `history.html`.
+    -->
+    <title>Reader</title>
+  </head>
+  <body>
+    <div id="reader-root"></div>
+    <script type="module" src="./reader.tsx"></script>
+  </body>
+</html>

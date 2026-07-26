@@ -1,0 +1,73 @@
+/*
+  Design tokens and the shared reset.
+
+  Imported by every browser-UI surface — the chrome renderer and the overlay layer — so a
+  menu drawn on the overlay cannot drift from the toolbar that opened it. Two copies of a
+  palette are two things to update, and the second one is always the one that gets
+  forgotten.
+
+  Colours are custom properties so the theme setting can swap them live without a reload
+  (spec 5). Focus outlines are never removed: full keyboard operation is a requirement, and
+  an invisible focus ring makes it unusable (spec 7).
+*/
+
+:root {
+  --bg: #17171a;
+  --bg-elevated: #202024;
+  --bg-input: #2a2a30;
+  --fg: #e6e6ea;
+  --fg-dim: #8b8b96;
+  --border: #35353d;
+  --accent: #6da8ff;
+  --accent-private: #c58bff;
+  --danger: #ff8b6b;
+  /*
+    The tab-group palette: eight fixed slots, named in `shared/tabgroups/palette.ts`.
+
+    Slots rather than colour values, and stored as slot names, for two reasons. A theme can repaint
+    every group at once — which a stored `#6da8ff` could not — and a group keeps its identity when it
+    does. Removing a slot in a later version also costs a label rather than a group, because the
+    document schema heals an unknown name to grey instead of rejecting the file.
+
+    Chosen to stay apart at a 14 px chip on this background, including for the two most common forms
+    of colour blindness: the pairs most at risk (green/red, blue/cyan) differ in lightness as well as
+    in hue, so a group is still distinguishable when the hue is not.
+  */
+  --tab-group-blue: #5b8dd9;
+  --tab-group-cyan: #3fb2c4;
+  --tab-group-green: #63a95c;
+  --tab-group-yellow: #c9a94a;
+  --tab-group-orange: #d1854a;
+  --tab-group-red: #cf6a5e;
+  --tab-group-pink: #c273a8;
+  --tab-group-grey: #7c7c88;
+  --tab-height: 36px;
+  --toolbar-height: 44px;
+  --font-ui:
+    13px/1.4 system-ui, -apple-system, 'Segoe UI', Ubuntu, sans-serif;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--fg);
+  font: var(--font-ui);
+  overflow: hidden;
+  /* Text selection in browser UI is not meaningful and interferes with drags. */
+  user-select: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

@@ -1,0 +1,150 @@
+@import '../src/tokens.css';
+
+/*
+  The downloads page.
+
+  Its own stylesheet rather than the chrome UI's: this is content in a sandboxed renderer, and
+  the only thing the two genuinely share is the palette.
+*/
+
+body {
+  background: var(--bg);
+  user-select: text;
+  overflow-y: auto;
+}
+
+.downloads {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+}
+
+.downloads__header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.downloads__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.downloads__clear {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: default;
+}
+
+.downloads__clear:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.downloads__clear:disabled {
+  opacity: 0.4;
+}
+
+.downloads__notice {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.downloads__empty {
+  margin-top: 32px;
+  color: var(--fg-dim);
+  text-align: center;
+}
+
+.downloads__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.downloads__entry {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.downloads__entry:hover {
+  background: var(--bg-elevated);
+}
+
+.downloads__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.downloads__meta,
+.downloads__missing {
+  grid-column: 1;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.downloads__missing {
+  color: var(--danger);
+}
+
+/*
+  A progress element rather than a coloured div.
+
+  It reports its own value to assistive technology, and an indeterminate one is a state the
+  platform already draws — which is exactly what a download with no declared total needs.
+*/
+.downloads__progress {
+  grid-column: 1;
+  width: 100%;
+  height: 4px;
+  margin: 2px 0;
+}
+
+.downloads__actions {
+  display: flex;
+  grid-row: 1 / span 3;
+  grid-column: 2;
+  align-items: center;
+  gap: 2px;
+}
+
+.downloads__actions button {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+  /* Revealed on hover, but never hidden from the keyboard or a screen reader. */
+  opacity: 0;
+}
+
+.downloads__entry:hover .downloads__actions button,
+.downloads__actions button:focus-visible {
+  opacity: 1;
+}
+
+.downloads__actions button:hover {
+  background: var(--bg-input);
+}

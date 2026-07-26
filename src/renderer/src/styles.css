@@ -1,0 +1,801 @@
+@import './tokens.css';
+
+/*
+  Chrome UI styling: the tab strip, the toolbar and the full-window panels.
+
+  Anything that has to appear *over* page content is not here — it belongs to the overlay
+  surface (`overlay.css`), because the DOM of this renderer sits beneath the native tab
+  views and is neither visible nor clickable there.
+*/
+
+body {
+  background: var(--bg);
+}
+
+.app {
+  height: 100%;
+  position: relative;
+}
+
+.app--private {
+  --bg: #2a1636;
+  --bg-elevated: #331b41;
+  --bg-input: #3d2150;
+  --accent: var(--accent-private);
+}
+
+/* --- chrome ---------------------------------------------------------------- */
+
+.chrome {
+  position: absolute;
+  inset: 0 0 auto 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 2;
+}
+
+.tabbar {
+  height: var(--tab-height);
+  display: flex;
+  align-items: stretch;
+  /* Lets the frameless window be dragged by its empty areas. */
+  -webkit-app-region: drag;
+}
+
+.tabbar__strip {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  padding: 4px 4px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabbar__strip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 60px;
+  max-width: 220px;
+  padding: 0 6px 0 8px;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+.tab:hover {
+  background: var(--bg-elevated);
+}
+
+.tab--active {
+  background: var(--bg-elevated);
+  color: var(--fg);
+}
+
+.tab--pinned {
+  min-width: 36px;
+  max-width: 36px;
+}
+
+/* A tab that is loaded but in no tile — visibly different, not hidden (spec 2). */
+.tab--unassigned {
+  opacity: 0.55;
+}
+
+.tab--dragging {
+  opacity: 0.4;
+}
+
+/*
+  Only the tabs themselves refuse the window drag, not the strip that holds them.
+
+  The strip has `flex: 1`, so declaring *it* undraggable left the window with a handle of zero
+  width — the rule was there and could never fire. Empty space to the right of the last tab is
+  now a drag handle, which is where every other browser puts one.
+*/
+.tab,
+.tabbar__new {
+  -webkit-app-region: no-drag;
+}
+
+/*
+  Insertion marker while reordering. A line between tabs rather than a highlight on one of
+  them: the question a reorder answers is "between which two", and highlighting a tab answers
+  a different question.
+*/
+.tab--dropbefore {
+  box-shadow: -2px 0 0 0 var(--accent);
+}
+
+.tab__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  A group's chip, and the band under its members.
+
+  The band is a bottom border rather than a background, deliberately: a coloured background on a tab
+  fights with the active-tab highlight, and the two would then compete for the same signal. A line
+  underneath groups the run visually while leaving "which tab am I on" to the highlight it already has.
+
+  `--tab-group-current` is set inline from the group's palette slot, so eight colours need one set of
+  rules rather than eight. The rounded ends come from the position `stripItems` reports, which is why
+  that is part of its answer rather than something the strip works out again.
+*/
+.tabgroup {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: none;
+  height: var(--tab-height);
+  padding: 0 0.5rem;
+  border: none;
+  border-bottom: 2px solid var(--tab-group-current, var(--border));
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+  cursor: pointer;
+  max-width: 10rem;
+}
+
+.tabgroup:hover {
+  color: var(--fg);
+}
+
+.tabgroup__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tab-group-current, var(--border));
+}
+
+/* The rename field, sized and coloured like the chip it replaces so the strip does not jump. */
+.tabgroup__input {
+  flex: none;
+  width: 8rem;
+  height: var(--tab-height);
+  padding: 0 0.5rem;
+  border: none;
+  border-bottom: 2px solid var(--tab-group-current, var(--border));
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+}
+
+.tabgroup__name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The count is the only thing saying a folded group's tabs are still there. */
+.tabgroup__count {
+  flex: none;
+  padding: 0 0.3rem;
+  border-radius: 6px;
+  background: var(--tab-group-current, var(--border));
+  color: var(--bg);
+  font-size: 0.8em;
+  font-weight: 600;
+}
+
+.tab--grouped {
+  border-bottom: 2px solid var(--tab-group-current, var(--border));
+}
+
+/*
+  The run's ends, so a group reads as one shape.
+
+  `only` gets both corners; a `middle` tab gets neither, which is what makes three tabs look like one
+  band rather than three.
+*/
+.tab--group-first,
+.tab--group-only {
+  border-bottom-left-radius: 3px;
+}
+
+.tab--group-last,
+.tab--group-only {
+  border-bottom-right-radius: 3px;
+}
+
+.tab__favicon,
+.tab__spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+/*
+  The site's icon, drawn over the placeholder square rather than replacing it.
+
+  Layered this way so a miss needs no state: the image simply hides itself and the square is still
+  there. `object-fit: contain` because a cached icon may be 180 px (an Apple touch icon) or a
+  non-square favicon, and stretching either one to 14 px would look worse than the placeholder.
+*/
+.tab__faviconImage {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.tab__spinner {
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  background: none;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tab__spinner {
+    animation: none;
+  }
+}
+
+/* Tile number, so tab-to-tile mapping is readable at a glance (spec 2). */
+.tab__tile {
+  flex: none;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #0d0d10;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+
+.tab__close,
+.tab__mute {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: default;
+}
+
+.tab__close:hover,
+.tab__mute:hover {
+  background: var(--border);
+}
+
+.tabbar__new {
+  flex: none;
+  width: 28px;
+  margin: 4px 0 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 16px;
+  cursor: default;
+}
+
+.tabbar__new:hover {
+  background: var(--bg-elevated);
+  color: var(--fg);
+}
+
+/* --- toolbar --------------------------------------------------------------- */
+
+.toolbar {
+  height: var(--toolbar-height);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  background: var(--bg-elevated);
+}
+
+.toolbar__nav,
+.toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+/*
+  Toolbar buttons.
+
+  The glyphs were text characters at 15px inside 28px buttons, which read as small and
+  inconsistent next to the address bar. They are now stroked SVG at 20px in 32px
+  buttons: a uniform optical weight that no font substitution can change, and a target
+  large enough to hit without aiming.
+*/
+.iconbutton {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--fg);
+  line-height: 1;
+  cursor: default;
+}
+
+.iconbutton svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The layout button carries a preview plus a caret, so it needs a little more room. */
+.iconbutton--wide {
+  width: auto;
+  min-width: 44px;
+  gap: 2px;
+  padding: 0 6px;
+  grid-auto-flow: column;
+}
+
+/*
+  Outlined like every other toolbar icon.
+
+  This selector used to override the shared `fill: none; stroke: currentColor` with a solid
+  fill, which made the layout preview a block of white among a row of line drawings. A thinner
+  stroke than the other icons because the tiles sit close together.
+*/
+.iconbutton--wide svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+
+.iconbutton__caret {
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+
+.iconbutton:hover:not(:disabled) {
+  background: var(--bg-input);
+}
+
+.iconbutton:disabled {
+  color: var(--fg-dim);
+  opacity: 0.4;
+}
+
+.iconbutton[aria-expanded='true'],
+.iconbutton[aria-pressed='true'] {
+  background: var(--bg-input);
+}
+
+/* --- address bar ----------------------------------------------------------- */
+
+.omnibox {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.omnibox:focus-within {
+  border-color: var(--accent);
+}
+
+.omnibox__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  user-select: text;
+}
+
+.omnibox__input:focus {
+  outline: none;
+}
+
+.omnibox__security {
+  flex: none;
+  font-size: 11px;
+}
+
+.omnibox__security--insecure {
+  color: var(--danger);
+}
+
+.omnibox__security--invalid-certificate {
+  color: var(--danger);
+}
+
+.omnibox__badge {
+  flex: none;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--border);
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: default;
+}
+
+.omnibox__badge--private {
+  background: var(--accent-private);
+  color: #17171a;
+}
+
+/* Preview of what Enter will do — address or search (spec 1). */
+.omnibox__hint {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg-dim);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- panels (settings, extensions) ---------------------------------------- */
+
+/*
+  A panel covers the whole window because the content views are suspended while it is
+  open — see `window:setOverlay`. Drawn at a higher stacking level than the divider
+  layer so it also covers those handles.
+*/
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 45%);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  max-height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 50%);
+  overflow: hidden;
+}
+
+.panel--narrow {
+  width: min(560px, 100%);
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel__heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.panel__search {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+  user-select: text;
+}
+
+.panel__search:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.panel__body {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 14px 16px;
+  overflow-y: auto;
+}
+
+.panel__notice {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.panel__error {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.panel__empty {
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.panel__section {
+  margin-top: 18px;
+}
+
+.panel__sectionTitle {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+/* --- one settings row ------------------------------------------------------ */
+
+.field {
+  display: grid;
+  grid-template-columns: 1fr auto 28px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.field__text-block {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.field__label {
+  font-size: 13px;
+}
+
+.field__key {
+  color: var(--fg-dim);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 10.5px;
+}
+
+.field__note {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.field__control {
+  display: flex;
+  align-items: center;
+}
+
+.field__toggle {
+  width: 34px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+.field__select,
+.field__number,
+.field__text {
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  user-select: text;
+}
+
+.field__number {
+  width: 92px;
+}
+
+.field__text {
+  width: 220px;
+}
+
+.field__list {
+  width: 260px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+  user-select: text;
+}
+
+.field__readonly {
+  max-width: 260px;
+  color: var(--fg-dim);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.field__reset {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-dim);
+  font-size: 13px;
+  cursor: default;
+}
+
+.field__reset:hover {
+  background: var(--bg-input);
+  color: var(--fg);
+}
+
+/* --- extension list -------------------------------------------------------- */
+
+.extlist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.extlist__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.extlist__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.extlist__name {
+  font-size: 13px;
+}
+
+.extlist__meta {
+  color: var(--fg-dim);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.dialog__button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+}
+
+.dialog__button:hover {
+  background: var(--bg-input);
+}
+
+.dialog__button--primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #0d0d10;
+  font-weight: 500;
+}
+
+/* --- content area and dividers -------------------------------------------- */
+
+.content {
+  position: absolute;
+  inset: 0 0 0 0;
+  display: grid;
+  place-items: center;
+  color: var(--fg-dim);
+}
+
+.content__empty {
+  margin: 0;
+}
+
+/*
+  Divider layer. Sits above the content region but is itself click-through: only
+  the handles accept pointer events, so clicks elsewhere reach the native views.
+*/
+.dividers {
+  position: absolute;
+  inset: 0 0 0 0;
+  /* Below the panels (z-index 20), above the chrome. */
+  z-index: 3;
+  pointer-events: none;
+}
+
+.divider {
+  position: absolute;
+  pointer-events: auto;
+  background: transparent;
+}
+
+.divider:hover,
+.divider:focus-visible {
+  background: var(--accent);
+}
+
+.divider--vertical {
+  cursor: col-resize;
+}
+
+.divider--horizontal {
+  cursor: row-resize;
+}

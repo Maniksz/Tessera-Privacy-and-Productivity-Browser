@@ -1,0 +1,192 @@
+import { ipcRenderer } from 'electron'
+import {
+  COSMETIC_GENERIC_CHANNEL,
+  COSMETIC_SPECIFIC_CHANNEL,
+  asCosmeticStyles,
+  sameFeatures,
+  surveyFeatures
+} from '@shared/filters/injection.js'
+import type { DocumentFeatures } from '@shared/filters/features.js'
+
+/**
+ * Puts the blocker's hiding rules into the page.
+ *
+ * Blocking a request removes an advert; it does not remove the space it occupied. This is what closes
+ * the hole — and it is a third of what a filter list contains, so without it fifty thousand rules are
+ * parsed on every launch and never used.
+ *
+ * ## Why the stylesheet goes in directly and the fingerprint masking does not
+ *
+ * A preload runs in an isolated world: its JavaScript cannot see the page's, which is why masking has
+ * to cross over through `executeInMainWorld`. The *DOM* is not isolated — both worlds see one document
+ * — so a `<style>` element appended from here styles the page. That makes this the rare case where the
+ * boundary costs nothing.
+ *
+ * ## Why one element, replaced, rather than one per answer
+ *
+ * The generic rules arrive in instalments as the page grows, and each instalment is only what is new.
+ * Appending would leave a page with dozens of `<style>` elements after a busy minute — visible in the
+ * inspector, and a hint to a site that something is filtering it. One element whose text grows keeps
+ * both the count and the shape constant.
+ */
+
+const STYLE_ELEMENT_ID = 'tessera-cosmetic'
+
+/** How long a mutation burst is allowed to settle before the page is surveyed again. */
+const SURVEY_DEBOUNCE_MS = 250
+
+/**
+ * The address of the document this preload is running in.
+ *
+ * Read once, at install time, and reported with every request. The view's own URL is not usable here:
+ * at `document-start` it has already moved to the page being loaded while this code runs for it, and by
+ * the time an asynchronous report is answered it may have moved again. What is wanted is "which document
+ * am I", and only this side knows that.
+ */
+function documentUrl(): string {
+  try {
+    return location.href
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The document as it actually is at `document-start`, rather than as the DOM types describe it.
+ *
+ * `lib.dom` declares `head` and `documentElement` non-nullable, and at every moment a web developer
+ * writes code that is true. A preload runs earlier than that: `document-start` is before the parser has
+ * produced `<head>`, so both can be null and the type is simply wrong for this timing.
+ *
+ * Named here rather than guarded with a cast at each use, because the alternative the linter suggests —
+ * dropping the checks, since "they cannot be null" — would crash the preload and take the page with it.
+ */
+// `Omit` and not an intersection: `HTMLElement & (HTMLElement | null)` is still `HTMLElement`, so an
+// intersection narrows where this has to widen. The original field has to be removed to be replaced.
+const earlyDocument = document as Omit<Document, 'head' | 'documentElement'> & {
+  head: HTMLHeadElement | null
+  documentElement: HTMLElement | null
+}
+
+function styleElement(): HTMLStyleElement | null {
+  const existing = document.getElementById(STYLE_ELEMENT_ID)
+  if (existing instanceof HTMLStyleElement) return existing
+
+  // No `<head>` yet means putting the sheet in `documentElement`, where it applies just as well. The
+  // alternative is waiting, which is exactly the flash of visible advert this whole path prevents.
+  const parent = earlyDocument.head ?? earlyDocument.documentElement
+  if (parent === null) return null
+
+  const created = document.createElement('style')
+  created.id = STYLE_ELEMENT_ID
+  parent.appendChild(created)
+  return created
+}
+
+function appendStyles(css: string): void {
+  const element = styleElement()
+  if (element === null) return
+  element.textContent = `${element.textContent}\n${css}`
+}
+
+/**
+ * The host-specific rules, before anything else runs.
+ *
+ * Synchronous on purpose, and it is the one place in this file that blocks: `document-start` is the
+ * last moment before the page's own scripts, and an awaited answer arrives after them — which the user
+ * sees as the advert appearing and then vanishing. The cost is one round trip on a channel the core
+ * answers from an in-memory index.
+ */
+function installSpecificStyles(): void {
+  let answer: unknown
+  try {
+    answer = ipcRenderer.sendSync(COSMETIC_SPECIFIC_CHANNEL, documentUrl())
+  } catch {
+    // No responder — an old build, or a view created outside a hardened session. Hiding nothing is the
+    // only safe reading; there is nothing to guess at.
+    return
+  }
+  const css = asCosmeticStyles(answer)
+  if (css !== null) appendStyles(css)
+}
+
+/**
+ * The generic rules, in instalments, as the page turns out to contain things.
+ *
+ * There are tens of thousands of selectors that apply to every site. Sending them all would be
+ * megabytes of CSS per document, so the page says which class, id and tag names it actually uses and
+ * gets back only what could match. A single-page application keeps building itself, so this repeats —
+ * but only when the survey has genuinely changed, which on a busy page is a small fraction of the
+ * mutation bursts.
+ */
+function installGenericStyles(): void {
+  let reported: DocumentFeatures | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  ipcRenderer.on(COSMETIC_GENERIC_CHANNEL, (_event, payload: unknown) => {
+    const css = asCosmeticStyles(payload)
+    if (css !== null) appendStyles(css)
+  })
+
+  const survey = (): void => {
+    timer = null
+    let features: DocumentFeatures
+    try {
+      features = surveyFeatures(document.querySelectorAll('*'))
+    } catch {
+      // A document torn down mid-survey. Nothing to report and nothing to fix.
+      return
+    }
+    // Almost every burst introduces no new name. Comparing here turns a channel call per burst into one
+    // per genuinely new class — the difference between a few calls and thousands on a chat page.
+    if (reported !== null && sameFeatures(reported, features)) return
+    reported = features
+    try {
+      ipcRenderer.send(COSMETIC_GENERIC_CHANNEL, documentUrl(), features)
+    } catch {
+      // Same reading as above: no responder means nothing is hidden.
+    }
+  }
+
+  const schedule = (): void => {
+    if (timer !== null) return
+    timer = setTimeout(survey, SURVEY_DEBOUNCE_MS)
+  }
+
+  const observe = (): void => {
+    survey()
+    const root = earlyDocument.documentElement
+    if (root === null) return
+    try {
+      new MutationObserver(schedule).observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'id']
+      })
+    } catch {
+      // The document was torn down between the check and the call. The one survey above still happened.
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', observe, { once: true })
+  } else {
+    observe()
+  }
+}
+
+/**
+ * Installs both halves. Called from the content preload only.
+ *
+ * Guarded as a whole as well as in parts: a failure here must cost the page its cosmetic filtering and
+ * nothing else. A preload that throws takes the document with it.
+ */
+export function installCosmeticFiltering(): void {
+  try {
+    installSpecificStyles()
+    installGenericStyles()
+  } catch (error) {
+    console.warn('[cosmetic] filtering could not be installed:', error)
+  }
+}

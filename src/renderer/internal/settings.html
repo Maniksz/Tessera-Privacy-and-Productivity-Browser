@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      No remote origin at all, and this page needs that more than most.
+
+      It can write every setting the browser has, and it is reachable from web content by a link —
+      unlike the chrome UI. That link only navigates: the two documents are cross-origin, so the
+      linking page gets no DOM access and no scripting handle, and this page listens to no
+      `postMessage`. What keeps it that way is this policy: no inline script, no remote script, so
+      injected markup cannot become injected code.
+
+      `img-src tessera:` is for the local caches. `connect-src 'none'`: this page has no business
+      fetching anything, and the settings channels are the IPC bridge rather than the network.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: tessera:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Settings</title>
+  </head>
+  <body>
+    <div id="settings-root"></div>
+    <script type="module" src="./settings.tsx"></script>
+  </body>
+</html>
