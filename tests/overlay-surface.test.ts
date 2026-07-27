@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  OVERLAY_AWAITS_ANSWER,
+  OVERLAY_CAPTURES_KEYBOARD,
   OVERLAY_KINDS,
   OVERLAY_MARKS_THE_PAGE,
   OVERLAY_PRECEDENCE,
   OVERLAY_REGION,
+  awaitsAnswer,
+  capturesKeyboard,
   departureMatters,
   marksThePage,
   mayPresentOver,
@@ -13,13 +17,13 @@ import {
   surfaceIdentity,
   takesFocus,
   type OverlayKind,
-  type OverlayPresentation
-,
+  type OverlayPresentation,
   type FindBarPresentation,
   type TileBarPresentation
 } from '@shared/overlay/surface.js'
 import { TILE_BAR_HEIGHT } from '@shared/split/tile-bar.js'
 import { FIND_BAR_HEIGHT, FIND_BAR_WIDTH } from '@shared/find/bar.js'
+import { MIN_MASTER_PASSWORD_LENGTH } from '@shared/passwords/vault.js'
 
 /**
  * How much of the window the overlay layer takes, and who gets it when two things want it.
@@ -76,6 +80,15 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
     subject: 'camera',
     devices: ['camera'],
     waiting: 0
+  },
+  'master-password': {
+    kind: 'master-password',
+    requestId: 'p1',
+    purpose: 'unlock',
+    step: 'current',
+    filled: 0,
+    problem: null,
+    minLength: MIN_MASTER_PASSWORD_LENGTH
   },
   'tile-bar': {
     kind: 'tile-bar',
@@ -251,10 +264,22 @@ describe('two claims on one layer', () => {
     for (const kind of OVERLAY_KINDS) {
       expect(typeof OVERLAY_PRECEDENCE[kind], `${kind} is unranked`).toBe('number')
     }
-    // The bar is the weakest and the prompt the strongest; everything else sits between them.
+    /*
+      The bar is the weakest; the master-password prompt is the strongest and outranks even a consent
+      dialogue. Everything else sits between them.
+
+      This assertion named the permission prompt as the maximum until the vault prompt arrived, and the
+      change is the whole argument for the new rank: a page can cause a camera request whenever it likes, so
+      leaving the two equal would let a *page* choose the moment to interrupt somebody typing their master
+      password — and because the core takes that surface's keystrokes out of the pipeline, the rest of the
+      password would then arrive as ordinary keys in a dialogue whose buttons grant things.
+    */
     const ranks = OVERLAY_KINDS.map((kind) => OVERLAY_PRECEDENCE[kind])
     expect(OVERLAY_PRECEDENCE['tile-bar']).toBe(Math.min(...ranks))
-    expect(OVERLAY_PRECEDENCE['permission-request']).toBe(Math.max(...ranks))
+    expect(OVERLAY_PRECEDENCE['master-password']).toBe(Math.max(...ranks))
+    expect(OVERLAY_PRECEDENCE['permission-request']).toBeLessThan(
+      OVERLAY_PRECEDENCE['master-password']
+    )
   })
 
   it('never lets a hovered tile bar destroy a search somebody is typing', () => {
@@ -319,6 +344,29 @@ describe('surfaces whose departure is not free', () => {
     expect(departureMatters(SAMPLES['layout-menu'])).toBe(false)
     expect(departureMatters(SAMPLES['tab-drop'])).toBe(false)
     expect(departureMatters(SAMPLES['tile-bar'])).toBe(false)
+  })
+
+  it('announces a vanished master-password prompt, which resolves as cancelled', () => {
+    /*
+      The debt is the same shape as a permission prompt's and the safe answer is the opposite word:
+      `passwords:requestUnlock` is holding a promise, and a resize or a lost focus is the browser
+      taking the question away rather than the user getting their own master password wrong. Without
+      the announcement the passwords page waits on a promise nothing will ever settle — the defect
+      this project has already shipped once, from the other side, when a re-present settled a live
+      consent dialogue as a refusal.
+    */
+    expect(awaitsAnswer(SAMPLES['master-password'])).toBe(true)
+    expect(marksThePage(SAMPLES['master-password'])).toBe(false)
+    expect(departureMatters(SAMPLES['master-password'])).toBe(true)
+  })
+
+  it('waits for an answer on exactly the two kinds that ask a question', () => {
+    // Driven off the table so a seventh kind cannot be added without an answer to this question.
+    for (const kind of OVERLAY_KINDS) {
+      expect(OVERLAY_AWAITS_ANSWER[kind], kind).toBe(
+        kind === 'permission-request' || kind === 'master-password'
+      )
+    }
   })
 })
 
@@ -397,5 +445,57 @@ describe('which surfaces take the keyboard', () => {
     // The strongest case of the five: reached only by shortcut, and its whole purpose is to be typed
     // into. A find bar that did not take focus would be a search box you cannot type in.
     expect(takesFocus(SAMPLES['find-bar'])).toBe(true)
+  })
+
+  it('must give it to the master-password prompt, or the prompt collects nothing', () => {
+    /*
+      Not a convenience here but the mechanism. The core reads this surface's keystrokes off *this
+      view's* input pipeline, which only carries them while this view has the keyboard. Without focus
+      the prompt draws a field that swallows nothing and counts zero bullets for ever, while the
+      characters of somebody's master password go to whatever did have focus — the address bar, in the
+      worst case, which then remembers them.
+    */
+    expect(takesFocus(SAMPLES['master-password'])).toBe(true)
+  })
+})
+
+describe('whose keystrokes the core takes out of the pipeline', () => {
+  /**
+   * The one table on this layer that decides where a secret lives.
+   *
+   * For `master-password` the layer intercepts every keystroke in the main process and does not pass
+   * it on, so the renderer draws a count of bullets and never holds a character. If this answered
+   * `false` the field would become an ordinary one in the overlay renderer's DOM, the value would have
+   * to travel back over a channel, and the guarantee this feature is sold on — that no channel accepts
+   * a master password — would be a promise about everyone who can see that channel instead of a
+   * property of the program.
+   *
+   * The other direction is just as costly and less obvious: taking a *find bar's* keys in the core
+   * would mean hand-implementing text editing, with no caret, no selection and no IME, for a search
+   * box.
+   */
+  it('takes them for the master-password prompt and for nothing else', () => {
+    for (const kind of OVERLAY_KINDS) {
+      expect(OVERLAY_CAPTURES_KEYBOARD[kind], kind).toBe(kind === 'master-password')
+    }
+  })
+
+  it('answers the same question for a presentation', () => {
+    expect(capturesKeyboard(SAMPLES['master-password'])).toBe(true)
+    expect(capturesKeyboard(SAMPLES['find-bar'])).toBe(false)
+    expect(capturesKeyboard(SAMPLES['permission-request'])).toBe(false)
+  })
+
+  it('only ever captures for a surface that also holds the keyboard', () => {
+    /*
+      The invariant that makes the capture work at all, and it is a pairing rather than a coincidence:
+      keystrokes are read off the layer's own input pipeline, so a kind that captured without taking
+      focus would silently collect nothing. Asserted over the kinds rather than for the one that does
+      it, so a future capturing surface cannot be added without focus.
+    */
+    for (const kind of OVERLAY_KINDS) {
+      if (!OVERLAY_CAPTURES_KEYBOARD[kind]) continue
+      expect(takesFocus(SAMPLES[kind]), kind).toBe(true)
+    }
   })
 })

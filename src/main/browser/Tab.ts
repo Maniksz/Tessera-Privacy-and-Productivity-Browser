@@ -9,10 +9,12 @@ import { type FaviconCache, faviconDomainOf, faviconUrl } from '@shared/favicons
 import type { ThumbnailCapturer } from '@shared/thumbnails/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import { mouseMoveY } from '@shared/gestures/pointer.js'
+import type { ZoomDirection } from '@shared/gestures/zoom.js'
 import { sequenceOfTabId, tabIdForSequence } from '@shared/session/tab-ids.js'
 import { INTERNAL_SCHEME } from '@shared/product.js'
 import { applyWebRtcPolicy } from '../session/hardening.js'
 import { preloadFile, preloadRoleArgument } from '../paths.js'
+import { pageKeystrokeOf, type PageKeystroke } from './page-keys.js'
 
 /**
  * One tab: a full `WebContentsView` with its own renderer process.
@@ -55,6 +57,31 @@ export interface TabCallbacks {
    * so it can report the bar's *departure* and nothing else. Neither renderer can report the approach, ever.
    */
   onPointerMoved(tab: Tab, y: number): void
+  /**
+   * A pinch or a `Ctrl`-wheel over *this* tab's page.
+   *
+   * Per tile without any work, and worth saying why: this arrives on the tab's own `webContents`, so
+   * the page that received the gesture is the page the gesture is about. The navigation gestures have
+   * a whole function for that question (`decideNavigationGesture`) only because their events reach the
+   * window carrying no position at all.
+   *
+   * Reported rather than applied here because the step belongs to the ladder in `gestures/zoom.ts`,
+   * which both this and the menu's zoom go through so the two cannot disagree.
+   */
+  onZoomGesture(tab: Tab, direction: ZoomDirection): void
+  /**
+   * A keystroke on its way into this tab's page, reported before the page has it.
+   *
+   * Only two keys are anybody's business up there — `Escape` and, on macOS, `Command+.` — and this is
+   * the only route they have: as menu accelerators they would be claimed globally and taken from every
+   * text field on every page. The window decides what to do with them, because both answers are the
+   * window's (cancel this tab's load, or step down the escalation ladder) and neither is a tab's.
+   *
+   * Reported rather than acted on, and reported *without* the means to consume the key: the handler
+   * that could call `preventDefault` stays in this file and deliberately never does. See
+   * `page-keys.ts` for why the page always keeps the keystroke.
+   */
+  onPageKeystroke(tab: Tab, keystroke: PageKeystroke): void
 }
 
 /**
@@ -249,6 +276,22 @@ export class Tab {
     on('focus', () => this.callbacks.onFocused(this))
 
     /*
+      Pinch and `Ctrl`-wheel, which on a laptop is the only zoom there is.
+
+      Chromium raises this on the view under the pointer, not the focused one — the same routing it uses
+      for scrolling — so with four pages on screen the gesture lands on the page being looked at. That is
+      the behaviour asked for, and it comes free: no tile has to be worked out.
+
+      The direction is read defensively because it comes from an untyped event payload, and an unknown
+      value must do nothing rather than be treated as one of the two.
+    */
+    on('zoom-changed', (...args: unknown[]) => {
+      const [, direction] = args
+      if (direction !== 'in' && direction !== 'out') return
+      this.callbacks.onZoomGesture(this, direction)
+    })
+
+    /*
       Every mouse move in the page, filtered to the one number the tile bar needs.
 
       Gated on the setting here rather than further up: this runs per mouse move in every tile, which is exactly
@@ -262,6 +305,25 @@ export class Tab {
       const y = mouseMoveY(input)
       if (y === null) return
       this.callbacks.onPointerMoved(this, y)
+    })
+    /*
+      `Escape`, before the page sees it — and left for the page all the same.
+
+      `before-input-event` rather than the `input-event` above, although nothing here consumes the
+      keystroke and `input-event` would therefore do. Two reasons, both deliberate. This event carries
+      Electron's parsed `Input` — `key`, the four modifier flags, `isAutoRepeat` — where `input-event`
+      carries the raw serialised Blink event with none of that described; and the `preventDefault` this
+      one *could* call is exactly the decision `page-keys.ts` is about, so the code should sit where
+      that choice is visible rather than where it cannot be made. The other subscription is also gated
+      on the hover setting, which a keyboard user turns off.
+
+      `event.preventDefault` is not called on any path. See `page-keys.ts`.
+    */
+    on('before-input-event', (...args: unknown[]) => {
+      const [, input] = args
+      const keystroke = pageKeystrokeOf(input)
+      if (keystroke === null) return
+      this.callbacks.onPageKeystroke(this, keystroke)
     })
     on('page-title-updated', () => {
       // Chromium reports the title after the navigation, so without this most entries would have
@@ -410,6 +472,18 @@ export class Tab {
 
   stop(): void {
     this.view.webContents.stop()
+  }
+
+  /**
+   * True while this tab is still fetching something.
+   *
+   * A getter rather than a second `isLoading()` call at the one other place that wants it, because
+   * `toState` and the `Escape` decision must not be able to disagree about whether a load is in flight
+   * — that is the whole question `stop` turns on.
+   */
+  get loading(): boolean {
+    const wc = this.view.webContents
+    return !wc.isDestroyed() && wc.isLoading()
   }
 
   toggleDevTools(): void {
@@ -601,7 +675,7 @@ export class Tab {
       pendingInput: this.#pendingInput,
       title: this.#deferred?.title ?? (destroyed ? '' : wc.getTitle()),
       faviconUrl: this.#favicon?.url ?? null,
-      loading: destroyed ? false : wc.isLoading(),
+      loading: this.loading,
       canGoBack: history?.canGoBack() ?? false,
       canGoForward: history?.canGoForward() ?? false,
       pinned: this.#pinned,

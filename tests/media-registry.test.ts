@@ -502,7 +502,8 @@ one.ts
     // of tests is here because a parser that only trusted the header would buffer
     // whatever a server chose to send.
     const world = harness({ maxManifestBytes: 32 })
-    world.answer(() => playlistResponse(`#EXTM3U\n#EXTINF:4.0,\n${'a'.repeat(200)}.ts\n`))
+    const body = `#EXTM3U\n#EXTINF:4.0,\n${'a'.repeat(200)}.ts\n`
+    world.answer(() => playlistResponse(body))
     world.respond({
       url: 'https://example.com/hls/master.m3u8',
       resourceType: 'xhr',
@@ -513,6 +514,45 @@ one.ts
     const manifest = await world.registry.describe('tab-1', finding.id)
     expect(manifest).toMatchObject({ status: 'failed', reason: 'too-large' })
     expect(manifest?.status === 'failed' && manifest.detail).not.toContain('declared')
+    // The measured size, in the detail line the panel shows. Asserting only the absence
+    // of "declared" is satisfied by an empty string too, and then the one sentence that
+    // tells a user whether the ceiling is nearly right or absurdly wrong would be blank.
+    expect(manifest?.status === 'failed' && manifest.detail).toBe(`${body.length} bytes`)
+  })
+
+  it('accepts a manifest that is exactly the ceiling, declared and measured', async () => {
+    /*
+      The ceiling at the value itself, on both checks, plus the case that nothing covered
+      at all: a response that *declares* an honest length.
+
+      Every existing case here either declares a wildly excessive length or declares
+      nothing, so the header check could have been `Number.isFinite(declared) || declared >
+      maxBytes` — refusing every manifest that carries a `Content-Length` — and the suite
+      would have stayed green while the media panel showed "too large" for the well-behaved
+      half of the internet. `>` could equally have been `>=` in either place, which costs a
+      user the manifest that happens to land on the boundary.
+    */
+    const body = MEDIA_PLAYLIST
+    const world = harness({ maxManifestBytes: body.length })
+    world.answer(
+      () =>
+        new Response(body, {
+          headers: {
+            'content-type': 'application/x-mpegurl',
+            'content-length': String(body.length)
+          }
+        })
+    )
+    world.respond({
+      url: 'https://example.com/hls/master.m3u8',
+      resourceType: 'xhr',
+      contentType: 'application/x-mpegurl',
+      contentLength: null
+    })
+
+    const finding = world.registry.findingsFor('tab-1')[0]!
+    const manifest = await world.registry.describe('tab-1', finding.id)
+    expect(manifest).toMatchObject({ status: 'ready' })
   })
 
   it('reports something that is not a manifest at all', async () => {

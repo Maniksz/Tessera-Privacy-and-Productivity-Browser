@@ -1,10 +1,10 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { NativeImage } from 'electron'
-import { plainJsonDocumentCodec } from '@main/data/JsonStore.js'
+import { plainJsonDocumentCodec, type DocumentCodec } from '@main/data/JsonStore.js'
 import {
   ThumbnailStore,
   thumbnailFileName,
@@ -151,6 +151,29 @@ async function harness(
 
 function request(overrides: Partial<ThumbnailRequest> = {}): ThumbnailRequest {
   return { url: PAGE, title: TITLE, viewId: 7, ...overrides }
+}
+
+/**
+ * A codec that leaves nothing readable in the file.
+ *
+ * Not encryption — base64 hides nothing from anyone trying — but it stands in for the real
+ * codec in the one respect that matters to a store: the bytes on disk are not the document.
+ * A test using the *plain* codec cannot tell a store that forwards its codec from one that
+ * ignores it, which is how the forwarding stayed unasserted.
+ */
+function sealingCodec(): DocumentCodec {
+  const marker = 'sealed:'
+  return {
+    encode: (data) =>
+      new TextEncoder().encode(
+        `${marker}${Buffer.from(JSON.stringify(data), 'utf8').toString('base64')}`
+      ),
+    decode: (bytes) => {
+      const text = new TextDecoder().decode(bytes)
+      if (!text.startsWith(marker)) throw new Error('not written by this codec')
+      return JSON.parse(Buffer.from(text.slice(marker.length), 'base64').toString('utf8')) as unknown
+    }
+  }
 }
 
 async function storedShots(directory: string): Promise<ThumbnailEntry[]> {
@@ -341,6 +364,43 @@ describe('scaling what came back', () => {
     expect(h.log.qualities).toEqual([70, 40])
   })
 
+  it('keeps a picture that lands exactly on the cap, at either quality', async () => {
+    /*
+      The cap, at the value itself, on both attempts. Every other case here is a byte over
+      or comfortably under, so `<=` could have been `<` in either line and only a capture
+      of exactly 98 304 bytes would have noticed — and what it would produce is a
+      `too-large` refusal for a picture the index schema accepts, so the card would lose
+      its thumbnail with the counters saying the encoder was at fault.
+    */
+    const first = await harness()
+    first.answer(() =>
+      Promise.resolve(fakeImage(first.log, { jpeg: () => jpegBytes(70, MAX_THUMBNAIL_BYTES) }))
+    )
+    expect(await first.store.capturerFor('normal').capture(request())).toMatchObject({
+      kind: 'stored',
+      entry: { byteLength: MAX_THUMBNAIL_BYTES }
+    })
+    // And it stopped at the first attempt: a picture that fits is not re-encoded.
+    expect(first.log.qualities).toEqual([70])
+
+    const second = await harness()
+    second.answer(() =>
+      Promise.resolve(
+        fakeImage(second.log, {
+          jpeg: (quality) =>
+            quality === 70
+              ? jpegBytes(70, MAX_THUMBNAIL_BYTES + 1)
+              : jpegBytes(40, MAX_THUMBNAIL_BYTES)
+        })
+      )
+    )
+    expect(await second.store.capturerFor('normal').capture(request())).toMatchObject({
+      kind: 'stored',
+      entry: { byteLength: MAX_THUMBNAIL_BYTES }
+    })
+    expect(second.log.qualities).toEqual([70, 40])
+  })
+
   it('refuses a picture that is too big even at the lower quality', async () => {
     const h = await harness()
     h.answer(() =>
@@ -402,11 +462,20 @@ describe('refusing what cannot be stored', () => {
   it('refuses a provider that threw instead of answering', async () => {
     const h = await harness()
     h.answer(() => Promise.reject(new Error('view destroyed')))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     expect(await h.store.capturerFor('normal').capture(request())).toEqual({
       kind: 'rejected',
       reason: 'capture-failed'
     })
+    // Named, and named with the page in it. `capture-failed` is also what a view that had
+    // simply gone reports, so without the address in the log a provider that throws for
+    // every page — a broken platform call — is indistinguishable from ordinary tab churn.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`[thumbnails] could not photograph ${PAGE}`),
+      expect.anything()
+    )
+    warn.mockRestore()
   })
 
   it('refuses pixels it could not crop, scale or encode', async () => {
@@ -415,10 +484,19 @@ describe('refusing what cannot be stored', () => {
       h.answer(() =>
         Promise.resolve(fakeImage(h.log, { size: { width: 1440, height: 2400 }, fail }))
       )
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       expect(await h.store.capturerFor('normal').capture(request()), fail).toEqual({
         kind: 'rejected',
         reason: 'encode-failed'
       })
+      // One reason covers all three steps on purpose, so the log line is the only place
+      // that says the pixel path was where it broke — as opposed to the page, the file or
+      // the index, which produce the same shape of refusal.
+      expect(warn, fail).toHaveBeenCalledWith(
+        '[thumbnails] could not scale or encode a capture:',
+        expect.any(Error)
+      )
+      warn.mockRestore()
     }
   })
 
@@ -454,6 +532,7 @@ describe('refusing what cannot be stored', () => {
     // A file where the directory should be: nothing can be created inside it.
     await writeFile(join(root, 'blocked'), 'not a directory', 'utf8')
     const h = await harness({ directory: join(root, 'blocked', 'thumbnails') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     expect(await h.store.capturerFor('normal').capture(request())).toEqual({
       kind: 'rejected',
@@ -461,6 +540,14 @@ describe('refusing what cannot be stored', () => {
     })
     // No index entry, because there is no file for it to describe.
     expect(h.store.list()).toEqual([])
+    // And the reason is in the log with the page it was for. A directory that cannot be
+    // written to fails for *every* page, and this line is what distinguishes that from one
+    // capture going wrong — the counters cannot, they only say `write-failed` more often.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`[thumbnails] could not store the picture for ${PAGE_KEY}`),
+      expect.anything()
+    )
+    warn.mockRestore()
   })
 
   it('keeps the previous picture when a later capture fails', async () => {
@@ -531,10 +618,40 @@ describe('bounding what is kept', () => {
     const path = shotPath(h.directory, PAGE_KEY)
     await rm(path)
     await mkdir(path)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     h.tick(1_000)
     await capturer.capture(request({ url: OTHER }))
     expect(h.store.list().map((shot) => shot.url)).toEqual([OTHER])
+    // Reported, with the page it belonged to. Silence would leave a picture of the user's
+    // screen on disk that nothing remembers — and therefore nothing, including "clear
+    // data", can ever delete.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(`[thumbnails] could not remove the picture for ${PAGE_KEY}`),
+      expect.anything()
+    )
+    warn.mockRestore()
+  })
+
+  it('clears a picture whose file has already gone, without complaining', async () => {
+    /*
+      The ordinary case rather than an edge one: this directory is the kind the platform
+      treats as discardable, so a user, a cleaner or the OS can remove a file the index
+      still names. `rm` is asked with `force`, and without it every such deletion would log
+      a warning about a file already in the state we wanted.
+
+      A warning that fires in the common case is worse than none: it is the reason nobody
+      reads the log on the day something real happens.
+    */
+    const h = await harness()
+    await h.store.capturerFor('normal').capture(request())
+    await rm(shotPath(h.directory, PAGE_KEY))
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await h.store.clear()).toBe(1)
+    expect(warn, warn.mock.calls.map(String).join(' | ')).not.toHaveBeenCalled()
+    warn.mockRestore()
+    expect(h.store.list()).toEqual([])
   })
 
   it('clears every picture and the index, which is what clearing the cache does', async () => {
@@ -732,6 +849,89 @@ describe('on disk', () => {
       debounceMs: 0
     })
     expect(restarted.list()).toHaveLength(1)
+  })
+
+  it('puts the codec between the pages it names and the disk, not beside it', async () => {
+    /*
+      The test above passes the *plain* codec, so the file is byte-identical whether the
+      store forwards the codec or drops it on the way to `JsonStore`. This one uses a codec
+      whose output cannot be mistaken for JSON.
+
+      The index holds page addresses and their titles — the same material as the history
+      file — beside picture files deliberately named after hashes so that a directory
+      listing is not a reading list. Dropped, the addresses would be the one plainly
+      readable thing in a directory built to avoid exactly that.
+    */
+    const root = await mkdtemp(join(tmpdir(), 'tessera-thumbnails-'))
+    const directory = join(root, 'thumbnails')
+    const log: CameraLog = { crops: [], resizes: [], qualities: [] }
+    const camera: PageCapturer = () => Promise.resolve(fakeImage(log))
+
+    const store = await ThumbnailStore.open({
+      directory,
+      capture: camera,
+      codec: sealingCodec(),
+      debounceMs: 0
+    })
+    await store.capturerFor('normal').capture(request())
+    await store.flush()
+
+    const raw = await readFile(join(directory, 'index.json'), 'utf8')
+    expect(raw.startsWith('sealed:'), raw.slice(0, 40)).toBe(true)
+    expect(raw).not.toContain('example.com')
+
+    const restarted = await ThumbnailStore.open({
+      directory,
+      capture: camera,
+      codec: sealingCodec(),
+      debounceMs: 0
+    })
+    expect(restarted.list().map((shot) => shot.url)).toEqual([PAGE_KEY])
+  })
+
+  it('uses the coalescing window it was given, not the default one', async () => {
+    /*
+      `debounceMs: 0` means "write on every change", and `JsonStore` honours it without a
+      timer at all. A store that dropped the option would fall back to 250 ms and still pass
+      every other test here, because they all call `flush` first — so nothing would notice
+      that a caller asking for an immediate write got a coalesced one, which at exit is the
+      difference between the newest entries being in the index and being lost.
+
+      The observable is that no timer was scheduled, not how soon the file appears. An
+      earlier version installed fake timers and spun the event loop a hundred times waiting
+      for the file — a wall-clock budget in disguise, which passed on its own and failed in a
+      full run, where a queued write does not get its turn that soon.
+    */
+    const scheduled = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      const h = await harness()
+      // `open` is not what this is about; only the write the capture triggers.
+      scheduled.mockClear()
+      await h.store.capturerFor('normal').capture(request())
+      expect(scheduled, 'the write was put behind a timer').not.toHaveBeenCalled()
+
+      // Awaited on the store's own queue: the write is already on it, so this resolves once
+      // *that* write is on disk rather than starting a second one.
+      await h.store.flush()
+      expect(await readFile(join(h.directory, 'index.json'), 'utf8')).toContain(PAGE)
+    } finally {
+      scheduled.mockRestore()
+    }
+  })
+
+  it('writes the picture readable by nobody else', async () => {
+    /*
+      `0o600` is passed explicitly and this is what asks for it. A thumbnail is a
+      photograph of the user's screen — an inbox, a bank statement, whatever was open — and
+      the default mode would be `0644`, so on a shared machine every other account could
+      look through them. The file names are hashes for the same reason; mode and name are
+      two halves of one decision and only one of them was asserted.
+    */
+    const h = await harness()
+    await h.store.capturerFor('normal').capture(request())
+
+    const mode = (await stat(shotPath(h.directory, PAGE_KEY))).mode & 0o777
+    expect(mode.toString(8)).toBe('600')
   })
 
   it('uses the real clock and the default debounce when neither is given', async () => {

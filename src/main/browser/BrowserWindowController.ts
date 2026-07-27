@@ -11,8 +11,10 @@ import type { OverlayPresentation, OverlayState } from '@shared/overlay/surface.
 import { Tab, adoptTabId, nextTabId, type TabWiring } from './Tab.js'
 // The seams' *types* only: what each one is, and what it may reach, both live in `window-seams.ts`.
 import { createWindowSeams, type WindowSeams } from './window-seams.js'
+import type { LayoutChangeOptions } from './TileOccupancyController.js'
 import { chromeWindowOptions } from './window-options.js'
 import type { TileBarRequest } from '@shared/split/tile-bar.js'
+import { nextZoomPercent } from '@shared/gestures/zoom.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SessionRecorder } from '@shared/session/model.js'
@@ -21,6 +23,9 @@ import { OverlayLayer } from './OverlayLayer.js'
 import { SplitController, type TileDirection } from './SplitController.js'
 import { currentPlatform, preloadFile, preloadRoleArgument } from '../paths.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
+import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
+import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
+import { pageKeyAction, type PageKeystroke } from './page-keys.js'
 
 /**
  * One browser window: its chrome UI, its tabs, its split layout.
@@ -162,6 +167,7 @@ export class BrowserWindowController {
       contentRect: () => this.#contentRect(),
       setFullScreenable: (allowed) => this.window.setFullScreenable(allowed),
       exitWindowFullscreen: () => this.window.setFullScreen(false),
+      toggleWindowFullscreen: () => this.window.setFullScreen(!this.window.isFullScreen()),
       tab: (tabId) => this.#tabs.get(tabId),
       tabIds: () => [...this.#tabs.keys()],
       tabOrder: () => this.#tabOrder,
@@ -340,7 +346,19 @@ export class BrowserWindowController {
           // A tab with no tile is loaded but off screen, so there is no strip to reveal.
           if (tileIndex === null) return
           this.requestTileBar({ invokedBy: 'pointer', tileIndex, y })
-        }
+        },
+        /*
+          The tab the gesture landed on zooms, whichever tile that is and whether or not it is active.
+
+          Through `setZoomPercent` rather than the view's own zoom, so the value goes into the
+          per-domain registry spec 1 requires. One consequence worth knowing rather than discovering:
+          two tiles showing the *same* site zoom together, because that is what "zoom is per domain"
+          means. Per tile would be a different specification, not a smaller change.
+        */
+        onZoomGesture: (source, direction) => {
+          source.setZoomPercent(nextZoomPercent(source.zoomPercent, direction))
+        },
+        onPageKeystroke: (source, keystroke) => this.#handlePageKeystroke(source, keystroke)
       }
     })
 
@@ -352,14 +370,18 @@ export class BrowserWindowController {
     this.window.contentView.addChildView(tab.view, 0)
 
     /**
-     * Explicit `null` means "load it but leave it out of the grid".
+     * Explicit `null` means "load it but leave it out of the grid" — a link opened in the
+     * background, which must not disturb the arrangement on screen. An explicit index is session
+     * restore and tile filling, both of which know exactly where the tab goes.
      *
-     * Otherwise an empty tile always wins over an occupied one. Using the active tile first
-     * meant a new tab in a split layout replaced whatever was in front of the user while empty
-     * panes sat next to it — the tab arrived and their page vanished.
+     * Everything else is somebody asking for a new tab, and a new tab gets the whole window:
+     * `claimTileForNewTab` puts the grid away and returns the one tile that is left. See there for
+     * why that does not bring back the empty panes it used to replace.
      */
     const tile =
-      options.tileIndex === null ? null : (options.tileIndex ?? this.#seams.occupancy.tileForNewTab())
+      options.tileIndex === null
+        ? null
+        : (options.tileIndex ?? this.#seams.occupancy.claimTileForNewTab())
 
     if (tile !== null) {
       this.assignTabToTile(tab.id, tile)
@@ -426,12 +448,49 @@ export class BrowserWindowController {
     if (tile !== null) {
       this.split.setActiveTile(tile)
     } else {
-      // A tab with no tile becomes visible by taking over the active one.
-      this.assignTabToTile(tabId, this.split.activeTile)
+      /*
+        A tab with no tile has two ways back, and which one applies is a question only its group can
+        answer.
+
+        If its group is carrying the arrangement these tabs were displaced from, that arrangement comes
+        back: the layout it was, every member in the tile it had. That is the point of recording it — a
+        new tab takes the window, and returning to what you were looking at is one click on any of the
+        tabs that were in it.
+
+        Otherwise it becomes visible the same way a newly created one does: it gets the window. It used
+        to take over the active tile, which is the complaint one step removed — opening a tab out of a
+        folded group replaced the page in front of the user, because a folded group releases its
+        members' tiles and every one of them comes back through here.
+      */
+      const arrangement = this.#seams.groups.takeArrangementFor(tabId)
+      if (arrangement === null) {
+        this.assignTabToTile(tabId, this.#seams.occupancy.claimTileForNewTab())
+      } else {
+        this.#seams.occupancy.restoreArrangement(tabId, arrangement)
+      }
     }
     this.#focusActiveTab()
     this.relayout()
     this.#scheduleBroadcast()
+  }
+
+  /**
+   * The positional tab keys: `Ctrl+1`…`Ctrl+8` and `Ctrl+9` (spec 9).
+   *
+   * Registered as hidden menu items in `tab-position-accelerators.ts`; which tab a position names is
+   * `tabForStripPosition`, and that module says why it is neither the tile index nor `#tabOrder` as it
+   * stands. A key naming a tab that is not there does nothing, as it does in every browser that has
+   * this feature.
+   */
+  activateTabAtStripPosition(position: StripPosition): void {
+    const groups = this.#seams.groups
+    const tabId = tabForStripPosition(
+      groups.displayOrder(),
+      tabsHiddenByCollapse(groups.groups()),
+      position
+    )
+    if (tabId === null) return
+    this.activateTab(tabId)
   }
 
   moveTab(tabId: string, toIndex: number): void {
@@ -520,12 +579,19 @@ export class BrowserWindowController {
   // --- split view ----------------------------------------------------------
 
   setLayout(layout: LayoutId): void {
-    // A layout the user picked gets its empty tiles filled; one the browser shrank into does
-    // not, or closing a tab would immediately conjure a replacement for it.
-    this.#applyLayout(layout, { fill: true })
+    /*
+      The one explicit layout change there is, and therefore the only one that fills.
+
+      A layout the user picked gets its empty tiles filled — first from whatever is already loaded
+      and hidden, then with start pages. Every other route here is the browser changing the layout on
+      its way to something else: a shrink after a close, a drop, a new tab taking the window. Filling
+      those would conjure a replacement for the very tab that was just closed, or open pages nobody
+      asked for alongside a page somebody did.
+    */
+    this.#applyLayout(layout, { fill: true, rehome: true })
   }
 
-  #applyLayout(layout: LayoutId, options: { fill: boolean }): void {
+  #applyLayout(layout: LayoutId, options: LayoutChangeOptions): void {
     /*
       By kind, and that distinction is the whole point rather than tidiness.
 
@@ -618,6 +684,11 @@ export class BrowserWindowController {
     this.#scheduleBroadcast()
   }
 
+  /** The fullscreen key. Which of the two fullscreens it means is decided in the seam. */
+  toggleFullscreen(): void {
+    this.#seams.fullscreen.toggleFullscreen()
+  }
+
   toggleTileMaximized(tileIndex?: number): void {
     // Same reason as `setFractions`: every tile's rectangle changes, including the one under an open bar.
     this.#overlay.dismissKind('tile-bar')
@@ -630,9 +701,46 @@ export class BrowserWindowController {
     this.#scheduleBroadcast()
   }
 
-  /** One step back down the escalation ladder (spec 2). */
+  /**
+   * One step back down the escalation ladder (spec 2).
+   *
+   * Two callers, and they cannot both fire for one press because focus is in one web contents: the
+   * chrome renderer's own key handler over `split:escape` (see `App.tsx`) when the toolbar or the tab
+   * strip has the keyboard, and `#handlePageKeystroke` below when a page has it. The second is the one
+   * that matters in the state this feature exists for — a fullscreen tile hides the chrome, so the
+   * renderer never sees the key.
+   */
   escape(): void {
     this.#seams.fullscreen.escape()
+  }
+
+  /**
+   * `Escape`, and macOS's `Command+.`, arriving in a page.
+   *
+   * Every rule is in `page-keys.ts` — including the one that is not visible here: the keystroke is
+   * never taken from the page. Whatever this does, the page's own handler and the caret in its text
+   * fields get the key as well.
+   *
+   * The tab that received the key is the one whose load is cancelled, rather than the active tile's:
+   * the page the user is looking at is the page that had the focus. The ladder is the window's, so it
+   * goes through the window either way.
+   */
+  #handlePageKeystroke(tab: Tab, keystroke: PageKeystroke): void {
+    const action = pageKeyAction(keystroke, currentPlatform(), {
+      loading: tab.loading,
+      escalation: this.split.escalation
+    })
+
+    switch (action) {
+      case 'stop-load':
+        tab.stop()
+        break
+      case 'escape-ladder':
+        this.escape()
+        break
+      case 'nothing':
+        break
+    }
   }
 
   setTileMuted(tileIndex: number, muted: boolean): void {
@@ -858,6 +966,15 @@ export class BrowserWindowController {
       */
       const tabs = this.#seams.groups.displayOrder().map((id) => this.#tabs.get(id)).filter((tab): tab is Tab => tab !== undefined).map((tab) => tab.toState())
       this.emit('tabs:changed', { tabs, activeTabId: this.split.activeTabId() })
+      /*
+        An open tile bar reads the tab again, from the same tick the strip does.
+
+        Here rather than in each navigation handler because the bar shows four things that change
+        independently — back, forward, loading and the address — and a version wired to "back was
+        pressed" was the bug: it left forward greyed out until the bar was re-opened. This is the one
+        place every one of those changes already arrives at.
+      */
+      this.#seams.tileInput.refreshTileBar()
       /*
         The session is recorded from the same snapshot the interface is given, on the same coalesced tick.
 

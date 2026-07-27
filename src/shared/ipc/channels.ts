@@ -233,9 +233,16 @@ export const INVOKE_CHANNELS = [
   /*
     Saved passwords.
 
-    Deliberately six channels and no seventh: there is no export, and nothing here answers with
-    more than one secret. That absence is what makes the bound on an open passwords tab real —
+    Thirteen channels, and the interesting number is how many of them carry a password: one, in one
+    direction. `passwords:reveal` answers with a single secret for a single id the user asked about.
+    Nothing else in this group carries one in either direction, and nothing anywhere on this boundary
+    answers with more than one. That absence is what makes the bound on an open passwords tab real —
     see `shared/passwords/reveal.ts`.
+
+    The absence that took the most rearranging is the master password. It has no channel, no field and
+    no payload: `passwords:requestUnlock` sends nothing, the core raises a prompt on the overlay layer
+    and reads the keystrokes off that view in the main process, and the answer is one of four words. See
+    `shared/passwords/api.ts` for what that replaced and why a promise about a payload was not enough.
   */
   'passwords:list',
   'passwords:create',
@@ -243,7 +250,33 @@ export const INVOKE_CHANNELS = [
   'passwords:remove',
   /** One secret, for one id the user asked about. The only channel here that returns a password. */
   'passwords:reveal',
-  'passwords:forgetNeverSaved'
+  'passwords:forgetNeverSaved',
+  /** How the vault is protected, and whether it is open. Never a count of what is in it. */
+  'passwords:vaultStatus',
+  /**
+   * Asks the core to raise the master-password prompt, and resolves with what came of it.
+   *
+   * No payload in either direction beyond four words and the resulting state. Pending for as long as
+   * somebody is being asked, which is the honest representation of a question put to a person.
+   */
+  'passwords:requestUnlock',
+  /** Drops the key now, rather than waiting for the idle timeout. */
+  'passwords:lock',
+  /** Starts the set, change or remove sequence. Carries the intent; the core derives the questions. */
+  'passwords:beginSetMasterPassword',
+  /** No payload: the core opens the file chooser and reads the file. See `shared/passwords/api.ts`. */
+  'passwords:import',
+  /** Destroys the vault, after offering to put the sealed copy aside. */
+  'passwords:resetVault',
+  /**
+   * Continue or Cancel on the master-password prompt.
+   *
+   * Chrome-only, and on no internal page allowlist. It exists for the two buttons a mouse can reach:
+   * every keyboard route is handled in the core, because that surface never receives its own keystrokes.
+   * It carries a request id and a verb, so the worst a forged call can do is submit or abandon whatever
+   * the person in front of the machine had already typed.
+   */
+  'passwords:answerPrompt'
 ] as const
 
 export type InvokeChannel = (typeof INVOKE_CHANNELS)[number]
@@ -364,6 +397,15 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'downloads:resume',
     'downloads:cancel'
   ],
+  /*
+    Twelve, and one deliberate omission: `passwords:answerPrompt`.
+
+    Every operation the page offers is here, including the ones that can destroy the vault — because the
+    page is where a person manages their own credentials, and a manager whose reset button is somewhere
+    else is a manager people cannot recover from. What is not here is the answer to the *prompt*: that
+    surface belongs to the chrome, a mis-aimed submit on it would spend whatever the person had typed,
+    and the page has no business reaching it. The page asks a question and waits for the outcome.
+  */
   passwords: [
     'i18n:getCatalog',
     'passwords:list',
@@ -371,7 +413,13 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'passwords:update',
     'passwords:remove',
     'passwords:reveal',
-    'passwords:forgetNeverSaved'
+    'passwords:forgetNeverSaved',
+    'passwords:vaultStatus',
+    'passwords:requestUnlock',
+    'passwords:lock',
+    'passwords:beginSetMasterPassword',
+    'passwords:import',
+    'passwords:resetVault'
   ],
   /*
     The narrowest allowlist in the table, and it should be: the reader page renders text harvested from a

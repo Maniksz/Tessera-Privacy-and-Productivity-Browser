@@ -45,9 +45,11 @@ import {
  *      every URL in the name column, and given a hand-edited file would import every username as a
  *      password. A header without `url` and `password` refuses the whole file rather than importing
  *      part of it.
- *   5. **A UTF-8 BOM.** `name` matches no column, so *every* mapping fails and the file is
+ *   5. **A UTF-8 BOM.** `\uFEFFname` matches no column, so *every* mapping fails and the file is
  *      refused for a reason that has nothing to do with what is wrong with it. Stripped once, at the
- *      front, before anything is scanned.
+ *      front, before anything is scanned — and written as an escape wherever it appears in this file,
+ *      because a literal one is invisible to a reviewer and was once silently eaten out of the very
+ *      comparison that does the stripping. See `parseChromePasswordCsv`.
  *   6. **CRLF line endings.** Chrome on Windows writes them. A scanner that only knows `\n` leaves a
  *      carriage return on the last field of every record, so every imported password has an
  *      invisible character appended and not one of them works.
@@ -88,6 +90,21 @@ export const MAX_CSV_LENGTH = 8 * 1024 * 1024
  */
 export const MAX_CSV_ROWS = 20_000
 
+/**
+ * Why the whole file was refused, as an array.
+ *
+ * Exported because the wire schema in `shared/ipc/contract.ts` has to enumerate it: the import report
+ * crosses IPC, and a refusal validated as a bare `string` would let a future value through as a key the
+ * page has no sentence for — a blank line where the explanation belonged. `satisfies` ties it to the
+ * union, so adding one without adding it here is a build failure.
+ */
+export const CSV_REFUSALS = [
+  'empty',
+  'unknown-columns',
+  'too-large',
+  'too-many-rows'
+] as const satisfies readonly CsvRefusal[]
+
 /** Why the whole file was refused. One of these means no credential was read at all. */
 export type CsvRefusal =
   /** No records, or a header and nothing under it. */
@@ -108,7 +125,8 @@ export type RowRefusal =
   | 'password-too-long'
   | 'username-too-long'
 
-const ROW_REFUSALS = [
+/** Exported for the wire schema, for the reason `CSV_REFUSALS` gives. */
+export const ROW_REFUSALS = [
   'no-url',
   'formula-url',
   'unsupported-url',
@@ -307,10 +325,24 @@ function cellAt(row: readonly string[], index: number): string {
 export function parseChromePasswordCsv(text: string): ChromeImportParse {
   if (text.length > MAX_CSV_LENGTH) return refused('too-large')
 
-  // The BOM is stripped once, here, before anything reads a column name. Left in place it would make
-  // the first header cell `name`, so `mapColumns` would fail and the file would be refused as
-  // "not a password export" — a true statement about the wrong thing.
-  const source = text.startsWith('') ? text.slice(1) : text
+  /*
+    The BOM is stripped once, here, before anything reads a column name. Left in place it would make
+    the first header cell `\uFEFFname`, so `mapColumns` would fail and the file would be refused as
+    "not a password export" — a true statement about the wrong thing.
+
+    Written as the escape rather than as the character itself, and that is not style. This line used to
+    read `text.startsWith('')` with the BOM pasted literally between the quotes — where an editor, a
+    copy through a terminal or a `prettier` pass had eaten it, leaving an **empty string**. Since
+    `''.startsWith('')` is always true, the first character of *every* imported file was discarded.
+    Chrome's own export survived by luck: `name,url,…` became `ame,url,…`, and the columns that matter
+    are found by name, so the damaged one was the one nothing needed. Firefox's export begins with
+    `url`, so the damage landed on a column that is required and the whole file came back
+    `unknown-columns` — "you picked the wrong file", about a file that was exactly right.
+
+    An invisible character inside a string literal cannot be reviewed, which is the whole argument for
+    the escape: a literal one is invisible in a diff, and `'\uFEFF'` is not.
+  */
+  const source = text.startsWith('\uFEFF') ? text.slice(1) : text
 
   const records = parseCsvRecords(source)
   if (records === null) return refused('too-many-rows')

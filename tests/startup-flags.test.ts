@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  readCheckModule,
   readStartupFlags,
   startupFlagsFrom,
   writeStartupFlags,
@@ -130,6 +131,54 @@ describe('writing the flags', () => {
       hardwareAcceleration: true,
       throttleBackgroundContent: true
     })
+  })
+})
+
+describe('the check-run switch', () => {
+  const DEVELOPMENT = { packaged: false }
+
+  it('reads the module path off the command line', () => {
+    // Without this the application has no way to be driven from inside its own process, and the
+    // only remaining way to drive a real window is a debugging port — the thing this replaced.
+    expect(readCheckModule(['electron', 'out/main/index.js', '--run-checks=/tmp/checks.mjs'], DEVELOPMENT)).toBe(
+      '/tmp/checks.mjs'
+    )
+  })
+
+  it('is absent on an ordinary command line', () => {
+    // Every normal launch goes through here. A false positive would make the browser load a module
+    // and exit instead of opening a window.
+    expect(readCheckModule(['electron', 'out/main/index.js', '--user-data-dir=/tmp/p'], DEVELOPMENT)).toBeNull()
+  })
+
+  it('refuses the switch in a packaged build', () => {
+    /*
+      The guard that matters. A shipped browser that can be told to load and execute a file from disk
+      is a code-execution route whose key is a command line — a tampered shortcut, a `.desktop` file,
+      anything that can start the browser with arguments. In a packaged build the switch must not
+      exist at all, however well-formed it looks.
+    */
+    expect(readCheckModule(['Tessera', '--run-checks=/tmp/evil.mjs'], { packaged: true })).toBeNull()
+  })
+
+  it('treats a switch with no path as absent', () => {
+    // `--run-checks=` names nothing to load. Refusing to start over it would make a typo in a
+    // development-only switch into a browser that does not open.
+    expect(readCheckModule(['electron', '--run-checks='], DEVELOPMENT)).toBeNull()
+  })
+
+  it('lets the last occurrence win, as Chromium does with its own switches', () => {
+    // The run script appends the switch to whatever is already on the command line. If an earlier
+    // one won, a stale path in someone's launch configuration would silently decide what runs.
+    expect(
+      readCheckModule(['electron', '--run-checks=/tmp/stale.mjs', '--run-checks=/tmp/wanted.mjs'], DEVELOPMENT)
+    ).toBe('/tmp/wanted.mjs')
+  })
+
+  it('does not match a switch that merely starts with the same letters', () => {
+    // `startsWith` on the bare name would accept `--run-checks-later=x` and hand the core a path it
+    // was never given; the `=` is part of what is matched for that reason.
+    expect(readCheckModule(['electron', '--run-checksum=/tmp/x.mjs'], DEVELOPMENT)).toBeNull()
   })
 })
 

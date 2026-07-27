@@ -5,6 +5,8 @@ import {
   INTERNAL_PAGE_EVENT_CHANNELS,
   INTERNAL_PAGE_INVOKE_CHANNELS,
   INVOKE_CHANNELS,
+  anyInternalInvokeChannels,
+  mayInternalPageInvoke,
   type InternalPage
 } from '@shared/ipc/channels.js'
 import { PASSWORD_CHANNELS } from '@shared/passwords/api.js'
@@ -27,6 +29,23 @@ const ROOT = process.cwd()
 
 function source(relative: string): string {
   return readFileSync(join(ROOT, relative), 'utf8')
+}
+
+/**
+ * A file with its comments removed.
+ *
+ * A scanning test that reads prose finds the words the prose is *about*. This one failed on the docblock that
+ * says "the absence of any `masterPassword` … below is the enforcement" — a comment stating the very rule being
+ * checked, reported as a violation of it. The same mistake has bitten this project three times, and the fix each
+ * time is to scan code rather than text.
+ *
+ * String literals are deliberately left in: a channel name or a field name written as a literal is code, and a
+ * previous version of `codeOnly` in `architecture.test.ts` stripped those too and made an assertion vacuous.
+ */
+function codeOf(relative: string): string {
+  return source(relative)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
 }
 
 /**
@@ -67,33 +86,65 @@ describe('internal page privileges', () => {
   })
 
   /*
-    The six that are wired, named rather than derived, and that is the whole point of this list.
+    What the page is granted, named rather than derived, and that is the whole point of this list.
 
-    `PASSWORD_CHANNELS` in `shared/passwords/api.ts` declares eleven: the five below it — the lock, the
-    master password, the vault reset and the CSV import — arrived with the vault and have no contract
-    entry, no handler and therefore no grant. Deriving this expectation from that array would turn the
-    gap into a green test on the day somebody adds a name to it and nothing else.
+    It was six while the lock, the master password, the reset and the CSV import sat in the tree with no
+    contract entry and no handler. It is now twelve. Deriving the expectation from `PASSWORD_CHANNELS`
+    would make this test green on the day somebody adds a name to that array and nothing else, which is
+    exactly the state it was written to catch.
 
-    So the two assertions are different in kind: the grant must be exactly these six, *and* every one
-    of them must still be a channel that feature declares. A channel renamed on their side fails the
-    second; a channel granted without being wired fails the first.
+    `passwords:answerPrompt` is the one channel that feature declares and this page must *not* have: it
+    answers the master-password prompt, that surface is browser chrome, and a mis-aimed submit on it would
+    spend whatever the person had typed. Asserted below rather than implied by absence.
+
+    So the assertions are different in kind: the grant must be exactly these twelve, every one of them must
+    still be a channel that feature declares, and the thirteenth must stay out.
   */
   const WIRED_PASSWORD_CHANNELS = [
+    'passwords:beginSetMasterPassword',
     'passwords:create',
     'passwords:forgetNeverSaved',
+    'passwords:import',
     'passwords:list',
+    'passwords:lock',
     'passwords:remove',
+    'passwords:requestUnlock',
+    'passwords:resetVault',
     'passwords:reveal',
-    'passwords:update'
+    'passwords:update',
+    'passwords:vaultStatus'
   ]
 
-  it('grants the passwords page exactly the six channels that are wired', () => {
+  it('grants the passwords page exactly the channels that are wired', () => {
     expect(grantedTo('passwords')).toEqual(WIRED_PASSWORD_CHANNELS)
   })
 
-  it('keeps those six names in step with the passwords API', () => {
+  it('keeps those names in step with the passwords API', () => {
     for (const channel of WIRED_PASSWORD_CHANNELS) {
       expect(PASSWORD_CHANNELS as readonly string[], channel).toContain(channel)
+    }
+  })
+
+  it('keeps the master-password prompt answerable only from the chrome', () => {
+    expect(mayInternalPageInvoke('passwords', 'passwords:answerPrompt')).toBe(false)
+    // And from no other internal page either: the union is the only thing one page cannot satisfy for
+    // another by happening to lack a channel.
+    expect(anyInternalInvokeChannels() as readonly string[]).not.toContain('passwords:answerPrompt')
+  })
+
+  it("carries no channel whose payload could hold a master password", () => {
+    /*
+      The structural half of the decision `shared/passwords/api.ts` describes, read off the contract rather
+      than promised in a comment. A request schema is where such a field would have to appear to be
+      accepted, so this greps the one file that defines them all.
+
+      It would have caught the design this replaced: `passwords:unlock { masterPassword }` and
+      `passwords:setMasterPassword { current, next }` were both declared, with an argument for why crossing
+      was unavoidable. It was not unavoidable.
+    */
+    const schema = codeOf('src/shared/passwords/schema.ts')
+    for (const field of ['masterPassword', 'current:', 'next:', 'candidate']) {
+      expect(schema, `the password wire schema names ${field}`).not.toContain(field)
     }
   })
 

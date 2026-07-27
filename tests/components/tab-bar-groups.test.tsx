@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TabBar } from '@renderer/components/TabBar.js'
 import type { TabState } from '@shared/model.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
+import { shortcutTitles } from '@shared/shortcuts/format.js'
 
 /**
  * The tab strip with groups in it.
@@ -68,7 +69,17 @@ function group(overrides: Partial<TabGroup> & { id: string; tabIds: string[] }):
 
 function renderBar(tabs: TabState[], groups: TabGroup[]): void {
   render(
-    <TabBar tabs={tabs} groups={groups} activeTabId={tabs[0]?.id ?? null} split={null} leftInset={0} rightInset={0} />
+    <TabBar
+      tabs={tabs}
+      groups={groups}
+      activeTabId={tabs[0]?.id ?? null}
+      split={null}
+      leftInset={0}
+      rightInset={0}
+      // The real writer, built for a known platform. A stub returning the label would let a call site
+      // stop asking for the key without this file noticing.
+      titleWithShortcut={shortcutTitles('win32')}
+    />
   )
 }
 
@@ -91,10 +102,7 @@ describe('a group in the strip', () => {
 
   it('bands the members and marks the ends of the run', () => {
     installBridge()
-    renderBar(
-      [tab('t1'), tab('t2'), tab('t3')],
-      [group({ id: 'g1', tabIds: ['t1', 't2', 't3'] })]
-    )
+    renderBar([tab('t1'), tab('t2'), tab('t3')], [group({ id: 'g1', tabIds: ['t1', 't2', 't3'] })])
     const classes = ['t1', 't2', 't3'].map(
       (id) => document.querySelector(`[data-tab-id="${id}"]`)?.className ?? ''
     )

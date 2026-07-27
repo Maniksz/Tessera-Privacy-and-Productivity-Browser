@@ -37,8 +37,20 @@ import type { OverlayInvocation, TileBarPresentation } from '../overlay/surface.
 /** Height of the bar, and the distance at which the pointer stops holding it open. */
 export const TILE_BAR_HEIGHT = 40
 
-/** How close to the top edge the pointer has to come for the bar to appear. */
-export const TILE_BAR_REVEAL_WITHIN = 6
+/**
+ * How close to the top edge the pointer has to come for the bar to appear.
+ *
+ * Six pixels was the first guess and it was too tight: reaching for a control that is only there
+ * once you have found it, in a six-pixel strip, means stabbing at the edge until it appears. Sixteen
+ * is a band the hand can aim at, and it is what the *reveal* costs — the bar still only holds itself
+ * open while the pointer is within its own height, so the hysteresis gap below stays 24 px wide.
+ *
+ * The invariant that must survive any further change to this number: it stays strictly below
+ * `TILE_BAR_HEIGHT`, which is strictly below `TILE_BAR_POINTER_AWAY`. Raise it past the height and
+ * the two thresholds meet — reveal and dismiss then answer the same position differently on
+ * consecutive samples, which is the flicker the pair exists to prevent. A test pins the ordering.
+ */
+export const TILE_BAR_REVEAL_WITHIN = 16
 
 /**
  * The position a surface reports when the pointer has left its strip.
@@ -188,6 +200,74 @@ export type TileBarRequest =
   | { invokedBy: 'pointer'; tileIndex: number; y: number }
   | { invokedBy: 'keyboard'; tileIndex: number }
 
+/**
+ * The bar that is up, with the tab's state read again.
+ *
+ * ## The bug this exists for
+ *
+ * The presentation is a *snapshot*: `canGoBack`, `canGoForward`, `loading` and the address are read
+ * once, when the bar is presented. So pressing back in a tile's own bar navigated the page and left
+ * the bar showing the state from before the press — forward stayed greyed out, and only re-opening the
+ * bar showed the truth. Reported as "the tile controls show 'forward' only once I re-focus it".
+ *
+ * ## Why it compares before it re-presents
+ *
+ * A re-present is nearly free but not free of consequence: a bar the keyboard opened holds the focus,
+ * and the address field in it may have half-typed text in it. Called on every tab change — which is
+ * what makes it correct — an unconditional re-present would reset that field while somebody was using
+ * it. So an identical presentation is `nothing`, and this stays safe to call as often as anything
+ * changes.
+ *
+ * The mode is re-checked for the same reason it is checked when a bar opens: the setting can be turned
+ * off while a bar is on screen, and a refresh must not be the thing that keeps it alive.
+ */
+export function tileBarRefresh(input: {
+  /** What the layer is showing now, or `null` when it is not a tile bar. */
+  current: TileBarPresentation | null
+  mode: TileBarMode
+  rects: ReadonlyArray<Rect | null>
+  tabOf: (tileIndex: number) => TileBarTab | null
+}): TileBarAction {
+  const current = input.current
+  if (current === null) return { do: 'nothing' }
+  // The invocation that *opened* the bar, not a fresh one: it is what decides whether the bar holds
+  // the focus, and a refresh must not change that.
+  if (!tileBarAllows(input.mode, current.invokedBy)) return { do: 'hide' }
+
+  const next = tileBarPresentation({
+    tileIndex: current.tileIndex,
+    rects: input.rects,
+    tab: input.tabOf(current.tileIndex),
+    invokedBy: current.invokedBy
+  })
+  if (next === null) return { do: 'hide' }
+  if (sameTileBar(next, current)) return { do: 'nothing' }
+  return { do: 'present', presentation: next }
+}
+
+/**
+ * Whether two presentations would draw the same bar.
+ *
+ * Field by field rather than by serialising the pair: the set of fields that make a bar look different
+ * is the thing being decided, and a structural comparison would silently start including any field
+ * added later — including one that changes on every tick, which would make every refresh a re-present
+ * and bring back the reset-while-typing this comparison exists to prevent.
+ */
+function sameTileBar(a: TileBarPresentation, b: TileBarPresentation): boolean {
+  return (
+    a.tileIndex === b.tileIndex &&
+    a.tabId === b.tabId &&
+    a.url === b.url &&
+    a.canGoBack === b.canGoBack &&
+    a.canGoForward === b.canGoForward &&
+    a.loading === b.loading &&
+    a.bounds.x === b.bounds.x &&
+    a.bounds.y === b.bounds.y &&
+    a.bounds.width === b.bounds.width &&
+    a.bounds.height === b.bounds.height
+  )
+}
+
 export type TileBarAction =
   | { do: 'present'; presentation: TileBarPresentation }
   | { do: 'hide' }
@@ -225,6 +305,21 @@ export function tileBarStep(input: {
     the mouse moving somewhere unrelated.
   */
   if (!tileBarAllows(input.mode, input.request.invokedBy)) return { do: 'nothing' }
+
+  /*
+    One tile, no bar.
+
+    The bar exists because in a split layout the toolbar acts on one tile and the others had no way
+    to go back or to edit their address. With a single tile the toolbar *is* that tile's bar, so a
+    second copy of it appearing over the top of the page is a control that duplicates the one two
+    centimetres above it and covers forty pixels of the document to do it.
+
+    Here rather than in the surface, with the rest of the geometry: `rects` is the tile list, so the
+    number of tiles is already in hand, and the alternative — a renderer declining to draw a
+    presentation the core built and sized the layer for — would leave the layer holding an invisible
+    surface and swallowing the pointer events inside it.
+  */
+  if (input.rects.length <= 1) return { do: 'hide' }
 
   const target =
     input.request.invokedBy === 'keyboard'

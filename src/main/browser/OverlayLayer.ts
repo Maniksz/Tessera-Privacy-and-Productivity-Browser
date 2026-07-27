@@ -1,6 +1,7 @@
 import { WebContentsView, type BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import {
+  capturesKeyboard,
   departureMatters,
   mayPresentOver,
   overlayBounds,
@@ -12,6 +13,7 @@ import {
 } from '@shared/overlay/surface.js'
 import type { Rect, Size } from '@shared/ui/anchor.js'
 import { preloadFile, preloadRoleArgument } from '../paths.js'
+import { notifyOverlayKey } from '../passwords/overlay-keys.js'
 import { notifyOverlayVacancy, type OverlayVacancyReason } from '../permissions/vacancy.js'
 
 /**
@@ -253,6 +255,25 @@ export class OverlayLayer {
     // Appended, so it sits above the tab views. Tab views are inserted at index 0 for the
     // same reason; see `BrowserWindowController.createTab`.
     this.options.window.contentView.addChildView(view)
+
+    /*
+      Keystrokes for the surfaces that must not receive their own.
+
+      One surface on this layer is a master-password field, and the whole point of it is that the
+      characters never reach a renderer — so they are read here, where the browser process already has
+      them, and `preventDefault` keeps them from going any further. See `capturesKeyboard` for why that
+      is a property of the kind rather than a check written here, and `overlay-keys.ts` for why the
+      collector is reached through a registry.
+
+      `preventDefault` comes before the announcement deliberately: a listener that throws must not be
+      able to leak the keystroke into the renderer as a side effect of failing.
+    */
+    view.webContents.on('before-input-event', (event, input) => {
+      const presentation = this.#presentation
+      if (presentation === null || !capturesKeyboard(presentation)) return
+      event.preventDefault()
+      notifyOverlayKey(presentation, input)
+    })
 
     view.webContents.on('did-finish-load', () => {
       this.#loaded = true

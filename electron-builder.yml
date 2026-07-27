@@ -106,8 +106,23 @@ dmg:
       path: /Applications
 
 # --- Updates -----------------------------------------------------------------
-# Self-hosted generic feed: no third party learns who is running the browser.
+# GitHub Releases, by decision — and the earlier claim here has been withdrawn rather than quietly
+# left standing. This block used to name a self-hosted generic feed with the comment "no third
+# party learns who is running the browser"; that feed did not exist (`updates.tessera.invalid`,
+# a reserved TLD) and the sentence was therefore a promise about software nobody had written.
+#
+# With GitHub as the source, GitHub sees the IP address, the version and, in aggregate, how many
+# people run this browser, on every check. That is the honest cost and it belongs written down here
+# rather than discovered later. What limits it: the check is one request to one host, it carries no
+# identifier of ours, and it is a setting the user can switch off. What would remove it is a feed
+# under our own control — the provider is per-channel configurable, so that is a config change and
+# not a rewrite.
+#
+# `releaseType: prerelease` because the current channel is alpha: a published build must not present
+# itself to a stable user as the newest release. `electron-builder --publish always` creates the
+# release and uploads both the installers and the `latest*.yml` files that the updater reads.
 publish:
-  - provider: generic
-    url: https://updates.tessera.invalid/${channel}
-    channel: latest
+  - provider: github
+    owner: Maniksz
+    repo: Tessera-Privacy-and-Productivity-Browser
+    releaseType: prerelease

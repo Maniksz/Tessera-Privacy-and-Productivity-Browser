@@ -5,15 +5,18 @@ import {
   EmptyTabGroupError,
   MAX_TAB_GROUPS,
   MAX_TAB_GROUP_NAME_LENGTH,
+  MIN_ARRANGED_TILES,
   TabGroupLimitError,
   TabGroupNotFoundError,
   addGroup,
   addTabToGroup,
+  arrangedTabs,
   contiguousOrder,
   dissolveGroup,
   emptyTabGroupDocument,
   findGroup,
   groupOfTab,
+  groupToHoldArrangement,
   isContiguous,
   isTabHidden,
   newTabGroup,
@@ -24,9 +27,11 @@ import {
   repairGroups,
   retainTabs,
   setGroupCollapsed,
+  setGroupLayout,
   tabsHiddenByCollapse,
   visibleTabOrder,
-  type TabGroup
+  type TabGroup,
+  type TabGroupLayout
 } from '@shared/tabgroups/model.js'
 import {
   FALLBACK_TAB_GROUP_COLOR,
@@ -93,6 +98,21 @@ describe('what the tab strip is allowed to import', () => {
   /** The files the tab strip may import. `schema.ts` is deliberately absent. */
   const RENDERER_FACING = ['model.ts', 'palette.ts', 'strip.ts']
 
+  /**
+   * The one module outside the directory these files may name.
+   *
+   * `split/layout.ts` is what *defines* a layout id, and a group that records the arrangement its tabs
+   * were displaced from has to speak the same seven names — a local copy of them would be a second
+   * source of truth for the shape of the window. It costs the bundle nothing: it is pure, zod-free,
+   * dependency-free by its own docblock, and `LayoutIcon`, `LayoutMenu` and `SplitDividers` already
+   * import it, so the strip's neighbours have loaded it either way.
+   *
+   * An allowance rather than dropping the rule, because what the rule is really for survives: no
+   * `@main/`, nothing with a transitive dependency, nothing that pulls a validator into a bundle the
+   * user waits for.
+   */
+  const ALLOWED_OUTSIDE = new Set(['../split/layout.js'])
+
   it('keeps the renderer-facing files inside their own directory', () => {
     // A dependency here is a dependency in the UI bundle. Staying within the directory is stricter
     // than needed and cheap to keep, and it makes an accidental `@main/` import impossible.
@@ -100,6 +120,7 @@ describe('what the tab strip is allowed to import', () => {
       const text = readFileSync(join(directory, name), 'utf8')
       const specifiers = [...text.matchAll(/from\s+'([^']+)'/g)].map((match) => match[1])
       for (const specifier of specifiers) {
+        if (specifier !== undefined && ALLOWED_OUTSIDE.has(specifier)) continue
         expect(specifier, `${name} imports ${specifier ?? ''}`).toMatch(/^\.\//)
       }
     }
@@ -526,6 +547,226 @@ describe('reconciling a loaded document with the tabs a window has', () => {
   })
 })
 
+describe('the arrangement a group keeps', () => {
+  /**
+   * A four-pane arrangement over the four tabs named.
+   *
+   * `2x2` rather than `1x4` on purpose: both have four tiles, so a test that passed with the count
+   * inferred from the array would still be checking something.
+   */
+  function quad(tiles: Array<string | null>): TabGroupLayout {
+    return { id: '2x2', tiles }
+  }
+
+  it('is carried by a group created to remember it', () => {
+    /*
+      The write path the capture uses. Set at creation rather than by a second call, so the group reaches
+      the strip complete — broadcast once without its arrangement and once with it, a click arriving
+      between the two would take the old path and the arrangement would be lost in the moment it was
+      being saved.
+    */
+    const created = newTabGroup(
+      [],
+      { tabIds: ['a', 'b'], layout: quad(['a', 'b', null, null]) },
+      {
+        id: 'g',
+        now: T0
+      }
+    )
+    expect(created.layout).toEqual(quad(['a', 'b', null, null]))
+  })
+
+  it('is absent, not undefined, on a group made without one', () => {
+    // `exactOptionalPropertyTypes` is on and the difference reaches the disk: a key present with an
+    // `undefined` value is written to the document as a key, and every file written before this feature
+    // existed has none.
+    const created = newTabGroup([], { tabIds: ['a'] }, { id: 'g', now: T0 })
+    expect(Object.hasOwn(created, 'layout')).toBe(false)
+  })
+
+  it('is refused when it names a tab the group does not have', () => {
+    // A seat nobody can fill, and worse than nothing: on the way back it would still evict whatever is
+    // in that tile, so a stale id costs a page rather than leaving a pane empty.
+    const created = newTabGroup(
+      [],
+      { tabIds: ['a', 'b'], layout: quad(['a', 'b', 'stranger', null]) },
+      {
+        id: 'g',
+        now: T0
+      }
+    )
+    expect(created.layout).toBeUndefined()
+  })
+
+  it('is recorded on a group that already exists', () => {
+    const groups = setGroupLayout([group('g', ['a', 'b'])], 'g', quad(['a', null, 'b', null]))
+    expect(findGroup(groups, 'g')?.layout).toEqual(quad(['a', null, 'b', null]))
+  })
+
+  it('is taken away again by the restore that used it', () => {
+    // The other half of the same call: a recording of one displacement, spent once. Replaying it would
+    // undo whatever the user rearranged after the first restore.
+    const recorded = setGroupLayout([group('g', ['a', 'b'])], 'g', quad(['a', 'b', null, null]))
+    const spent = setGroupLayout(recorded, 'g', null)
+    expect(Object.hasOwn(spent[0]!, 'layout')).toBe(false)
+  })
+
+  it('is refused when it has the wrong number of tiles for its layout', () => {
+    // `2x2` has four. Three would leave the last pane out of the recording and unaccounted for on the
+    // way back; five would silently drop a member.
+    const groups = setGroupLayout([group('g', ['a', 'b'])], 'g', {
+      id: '2x2',
+      tiles: ['a', 'b', null]
+    })
+    expect(findGroup(groups, 'g')?.layout).toBeUndefined()
+  })
+
+  it('is refused when it seats one tab in two tiles', () => {
+    /*
+      One tab cannot be in two places, and the failure is not a caught error but a wrong arrangement:
+      `assignTab` moves a tab rather than copying it, so the first tile would end up empty and what came
+      back would not be what was recorded.
+    */
+    const groups = setGroupLayout([group('g', ['a', 'b'])], 'g', quad(['a', 'a', 'b', null]))
+    expect(findGroup(groups, 'g')?.layout).toBeUndefined()
+  })
+
+  it('is refused when it seats fewer tabs than an arrangement needs', () => {
+    // One page in one pane is not an arrangement — it is the single view the browser is switching to
+    // anyway. Recording it would make a group out of every new tab.
+    expect(MIN_ARRANGED_TILES).toBe(2)
+    const groups = setGroupLayout([group('g', ['a', 'b'])], 'g', quad(['a', null, null, null]))
+    expect(findGroup(groups, 'g')?.layout).toBeUndefined()
+  })
+
+  it('empties the tile of a member that leaves, and moves nobody else', () => {
+    /*
+      Why `tiles` is positional. Closing the gap would answer "put it back the way it was" by sliding two
+      pages that never moved — the user closes one tab of four and the other three come back in different
+      panes.
+    */
+    const recorded = setGroupLayout([group('g', ['a', 'b', 'c'])], 'g', quad(['a', 'b', 'c', null]))
+    const after = removeTabFromGroup(recorded, 'b')
+    expect(findGroup(after, 'g')?.layout).toEqual(quad(['a', null, 'c', null]))
+  })
+
+  it('drops the recording when too few members are left to seat', () => {
+    // Applying a four-pane layout to seat one page would put three empty panes on screen, which is the
+    // outcome the split rules exist to prevent. Nothing left to restore, so nothing is kept.
+    const recorded = setGroupLayout(
+      [group('g', ['a', 'b', 'c'])],
+      'g',
+      quad(['a', 'b', null, null])
+    )
+    const after = removeTabFromGroup(recorded, 'b')
+    expect(findGroup(after, 'g')?.layout).toBeUndefined()
+    // The group itself survives: it still has members, and losing an arrangement must not cost tabs.
+    expect(findGroup(after, 'g')?.tabIds).toEqual(['a', 'c'])
+  })
+
+  it('drops the recording for members a launch did not bring back', () => {
+    // Same rule down the other path. Tab ids restart at `tab-1` every launch, so a stored arrangement
+    // naming ids nothing came back under would otherwise seat whichever fresh tabs took those ids.
+    const recorded = setGroupLayout([group('g', ['a', 'b', 'c'])], 'g', quad(['a', 'b', 'c', null]))
+    const after = retainTabs(recorded, ['a', 'b'])
+    expect(findGroup(after, 'g')?.layout).toEqual(quad(['a', 'b', null, null]))
+  })
+
+  it('stores a copy of the arrangement, not the array it was handed', () => {
+    // The array comes from the split controller, which goes on owning its own tiles. Storing it would make
+    // the document change on its own the next time a tab moved — a recording that silently follows the
+    // window is not a way back to anywhere.
+    const tiles: Array<string | null> = ['a', 'b', null, null]
+    const recorded = setGroupLayout([group('g', ['a', 'b'])], 'g', { id: '2x2', tiles })
+    tiles[0] = 'moved-on'
+    expect(recorded[0]?.layout?.tiles[0]).toBe('a')
+  })
+
+  it('hands out an arrangement no earlier result shares', () => {
+    // `tiles` is the second array on a group and needs what `tabIds` gets. Shared, a store's "previous" and
+    // "next" documents come out as the same object, and a change that has to be diffed cannot be seen.
+    const recorded = setGroupLayout([group('g', ['a', 'b'])], 'g', quad(['a', 'b', null, null]))
+    const renamed = renameGroup(recorded, 'g', 'Work')
+    renamed[0]!.layout!.tiles[1] = 'tampered'
+    expect(recorded[0]?.layout?.tiles[1]).toBe('b')
+  })
+
+  it('names its seated members in tile order, skipping the empty tiles', () => {
+    expect(arrangedTabs(quad(['a', null, 'b', 'c']))).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('deciding which group keeps an arrangement', () => {
+  const quad = (tiles: Array<string | null>): TabGroupLayout => ({ id: '2x2', tiles })
+
+  it('makes a group when none of the tabs is in one', () => {
+    // The ordinary case: four panes of ungrouped tabs, and the request is that they stay together.
+    expect(groupToHoldArrangement([], quad(['a', 'b', 'c', 'd']))).toEqual({ kind: 'create' })
+  })
+
+  it('reuses the group that already holds all of them', () => {
+    /*
+      What keeps this from being group spam. A window collapsed, restored and collapsed again reuses the
+      group it made the first time — keeping its colour and any name the user has given it — instead of
+      leaving a trail of one chip per new tab down the strip.
+    */
+    const groups = [group('g', ['a', 'b', 'c'])]
+    expect(groupToHoldArrangement(groups, quad(['a', 'b', null, null]))).toEqual({
+      kind: 'reuse',
+      groupId: 'g'
+    })
+  })
+
+  it('keeps nothing when some are grouped and some are not', () => {
+    /*
+      The case that must not be honoured, and the reason is destructive: `addGroup` takes its members away
+      from whatever held them, so recording this arrangement would shrink the user's own group — and
+      dissolve it outright if the arrangement held all of it. Adding the loose tabs to it instead is no
+      better: it hands them a colour and a bracket nobody asked for and reorders the strip.
+
+      Forgetting a layout costs one drag. Silently editing a group the user built costs them a thing they
+      made, and there is no undo for it.
+    */
+    const groups = [group('work', ['a', 'b'], { name: 'Steuererklärung 2026' })]
+    expect(groupToHoldArrangement(groups, quad(['a', 'b', 'loose', null]))).toEqual({
+      kind: 'none'
+    })
+    // And the group is untouched, which is the point of refusing.
+    expect(findGroup(groups, 'work')?.tabIds).toEqual(['a', 'b'])
+  })
+
+  it('keeps nothing when the tabs are spread over two groups', () => {
+    // There is no single answer to "whose arrangement is this", and merging the two to invent one would
+    // destroy the group that lost.
+    const groups = [group('one', ['a']), group('two', ['b'])]
+    expect(groupToHoldArrangement(groups, quad(['a', 'b', null, null]))).toEqual({ kind: 'none' })
+  })
+
+  it('keeps nothing when only one pane held anything', () => {
+    // Same floor as the write path, applied here so "is this worth keeping" and "where would it go"
+    // cannot answer differently.
+    expect(groupToHoldArrangement([], quad(['a', null, null, null]))).toEqual({ kind: 'none' })
+  })
+
+  it('keeps nothing rather than asking for a group past the cap', () => {
+    /*
+      The bug this rules out is not a lost arrangement but a browser that cannot open a tab. This caller
+      is not a user pressing a button: `newTabGroup` throws past the cap, and the throw would travel up
+      through `claimTileForNewTab` into `createTab`, so at fifty groups "new tab" would fail outright.
+    */
+    const full = Array.from({ length: MAX_TAB_GROUPS }, (_, index) =>
+      group(`g${index}`, [`x${index}`])
+    )
+    expect(groupToHoldArrangement(full, quad(['a', 'b', null, null]))).toEqual({ kind: 'none' })
+    // Reusing costs no group, so a window at the cap can still record onto one it already has.
+    const atCap = [...full.slice(1), group('holder', ['a', 'b'])]
+    expect(groupToHoldArrangement(atCap, quad(['a', 'b', null, null]))).toEqual({
+      kind: 'reuse',
+      groupId: 'holder'
+    })
+  })
+})
+
 describe('repairing a document that was written by something else', () => {
   it('leaves a healthy document alone', () => {
     const groups = [group('a', ['t1', 't2']), group('b', ['t3'])]
@@ -568,6 +809,60 @@ describe('repairing a document that was written by something else', () => {
     const repaired = repairGroups(tooMany)
     expect(repaired).toHaveLength(MAX_TAB_GROUPS)
     expect(repaired[0]?.id).toBe('g0')
+  })
+
+  it('accepts a document with no arrangement anywhere in it', () => {
+    // Every file this browser has written so far. The field arrived after them, so its absence is the
+    // normal state and must not read as damage — repairing it away would be harmless, rejecting the
+    // document over it would cost the user every group.
+    const groups = [group('a', ['t1', 't2'])]
+    expect(repairGroups(groups)).toEqual(groups)
+    expect(Object.hasOwn(repairGroups(groups)[0]!, 'layout')).toBe(false)
+  })
+
+  it('keeps an arrangement that describes its group', () => {
+    // Asserted alongside the rejections below, because a repair that dropped every arrangement would pass
+    // all of them and quietly disable the feature on the first launch after a restart.
+    const layout: TabGroupLayout = { id: '1x2', tiles: ['t1', 't2'] }
+    const repaired = repairGroups([group('a', ['t1', 't2'], { layout })])
+    expect(repaired[0]?.layout).toEqual(layout)
+  })
+
+  it('drops an arrangement with the wrong number of tiles for its layout', () => {
+    // Honoured, it would leave the last pane of a `2x2` unaccounted for on the way back. The layout id
+    // and the tile count cannot check each other — `2x2` and `1x4` both have four — so this is the only
+    // place it is caught.
+    const layout: TabGroupLayout = { id: '2x2', tiles: ['t1', 't2'] }
+    const repaired = repairGroups([group('a', ['t1', 't2'], { layout })])
+    expect(repaired[0]?.layout).toBeUndefined()
+    // The group and its tabs survive. Losing an arrangement costs a drag; losing a group costs eleven
+    // loaded pages and a name.
+    expect(repaired[0]?.tabIds).toEqual(['t1', 't2'])
+  })
+
+  it('drops an arrangement naming a tab the group does not have', () => {
+    const layout: TabGroupLayout = { id: '1x2', tiles: ['t1', 'stranger'] }
+    const repaired = repairGroups([group('a', ['t1', 't2'], { layout })])
+    expect(repaired[0]?.layout).toBeUndefined()
+  })
+
+  it('drops an arrangement naming a tab this pass has just taken off the group', () => {
+    /*
+      The two repairs meeting, and the order that makes it work. `t1` is claimed by the first group, so the
+      second loses it — and the second group's arrangement still seats it. Validated against the *repaired*
+      member list rather than the one in the file, or the recording would survive naming a tab the group no
+      longer has.
+    */
+    const layout: TabGroupLayout = { id: '1x2', tiles: ['t1', 't2'] }
+    const repaired = repairGroups([group('a', ['t1']), group('b', ['t1', 't2'], { layout })])
+    expect(repaired[1]?.tabIds).toEqual(['t2'])
+    expect(repaired[1]?.layout).toBeUndefined()
+  })
+
+  it('drops an arrangement that seats one tab in two tiles', () => {
+    const layout: TabGroupLayout = { id: '1x2', tiles: ['t1', 't1'] }
+    const repaired = repairGroups([group('a', ['t1', 't2'], { layout })])
+    expect(repaired[0]?.layout).toBeUndefined()
   })
 
   it('produces a document every rule then holds for', () => {

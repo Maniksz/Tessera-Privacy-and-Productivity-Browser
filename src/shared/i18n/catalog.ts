@@ -277,18 +277,119 @@ const en = {
   /*
     Saved passwords.
 
-    Two of these say something no other page in the browser has to. `protectionNotice` and
-    `unencryptedNotice` describe how the vault is actually protected on *this* machine, including
-    the part that is uncomfortable — the platform key store unwraps for anybody already signed in
-    as this user. A manager that did not say so on its own front page would be misrepresenting
-    itself, and `revealNotice` exists for the same reason: a password that vanishes after half a
-    minute reads as a fault unless the bound is stated.
+    Four of these say something no other page in the browser has to. The `protection.*` sentences
+    describe how the vault is actually protected on *this* machine, including the part that is
+    uncomfortable — the platform key store unwraps for anybody already signed in as this user. A
+    manager that did not say so on its own front page would be misrepresenting itself, and
+    `revealNotice` exists for the same reason: a password that vanishes after half a minute reads as a
+    fault unless the bound is stated.
+
+    They replaced a pair, `protectionNotice` and `unencryptedNotice`, which could only say "encrypted"
+    or "not encrypted". Once a master password exists that is not enough to be honest with: key store
+    *and* master password is a different guarantee from either alone, and rounding four states up to two
+    means claiming the stronger one on a page about credentials.
   */
   'passwords.title': 'Passwords',
-  'passwords.protectionNotice':
-    'These are encrypted with a key your operating system keeps. Anyone already signed in as you can read them.',
-  'passwords.unencryptedNotice':
-    'There was no system key store to protect these with, so they are stored as readable text.',
+  /*
+    One sentence per protection level rather than one sentence with a noun interpolated.
+
+    The four are not variations on a theme, so a template would have forced them into one grammar — and
+    interpolating a noun into a shared clause is how a translation ends up saying the opposite in German,
+    where the surrounding words change with the noun.
+  */
+  'passwords.protection.keystoreMaster':
+    'Protected twice: by a key your operating system keeps, and by your master password. Opening this vault needs both.',
+  'passwords.protection.master':
+    'Protected by your master password alone — this machine offered no key store. That password is the only thing between this folder and your credentials.',
+  'passwords.protection.keystore':
+    'Encrypted with a key your operating system keeps. Anyone already signed in as you can read these. Set a master password to change that.',
+  'passwords.protection.plain':
+    'Not protected. There was no system key store, and no master password is set, so the key sits beside the file it protects.',
+
+  /*
+    The lock.
+
+    `lockedBody` is the sentence under the prompt on the overlay layer rather than on the page, and it
+    carries two facts that are not decoration: which keys work, because that field has no caret and
+    ignores Tab, and that the browser drew it — the one thing distinguishing this prompt from a page
+    imitating it, which is the attack a master-password field invites.
+  */
+  'passwords.lockedTitle': 'The vault is locked',
+  'passwords.lockedBody':
+    'The browser draws this field itself, so no page can read it. Return continues, Escape cancels.',
+  'passwords.masterPassword': 'Master password',
+  'passwords.unlock': 'Unlock',
+  'passwords.unlockFailed': 'That was not the master password.',
+  'passwords.unreadableTitle': 'This vault cannot be opened',
+  /** No master password helps here, so the sentence must not suggest trying one. */
+  'passwords.unreadableBody':
+    'The key file is damaged, or the system key store that wrapped it is gone. No master password can open it. You can save a copy and start a new vault.',
+  'passwords.lockNow': 'Lock now',
+  'passwords.idleNotice':
+    'The vault locks itself after {minutes} minutes without use, when you lock it, and when the last window closes.',
+
+  /*
+    The master password.
+
+    `masterPasswordWarning` is shown while a new one is being chosen, and it says the thing nobody wants
+    to read at that moment: there is no recovery. Saying it later would be saying it too late.
+  */
+  'passwords.masterPasswordTitle': 'Master password',
+  'passwords.setMasterPassword': 'Set a master password',
+  'passwords.changeMasterPassword': 'Change the master password',
+  'passwords.removeMasterPassword': 'Remove the master password',
+  'passwords.currentMasterPassword': 'Current master password',
+  'passwords.newMasterPassword': 'New master password',
+  'passwords.confirmMasterPassword': 'The new master password again',
+  'passwords.masterPasswordMismatch': 'The two did not match. Choose it again.',
+  'passwords.masterPasswordTooShort': 'At least {min} characters.',
+  'passwords.masterPasswordTooLong': 'That is too long to be a password.',
+  'passwords.masterPasswordWarning':
+    'At least {min} characters, and length matters far more than symbols do. Nothing can recover it: forget it and the saved passwords are gone.',
+  'passwords.masterPasswordSet': 'Master password set',
+  'passwords.masterPasswordChanged': 'Master password changed',
+  'passwords.masterPasswordRemoved':
+    'Master password removed. The vault now opens without asking anybody.',
+
+  /*
+    Importing an exported CSV.
+
+    `importDeleteFile` is the important one and the easiest to leave out: the biggest exposure an import
+    creates is not in the vault but the plain-text file of every password the user owns, now sitting in
+    their downloads folder. This browser will not delete somebody else's file behind their back, so it
+    names it and says so.
+  */
+  'passwords.import': 'Import from a file…',
+  'passwords.importTitle': 'Import',
+  'passwords.importUnreadable': 'That file could not be read.',
+  'passwords.importLocked': 'Unlock the vault before importing.',
+  'passwords.importRefusedColumns':
+    'That does not look like an exported password file: no address column, or no password column.',
+  'passwords.importRefusedEmpty': 'There was nothing in that file.',
+  'passwords.importRefusedTooLarge': 'That file is too large to be a password export.',
+  'passwords.importRefusedTooManyRows': 'That file has more rows than an export should.',
+  'passwords.importSummary': '{imported} imported, {skipped} skipped',
+  'passwords.importDuplicates': '{count} were already stored, unchanged',
+  /** The only number in the report worth acting on; see `main/passwords/import.ts`. */
+  'passwords.importConflicts':
+    '{count} are stored here with a different password. The stored one was kept.',
+  'passwords.importFull': '{count} did not fit and were not imported.',
+  'passwords.importNotesDropped': '{count} notes were not imported.',
+  'passwords.importDeleteFile':
+    'That file holds every one of these passwords as readable text. Delete it: {path}',
+
+  /*
+    Destroying the vault.
+
+    `resetVaultConfirm` is a native dialogue message and has to do two jobs in one breath — say what is
+    about to be lost, and say that the copy on offer is worth keeping *and* unreadable without the
+    password that was just forgotten. It names its own buttons, because a message box gives them no
+    other explanation.
+  */
+  'passwords.resetVault': 'Delete all saved passwords',
+  'passwords.resetVaultConfirm':
+    'This deletes every saved password and starts an empty vault. Save keeps a copy of the sealed files where you choose — unreadable without the master password, and only on this computer if the system key store wrapped it, but if the password comes back so do the credentials. Delete all saved passwords discards them now.',
+  'passwords.resetVaultDone': 'The vault was deleted. A new, empty one has been started.',
   'passwords.searchPlaceholder': 'Search passwords',
   'passwords.empty': 'No passwords saved yet.',
   'passwords.noMatches': 'No entry matches {query}.',
@@ -746,10 +847,68 @@ const de = {
   'downloads.byteSize': '{value} {unit}',
 
   'passwords.title': 'Passwörter',
-  'passwords.protectionNotice':
-    'Sie sind mit einem Schlüssel verschlüsselt, den dein Betriebssystem aufbewahrt. Wer als du angemeldet ist, kann sie lesen.',
-  'passwords.unencryptedNotice':
-    'Es gab keinen Schlüsselspeicher des Systems, um sie zu schützen — sie liegen als lesbarer Text auf der Platte.',
+  'passwords.protection.keystoreMaster':
+    'Doppelt geschützt: durch einen Schlüssel, den dein Betriebssystem aufbewahrt, und durch dein Master-Passwort. Zum Öffnen braucht es beides.',
+  'passwords.protection.master':
+    'Nur durch dein Master-Passwort geschützt — dieses Gerät hat keinen Schlüsselspeicher angeboten. Dieses Passwort ist das Einzige zwischen diesem Ordner und deinen Zugangsdaten.',
+  'passwords.protection.keystore':
+    'Mit einem Schlüssel verschlüsselt, den dein Betriebssystem aufbewahrt. Wer als du angemeldet ist, kann sie lesen. Setz ein Master-Passwort, wenn du das ändern willst.',
+  'passwords.protection.plain':
+    'Nicht geschützt. Es gab keinen Schlüsselspeicher des Systems, und es ist kein Master-Passwort gesetzt — der Schlüssel liegt neben der Datei, die er schützt.',
+
+  'passwords.lockedTitle': 'Der Tresor ist gesperrt',
+  'passwords.lockedBody':
+    'Dieses Feld zeichnet der Browser selbst, keine Seite kann es lesen. Enter geht weiter, Esc bricht ab.',
+  'passwords.masterPassword': 'Master-Passwort',
+  'passwords.unlock': 'Entsperren',
+  'passwords.unlockFailed': 'Das war nicht das Master-Passwort.',
+  'passwords.unreadableTitle': 'Dieser Tresor lässt sich nicht öffnen',
+  'passwords.unreadableBody':
+    'Die Schlüsseldatei ist beschädigt, oder der Schlüsselspeicher des Systems, der sie umschlossen hat, ist weg. Kein Master-Passwort hilft hier. Du kannst eine Kopie sichern und neu anfangen.',
+  'passwords.lockNow': 'Jetzt sperren',
+  'passwords.idleNotice':
+    'Der Tresor sperrt sich nach {minutes} Minuten ohne Nutzung, wenn du ihn sperrst, und wenn das letzte Fenster schließt.',
+
+  'passwords.masterPasswordTitle': 'Master-Passwort',
+  'passwords.setMasterPassword': 'Master-Passwort setzen',
+  'passwords.changeMasterPassword': 'Master-Passwort ändern',
+  'passwords.removeMasterPassword': 'Master-Passwort entfernen',
+  'passwords.currentMasterPassword': 'Aktuelles Master-Passwort',
+  'passwords.newMasterPassword': 'Neues Master-Passwort',
+  'passwords.confirmMasterPassword': 'Das neue Master-Passwort noch einmal',
+  'passwords.masterPasswordMismatch': 'Die beiden waren nicht gleich. Wähl es noch einmal.',
+  'passwords.masterPasswordTooShort': 'Mindestens {min} Zeichen.',
+  'passwords.masterPasswordTooLong': 'Das ist zu lang für ein Passwort.',
+  'passwords.masterPasswordWarning':
+    'Mindestens {min} Zeichen — und Länge zählt weit mehr als Sonderzeichen. Nichts kann es wiederherstellen: vergiss es, und die gespeicherten Passwörter sind weg.',
+  'passwords.masterPasswordSet': 'Master-Passwort gesetzt',
+  'passwords.masterPasswordChanged': 'Master-Passwort geändert',
+  'passwords.masterPasswordRemoved':
+    'Master-Passwort entfernt. Der Tresor öffnet sich jetzt, ohne jemanden zu fragen.',
+
+  'passwords.import': 'Aus einer Datei importieren…',
+  'passwords.importTitle': 'Import',
+  'passwords.importUnreadable': 'Diese Datei ließ sich nicht lesen.',
+  'passwords.importLocked': 'Entsperr den Tresor, bevor du importierst.',
+  'passwords.importRefusedColumns':
+    'Das sieht nicht wie ein exportiertes Passwort-Archiv aus: keine Adress-Spalte oder keine Passwort-Spalte.',
+  'passwords.importRefusedEmpty': 'In dieser Datei war nichts.',
+  'passwords.importRefusedTooLarge': 'Diese Datei ist zu groß für einen Passwort-Export.',
+  'passwords.importRefusedTooManyRows':
+    'Diese Datei hat mehr Zeilen, als ein Export haben sollte.',
+  'passwords.importSummary': '{imported} importiert, {skipped} übersprungen',
+  'passwords.importDuplicates': '{count} waren schon gespeichert, unverändert',
+  'passwords.importConflicts':
+    '{count} sind hier mit einem anderen Passwort gespeichert. Das gespeicherte wurde behalten.',
+  'passwords.importFull': '{count} haben nicht mehr hineingepasst und wurden nicht importiert.',
+  'passwords.importNotesDropped': '{count} Notizen wurden nicht importiert.',
+  'passwords.importDeleteFile':
+    'Diese Datei enthält jedes dieser Passwörter als lesbaren Text. Lösch sie: {path}',
+
+  'passwords.resetVault': 'Alle gespeicherten Passwörter löschen',
+  'passwords.resetVaultConfirm':
+    'Das löscht jedes gespeicherte Passwort und beginnt einen leeren Tresor. Speichern legt eine Kopie der verschlüsselten Dateien dorthin, wo du willst — ohne das Master-Passwort nicht lesbar, und nur auf diesem Rechner, falls der Schlüsselspeicher des Systems mit im Spiel war. Fällt dir das Passwort wieder ein, sind die Zugangsdaten wieder da. Alle gespeicherten Passwörter löschen verwirft sie jetzt.',
+  'passwords.resetVaultDone': 'Der Tresor wurde gelöscht. Ein neuer, leerer ist angelegt.',
   'passwords.searchPlaceholder': 'Passwörter durchsuchen',
   'passwords.empty': 'Noch keine Passwörter gespeichert.',
   'passwords.noMatches': 'Kein Eintrag passt zu {query}.',

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   app,
   BrowserWindow,
@@ -12,13 +12,18 @@ import {
   shell,
   webContents
 } from 'electron'
-import { resolveLocale, type Locale } from '@shared/i18n/catalog.js'
+import { resolveLocale, translate, type Locale } from '@shared/i18n/catalog.js'
 import { SettingsStore } from './settings/SettingsStore.js'
 import { WindowRegistry } from './browser/WindowRegistry.js'
 import { registerIpcHandlers } from './ipc/handlers.js'
 import { installApplicationMenu } from './menu/appMenu.js'
 import { applyRuntimeFlags } from './runtime-flags.js'
-import { readStartupFlags, startupFlagsFrom, writeStartupFlags } from './startup-flags.js'
+import {
+  readCheckModule,
+  readStartupFlags,
+  startupFlagsFrom,
+  writeStartupFlags
+} from './startup-flags.js'
 import { openLocalDataProtection } from './data/local-data-protection.js'
 import { applySecureDns } from './session/hardening.js'
 import { registerAsDefaultBrowser, registerInternalProtocol, registerInternalSchemePrivileges } from './protocol.js'
@@ -34,8 +39,8 @@ import {
   localDataKeyFile,
   permissionsFile,
   passwordsFile,
+  passwordVaultKeyFile,
   quickLinksFile,
-  userDataDir,
   sessionStateFile,
   settingsFile,
   startupFlagsFile,
@@ -69,6 +74,9 @@ import { MediaSessions } from './media/MediaSessions.js'
 import { DownloadManager } from './downloads/DownloadManager.js'
 import { PasswordApi } from './passwords/PasswordApi.js'
 import { PasswordVault } from './passwords/PasswordVault.js'
+import { AutofillService } from './passwords/AutofillService.js'
+import { installAutofill } from './passwords/install-autofill.js'
+import { MasterPasswordPrompt } from './passwords/MasterPasswordPrompt.js'
 
 /**
  * Application entry point.
@@ -318,12 +326,9 @@ async function main(): Promise<void> {
     provide. `previousCodec` is the profile-wide codec and is used for *reading* once, to migrate a
     document sealed before the vault had a key of its own.
 
-    `passwords.key` is spelled here rather than in `paths.ts`, and that is the one loose end in this
-    wiring: it belongs beside `passwordsFile()` as `passwordVaultKeyFile()`, in the file that owns
-    every path in the application. Left inline only because the vault landed in a parallel change.
   */
   passwords = await PasswordVault.open({
-    keyFilePath: join(userDataDir(), 'passwords.key'),
+    keyFilePath: passwordVaultKeyFile(),
     documentPath: passwordsFile(),
     safeStorage,
     previousCodec: protection.codec
@@ -355,16 +360,60 @@ async function main(): Promise<void> {
     }
   })
 
-  /*
-    What the passwords page is allowed to do, and the one Electron-shaped thing it needs.
-
-    The file chooser is injected rather than called inside `PasswordApi`, so every rule the import
-    obeys is testable without a dialog — and so the *core* reads the file. A page-side file input
-    would have put an entire exported vault, in clear text, into one IPC message.
-  */
   const passwordVault = passwords
+
+  /*
+    Who asks for the master password.
+
+    The clipboard is injected because paste has to work — the length floor pushes people towards
+    passphrases they keep somewhere else — and because reading it *here*, in the main process, is what
+    keeps the pasted text out of a renderer. That is the same rule the keystrokes follow, and this is
+    the one place the two meet Electron.
+  */
+  const masterPasswordPrompt = new MasterPasswordPrompt({
+    vault: passwordVault,
+    readClipboard: () => clipboard.readText()
+  })
+
+  /*
+    Autofill, and the wiring it had been waiting for.
+
+    `AutofillService` and `installAutofill` were both complete, tested and *called by nothing*, which is
+    the most expensive state this project keeps finding itself in: a feature that exists, passes its
+    tests, and does not run. Three lines were missing, and every one of them is load-bearing.
+
+    `modeFor` is what makes a private window fill without recording that it did, and it answers `null`
+    for a view this browser cannot place — a devtools window, something being torn down — because the
+    default for anything unaccounted for has to be "no".
+
+    `onLock` is the third: without it a lock would be a half-truth. The key would be gone from the vault
+    while a password the user typed two minutes ago sat in the save bar state for the rest of its two
+    minutes. See `AutofillService.dropPendingSaves`.
+  */
+  const autofill = new AutofillService({
+    vault: passwordVault,
+    modeFor: (viewId) => {
+      const controller = windows?.controllerForWebContents(viewId)
+      if (controller === undefined) return null
+      return controller.privateMode ? 'private' : 'normal'
+    },
+    // Read per call, so a language change reaches the next sign-in form rather than the next restart.
+    locale: () => resolveLocale(settings?.get('appearance.uiLanguage')),
+    now: () => Date.now()
+  })
+  passwordVault.onLock(() => autofill.dropPendingSaves())
+  installAutofill(autofill)
+
+  /*
+    What the passwords page is allowed to do, and the two Electron-shaped things it needs.
+
+    Both are injected rather than called inside `PasswordApi`, so every rule the import obeys and the
+    ordering the reset obeys are testable without a dialog — and so the *core* reads the file. A
+    page-side file input would have put an entire exported vault, in clear text, into one IPC message.
+  */
   const passwordApi = new PasswordApi({
     vault: passwordVault,
+    prompt: masterPasswordPrompt,
     chooseImportFile: async () => {
       const target = windows?.focused() ?? windows?.controllers[0]
       const chosen = await dialog.showOpenDialog(target?.window ?? (undefined as never), {
@@ -374,6 +423,64 @@ async function main(): Promise<void> {
       const [path] = chosen.canceled ? [] : chosen.filePaths
       if (path === undefined) return null
       return { path, text: await readFile(path, 'utf8') }
+    },
+    /*
+      The offer to put the sealed vault aside before it is destroyed.
+
+      A native message box rather than something on the page, and for a reason beyond convenience: this is
+      the point of no return, and the sentence has to be read *here* — two clicks earlier, on a page, it
+      would be a warning somebody scrolled past. `cancelId` and `defaultId` both point at Cancel, so
+      Escape and a stray Return both keep the vault.
+
+      `resetVaultConfirm` names its own buttons because a message box gives them no other explanation, and
+      it says in the same breath what the copy is worth: unreadable without the master password that was
+      just forgotten, and — when the key store wrapped it — only on this computer. A copy offered without
+      that sentence would be a false promise of recovery.
+    */
+    askAboutVaultCopy: async () => {
+      // `resolveLocale` over the raw setting rather than `uiLocale`, which needs a non-null store: this
+      // closure runs long after startup. Same answer, without a non-null assertion — as the picker does.
+      const locale = resolveLocale(settings?.get('appearance.uiLanguage'))
+      const target = windows?.focused() ?? windows?.controllers[0]
+      const parent = target?.window
+      /*
+        `showMessageBox` takes an optional parent, unlike `showOpenDialog` above, so there is no cast here.
+
+        Not a detail worth losing: with a parent the box is modal to that window, which is what makes it
+        impossible to click the reset button again underneath it. Without one — no window open at all — it is
+        application-modal, which is the correct fallback and the reason this is a real optional rather than a
+        cast around one.
+      */
+      const options: Electron.MessageBoxOptions = {
+        type: 'warning',
+        title: translate(locale, 'passwords.resetVault'),
+        message: translate(locale, 'passwords.resetVaultConfirm'),
+        buttons: [
+          translate(locale, 'passwords.saveChanges'),
+          translate(locale, 'passwords.resetVault'),
+          translate(locale, 'passwords.cancel')
+        ],
+        defaultId: 2,
+        cancelId: 2
+      }
+      const answer = await (parent === undefined
+        ? dialog.showMessageBox(options)
+        : dialog.showMessageBox(parent, options))
+      if (answer.response === 2) return { choice: 'cancel' }
+      if (answer.response === 1) return { choice: 'discard' }
+
+      const where = await dialog.showOpenDialog(parent ?? (undefined as never), {
+        properties: ['openDirectory', 'createDirectory'],
+        title: translate(locale, 'passwords.resetVault')
+      })
+      const [directory] = where.canceled ? [] : where.filePaths
+      /*
+        Closing the folder chooser cancels the *whole* operation rather than falling through to the
+        deletion. Somebody who asked to keep a copy and then closed the picker has not agreed to lose it,
+        and reading that as "delete anyway" is the one misreading this offer exists to prevent.
+      */
+      if (directory === undefined) return { choice: 'cancel' }
+      return { choice: 'copy', directory }
     }
   })
 
@@ -570,6 +677,7 @@ async function main(): Promise<void> {
     bookmarks,
     downloads: downloadManager,
     passwords: passwordApi,
+    prompt: masterPasswordPrompt,
     permissions: permissionArbiter,
     media: mediaSessions,
     picker: elementPicker,
@@ -639,6 +747,18 @@ async function main(): Promise<void> {
     })
   }
 
+  /*
+    Development only: the application drives its own checks and exits with the verdict.
+
+    Started here because the window that has just been opened is what the checks drive. From
+    *inside* the process, which is the whole point: driving a real window from outside means a
+    Chromium process with an open debugging port spoken to over CDP, and that is the standard
+    technique for reading cookies and saved passwords out of a browser — so endpoint protection
+    flags exactly that shape, whoever started it and whichever port it uses.
+  */
+  const checkModule = readCheckModule(process.argv, { packaged: app.isPackaged })
+  if (checkModule !== null) void runOwnChecks(checkModule)
+
   app.on('second-instance', (_event, argv) => {
     const url = argv.find((arg) => /^https?:\/\//i.test(arg))
     const target = windows?.focused() ?? windows?.controllers[0]
@@ -671,9 +791,64 @@ async function main(): Promise<void> {
   })
 
   app.on('window-all-closed', () => {
+    /*
+      The third of the three ways the vault key goes away, and the only one that can be wired here.
+
+      `PasswordVault` owns the explicit lock and the idle timeout; it has no way to know a window closed.
+      On macOS this is the case that matters most: the application keeps running with no windows, so
+      without this line a vault unlocked an hour ago would stay open on a machine whose owner has visibly
+      finished — and `reveal.ts` names all three as the bound the unlock is held to.
+
+      Before the quit, so the flush that `before-quit` performs writes a vault that has already been
+      closed rather than one being closed underneath it.
+    */
+    void passwords?.lock()
     // macOS keeps the application running with no windows; the others quit.
     if (process.platform !== 'darwin') app.quit()
   })
+}
+
+/** What a check module has to expose, and everything it is given. */
+interface CheckModule {
+  run(handles: {
+    webContents: typeof webContents
+    /** `sendInputEvent` reaches a focused window only — Electron's own note on the method. */
+    focus(): void
+  }): Promise<number>
+}
+
+/**
+ * Loads the check module, runs it, and exits 0 only if every check passed.
+ *
+ * The count of failures is printed by the module itself; the status is the answer to "did this build
+ * pass", which is what a script or a CI step can act on.
+ *
+ * A runtime `import()` of a path outside `src/`, and that is a size decision rather than a style
+ * one: the checks are a thousand lines of assertions, the main bundle is parsed once per launch by
+ * every user, and its budget is already over. Bundled they would be paid for at every start; loaded
+ * like this they cost a `readCheckModule` call.
+ *
+ * Waits for the first window's document, because everything the checks read is rendered by it —
+ * `did-finish-load` rather than a delay, so a slow machine changes nothing.
+ *
+ * `app.exit` rather than `app.quit`: the verdict is the exit status, and `quit` would go through
+ * `before-quit`, which cancels the first attempt to do its cleanup and would swallow the code.
+ */
+async function runOwnChecks(modulePath: string): Promise<void> {
+  try {
+    const [first] = BrowserWindow.getAllWindows()
+    if (first?.webContents.isLoading() === true) {
+      await new Promise<void>((resolve) => first.webContents.once('did-finish-load', () => resolve()))
+    }
+    const loaded = (await import(pathToFileURL(modulePath).href)) as Partial<CheckModule>
+    const run = loaded.run
+    if (run === undefined) throw new Error(`${modulePath} exports no run()`)
+    const failures = await run({ webContents, focus: () => app.focus({ steal: true }) })
+    app.exit(failures === 0 ? 0 : 1)
+  } catch (error) {
+    console.error('[checks] could not be run:', error)
+    app.exit(1)
+  }
 }
 
 function uiLocale(store: SettingsStore): Locale {

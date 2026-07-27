@@ -63,6 +63,46 @@ export function readStartupFlags(filePath: string, defaults: StartupFlags): Star
   }
 }
 
+/**
+ * The switch that makes this build drive its own checks instead of waiting for a user.
+ *
+ * Named `--run-checks=<module>` and carrying a path, because the checks must *not* live in the
+ * main bundle: they are a thousand lines of assertions that every user would otherwise parse at
+ * every launch, against a size budget that is already over. So the core knows how to load a
+ * module, and nothing about what is in it.
+ */
+const CHECK_MODULE_SWITCH = '--run-checks='
+
+/**
+ * The check module named on the command line, or `null` for a normal launch.
+ *
+ * ## Why it is refused in a packaged build
+ *
+ * This switch says "load this file from disk and run it in the browser process", which is a
+ * code-execution route with a command line for a key: a tampered shortcut, a `.desktop` file or
+ * anything that can launch the browser with arguments would own the process. Development builds
+ * are started by the developer who wrote the module; a shipped one has no such assurance, so the
+ * switch does not exist there at all. `app.isPackaged` is the caller's to supply — this stays a
+ * pure function so the refusal itself is testable.
+ *
+ * The last occurrence wins, as Chromium's own switch parsing does: the run script appends the
+ * switch, and a stale one already on the command line must not silently beat it.
+ */
+export function readCheckModule(
+  argv: readonly string[],
+  options: { packaged: boolean }
+): string | null {
+  if (options.packaged) return null
+  const named = argv.filter((argument) => argument.startsWith(CHECK_MODULE_SWITCH))
+  const [last] = named.slice(-1)
+  if (last === undefined) return null
+  const modulePath = last.slice(CHECK_MODULE_SWITCH.length)
+  // `--run-checks=` with nothing after it names no module. Treated as absent rather than as an
+  // error, because the alternative is a browser that refuses to start over a typo in a switch it
+  // only has in development.
+  return modulePath === '' ? null : modulePath
+}
+
 /** The subset of the settings snapshot that reaches the command line. */
 export function startupFlagsFrom(settings: SettingsSnapshot): StartupFlags {
   return {

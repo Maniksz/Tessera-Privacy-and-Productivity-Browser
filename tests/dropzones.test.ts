@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { dropZonesFor, relativeTo, zoneAt } from '@shared/split/dropzones.js'
-import { LAYOUT_IDS, TILE_COUNT, TILE_GUTTER, type LayoutId, type Rect } from '@shared/split/layout.js'
+import {
+  DEFAULT_FRACTIONS,
+  LAYOUT_IDS,
+  TILE_COUNT,
+  TILE_GUTTER,
+  computeTileRects,
+  type LayoutId,
+  type Rect
+} from '@shared/split/layout.js'
 
 /**
  * Where a dragged tab can be dropped.
@@ -81,18 +89,60 @@ describe('reaching every arrangement by dragging', () => {
     }
   })
 
-  it('reaches a three-column row from either column of a two-column layout', () => {
+  it('reaches every column of a three-column row from a two-column one', () => {
     const toThree = dropZonesFor('1x2', CONTENT).filter((zone) => zone.layout === '1x3')
-    // Left and right of the first column, then of the second. The right edge of the
-    // first and the left edge of the second open the same gap, so they name the same
-    // new column.
-    expect(toThree.map((zone) => zone.id)).toEqual(['0-left', '0-right', '1-left', '1-right'])
-    expect(toThree.map((zone) => zone.tileIndex)).toEqual([0, 1, 1, 2])
+    // Three gaps, three zones: the leading one from the first column's left edge, the
+    // other two from the right edge of the column each sits beside. The second column's
+    // left edge is gone because it opens the gap `0-right` already offers.
+    expect(toThree.map((zone) => zone.id)).toEqual(['0-left', '0-right', '1-right'])
+    expect(toThree.map((zone) => zone.tileIndex)).toEqual([0, 1, 2])
   })
 
-  it('reaches a four-column row from every column of a three-column one', () => {
+  it('reaches every column of a four-column row from a three-column one', () => {
     const toFour = dropZonesFor('1x3', CONTENT).filter((zone) => zone.layout === '1x4')
-    expect(toFour.map((zone) => zone.tileIndex)).toEqual([0, 1, 1, 2, 2, 3])
+    expect(toFour.map((zone) => zone.id)).toEqual(['0-left', '0-right', '1-right', '2-right'])
+    expect(toFour.map((zone) => zone.tileIndex)).toEqual([0, 1, 2, 3])
+  })
+
+  it('offers each tile of each target layout exactly once', () => {
+    /*
+      The defect this pins down. A column's right edge and its neighbour's left edge open the
+      same gap, and both were listed — so two zones led to one tile and drew two identical
+      previews, one over the other. The tile that paid for it was the one with a neighbour on
+      each side: both of the middle column's bands were duplicates, and together they took 60 %
+      of it.
+    */
+    for (const layout of LAYOUT_IDS) {
+      const targets = dropZonesFor(layout, CONTENT)
+        .filter((zone) => zone.layout !== null)
+        .map((zone) => `${zone.layout}#${zone.tileIndex}`)
+      expect(new Set(targets).size, layout).toBe(targets.length)
+    }
+  })
+
+  it('gives a tile with a neighbour on each side at most one band', () => {
+    // The report was "dragging onto the middle tile does not work", and this is the shape of it:
+    // a gap belongs to one column, so a middle column cannot be carved from both sides at once.
+    for (const [layout, middle] of [
+      ['1x3', 1],
+      ['1x4', 1],
+      ['1x4', 2]
+    ] as const) {
+      const bands = dropZonesFor(layout, CONTENT).filter(
+        (zone) => zone.tileIndex === middle && zone.kind !== 'tile'
+      )
+      expect(bands.length, `${layout} tile ${middle}`).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('leaves the middle column of a three-column row mostly droppable', () => {
+    // The number the report came down to: 40 % of the middle column accepted a plain drop,
+    // because a band was taken off each side for two offers its neighbours already made.
+    const [middle] = computeTileRects('1x3', DEFAULT_FRACTIONS['1x3'], CONTENT, {
+      gutter: TILE_GUTTER
+    }).slice(1, 2)
+    const centre = dropZonesFor('1x3', CONTENT).find((zone) => zone.id === '1-centre')!
+    expect(centre.hit.width / middle!.width).toBeGreaterThan(0.6)
   })
 
   it('still reaches the grid and the three-tile shape from two columns', () => {

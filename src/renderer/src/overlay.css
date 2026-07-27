@@ -203,6 +203,49 @@ body {
   color: var(--fg-dim);
 }
 
+/* --- master password ------------------------------------------------------- */
+
+.prompt__field-label {
+  margin: 8px 0 6px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+/*
+  The field that is not a field.
+
+  Styled like an input because it has to read as one — the core is collecting the keystrokes and this
+  element is the only thing on screen saying that anything is being typed. Sized to a fixed height so a
+  count of zero looks like an empty box rather than a collapsed line, and `letter-spacing` so a person
+  can count the bullets, which is the only feedback this field can give.
+
+  `user-select: none`: there is nothing here to copy, and a selection would suggest otherwise.
+*/
+.prompt__bullets {
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.2;
+  letter-spacing: 0.22em;
+  overflow: hidden;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/*
+  Why the last attempt was refused. Loud, because the alternative is a person retrying the same
+  password and concluding the browser has eaten their vault.
+*/
+.prompt__problem {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* --- menus ---------------------------------------------------------------- */
 
 /*
@@ -222,7 +265,9 @@ body {
 
 .menu__item {
   display: grid;
-  grid-template-columns: 20px 1fr auto;
+  /* Icon, label, tile count, key. The fourth column is `auto` and empty for the three arrangements
+     with no shortcut, so a row without one keeps the others' alignment. */
+  grid-template-columns: 20px 1fr auto auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -264,4 +309,17 @@ body {
 .menu__hint {
   color: var(--fg-dim);
   font-size: 11px;
+}
+
+/*
+  The accelerator, in the column the eye already searches for one.
+
+  Tabular figures so `⇧⌘1` and `⇧⌘4` occupy the same width and the column does not shuffle between
+  rows, and `white-space: nowrap` because `Ctrl+Shift+1` must not wrap in a menu sized to its content.
+*/
+.menu__key {
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }

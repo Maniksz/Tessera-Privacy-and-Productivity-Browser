@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { OverlayState } from '@shared/overlay/surface.js'
+import { shortcutTitles } from '@shared/shortcuts/format.js'
 import { invoke, subscribe } from './bridge.js'
 import { useBrowserState } from './useBrowserState.js'
 import { useI18n } from './i18n.js'
@@ -148,6 +149,23 @@ export function App(): React.ReactNode {
 
   const controls = state.window?.windowControlsInset ?? { left: 0, right: 0 }
 
+  /**
+   * The tooltip writer, built once and handed down.
+   *
+   * Built here rather than in each bar because this is where both of its inputs already are, and both
+   * matter: the platform decides whether a key is written `⇧⌘T` or `Ctrl+Shift+T`, and the overrides
+   * decide whether it is the key the user actually rebound. A tooltip naming the default while the
+   * user has rebound it is worse than no tooltip.
+   *
+   * `platform` comes from the window state and is `null` until it arrives — for that first render the
+   * buttons carry their labels and nothing else, which is the one honest answer to "which key?" before
+   * we know which machine we are on.
+   */
+  const titleWithShortcut = shortcutTitles(
+    state.window?.platform ?? null,
+    state.settings?.['advanced.customShortcuts'] ?? {}
+  )
+
   return (
     <div className={`app${privateMode ? ' app--private' : ''}`}>
       <div className="chrome" ref={chromeRef}>
@@ -159,12 +177,14 @@ export function App(): React.ReactNode {
           split={state.split}
           leftInset={controls.left}
           rightInset={controls.right}
+          titleWithShortcut={titleWithShortcut}
         />
         <Toolbar
           tab={activeTab}
           split={state.split}
           settings={state.settings}
           privateMode={privateMode}
+          titleWithShortcut={titleWithShortcut}
           layoutMenuOpen={overlay?.kind === 'layout-menu'}
           focusRequest={focusRequest}
           onOpenSettings={() => setPanel('settings')}

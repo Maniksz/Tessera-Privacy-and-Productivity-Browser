@@ -1,5 +1,6 @@
 import type { SplitState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
+import type { ShortcutTitle } from '@shared/shortcuts/format.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
@@ -27,6 +28,8 @@ interface ToolbarProps {
   onOpenExtensions: () => void
   /** Bumped when the user asks for the address bar; passed straight to `Omnibox`. */
   focusRequest: number
+  /** Joins a label to the key that also presses the button; see `shortcutTitles`. */
+  titleWithShortcut: ShortcutTitle
 }
 
 export function Toolbar({
@@ -38,11 +41,16 @@ export function Toolbar({
   onOpenSettings,
   onOpenExtensions
 ,
-  focusRequest
+  focusRequest,
+  titleWithShortcut
 }: ToolbarProps): React.ReactNode {
   const { t } = useI18n()
   const loading = tab?.loading ?? false
   const tileCount = split?.tileTabIds.length ?? 1
+  const maximized = split?.maximizedTile !== null
+  // Named once because it is the accessible name *and* the first line of the tooltip, and the two
+  // drifting apart would mean a screen reader and a tooltip describing different buttons.
+  const maximizeLabel = t(maximized ? 'split.restore' : 'split.maximize')
 
   return (
     <div className="toolbar">
@@ -51,7 +59,7 @@ export function Toolbar({
           type="button"
           className="iconbutton"
           aria-label={t('toolbar.back')}
-          title={t('toolbar.back')}
+          title={titleWithShortcut(t('toolbar.back'), 'back')}
           disabled={!(tab?.canGoBack ?? false)}
           onClick={() => void invoke('nav:goBack', {})}
         >
@@ -64,7 +72,7 @@ export function Toolbar({
           type="button"
           className="iconbutton"
           aria-label={t('toolbar.forward')}
-          title={t('toolbar.forward')}
+          title={titleWithShortcut(t('toolbar.forward'), 'forward')}
           disabled={!(tab?.canGoForward ?? false)}
           onClick={() => void invoke('nav:goForward', {})}
         >
@@ -77,7 +85,15 @@ export function Toolbar({
           type="button"
           className="iconbutton"
           aria-label={t(loading ? 'toolbar.stop' : 'toolbar.reload')}
-          title={t(loading ? 'toolbar.stop' : 'toolbar.reload')}
+          /*
+            A key while it means Reload, none while it means Stop.
+
+            `stop` is bound to Escape in the tables, and nothing registers it: it is deliberately kept
+            out of the menu so it cannot swallow Escape in a form, and the renderer's own Escape
+            handler walks the fullscreen ladder — it never cancels a load. Printing `Esc` here would
+            promise something the browser does not do.
+          */
+          title={loading ? t('toolbar.stop') : titleWithShortcut(t('toolbar.reload'), 'reload')}
           onClick={() => {
             if (loading) void invoke('nav:stop', {})
             else void invoke('nav:reload', {})
@@ -99,7 +115,7 @@ export function Toolbar({
           type="button"
           className="iconbutton"
           aria-label={t('toolbar.home')}
-          title={t('toolbar.home')}
+          title={titleWithShortcut(t('toolbar.home'), 'home')}
           onClick={() => void invoke('nav:navigate', { input: HOME_URL })}
         >
           <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -119,21 +135,18 @@ export function Toolbar({
           <button
             type="button"
             className="iconbutton"
-            aria-pressed={split?.maximizedTile !== null}
-            aria-label={t(split?.maximizedTile !== null ? 'split.restore' : 'split.maximize')}
-            title={t(split?.maximizedTile !== null ? 'split.restore' : 'split.maximize')}
+            aria-pressed={maximized}
+            aria-label={maximizeLabel}
+            title={titleWithShortcut(maximizeLabel, 'toggleTileMaximized')}
             onClick={() => void invoke('split:toggleTileMaximized', {})}
           >
             <svg viewBox="0 0 20 20" aria-hidden="true">
-              {split?.maximizedTile !== null ? (
-                <path d="M4 8h5V3M16 12h-5v5" />
-              ) : (
-                <path d="M4 4h12v12H4z" />
-              )}
+              {maximized ? <path d="M4 8h5V3M16 12h-5v5" /> : <path d="M4 4h12v12H4z" />}
             </svg>
           </button>
         )}
 
+        {/* No key: `SHORTCUT_ACTIONS` has no extensions action, and a tooltip must not invent one. */}
         <button
           type="button"
           className="iconbutton"
@@ -150,7 +163,7 @@ export function Toolbar({
           type="button"
           className="iconbutton"
           aria-label={t('toolbar.settings')}
-          title={t('toolbar.settings')}
+          title={titleWithShortcut(t('toolbar.settings'), 'settings')}
           onClick={onOpenSettings}
         >
           <svg viewBox="0 0 20 20" aria-hidden="true">

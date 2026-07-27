@@ -1,5 +1,10 @@
 import type { LayoutId } from '../split/layout.js'
 import type { DropZone } from '../split/dropzones.js'
+import type {
+  MasterPasswordPromptProblem,
+  MasterPasswordPurpose,
+  MasterPasswordStep
+} from '../passwords/prompt.js'
 import type { Rect, Size } from '../ui/anchor.js'
 import type { PermissionDevice, PermissionSubject } from './permission.js'
 
@@ -34,7 +39,8 @@ export const OVERLAY_KINDS = [
   'tab-drop',
   'permission-request',
   'tile-bar',
-  'find-bar'
+  'find-bar',
+  'master-password'
 ] as const
 
 export type OverlayKind = (typeof OVERLAY_KINDS)[number]
@@ -95,7 +101,17 @@ export const OVERLAY_REGION = {
    * is why it is a corner rather than a strip; see `findBarBounds`. Sized to the window it would
    * make the other three pages unclickable while one of them was being searched.
    */
-  'find-bar': 'tile'
+  'find-bar': 'tile',
+  /**
+   * The whole window, and this is the surface with the least room for argument about it.
+   *
+   * While the master password is being typed, the window is for that and nothing else. Sized to the
+   * content area it would leave the toolbar and the tab strip live, so a click there would take the
+   * prompt down mid-word — and a keystroke that arrived after the layer had lost focus would land in
+   * the address bar, which is to say part of somebody's master password would appear in the omnibox
+   * and then in its history. The full region is what makes that unreachable rather than unlikely.
+   */
+  'master-password': 'window'
 } as const satisfies Record<OverlayKind, OverlayRegion>
 
 /** The layout menu carries the current layout so it can render its radio state at once. */
@@ -275,12 +291,61 @@ export interface FindBarPresentation {
   activeMatch: number
 }
 
+/**
+ * The master password, being asked for (see `shared/passwords/prompt.ts`).
+ *
+ * ## Why this presentation has no value in it
+ *
+ * There is no field here for what the user has typed, in either direction, and that absence is the
+ * feature. The characters live in the main process — captured from the input pipeline before this
+ * layer's renderer sees them, see `capturesKeyboard` — so the only thing the surface is told is *how
+ * many* there are, and the only thing it draws is that many bullets. A renderer that never holds the
+ * master password cannot be the way it escapes, and no channel has to be trusted not to carry it.
+ *
+ * The cost of that is real and is stated in `prompt.ts`: this is a hand-driven field, so there is no
+ * IME and no caret. It is not a cost this presentation can hide, which is why the surface says what
+ * keys do.
+ *
+ * ## Why the problem travels with the question
+ *
+ * A refused attempt re-presents the same surface with `problem` set rather than opening a second
+ * one, exactly as a permission prompt re-presents with a new `waiting` count. `surfaceIdentity` keys
+ * on `requestId`, so that is an update and not a departure — which matters more here than anywhere
+ * else on this layer, because a departure of this surface settles the request as cancelled.
+ */
+export interface MasterPasswordPresentation {
+  kind: 'master-password'
+  /**
+   * Identity of the question.
+   *
+   * Echoed back with a click on Continue or Cancel, for the reason `PermissionRequestPresentation`
+   * gives: an answer must only ever be able to resolve the question it was shown for. It is also how
+   * the core finds the pending request a departed prompt belonged to.
+   */
+  requestId: string
+  purpose: MasterPasswordPurpose
+  /** Which question of the sequence is on screen. One at a time; see `MASTER_PASSWORD_STEPS`. */
+  step: MasterPasswordStep
+  /**
+   * How many characters have been typed, so the field can draw that many bullets.
+   *
+   * A count and not the text. This is the whole of what the renderer is allowed to know about the
+   * secret being entered into it.
+   */
+  filled: number
+  /** Why the previous attempt was refused, or null. Never the candidate. */
+  problem: MasterPasswordPromptProblem | null
+  /** The length floor, so the rule can be stated before it is broken rather than after. */
+  minLength: number
+}
+
 export type OverlayPresentation =
   | LayoutMenuPresentation
   | TabDropPresentation
   | PermissionRequestPresentation
   | TileBarPresentation
   | FindBarPresentation
+  | MasterPasswordPresentation
 
 /** Nothing presented is a first-class state, not an absent one. */
 export type OverlayState = OverlayPresentation | null
@@ -308,7 +373,16 @@ export const OVERLAY_AWAITS_ANSWER = {
    * `OVERLAY_MARKS_THE_PAGE`. The two facts are kept apart because they are different: one is a
    * promise nobody will settle, the other a mark left on a document.
    */
-  'find-bar': false
+  'find-bar': false,
+  /**
+   * Somebody invoked `passwords:requestUnlock` and is holding a promise for one of four words.
+   *
+   * The same shape of debt as a permission prompt and a different safe answer: a vanished consent
+   * dialogue means "no", a vanished password prompt means `cancelled`. Refusing would be wrong here —
+   * `wrong-password` is what the page renders as "that was not it", and a window resize is not the
+   * user getting their own master password wrong.
+   */
+  'master-password': true
 } as const satisfies Record<OverlayKind, boolean>
 
 export function awaitsAnswer(presentation: OverlayPresentation): boolean {
@@ -340,7 +414,9 @@ export const OVERLAY_MARKS_THE_PAGE = {
   /** A dialogue over a page changes nothing in it. */
   'permission-request': false,
   'tile-bar': false,
-  'find-bar': true
+  'find-bar': true,
+  /** A dialogue over a page changes nothing in it, and this one does not even read it. */
+  'master-password': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function marksThePage(presentation: OverlayPresentation): boolean {
@@ -389,7 +465,44 @@ export function surfaceIdentity(presentation: OverlayPresentation): string {
       return `tile-bar:${presentation.tileIndex}`
     case 'find-bar':
       return `find-bar:${presentation.sessionId}`
+    case 'master-password':
+      return `master-password:${presentation.requestId}`
   }
+}
+
+/**
+ * Whether the *core* takes this surface's keystrokes instead of letting its renderer have them.
+ *
+ * ## The failure this table prevents
+ *
+ * One surface on this layer is a password field, and the password it collects is the one whose loss
+ * costs every other one. A normal field would put it in the overlay renderer's DOM, and there is no
+ * version of that which is safe enough: it would then have to travel back over a channel, and a
+ * channel that carries a master password is a channel a compromised renderer can be made to answer
+ * on — while the guarantee this feature is sold on is that no such channel exists.
+ *
+ * So for this one kind the layer intercepts every keystroke in the main process and **does not pass
+ * it on**. The renderer draws a count of bullets it was given and never sees a character. The other
+ * five kinds must not be treated that way: a find bar is a real text field, and taking its keys in
+ * the core would mean hand-implementing text editing for a search box.
+ *
+ * A table rather than a check inside the layer, for the reason the regions are: `satisfies` makes a
+ * seventh kind that nobody considered a build failure rather than a surface that quietly loses every
+ * keystroke — or quietly keeps one it should not have.
+ */
+export const OVERLAY_CAPTURES_KEYBOARD = {
+  'layout-menu': false,
+  'tab-drop': false,
+  /** Its buttons are reached by Tab and answered by Return, in the renderer, as a dialogue should be. */
+  'permission-request': false,
+  'tile-bar': false,
+  /** A real text field with a real caret; see the docblock above. */
+  'find-bar': false,
+  'master-password': true
+} as const satisfies Record<OverlayKind, boolean>
+
+export function capturesKeyboard(presentation: OverlayPresentation): boolean {
+  return OVERLAY_CAPTURES_KEYBOARD[presentation.kind]
 }
 
 /**
@@ -425,12 +538,31 @@ export function surfaceIdentity(presentation: OverlayPresentation): string {
  *    both of those cannot function without the layer: a drag with no drop indicator is a drop
  *    landing blind. Losing a search term to a gesture the user deliberately started is a fair
  *    trade; the term comes back, because the core remembers it and the shortcut restores it.
+ *  - **The master-password prompt outranks even a permission prompt**, and it is the only surface
+ *    that does. Both await an answer, so displacing either costs something real, and the question is
+ *    which cost is worse — the two directions are not symmetrical:
+ *
+ *    A camera prompt displacing a vault prompt would destroy a half-typed master password *and* aim
+ *    the rest of it at a consent dialogue: the layer takes this surface's keystrokes in the core (see
+ *    `capturesKeyboard`), so the moment something else holds the layer the remaining characters
+ *    become ordinary keys in a renderer — where Return is a button. A page can cause a camera request
+ *    at any moment, so that path lets a *page* choose when to interrupt somebody typing their master
+ *    password, and lands their next keystroke on "Allow". That is the worst outcome available on this
+ *    layer.
+ *
+ *    The other direction costs the page a refused request, which is the safe default it already gets
+ *    for a dismissal, a resize or a lost focus. A person who deliberately asked to unlock their vault
+ *    wins over a request nobody asked for; the page may ask again.
+ *
+ *    It cannot be claimed by drifting a pointer or by a page: it exists only because somebody pressed
+ *    Unlock or chose a master-password action, which is why giving it the top rank grants nothing to
+ *    anything untrusted.
  *  - **Equal replaces**, which is what makes the next queued prompt able to follow the one just
- *    answered, what lets a tile bar move from one tile to the next, and what lets a find bar update
- *    its own match count.
+ *    answered, what lets a tile bar move from one tile to the next, what lets a find bar update
+ *    its own match count, and what lets this prompt redraw its bullet count on every keystroke.
  *
  * Data rather than a chain of `if`s inside the layer, and `satisfies` rather than a lookup with a
- * fallback: a sixth kind that nobody ranked is a build failure instead of a surface that silently
+ * fallback: a seventh kind that nobody ranked is a build failure instead of a surface that silently
  * displaces a consent dialogue.
  */
 export const OVERLAY_PRECEDENCE = {
@@ -438,7 +570,8 @@ export const OVERLAY_PRECEDENCE = {
   'find-bar': 1,
   'layout-menu': 2,
   'tab-drop': 2,
-  'permission-request': 3
+  'permission-request': 3,
+  'master-password': 4
 } as const satisfies Record<OverlayKind, number>
 
 /** Whether `incoming` may take the layer from whatever is on it. */
@@ -450,11 +583,16 @@ export function mayPresentOver(incoming: OverlayKind, current: OverlayState): bo
 /**
  * Whether presenting this surface should move the keyboard into it.
  *
- * Four of the five kinds always should: each is the direct result of the user asking for it, and
+ * Five of the six kinds always should: each is the direct result of the user asking for it, and
  * a menu or a dialogue that did not take the keyboard would be unusable without a mouse (spec 7).
  * The find bar is the strongest case of all — it is a text field, reached only by shortcut, and its
  * entire purpose is to receive typing. A find bar that did not take focus would be a search box you
  * cannot type in.
+ *
+ * The master-password prompt needs it for a reason of its own, and needs it absolutely: the core reads
+ * its keystrokes off *this view's* input pipeline (`capturesKeyboard`), which only ever carries them
+ * while this view has the keyboard. Without focus the prompt would draw a field that swallows nothing
+ * and count zero bullets for ever, while the characters went to whatever did have focus.
  *
  * A tile bar revealed by the pointer must not, and that is the whole reason this function exists.
  * The layer's renderer is a real web contents; focusing it takes focus away from the page. A bar
@@ -471,6 +609,7 @@ export function takesFocus(presentation: OverlayPresentation): boolean {
     case 'tab-drop':
     case 'permission-request':
     case 'find-bar':
+    case 'master-password':
       return true
     case 'tile-bar':
       return presentation.invokedBy === 'keyboard'

@@ -11,7 +11,10 @@ import { TabGroupController } from './TabGroupController.js'
 import { TileAudioController } from './TileAudioController.js'
 import { TileFullscreenController } from './TileFullscreenController.js'
 import { TileInputController } from './TileInputController.js'
-import { TileOccupancyController } from './TileOccupancyController.js'
+import {
+  TileOccupancyController,
+  type LayoutChangeOptions
+} from './TileOccupancyController.js'
 
 /**
  * Builds the six controllers a window delegates to, and — the actual point — writes down what each of them is
@@ -32,8 +35,8 @@ import { TileOccupancyController } from './TileOccupancyController.js'
  * ## What this is not
  *
  * Not a dependency-injection container and not a lifecycle. It is called once, returns six objects, and is
- * finished — the window still owns them and still decides when each is asked anything. The one ordering
- * constraint is spelled out where it bites.
+ * finished — the window still owns them and still decides when each is asked anything. The two ordering
+ * constraints are spelled out where each bites.
  */
 
 /**
@@ -53,6 +56,8 @@ export interface WindowInternals {
   contentRect(): Rect
   setFullScreenable(allowed: boolean): void
   exitWindowFullscreen(): void
+  /** Flips it, for the key that means "fullscreen" rather than "leave fullscreen". */
+  toggleWindowFullscreen(): void
 
   /** The window's tabs, by id. A seam reads; only the window adds and removes. */
   tab(tabId: string): Tab | undefined
@@ -66,7 +71,7 @@ export interface WindowInternals {
   setActiveTile(tileIndex: number): void
   /** Opens a start-page tab for an empty tile, marked as a filler. */
   openFiller(tileIndex: number): void
-  applyLayout(layout: LayoutId, options: { fill: boolean }): void
+  applyLayout(layout: LayoutId, options: LayoutChangeOptions): void
 
   presentOverlay(presentation: OverlayPresentation): void
   relayout(): void
@@ -112,6 +117,7 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     fullscreenScope: () => internals.getSettings()['splitView.fullscreenScope'],
     setFullScreenable: (allowed) => internals.setFullScreenable(allowed),
     exitWindowFullscreen: () => internals.exitWindowFullscreen(),
+    toggleWindowFullscreen: () => internals.toggleWindowFullscreen(),
     askPageToExitFullscreen: (tabId) => {
       /*
         Asked rather than forced, and the failure swallowed on purpose.
@@ -131,6 +137,23 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     }
   })
 
+  /*
+    Before `occupancy`, and that is the second ordering constraint in this file.
+
+    Putting the grid away for a new tab loses the arrangement the other tabs were in, and a tab group is
+    what keeps it — so the occupancy controller hands `groups` the arrangement on the way out. The
+    dependency runs one way, and unlike `drag`/`occupancy` the construction order can satisfy it
+    directly: nothing here needs the occupancy controller.
+  */
+  const groups = new TabGroupController({
+    book: internals.tabGroups,
+    tabOrder: () => internals.tabOrder(),
+    setTabOrder: (order) => internals.setTabOrder(order),
+    unassign: (tabId) => internals.tab(tabId)?.setTileIndex(null),
+    liveTabIds: () => internals.tabIds(),
+    broadcast: () => internals.broadcast()
+  })
+
   occupancy = new TileOccupancyController({
     split: internals.split,
     adaptEnabled: () => internals.getSettings()['splitView.adaptLayoutToTabs'],
@@ -141,7 +164,8 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     closeTab: (tabId) => internals.closeTab(tabId),
     setActiveTile: (tileIndex) => internals.setActiveTile(tileIndex),
     openFiller: (tileIndex) => internals.openFiller(tileIndex),
-    applyLayout: (layout, options) => internals.applyLayout(layout, options)
+    applyLayout: (layout, options) => internals.applyLayout(layout, options),
+    keepArrangement: (layout) => groups.keepArrangement(layout)
   })
 
   const audio = new TileAudioController({
@@ -172,15 +196,6 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     cursor: () => cursorInWindow(internals),
     goBack: (tileIndex) => tabInTile(internals, tileIndex)?.goBack(),
     goForward: (tileIndex) => tabInTile(internals, tileIndex)?.goForward()
-  })
-
-  const groups = new TabGroupController({
-    book: internals.tabGroups,
-    tabOrder: () => internals.tabOrder(),
-    setTabOrder: (order) => internals.setTabOrder(order),
-    unassign: (tabId) => internals.tab(tabId)?.setTileIndex(null),
-    liveTabIds: () => internals.tabIds(),
-    broadcast: () => internals.broadcast()
   })
 
   return { drag, fullscreen, occupancy, audio, tileInput, groups }

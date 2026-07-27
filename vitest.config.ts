@@ -120,6 +120,17 @@ export default defineConfig({
         */
         'src/main/privacy/CosmeticInjector.ts',
         'src/main/privacy/ElementPicker.ts',
+        /*
+          Exactly the same shape as those two, and admitted on exactly the same terms: it subscribes to
+          `app.on('web-contents-created')` and talks to a live `WebContents`, so it cannot run outside a
+          browser process.
+
+          Its decisions were extracted first, which is the condition for being listed here rather than an
+          excuse to be: `AutofillService` holds every rule about which page may be filled, what a save bar
+          may ask and when a credential is discarded, and it is covered in full. What is left in this file
+          is the subscription plumbing.
+        */
+        'src/main/passwords/install-autofill.ts',
         '**/*.d.ts'
       ],
       thresholds: {
@@ -171,6 +182,18 @@ export default defineConfig({
         'src/shared/session/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/find/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/thumbnails/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          Named per file rather than as `shortcuts/**`, because `bindings.ts` is a table this project
+          has never had full branch coverage of and pretending otherwise would make the entry a
+          formality. `format.ts` is the part where being wrong is visible to the user — a tooltip
+          naming a key nobody can press — so it is held to all of it.
+        */
+        'src/shared/shortcuts/format.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         // `apply.ts` patches nine browser APIs; two of its guards need a page that lacks one.
         'src/shared/fingerprint/**': { lines: 100, functions: 100, branches: 98, statements: 100 },
         'src/main/crypto/**': { lines: 100, functions: 100, branches: 100, statements: 100 },

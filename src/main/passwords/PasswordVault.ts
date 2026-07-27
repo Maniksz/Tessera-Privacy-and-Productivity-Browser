@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises'
+import { copyFile, rm } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import {
   parseChromePasswordCsv,
   type ChromeImportResult
@@ -364,6 +365,44 @@ export class PasswordVault implements AutofillVault, ImportTarget {
   }
 
   /**
+   * Whether a candidate is the current master password. Nothing else changes.
+   *
+   * Verified the only way there is to verify it — by *opening the stored key file with it* — because
+   * there is nothing to compare it against, and that is the design rather than a shortcoming: a stored
+   * comparison value would be a second thing an attacker with the profile directory could attack.
+   *
+   * It exists for one caller. `MasterPasswordPrompt` asks the current password first and then asks for a
+   * new one twice; without this the mistyped current password would only be discovered after all three
+   * had been typed, and all three would then be thrown away. `setMasterPassword` still performs its own
+   * check, so this is an early refusal and never a substitute for one — a check that can be skipped by
+   * having already passed a different check is not a check.
+   *
+   * @returns false for a wrong candidate *and* for a key file that cannot be opened at all: neither is a
+   *   candidate this vault will accept, and telling them apart here would only give a caller a way to
+   *   distinguish "wrong" from "damaged" on a channel that answers one word.
+   */
+  async verifyMasterPassword(candidate: string): Promise<boolean> {
+    const file = this.#file
+    // A vault with no master password has none to verify, so no candidate is the right one.
+    if (file?.kdf == null) return false
+    try {
+      const proof = await openVaultKey({
+        file,
+        safeStorage: this.#options.safeStorage,
+        masterPassword: candidate
+      })
+      // Dropped immediately rather than used, so there is never a second live copy of the vault key in
+      // this process. Same rule as `setMasterPassword`'s proof.
+      proof.fill(0)
+      return true
+    } catch (error) {
+      if (error instanceof WrongMasterPasswordError) return false
+      if (error instanceof VaultKeyUnreadableError) return false
+      throw error
+    }
+  }
+
+  /**
    * Sets, changes or removes the master password.
    *
    * One method for all three transitions, because they are one operation with three shapes and
@@ -435,6 +474,52 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     await writeVaultKeyFile(this.#options.keyFilePath, file)
     this.#file = file
     this.#noteActivity()
+  }
+
+  /**
+   * Puts a copy of the sealed vault somewhere the user chose, so `resetVault` is not the end of it.
+   *
+   * ## Why this exists
+   *
+   * The only reason anybody reaches `resetVault` is that they have forgotten the master password, and the
+   * file is then unreadable — but it is not worthless. Master passwords are remembered days later, found
+   * in a notebook, recalled by typing it somewhere else. A browser that deletes the credentials of the
+   * last five years because somebody could not remember a word this morning has destroyed something it
+   * had no way of valuing.
+   *
+   * ## Why both files, and what the copy is honestly worth
+   *
+   * The document alone is unopenable: the key that seals it lives in `passwords.key`, wrapped. So both
+   * are copied, and even then the copy is only as good as the wrapping. With `keystore+master` it is
+   * *also* wrapped by this machine's key store, so the copy is recoverable on this machine, by this user,
+   * with the master password — and nowhere else. With `master` alone, the password is the whole of it and
+   * the copy travels. Neither of those is something a person can infer from a file, which is why the
+   * sentence the user reads before this runs says it (`passwords.resetVaultKeepBody`).
+   *
+   * Flushed first, so the copy includes writes still sitting in the debounce timer rather than being a
+   * version of the vault from thirty seconds ago.
+   *
+   * @returns how many files were written. Zero means there was nothing to keep, and the caller must then
+   *   *not* discard anything — see `PasswordApi.resetVault`.
+   */
+  async copyTo(directory: string): Promise<number> {
+    await this.flush()
+    let written = 0
+    for (const source of [this.#options.documentPath, this.#options.keyFilePath]) {
+      try {
+        await copyFile(source, join(directory, basename(source)))
+        written += 1
+      } catch (error) {
+        /*
+          A missing source is not an error here: a vault that has never been written has no document, and
+          a key file can be the thing that went missing in the first place. Anything else — no permission,
+          a full disk — is let out, because a copy that silently did not happen is the one failure this
+          whole operation exists to prevent.
+        */
+        if ((error as { code?: string }).code !== 'ENOENT') throw error
+      }
+    }
+    return written
   }
 
   /**

@@ -1,5 +1,4 @@
 import { translate, type Locale } from '@shared/i18n/catalog.js'
-import { passwordMessage } from '@shared/passwords/messages.js'
 import type { FillChrome, SaveBarChrome } from '@shared/passwords/wire.js'
 
 /**
@@ -95,8 +94,8 @@ const SHARED_STYLES = `
 export function fillChromeFor(locale: Locale, site: string): FillChrome {
   return {
     styles: SHARED_STYLES,
-    title: translate(locale, passwordMessage('passwords.fillTitle'), { site }),
-    noUsernameLabel: translate(locale, passwordMessage('passwords.noUsername'))
+    title: translate(locale, 'passwords.fillTitle', { site }),
+    noUsernameLabel: translate(locale, 'passwords.noUsername')
   }
 }
 
@@ -119,14 +118,14 @@ export function saveBarChromeFor(options: {
     styles: SHARED_STYLES,
     message: translate(
       locale,
-      passwordMessage(kind === 'create' ? 'passwords.savePrompt' : 'passwords.saveUpdatePrompt'),
+      kind === 'create' ? 'passwords.savePrompt' : 'passwords.saveUpdatePrompt',
       { site }
     ),
     // Empty stays empty rather than becoming "(no username)": on the save bar the name is a fact
     // about what is being stored, and a placeholder there would read as the *value* being saved.
     username,
-    saveLabel: translate(locale, passwordMessage('passwords.saveAction')),
-    neverLabel: translate(locale, passwordMessage('passwords.neverAction')),
-    dismissLabel: translate(locale, passwordMessage('passwords.dismissAction'))
+    saveLabel: translate(locale, 'passwords.saveAction'),
+    neverLabel: translate(locale, 'passwords.neverAction'),
+    dismissLabel: translate(locale, 'passwords.dismissAction')
   }
 }

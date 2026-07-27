@@ -156,6 +156,26 @@ export function passwordsFile(): string {
   return join(userDataDir(), 'passwords.json')
 }
 
+/**
+ * The vault's own key, wrapped by the OS key store and — once one is set — by the master password.
+ *
+ * Beside the document it seals, for the reason `localDataKeyFile` gives: wrapped, the file is useless
+ * without the keychain or the password, and keeping it inside the profile means copying a profile between
+ * machines fails visibly instead of half-working.
+ *
+ * Separate from `local-data.key` on purpose, and that separation is the whole design of the lock. The
+ * profile-wide key has to be usable at startup with nobody present, so it can never be behind a password;
+ * this one can, which is what lets the vault be closed while history and settings are open. See
+ * `crypto/vault-key.ts`.
+ *
+ * Spelled here rather than inline in `index.ts`, which is where it started: this file owns every path in
+ * the application, and a path assembled at its one call site is a path the next caller assembles
+ * differently — which for a key file means a vault nobody can open.
+ */
+export function passwordVaultKeyFile(): string {
+  return join(userDataDir(), 'passwords.key')
+}
+
 /** Locally stored favicons — never fetched from a third-party service (spec 1). */
 export function faviconCacheDir(): string {
   return join(cacheDir(), 'favicons')

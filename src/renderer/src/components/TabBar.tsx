@@ -3,6 +3,7 @@ import type { SplitState, TabState } from '@shared/model.js'
 import { stripItems } from '@shared/tabgroups/strip.js'
 import { MAX_TAB_GROUP_NAME_LENGTH, type TabGroup } from '@shared/tabgroups/model.js'
 import { tabGroupColorToken, type TabGroupColor } from '@shared/tabgroups/palette.js'
+import type { ShortcutTitle } from '@shared/shortcuts/format.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
@@ -33,6 +34,8 @@ interface TabBarProps {
   split: SplitState | null
   leftInset: number
   rightInset: number
+  /** Joins a label to the key that also presses the button; see `shortcutTitles`. */
+  titleWithShortcut: ShortcutTitle
 }
 
 /**
@@ -145,7 +148,15 @@ function GroupChip({
   )
 }
 
-export function TabBar({ tabs, groups, activeTabId, split, leftInset, rightInset }: TabBarProps): React.ReactNode {
+export function TabBar({
+  tabs,
+  groups,
+  activeTabId,
+  split,
+  leftInset,
+  rightInset,
+  titleWithShortcut
+}: TabBarProps): React.ReactNode {
   const { t } = useI18n()
   const stripRef = useRef<HTMLDivElement>(null)
   const drag = useTabDrag(stripRef)
@@ -320,7 +331,7 @@ export function TabBar({ tabs, groups, activeTabId, split, leftInset, rightInset
           type="button"
           className="tabbar__new"
           aria-label={t('tab.newTab')}
-          title={t('tab.newTab')}
+          title={titleWithShortcut(t('tab.newTab'), 'newTab')}
           onClick={() => void invoke('tabs:create', {})}
         >
           +

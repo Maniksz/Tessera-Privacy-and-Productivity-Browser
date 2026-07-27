@@ -1,4 +1,9 @@
-import { tileBarStep, type TileBarMode, type TileBarRequest } from '@shared/split/tile-bar.js'
+import {
+  tileBarRefresh,
+  tileBarStep,
+  type TileBarMode,
+  type TileBarRequest
+} from '@shared/split/tile-bar.js'
 import { decideNavigationGesture, type GestureSource } from '@shared/gestures/navigation.js'
 import type { OverlayPresentation, OverlayState } from '@shared/overlay/surface.js'
 import type { Point } from '@shared/split/dropzones.js'
@@ -74,6 +79,27 @@ export class TileInputController {
       prompt that leaves the layer is settled the safe way, which is refused. `tileBarStep` does not know what
       else the layer might be showing and should not have to.
     */
+    else if (action.do === 'hide') this.host.dismissTileBar()
+  }
+
+  /**
+   * Reads the tab's state into the bar that is already up (spec 2).
+   *
+   * Called whenever anything about a tab changes, which is what makes the bar's buttons tell the truth
+   * rather than the truth as it was when the pointer arrived. `tileBarRefresh` returns `nothing` when
+   * the bar would look identical, so calling it that often costs a comparison — see there for why that
+   * matters and not just why it is cheap.
+   */
+  refreshTileBar(): void {
+    const current = this.host.overlayPresentation()
+    const action = tileBarRefresh({
+      current: current?.kind === 'tile-bar' ? current : null,
+      mode: this.host.tileBarMode(),
+      rects: this.host.tileRects(),
+      tabOf: (tileIndex) => this.host.tabIn(tileIndex)
+    })
+
+    if (action.do === 'present') this.host.present(action.presentation)
     else if (action.do === 'hide') this.host.dismissTileBar()
   }
 

@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { FaviconStore, type FaviconFetcher } from '@main/data/FaviconStore.js'
-import { plainJsonDocumentCodec } from '@main/data/JsonStore.js'
+import { plainJsonDocumentCodec, type DocumentCodec } from '@main/data/JsonStore.js'
 import {
   MAX_FAVICON_BYTES,
   discardingFaviconCache,
@@ -86,6 +86,29 @@ async function harness(
     },
     tick: (ms) => {
       clock += ms
+    }
+  }
+}
+
+/**
+ * A codec that leaves nothing readable in the file.
+ *
+ * Not encryption — base64 hides nothing from anyone trying — but it stands in for the real
+ * codec in the one respect that matters to a store: the bytes on disk are not the
+ * document. A test using the *plain* codec cannot tell a store that forwards its codec
+ * from one that ignores it, which is how the forwarding stayed unasserted.
+ */
+function sealingCodec(): DocumentCodec {
+  const marker = 'sealed:'
+  return {
+    encode: (data) =>
+      new TextEncoder().encode(
+        `${marker}${Buffer.from(JSON.stringify(data), 'utf8').toString('base64')}`
+      ),
+    decode: (bytes) => {
+      const text = new TextDecoder().decode(bytes)
+      if (!text.startsWith(marker)) throw new Error('not written by this codec')
+      return JSON.parse(Buffer.from(text.slice(marker.length), 'base64').toString('utf8')) as unknown
     }
   }
 }
@@ -213,6 +236,28 @@ describe('refusing what came back', () => {
     expect(existsSync(iconPath(h.directory, 'example.com'))).toBe(false)
   })
 
+  it('refuses on the declared type before it reads the body', async () => {
+    /*
+      The body here is a real PNG and the header still says `text/html`, which is the only
+      shape that can tell the header check from the signature check: in the test above both
+      refuse, so deleting the header check changed nothing anyone measured.
+
+      The order is the point. A soft 404 — an HTML error page served with 200 — is the
+      common case, and the header is what refuses it without buffering a page-sized body
+      per site in the tab strip.
+    */
+    const h = await harness()
+    h.answer(() =>
+      new Response(pngBytes(), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+    )
+
+    expect(await h.store.cacheFor('normal').ensure(PAGE, [ICON])).toEqual({
+      kind: 'rejected',
+      reason: 'unsupported-type'
+    })
+    expect(existsSync(iconPath(h.directory, 'example.com'))).toBe(false)
+  })
+
   it('refuses bytes that are not an image whatever the header claimed', async () => {
     const h = await harness()
     // The header says PNG; the body is an error page. This is the case a header check
@@ -277,6 +322,32 @@ describe('refusing what came back', () => {
     expect(outcome.kind).toBe('stored')
   })
 
+  it('accepts an icon of exactly the maximum size, declared and measured', async () => {
+    /*
+      The cap and both checks of it, at the value itself. The suite had 65 537 bytes
+      (refused) and 64 (accepted) and nothing in between, so `>` could have been `>=` in
+      either place and only a 65 536-byte icon would ever have noticed.
+
+      One byte of slack matters more here than it looks: the index schema allows a
+      `byteLength` up to the same constant, so a store that refused the boundary and a
+      schema that accepts it disagree about which icons are storable — and the visible
+      result is one site whose icon is missing for no reason a user could guess.
+    */
+    const h = await harness()
+    h.answer(() =>
+      imageResponse(pngBytes(MAX_FAVICON_BYTES), {
+        headers: { 'content-type': 'image/png', 'content-length': String(MAX_FAVICON_BYTES) }
+      })
+    )
+
+    expect(await h.store.cacheFor('normal').ensure(PAGE, [ICON])).toMatchObject({
+      kind: 'stored',
+      entry: { byteLength: MAX_FAVICON_BYTES }
+    })
+    const bytes = new Uint8Array(await readFile(iconPath(h.directory, 'example.com')))
+    expect(bytes).toHaveLength(MAX_FAVICON_BYTES)
+  })
+
   it('refuses an HTTP error', async () => {
     const h = await harness()
     h.answer(() => new Response('gone', { status: 404 }))
@@ -335,6 +406,7 @@ describe('refusing what came back', () => {
     // A file where the directory should be: the cache cannot be created at all.
     await writeFile(join(root, 'blocked'), 'not a directory', 'utf8')
     const h = await harness({ directory: join(root, 'blocked', 'favicons') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     expect(await h.store.cacheFor('normal').ensure(PAGE, [ICON])).toEqual({
       kind: 'rejected',
@@ -342,6 +414,14 @@ describe('refusing what came back', () => {
     })
     // No index entry, because there is no file for it to describe.
     expect(h.store.list()).toEqual([])
+    // And it says which site it lost, because `write-failed` on its own is a count. A
+    // cache directory that cannot be written to fails for *every* site, and the log is
+    // the only thing that can distinguish that from one broken icon.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[favicons] could not store the icon for example.com'),
+      expect.anything()
+    )
+    warn.mockRestore()
   })
 })
 
@@ -525,6 +605,7 @@ describe('bounding the cache', () => {
     const h = await harness({ maxEntries: 1 })
     const cache = h.store.cacheFor('normal')
     await cache.ensure(PAGE, [ICON])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     // A directory where the icon was: deletion fails, and the entry must still go —
     // keeping it is what would stop the site ever being asked again.
@@ -535,6 +616,35 @@ describe('bounding the cache', () => {
     h.tick(1_000)
     await cache.ensure('https://other.org/', ['https://other.org/favicon.ico'])
     expect(h.store.list().map((icon) => icon.domain)).toEqual(['other.org'])
+    // Reported, and reported with the site in it. Silence here would leave a few
+    // kilobytes in the cache directory that nothing remembers and nothing can ever
+    // delete, with no record of which site they belonged to.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('[favicons] could not remove the icon for example.com'),
+      expect.anything()
+    )
+    warn.mockRestore()
+  })
+
+  it('deletes an icon whose file has already gone, without complaining', async () => {
+    /*
+      The common case, not an edge one: the cache directory is the kind the platform
+      treats as discardable, so a user, a cleaner, or the OS can remove a file the index
+      still names. `rm` is asked with `force`, and without it every such deletion would
+      log a warning for a file that is *already* in the state we wanted.
+
+      A warning that fires in the ordinary case is worse than none, because it is the
+      reason nobody reads the log when something real happens.
+    */
+    const h = await harness()
+    await h.store.cacheFor('normal').ensure(PAGE, [ICON])
+    await rm(iconPath(h.directory, 'example.com'))
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await h.store.clear()).toBe(1)
+    expect(warn, warn.mock.calls.map(String).join(' | ')).not.toHaveBeenCalled()
+    warn.mockRestore()
+    expect(h.store.list()).toEqual([])
   })
 
   it('clears every icon and the index, which is what clearing the cache on exit does', async () => {
@@ -612,6 +722,78 @@ describe('on disk', () => {
       debounceMs: 0
     })
     expect(restarted.list()).toHaveLength(1)
+  })
+
+  it('puts the codec between the visited sites and the disk, not beside it', async () => {
+    /*
+      The test above passes the *plain* codec, so the file it writes is byte-identical
+      whether the store forwards the codec or drops it on the way to `JsonStore`. This one
+      uses a codec whose output cannot be mistaken for JSON.
+
+      The index is the list of sites the user has visited. Dropped, it would sit in the
+      cache directory in clear text — beside icon files deliberately named after hashes
+      so that a directory listing is not a reading list, which is how much this file was
+      already understood to give away.
+    */
+    const root = await mkdtemp(join(tmpdir(), 'tessera-favicons-'))
+    const directory = join(root, 'favicons')
+    const fetcher: FaviconFetcher = () => Promise.resolve(imageResponse(pngBytes()))
+
+    const store = await FaviconStore.open({
+      directory,
+      fetch: fetcher,
+      codec: sealingCodec(),
+      debounceMs: 0
+    })
+    await store.cacheFor('normal').ensure(PAGE, [ICON])
+    await store.flush()
+
+    const raw = await readFile(join(directory, 'index.json'), 'utf8')
+    expect(raw.startsWith('sealed:'), raw.slice(0, 40)).toBe(true)
+    expect(raw).not.toContain('example.com')
+
+    const restarted = await FaviconStore.open({
+      directory,
+      fetch: fetcher,
+      codec: sealingCodec(),
+      debounceMs: 0
+    })
+    expect(restarted.list().map((icon) => icon.domain)).toEqual(['example.com'])
+  })
+
+  it('uses the coalescing window it was given, not the default one', async () => {
+    /*
+      `debounceMs: 0` means "write on every change", and `JsonStore` honours it without a
+      timer at all. A store that dropped the option would fall back to 250 ms and still
+      pass every other test here, because they all call `flush` first — so nothing would
+      notice that a caller asking for an immediate write got a coalesced one, which at exit
+      is the difference between the newest icons being in the index and being lost.
+
+      The observable is that no timer was scheduled, not how soon the file appears. An
+      earlier version of this test installed fake timers and spun the event loop a hundred
+      times waiting for the file — a wall-clock budget in disguise, which passed on its own
+      and failed in a full run, where a write does not get its turn that soon.
+    */
+    const scheduled = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      const h = await harness()
+      // `open` is not what this is about; only the write the change triggers.
+      scheduled.mockClear()
+      await h.store.cacheFor('normal').ensure(PAGE, [ICON])
+      expect(scheduled, 'the write was put behind a timer').not.toHaveBeenCalled()
+
+      /*
+        Awaited on the store's own queue. With no debounce the write is already queued by
+        now, so this resolves once *that* write is on disk rather than starting a second
+        one — which is what makes the file below evidence of the immediate write and not of
+        this call.
+      */
+      await h.store.flush()
+      const raw = await readFile(join(h.directory, 'index.json'), 'utf8')
+      expect(raw).toContain('www.example.com')
+    } finally {
+      scheduled.mockRestore()
+    }
   })
 
   it('uses the real clock and the default debounce when neither is given', async () => {
@@ -736,6 +918,22 @@ describe('the file a site is stored in', () => {
       expect(name, `${name} names the site`).not.toContain('example')
       expect(name).toMatch(/^[0-9a-f]{32}\.icon$/)
     }
+  })
+
+  it('writes it readable by nobody else', async () => {
+    /*
+      `0o600` is passed explicitly and this is what asks for it. The cache lives in a
+      world-readable temporary-ish directory, and the default mode would be `0644`: on a
+      shared machine every other account could then read the icon files, and the set of
+      sites a user has visited is exactly what the encrypted index next to them exists to
+      keep. The file names are hashes for the same reason — mode and name are two halves
+      of one decision, and only one of them was asserted.
+    */
+    const h = await harness()
+    await h.store.cacheFor('normal').ensure(PAGE, [ICON])
+
+    const mode = (await stat(iconPath(h.directory, 'example.com'))).mode & 0o777
+    expect(mode.toString(8)).toBe('600')
   })
 
   it('gives two sites two different files', () => {

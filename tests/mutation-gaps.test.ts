@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyOmniboxInput } from '@shared/url/omnibox.js'
 import { clampFraction, computeTileRects, TILE_GUTTER } from '@shared/split/layout.js'
+import { internalUrl } from '@shared/product.js'
 
 /**
  * Assertions added in response to a mutation run.
@@ -151,5 +152,26 @@ describe('layout: mutants that survived', () => {
     const [defaultLeft] = computeTileRects('1x2', { v: 0.05 }, content)
     expect(defaultLeft!.width).toBeLessThan(600)
     expect(defaultLeft!.width).toBeGreaterThanOrEqual(240)
+  })
+})
+
+describe('internal addresses: mutants that survived', () => {
+  it('appends no question mark for a query with nothing in it', () => {
+    /*
+      Killed mutant: `search === '' ? base : ...` replaced by the query branch always
+      being taken, which yields `tessera://history?`.
+
+      A caller assembling a filtered address — the history page opened with no filter,
+      a quick link built from a record that had no parameters — would then get an
+      address that is *equal to no other spelling of the same page*. `isHomeUrl`
+      compares strings, history de-duplicates on the stored URL and the start page
+      matches its own address, so one stray `?` shows up as a card that never
+      highlights and a second history entry for a page the user has already visited.
+    */
+    expect(internalUrl('history', {})).toBe('tessera://history')
+    expect(internalUrl('history')).toBe('tessera://history')
+    // And a query that has something in it is still appended, so the empty case is not
+    // being met by dropping the parameters altogether.
+    expect(internalUrl('history', { q: 'news' })).toBe('tessera://history?q=news')
   })
 })

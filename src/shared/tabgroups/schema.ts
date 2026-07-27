@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { LAYOUT_IDS } from '../split/layout.js'
 import { TAB_GROUP_COLORS } from './palette.js'
 import type { TabGroup } from './model.js'
 
@@ -19,13 +20,28 @@ import type { TabGroup } from './model.js'
  * Separate from `model.ts` for the usual reason: the tab strip is a renderer, and a value import of
  * zod there lands in a bundle the user waits for. An architecture test keeps it that way.
  */
+/**
+ * The displaced arrangement, if the group is carrying one.
+ *
+ * Crosses the boundary because `tabgroups:changed` carries whole groups and the two-way
+ * assertion below is what stops the core and the strip from disagreeing about their shape.
+ * Nothing in the strip draws it today — the arrangement is acted on in the core, by a
+ * click the core already receives — so this is the shape being kept honest rather than a
+ * capability being handed to a renderer.
+ */
+const tabGroupLayoutSchema = z.object({
+  id: z.enum(LAYOUT_IDS),
+  tiles: z.array(z.string().min(1).nullable())
+})
+
 export const tabGroupSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   color: z.enum(TAB_GROUP_COLORS),
   collapsed: z.boolean(),
   tabIds: z.array(z.string().min(1)),
-  createdAt: z.number().int().nonnegative()
+  createdAt: z.number().int().nonnegative(),
+  layout: tabGroupLayoutSchema.optional()
 })
 
 export const tabGroupColorSchema = z.enum(TAB_GROUP_COLORS)

@@ -160,10 +160,16 @@ describe('the permission prompt is a modal surface', () => {
     expect(regionOf('permission-request')).toBe('window')
   })
 
-  it('is the only surface something is waiting on', () => {
-    for (const kind of OVERLAY_KINDS) {
-      expect(OVERLAY_AWAITS_ANSWER[kind], kind).toBe(kind === 'permission-request')
-    }
+  it('is one of the two surfaces something is waiting on', () => {
+    /*
+      It was the only one. The master-password prompt is the second, and the pair is worth asserting
+      together rather than loosening this to "at least the prompt": what makes a surface belong here is that
+      its departure strands somebody — a page holding an unsettled `getUserMedia`, or a caller holding an
+      unsettled `passwords:requestUnlock`. A third kind that quietly joined them would be a third
+      consequence nobody had decided the safe answer for.
+    */
+    const waiting = OVERLAY_KINDS.filter((kind) => OVERLAY_AWAITS_ANSWER[kind])
+    expect([...waiting].sort()).toEqual(['master-password', 'permission-request'])
   })
 
   it('reports a prompt as awaiting an answer and a menu as not', () => {

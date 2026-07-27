@@ -13,18 +13,15 @@ import type {
   PasswordResetVaultResponse,
   PasswordRevealRequest,
   PasswordRevealResponse,
-  PasswordUnlockRequest,
   PasswordUnlockResponse,
   PasswordUpdateRequest,
-  PasswordVaultStateResponse
+  PasswordVaultStateResponse,
+  VaultCopyOutcome
 } from '@shared/passwords/api.js'
 import type { ChromeImportResult } from '@shared/passwords/chrome-import.js'
 import type { PasswordSummary } from '@shared/passwords/model.js'
-import type {
-  MasterPasswordOutcome,
-  UnlockOutcome,
-  VaultStatus
-} from '@shared/passwords/vault.js'
+import { RESET_VAULT_CONFIRMATION, type VaultStatus } from '@shared/passwords/vault.js'
+import type { MasterPasswordHost, MasterPasswordPrompt } from './MasterPasswordPrompt.js'
 
 /**
  * What `tessera://passwords` is allowed to do.
@@ -82,16 +79,31 @@ export interface PasswordApiVault {
   update(id: string, patch: { username?: string; password?: string }): void
   remove(id: string): boolean
   forgetNeverSaved(url: string): void
-  unlock(masterPassword: string): Promise<UnlockOutcome>
   lock(): Promise<void>
-  setMasterPassword(request: {
-    current: string | null
-    next: string | null
-  }): Promise<MasterPasswordOutcome>
+  /**
+   * Writes the sealed document and the wrapped key into a directory. `0` means nothing was there.
+   *
+   * On this interface because the reset offers it, and the *ordering* is the thing worth testing: the
+   * copy happens before anything is deleted, and a copy that fails stops the deletion. A fake vault
+   * that records the order proves both.
+   */
+  copyTo(directory: string): Promise<number>
   resetVault(confirmation: string): Promise<boolean>
   /** `null` while locked, so the caller can report that rather than an empty import. */
   importChromeCsv(text: string): ChromeImportResult | null
 }
+
+/**
+ * What the user chose when offered a copy of the vault they are about to lose.
+ *
+ * Three answers and not two, because "cancel the whole thing" has to be one of them: the offer is shown
+ * at the point of no return, and a dialogue whose only choices are "keep a copy" and "delete" has taken
+ * away the answer most people want when they read the sentence and reconsider.
+ */
+export type VaultCopyChoice =
+  | { readonly choice: 'copy'; readonly directory: string }
+  | { readonly choice: 'discard' }
+  | { readonly choice: 'cancel' }
 
 /** A file the user picked, and its contents. Produced by the core's own dialog, never by a page. */
 export interface ImportSource {
@@ -102,6 +114,14 @@ export interface ImportSource {
 export interface PasswordApiOptions {
   readonly vault: PasswordApiVault
   /**
+   * Who asks for the master password, and the only thing in this program that ever holds one.
+   *
+   * Reached from here rather than reimplemented, because "the page asks and the core checks" is the whole
+   * arrangement: this class turns two channels into two calls on it and never sees a candidate. See
+   * `MasterPasswordPrompt`.
+   */
+  readonly prompt: MasterPasswordPrompt
+  /**
    * Opens a native file chooser and reads what was picked, or answers `null` when it was cancelled.
    *
    * Injected rather than called here, so this class needs no Electron and the import's rules are
@@ -110,15 +130,29 @@ export interface PasswordApiOptions {
    * becomes an English sentence on a translated page.
    */
   readonly chooseImportFile: () => Promise<ImportSource | null>
+  /**
+   * Asks whether to keep a copy of the vault about to be destroyed, and where.
+   *
+   * Injected for the same reason as the file chooser, and it carries more weight than most seams here:
+   * the *wording* is the point of the offer. The user has to be told, in one breath, that a copy is worth
+   * keeping and that it is unreadable without the password they have just told us they forgot. That
+   * sentence is translated and lives with the dialogue; what this class owns is that it is asked **before**
+   * anything is deleted.
+   */
+  readonly askAboutVaultCopy: () => Promise<VaultCopyChoice>
 }
 
 export class PasswordApi {
   readonly #vault: PasswordApiVault
+  readonly #prompt: MasterPasswordPrompt
   readonly #chooseImportFile: () => Promise<ImportSource | null>
+  readonly #askAboutVaultCopy: () => Promise<VaultCopyChoice>
 
   constructor(options: PasswordApiOptions) {
     this.#vault = options.vault
+    this.#prompt = options.prompt
     this.#chooseImportFile = options.chooseImportFile
+    this.#askAboutVaultCopy = options.askAboutVaultCopy
   }
 
   /**
@@ -195,16 +229,25 @@ export class PasswordApi {
 
   // --- the lock ---------------------------------------------------------------
 
+  /** The lock alone, for a page redrawing it without re-reading the list. */
+  vaultStatus(): PasswordVaultStateResponse {
+    return { vault: this.#vault.status() }
+  }
+
   /**
-   * Opens the vault.
+   * Asks the core to open the vault, and answers with what came of it.
    *
-   * The candidate is passed straight through and is not held, copied, logged or included in the reply.
-   * The reply is one word plus the resulting state, which is the whole reason `UnlockOutcome` is a
-   * union of values: an error object would have carried a message, and a message is a thing that gets
-   * logged.
+   * No payload, in either direction beyond one of four words. The prompt is browser chrome on the overlay
+   * layer, the keystrokes are read in the main process, and this method never holds a candidate — which is
+   * why there is nothing here to be careful with. That is the point of the arrangement: the previous
+   * version of this method took a `masterPassword` and was surrounded by promises about not logging it.
+   *
+   * `host` is the window the prompt appears in, resolved from the sender. `null` when the request could
+   * not be attributed to one — a page in a window that is closing — and then there is nowhere to draw a
+   * dialogue, so nobody can answer it, so it is `cancelled`. The same rule `PermissionArbiter.ask` applies.
    */
-  async unlock(request: PasswordUnlockRequest): Promise<PasswordUnlockResponse> {
-    const outcome = await this.#vault.unlock(request.masterPassword)
+  async requestUnlock(host: MasterPasswordHost | null): Promise<PasswordUnlockResponse> {
+    const outcome = await this.#prompt.requestUnlock(host)
     return { outcome, vault: this.#vault.status() }
   }
 
@@ -214,26 +257,80 @@ export class PasswordApi {
     return { vault: this.#vault.status() }
   }
 
-  async setMasterPassword(
-    request: PasswordMasterPasswordRequest
+  /** Sets, changes or removes the master password, through the same prompt. */
+  async beginSetMasterPassword(
+    request: PasswordMasterPasswordRequest,
+    host: MasterPasswordHost | null
   ): Promise<PasswordMasterPasswordResponse> {
-    const outcome = await this.#vault.setMasterPassword({
-      current: request.current,
-      next: request.next
-    })
+    const outcome = await this.#prompt.requestMasterPassword(host, request.intent)
     return { outcome, vault: this.#vault.status() }
   }
 
   /**
-   * Destroys the vault and starts an empty one.
+   * Destroys the vault and starts an empty one — after offering to put the sealed copy aside.
    *
-   * The escape hatch for a forgotten master password. `reset: false` for a wrong confirmation token,
-   * rather than a throw: this is the one operation whose failure must be quiet and whose success must
-   * be deliberate.
+   * ## Why the offer comes first, and why a failed copy stops everything
+   *
+   * The only reason anybody is here is that they have forgotten the master password, so the vault is
+   * unreadable — and *unreadable is not worthless*. Passwords come back: found in a notebook, remembered
+   * in the shower, recalled by typing it into something else. A browser that deleted five years of
+   * credentials because somebody could not remember a word this morning would have destroyed something it
+   * had no way of valuing, and the user would not discover the loss until the day the password returned.
+   *
+   * So the order is: offer, copy, verify that something was written, and only then discard. Every failure
+   * path leaves the vault alone:
+   *
+   *   - the confirmation token is wrong — nothing is offered and nothing happens, `copy: 'none'`;
+   *   - the user cancels the offer — nothing happens, `reset: false`;
+   *   - the copy throws, or wrote nothing — `copy: 'failed'` and **`reset: false`**. Discarding after
+   *     failing to save is the single outcome this whole feature exists to prevent, and it would be the
+   *     natural result of treating the copy as best-effort.
+   *
+   * `declined` is a real answer and is honoured: somebody who has decided the old vault is worthless does
+   * not need to be argued with, and the sentence they read said what they were giving up.
    */
   async resetVault(request: PasswordResetVaultRequest): Promise<PasswordResetVaultResponse> {
+    /*
+      The token before the dialogue.
+
+      Otherwise an empty or mistaken invoke on this channel would put a "your vault is about to be
+      destroyed" dialogue in front of somebody, which is alarming on its own — and the reset would then be
+      refused anyway, so the question was never real.
+    */
+    if (request.confirmation !== RESET_VAULT_CONFIRMATION) {
+      return { reset: false, copy: 'none', vault: this.#vault.status() }
+    }
+
+    const choice = await this.#askAboutVaultCopy()
+    if (choice.choice === 'cancel') {
+      return { reset: false, copy: 'none', vault: this.#vault.status() }
+    }
+
+    let copy: VaultCopyOutcome = 'declined'
+    if (choice.choice === 'copy') {
+      copy = await this.#copyVault(choice.directory)
+      if (copy === 'failed') return { reset: false, copy, vault: this.#vault.status() }
+    }
+
     const reset = await this.#vault.resetVault(request.confirmation)
-    return { reset, vault: this.#vault.status() }
+    return { reset, copy, vault: this.#vault.status() }
+  }
+
+  /**
+   * Writes the copy, and treats "nothing was written" as a failure.
+   *
+   * A rejection is caught rather than let out, and the message is logged rather than returned: it comes
+   * from the operating system and names a path the user chose, which is not a secret — but a rejected
+   * invoke becomes an English sentence on a translated page, and this page is one somebody reads once, at
+   * the worst moment.
+   */
+  async #copyVault(directory: string): Promise<VaultCopyOutcome> {
+    try {
+      return (await this.#vault.copyTo(directory)) > 0 ? 'saved' : 'failed'
+    } catch (error) {
+      console.warn('[passwords] the vault copy could not be written:', String(error))
+      return 'failed'
+    }
   }
 
   // --- importing --------------------------------------------------------------

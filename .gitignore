@@ -2,6 +2,10 @@ node_modules/
 out/
 dist/
 .vite/
+# `pnpm test:coverage` writes here. `reports/` is committed on purpose and this is not: the report is a
+# summary worth reviewing in a diff, the coverage directory is a few thousand generated HTML files.
+coverage/
+.stryker-tmp/
 *.tsbuildinfo
 .DS_Store
 .env

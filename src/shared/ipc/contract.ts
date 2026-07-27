@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { EventChannel, InvokeChannel } from './channels.js'
+import type { SameShape } from './same-shape.js'
 import {
   chromeInsetsSchema,
   historyEntrySchema,
@@ -36,9 +37,30 @@ import {
 import { MAX_TAB_GROUP_NAME_LENGTH } from '../tabgroups/model.js'
 import { BOOKMARK_KINDS, type Bookmark } from '../bookmarks/model.js'
 import { DOWNLOAD_STATES, type DownloadEntry } from '../downloads/model.js'
-import type { PasswordSummary } from '../passwords/model.js'
-import type { PasswordCreateResponse, PasswordListResponse } from '../passwords/api.js'
-import type { VaultStatus } from '../passwords/vault.js'
+import {
+  MASTER_PASSWORD_PROBLEMS,
+  MASTER_PASSWORD_PURPOSES,
+  MASTER_PASSWORD_STEPS
+} from '../passwords/prompt.js'
+/*
+  Every password wire shape, from that feature's own `schema.ts`.
+
+  The `model.ts` / `schema.ts` split `quicklinks`, `media` and `reader` already use, applied here for a
+  second reason as well: these fourteen schemas took this file past 1200 lines, which is where the
+  largest-file metric stops meaning what it was set to mean. The two-way assertions that keep each of them
+  in step with the interface the passwords page renders travel with them.
+*/
+import {
+  PASSWORD_SAVE_OUTCOMES,
+  passwordImportResponseSchema,
+  passwordListResponseSchema,
+  passwordMasterPasswordRequestSchema,
+  passwordMasterPasswordResponseSchema,
+  passwordPromptAnswerSchema,
+  passwordResetVaultResponseSchema,
+  passwordUnlockResponseSchema,
+  vaultStateResponseSchema
+} from '../passwords/schema.js'
 
 /**
  * The typing half of the UI <-> core boundary (spec 6).
@@ -169,6 +191,28 @@ const overlayPresentationSchema = z.discriminatedUnion('kind', [
     matches: z.number().int().nonnegative().nullable(),
     /** One-based position of the highlighted match; `0` when nothing is highlighted. */
     activeMatch: z.number().int().nonnegative()
+  }),
+  /**
+   * The master-password prompt.
+   *
+   * The one presentation on this layer that is *only* a display. There is no field here for what has
+   * been typed, in either direction — the characters live in the main process, taken off this view's own
+   * input pipeline before its renderer is dispatched to, and the surface is told a count so it can draw
+   * that many bullets. See `MasterPasswordPresentation` and `main/passwords/MasterPasswordPrompt.ts`.
+   *
+   * Which means this schema is worth reading for what it lacks: a validated boundary is only as good as
+   * the shapes it admits, and a `masterPassword: z.string()` anywhere in this file would be the whole
+   * guarantee gone.
+   */
+  z.object({
+    kind: z.literal('master-password'),
+    requestId: z.string().min(1),
+    purpose: z.enum(MASTER_PASSWORD_PURPOSES),
+    step: z.enum(MASTER_PASSWORD_STEPS),
+    /** A count of characters, never the characters. */
+    filled: z.number().int().nonnegative(),
+    problem: z.enum(MASTER_PASSWORD_PROBLEMS).nullable(),
+    minLength: z.number().int().positive()
   })
 ])
 
@@ -202,20 +246,6 @@ const extensionInfoSchema = z.object({
   path: z.string()
 })
 
-/**
- * True only when two shapes describe each other — assignable in both directions.
- *
- * The three features below each keep their model in a zod-free `shared` module, because their
- * pages are renderers and an architecture test follows the value-import graph to keep the
- * validation library out of the bundle. So the wire schema cannot live beside the interface, and
- * the two would drift silently: a schema that grew a field the interface lacks passes validation
- * and arrives as `unknown` at the page, and the reverse quietly drops a column.
- *
- * Both directions, expressed once. A single assignment would only catch drift one way, and each
- * way has actually happened in this codebase — see the two-assignment pairs in `HistoryStore` and
- * `BookmarkStore`, which this replaces four lines of boilerplate per shape with.
- */
-type SameShape<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never
 
 /**
  * One bookmark or folder, on the wire.
@@ -280,75 +310,6 @@ const downloadListingSchema = z.object({
 const downloadIdRequest = z.object({ id: z.string().min(1) })
 /** Whether the operation did anything. `false` is an answer, not a failure — see `DownloadManager`. */
 const downloadChanged = z.object({ changed: z.boolean() })
-
-/** Never carries a password. `PasswordSummary` exists so the compiler can say so. */
-const passwordSummarySchema = z.object({
-  id: z.string(),
-  origin: z.string(),
-  username: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  lastUsedAt: z.number().nullable()
-})
-
-const _passwordSummaryWireMatchesModel: SameShape<
-  z.output<typeof passwordSummarySchema>,
-  PasswordSummary
-> = true
-void _passwordSummaryWireMatchesModel
-
-/**
- * What a save attempt made of it.
- *
- * Five values, not the model's four: `locked` is the vault closing while somebody was typing, and it
- * is separate from `rejected` because the two need different sentences and different next actions.
- * Asserted against the API interface rather than against `SaveOutcome`, which is the *store*
- * vocabulary and knows nothing about a lock.
- */
-const PASSWORD_SAVE_OUTCOMES = ['created', 'updated', 'unchanged', 'rejected', 'locked'] as const
-const _saveOutcomeMatchesApi: SameShape<
-  (typeof PASSWORD_SAVE_OUTCOMES)[number],
-  PasswordCreateResponse['outcome']
-> = true
-void _saveOutcomeMatchesApi
-
-/**
- * What the core tells the page about the lock.
- *
- * Carries no count of entries and no origins on purpose: it is answered while the vault may be
- * *closed*, and a status reply saying "you have 43 saved passwords" would hand a locked vault's
- * contents to anything that could ask. See `VaultStatus`.
- */
-const vaultStatusSchema = z.object({
-  protection: z.enum(['keystore+master', 'master', 'keystore', 'plain']),
-  unlocked: z.boolean(),
-  /** The key file exists and cannot be opened at all — no master password will help. */
-  unreadable: z.boolean(),
-  /** Shown to the user, so a vault that locks itself is not read as a fault. */
-  idleTimeoutMs: z.number()
-})
-
-const _vaultStatusWireMatchesModel: SameShape<z.output<typeof vaultStatusSchema>, VaultStatus> = true
-void _vaultStatusWireMatchesModel
-
-const passwordListResponseSchema = z.object({
-  /** Empty while the vault is locked, and not because it was filtered: there is nothing to read. */
-  credentials: z.array(passwordSummarySchema),
-  neverSaved: z.array(z.string()),
-  /**
-   * How the vault is actually protected on this machine, and whether it is open.
-   *
-   * On the wire because it is the one fact a user cannot discover for themselves and the one that
-   * changes what these entries are worth. See `PasswordListResponse`.
-   */
-  vault: vaultStatusSchema
-})
-
-const _passwordListWireMatchesApi: SameShape<
-  z.output<typeof passwordListResponseSchema>,
-  PasswordListResponse
-> = true
-void _passwordListWireMatchesApi
 
 export const invokeContract = {
   // --- settings ------------------------------------------------------------
@@ -948,7 +909,63 @@ export const invokeContract = {
     response: z.object({ password: z.string().nullable() })
   },
   /** Undoes a "never here", so a site the user changed their mind about can be offered again. */
-  'passwords:forgetNeverSaved': { request: z.object({ origin: z.string() }), response: ok }
+  'passwords:forgetNeverSaved': { request: z.object({ origin: z.string() }), response: ok },
+
+  // --- the lock -------------------------------------------------------------
+  /*
+    Six channels for the lock, the master password, the reset and the import — and not one of them has a
+    request field that carries a secret.
+
+    That is the whole shape of this group and it is worth stating where the schemas are, because a
+    schema is where such a field would have to appear to be accepted. `passwords:requestUnlock` and
+    `passwords:beginSetMasterPassword` send nothing and an intent respectively; the candidate is typed
+    into a prompt on the overlay layer whose keystrokes the core takes out of the input pipeline before
+    any renderer sees them. See `shared/passwords/api.ts` for what this replaced.
+  */
+  'passwords:vaultStatus': { request: nothing, response: vaultStateResponseSchema },
+  /**
+   * Raises the prompt and resolves with one of four words.
+   *
+   * Pending for as long as somebody is being asked, which is minutes if they walk away — the same
+   * representation `media:download` uses for a long operation, and the correct one for a question put to a
+   * person. Every way the prompt can leave the screen settles it, `cancelled` being the safe reading.
+   */
+  'passwords:requestUnlock': { request: nothing, response: passwordUnlockResponseSchema },
+  'passwords:lock': { request: nothing, response: vaultStateResponseSchema },
+  /**
+   * Starts the set, change or remove sequence.
+   *
+   * The intent, not the sequence. The core derives which questions to ask from the vault as it actually
+   * is, and always towards more proof: `set` on a vault that already has a master password asks for the
+   * existing one first, because a caller able to choose otherwise would have found the one way to
+   * replace the lock without opening it.
+   */
+  'passwords:beginSetMasterPassword': {
+    request: passwordMasterPasswordRequestSchema,
+    response: passwordMasterPasswordResponseSchema
+  },
+  /**
+   * Destroys the vault, after offering to put the sealed copy somewhere the user chooses.
+   *
+   * The token is checked in the core and is not user-visible text; it is here so that an empty or
+   * mistaken invoke cannot delete anything. The sentence the user reads is translated and on the page.
+   */
+  'passwords:resetVault': {
+    request: z.object({ confirmation: z.string() }),
+    response: passwordResetVaultResponseSchema
+  },
+  /** No payload: the core opens the chooser and reads the file, so no export crosses this boundary. */
+  'passwords:import': { request: nothing, response: passwordImportResponseSchema },
+  /**
+   * Continue or Cancel on the prompt. Chrome-only.
+   *
+   * The mouse route, and the only thing this channel can do is spend or abandon what the person at the
+   * keyboard has already typed — there is nothing in the payload that could substitute for it.
+   */
+  'passwords:answerPrompt': {
+    request: passwordPromptAnswerSchema,
+    response: ok
+  }
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract

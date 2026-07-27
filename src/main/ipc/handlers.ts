@@ -24,6 +24,7 @@ import { buildTabContextMenu } from '../menu/tabContextMenu.js'
 import { registerPermissionHandlers } from './permission-handlers.js'
 import { registerMediaHandlers } from './media-handlers.js'
 import { registerDownloadHandlers } from './download-handlers.js'
+import { registerPasswordHandlers } from './password-handlers.js'
 import { buildBlockerMenu } from '../menu/blockerMenu.js'
 import { injectableDocumentUrl } from '@shared/filters/injection.js'
 import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
@@ -34,6 +35,7 @@ import type { UserRuleStore, UserRuleEditor } from '../data/UserRuleStore.js'
 import type { BookmarkStore } from '../data/BookmarkStore.js'
 import type { DownloadManager } from '../downloads/DownloadManager.js'
 import type { PasswordApi } from '../passwords/PasswordApi.js'
+import type { MasterPasswordPrompt } from '../passwords/MasterPasswordPrompt.js'
 
 /**
  * Wires every contract channel to the core.
@@ -52,8 +54,10 @@ export function registerIpcHandlers(deps: {
   bookmarks: BookmarkStore
   /** Subscribed to every session, and the only thing that knows a live download; see `attach`. */
   downloads: DownloadManager
-  /** The six operations a passwords page may perform, already measured; see `PasswordApi`. */
+  /** Everything a passwords page may perform, already measured; see `PasswordApi`. */
   passwords: PasswordApi
+  /** Raises the master-password prompt and holds the pending question; see `MasterPasswordPrompt`. */
+  prompt: MasterPasswordPrompt
   /** Decides and queues permission prompts; see `PermissionArbiter`. */
   permissions: PermissionArbiter
   /** One media service per browsing session; see `MediaSessions`. */
@@ -217,6 +221,12 @@ export function registerIpcHandlers(deps: {
     locale: () => resolveLocale(settings.get('appearance.uiLanguage'))
   })
   registerDownloadHandlers({ handle, downloads: deps.downloads, windows })
+  /*
+    The vault, in its own module for the reason permissions are: the thirteen channels and the two
+    subscriptions the master-password prompt needs are one mechanism, and a build that registered the
+    channels and forgot a subscription would show a prompt that swallows every keystroke.
+  */
+  registerPasswordHandlers({ passwords, prompt: deps.prompt, windows })
 
   // --- element picker and the user's own rules ------------------------------
   /*
@@ -754,31 +764,6 @@ export function registerIpcHandlers(deps: {
     const summary = bookmarks.import(html, translate(locale, 'bookmarks.importedFolder'))
     return { ...summary, cancelled: false }
   })
-
-  // --- saved passwords -----------------------------------------------------
-  /*
-    Six one-line forwards, and that is the whole of this block on purpose: every decision lives in
-    `PasswordApi`, which is free of Electron and therefore measurable — and the operations that touch
-    a password vault are the ones this project would least like to have only in a file no test reaches.
-
-    `update` is rebuilt key by key for the `exactOptionalPropertyTypes` reason above, which here is
-    not pedantry: spreading the request would hand the vault `{ password: undefined }` and claim an
-    edit nobody asked for, and the edit in question overwrites a password.
-  */
-  handle('passwords:list', () => passwords.list())
-  handle('passwords:reveal', ({ id }) => passwords.reveal({ id }))
-  handle('passwords:create', ({ url, username, password }) =>
-    passwords.create({ url, username, password })
-  )
-  handle('passwords:update', ({ id, username, password }) =>
-    passwords.update({
-      id,
-      ...(username === undefined ? {} : { username }),
-      ...(password === undefined ? {} : { password })
-    })
-  )
-  handle('passwords:remove', ({ id }) => passwords.remove({ id }))
-  handle('passwords:forgetNeverSaved', ({ origin }) => passwords.forgetNeverSaved({ origin }))
 
   assertAllChannelsRegistered()
 }

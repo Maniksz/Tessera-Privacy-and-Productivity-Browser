@@ -1,6 +1,8 @@
 import { Menu, app, type MenuItemConstructorOptions } from 'electron'
 import { translate, type Locale, type MessageKey } from '@shared/i18n/catalog.js'
 import { acceleratorFor, type ShortcutAction } from '@shared/shortcuts/bindings.js'
+import { withAlternativeAccelerators } from './alternative-accelerators.js'
+import { tabPositionAccelerators } from './tab-position-accelerators.js'
 import { openReaderMode } from '../reader/reader-mode.js'
 import type { Platform } from '@shared/model.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
@@ -9,6 +11,7 @@ import type { BrowserWindowController } from '../browser/BrowserWindowController
 import type { SettingsStore } from '../settings/SettingsStore.js'
 import { internalUrl } from '@shared/product.js'
 import { LAYOUT_IDS } from '@shared/split/layout.js'
+import { nextZoomPercent } from '@shared/gestures/zoom.js'
 import { LAYOUT_LABELS, LAYOUT_SHORTCUTS } from '@shared/split/labels.js'
 
 /**
@@ -143,7 +146,9 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
         accelerator: accel('zoomIn'),
         click: () => {
           const tab = focused()?.activeTab()
-          if (tab) tab.setZoomPercent(tab.zoomPercent + 10)
+          // The same ladder the pinch gesture walks. Two step sizes in one browser means zooming in
+          // with the keyboard and out with the trackpad does not return to where it started.
+          if (tab) tab.setZoomPercent(nextZoomPercent(tab.zoomPercent, 'in'))
         }
       },
       {
@@ -151,7 +156,7 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
         accelerator: accel('zoomOut'),
         click: () => {
           const tab = focused()?.activeTab()
-          if (tab) tab.setZoomPercent(tab.zoomPercent - 10)
+          if (tab) tab.setZoomPercent(nextZoomPercent(tab.zoomPercent, 'out'))
         }
       },
       {
@@ -171,10 +176,15 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       {
         label: t('menu.view.fullscreen'),
         accelerator: accel('windowFullscreen'),
-        click: () => {
-          const win = focused()?.window
-          if (win) win.setFullScreen(!win.isFullScreen())
-        }
+        /*
+          Through the window, not straight at `setFullScreen`.
+
+          In a split layout with the fullscreen scope set to the tile — the default — the window is
+          deliberately not fullscreenable, so `setFullScreen` was ignored and the key did nothing at
+          all. Which of the two things the key means is a decision about the layout, and it lives with
+          the rest of them in `TileFullscreenController`.
+        */
+        click: () => focused()?.toggleFullscreen()
       },
       { type: 'separator' },
       /*
@@ -368,7 +378,20 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
         label: t('menu.window.previousTab'),
         accelerator: accel('previousTab'),
         click: () => focused()?.emit('shortcut:triggered', { action: 'previousTab' })
-      }
+      },
+      /*
+        `Ctrl+1`…`Ctrl+8` and `Ctrl+9`, as nine hidden items.
+
+        Here rather than nowhere because an accelerator only fires where a menu item declares it, and
+        hidden because "Tab 3" is not an entry a menu can meaningfully name. Beside next and previous
+        tab because that is what they are: the same feature reached by position instead of by step.
+        See `tab-position-accelerators.ts` for why the eight cannot be rebound and what that costs.
+      */
+      ...tabPositionAccelerators({
+        platform,
+        lastTabAccelerator: accel('lastTab'),
+        select: (position) => focused()?.activateTabAtStripPosition(position)
+      })
     ]
   }
 
@@ -410,10 +433,24 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
   }
 
   template.push(fileMenu, editMenu, viewMenu, historyMenu, bookmarksMenu, splitMenu, toolsMenu)
-  if (isMac) template.push(windowMenu)
+  /*
+    On every platform, not only macOS.
+
+    This used to be `if (isMac)`, and the two items inside it that are not roles — next tab and previous
+    tab — were therefore the only route by which `Control+Tab` and `Control+Shift+Tab` were registered.
+    So on Windows and Linux those keys did nothing at all, while the settings screen listed them and the
+    renderer sat waiting for the action they never sent. That contradicts the rule stated at the top of
+    this file: no feature reachable on one platform only (spec 10).
+
+    A Window menu is unremarkable on Windows and Linux — every browser has one — and the one item in it
+    that really is macOS-only, the `zoom` role, is already gated inside.
+  */
+  template.push(windowMenu)
   template.push(helpMenu)
 
-  return Menu.buildFromTemplate(template)
+  // The second key of every action that has one, as a hidden sibling of the item carrying the first.
+  // Without this the whole right-hand side of the binding table is decoration; see there.
+  return Menu.buildFromTemplate(withAlternativeAccelerators(template, platform, overrides))
 }
 
 export function installApplicationMenu(deps: MenuDeps): void {

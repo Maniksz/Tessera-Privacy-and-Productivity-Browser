@@ -167,7 +167,12 @@ const macTable = {
   zoomIn: ['Command+Plus'],
   zoomOut: ['Command+-'],
   zoomReset: ['Command+0'],
-  windowFullscreen: ['Control+Command+F'],
+  /*
+    `Control+Command+F` first, because it is what every other macOS application uses and what the
+    menu should therefore show. `F11` is here as well because people arrive from Windows with it in
+    their hands — and on a Mac it costs nothing to answer to both.
+  */
+  windowFullscreen: ['Control+Command+F', 'F11'],
   print: ['Command+P'],
   devTools: ['Command+Alt+I'],
 

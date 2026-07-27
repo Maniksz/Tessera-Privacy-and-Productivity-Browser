@@ -1,9 +1,9 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { HistoryStore } from '@main/data/HistoryStore.js'
-import { plainJsonDocumentCodec } from '@main/data/JsonStore.js'
+import { plainJsonDocumentCodec, type DocumentCodec } from '@main/data/JsonStore.js'
 import {
   MAX_HISTORY_ENTRIES,
   discardingHistoryRecorder,
@@ -48,6 +48,29 @@ async function openStore(options: { debounceMs?: number; codec?: boolean } = {})
     ...(options.codec === true ? { codec: plainJsonDocumentCodec } : {})
   })
   return { store, filePath }
+}
+
+/**
+ * A codec that leaves nothing readable in the file.
+ *
+ * Not encryption — base64 hides nothing from anyone trying — but it stands in for the
+ * real codec in the one respect that matters to a store: the bytes on disk are not the
+ * document. A test using the *plain* codec cannot tell a store that forwards its codec
+ * from one that ignores it, which is how the forwarding stayed unasserted.
+ */
+function sealingCodec(): DocumentCodec {
+  const marker = 'sealed:'
+  return {
+    encode: (data) =>
+      new TextEncoder().encode(
+        `${marker}${Buffer.from(JSON.stringify(data), 'utf8').toString('base64')}`
+      ),
+    decode: (bytes) => {
+      const text = new TextDecoder().decode(bytes)
+      if (!text.startsWith(marker)) throw new Error('not written by this codec')
+      return JSON.parse(Buffer.from(text.slice(marker.length), 'base64').toString('utf8')) as unknown
+    }
+  }
 }
 
 async function storedVisits(filePath: string): Promise<HistoryVisit[]> {
@@ -126,14 +149,25 @@ describe('HistoryStore recording', () => {
   })
 
   it('writes nothing for a title about an address it never recorded', async () => {
+    /*
+      A visit is recorded first, deliberately. With an empty history the "is this page
+      here?" check answers `false` whatever it compares, so the comparison itself could be
+      replaced by `true` and this test would still pass — and then every title for a page
+      the user had cleared, or that was pruned as the oldest entry, would schedule a file
+      write and wake every listener with an unchanged list. Titles arrive on every
+      navigation, so that is a write per page load for nothing.
+    */
     const { store } = await openStore()
     const seen: HistoryVisit[][] = []
+    store.recorderFor('normal').recordVisit({ url: 'https://example.com', title: 'Example' })
     store.onChange((visits) => seen.push(visits))
 
     store.recorderFor('normal').noteTitle({ url: 'https://never.example/', title: 'Never' })
     store.recorderFor('normal').noteTitle({ url: 'about:blank', title: 'Blank' })
 
     expect(seen).toEqual([])
+    // Nor was the entry that *is* there touched.
+    expect(store.query().map((visit) => visit.title)).toEqual(['Example'])
   })
 
   it('uses the real clock when no clock is injected', async () => {
@@ -321,6 +355,37 @@ describe('HistoryStore on disk', () => {
     expect(restarted.query()).toHaveLength(1)
   })
 
+  it('puts the codec between the addresses and the disk, not beside it', async () => {
+    /*
+      The test above passes the *plain* codec, so it cannot tell a store that forwards
+      the codec from one that quietly drops it on the way to `JsonStore` — the file looks
+      the same either way. This one uses a codec whose output is unmistakably not JSON.
+
+      What a dropped codec costs is the whole of spec 3: the history file is the list of
+      every page the user opened, and it would sit in the profile directory in clear
+      text, readable by any other process running as them, while the browser reported
+      itself as encrypting local data.
+    */
+    const dir = await mkdtemp(join(tmpdir(), 'tessera-history-'))
+    const filePath = join(dir, 'history.json')
+
+    const store = await HistoryStore.open({
+      filePath,
+      codec: sealingCodec(),
+      debounceMs: 0,
+      now: () => T0
+    })
+    store.recorderFor('normal').recordVisit({ url: 'https://secret.example/inbox' })
+    await store.flush()
+
+    const raw = await readFile(filePath, 'utf8')
+    expect(raw.startsWith('sealed:'), raw.slice(0, 40)).toBe(true)
+    expect(raw).not.toContain('secret.example')
+    // And the store reads its own writing back, so the codec is used in both directions.
+    const restarted = await HistoryStore.open({ filePath, codec: sealingCodec(), debounceMs: 0 })
+    expect(restarted.query().map((visit) => visit.url)).toEqual(['https://secret.example/inbox'])
+  })
+
   it('writes with the default debounce when none is given', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'tessera-history-'))
     const filePath = join(dir, 'history.json')
@@ -330,6 +395,39 @@ describe('HistoryStore on disk', () => {
     // `flush` exists so a pending debounced write can be forced and awaited.
     await store.flush()
     expect(await storedVisits(filePath)).toHaveLength(1)
+  })
+
+  it('uses the coalescing window it was given, not the default one', async () => {
+    /*
+      `debounceMs: 0` means "write on every change", and `JsonStore` honours it without a
+      timer at all. A store that dropped the option on its way through would fall back to
+      250 ms and still pass every other test in this file, because they all call `flush`
+      first — so nothing here would notice that a caller asking for an immediate write got
+      a coalesced one, which for a shutdown path is the difference between the last visit
+      being on disk and being lost.
+
+      The observable is that no timer was scheduled, not how soon the file appears. An
+      earlier version installed fake timers and spun the event loop a hundred times waiting
+      for the file — a wall-clock budget in disguise, which passed on its own and failed in
+      a full run, where a queued write does not get its turn that soon.
+    */
+    const scheduled = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      const dir = await mkdtemp(join(tmpdir(), 'tessera-history-'))
+      const filePath = join(dir, 'history.json')
+      const store = await HistoryStore.open({ filePath, debounceMs: 0, now: () => T0 })
+      // `open` is not what this is about; only the write the change triggers.
+      scheduled.mockClear()
+      store.recorderFor('normal').recordVisit({ url: 'https://example.com' })
+      expect(scheduled, 'the write was put behind a timer').not.toHaveBeenCalled()
+
+      // Awaited on the store's own queue: the write is already on it, so this resolves once
+      // *that* write is on disk rather than starting a second one.
+      await store.flush()
+      expect(await readFile(filePath, 'utf8')).toContain('example.com')
+    } finally {
+      scheduled.mockRestore()
+    }
   })
 
   it('merges duplicates a hand-edited file left behind', async () => {

@@ -1,6 +1,11 @@
 import type { ChromeImportResult } from './chrome-import.js'
 import type { PasswordSummary } from './model.js'
-import type { MasterPasswordOutcome, UnlockOutcome, VaultStatus } from './vault.js'
+import type {
+  MasterPasswordIntent,
+  MasterPasswordRequestOutcome,
+  UnlockRequestOutcome
+} from './prompt.js'
+import type { VaultStatus } from './vault.js'
 
 /**
  * What `tessera://passwords` may ask the core for, and what it gets back.
@@ -30,18 +35,25 @@ import type { MasterPasswordOutcome, UnlockOutcome, VaultStatus } from './vault.
  * renderer's heap. The rule is that no payload carries a password it does not need, and this one does
  * not need any.
  *
- * ## The two requests that do carry a secret, and why they must
+ * ## Not one request here carries a password, and that is a structural claim
  *
- * `passwords:unlock` and `passwords:setMasterPassword`. The derivation has to happen in the core,
- * because a renderer cannot hold the vault key and must not; so the candidate has to cross. It is
- * used, checked and dropped — never stored, never logged, and never echoed: every reply is one of a
- * handful of words (`UnlockOutcome`, `MasterPasswordOutcome`), which is exactly why those are unions
- * of values rather than thrown errors carrying a message.
+ * There is no field of type `masterPassword` anywhere in this file, and there is no channel that has
+ * one. This *was* the obvious design — `passwords:unlock { masterPassword }` and
+ * `passwords:setMasterPassword { current, next }` — and the two of them were written down here with an
+ * argument for why crossing was unavoidable. It is not unavoidable.
  *
- * What this cannot defend against, stated rather than left out: a page that *looks* like
- * `tessera://passwords`. The address bar is the only thing that distinguishes them, as for every
- * internal page in every browser. It is the reason the master password is never asked for inside a
- * visited page's document — see the lock section of `main/passwords/AutofillService.ts`.
+ * What replaced them: `passwords:requestUnlock` takes **no payload** and answers one of four words. The
+ * core raises a prompt on the overlay layer, reads the keystrokes off that view's own input pipeline in
+ * the main process, checks the candidate itself, and reports the outcome. See
+ * `main/passwords/MasterPasswordPrompt.ts` for how, and `shared/passwords/prompt.ts` for what it costs.
+ *
+ * Why the change is worth its cost: a payload can only be defended by promises about everyone who can
+ * see it — the preload, the renderer, the router's logs, whatever a future `console.warn` decides is
+ * useful context. An absent payload needs no promises. And the audience for those promises includes a
+ * page that *looks* like `tessera://passwords`: the address bar is the only thing that distinguishes
+ * them, as for every internal page in every browser, so a design where that page could ask for the
+ * master password at all was one where the lookalike could too. Now neither can — the field is browser
+ * chrome, drawn on a layer a page cannot reach, and it holds no value even there.
  */
 
 export interface PasswordListResponse {
@@ -132,40 +144,38 @@ export interface PasswordOkResponse {
 
 // --- the lock ----------------------------------------------------------------
 
-/**
- * The master password, on its way to the one process that can use it.
- *
- * See the docblock at the top of this file for why this payload is allowed to carry a secret and what
- * is done to keep it from going anywhere else.
- */
-export interface PasswordUnlockRequest {
-  masterPassword: string
-}
-
-export interface PasswordUnlockResponse {
-  outcome: UnlockOutcome
-  /** The state afterwards, so a successful unlock needs no second round trip to redraw. */
-  vault: VaultStatus
-}
-
 export interface PasswordVaultStateResponse {
   vault: VaultStatus
 }
 
 /**
- * Setting, changing and removing the master password, as one request.
+ * What a request to unlock came to.
  *
- * `next: null` removes it; `current: null` is only accepted when there is none to prove. One shape for
- * all three transitions because they are one operation, and splitting them would give three places for
- * the "prove you know the current one" check to be left out of.
+ * **No request shape at all**, deliberately: `passwords:requestUnlock` takes no payload, because there
+ * is nothing a caller could usefully say. It asks the core to put the prompt up; the core asks the
+ * person. The promise settles when they answer, cancel, or the prompt leaves the screen — which can be
+ * a while, and that is the correct representation of "somebody is being asked something".
+ */
+export interface PasswordUnlockResponse {
+  outcome: UnlockRequestOutcome
+  /** The state afterwards, so a successful unlock needs no second round trip to redraw. */
+  vault: VaultStatus
+}
+
+/**
+ * Which master-password operation the user chose.
+ *
+ * The *intent*, not the sequence: the core derives which questions to ask from the vault's actual state,
+ * and always in the direction that demands more proof — asking to "set" one on a vault that already has
+ * one asks for the existing one first. A payload that named the questions would be a payload that could
+ * skip one.
  */
 export interface PasswordMasterPasswordRequest {
-  current: string | null
-  next: string | null
+  intent: MasterPasswordIntent
 }
 
 export interface PasswordMasterPasswordResponse {
-  outcome: MasterPasswordOutcome
+  outcome: MasterPasswordRequestOutcome
   vault: VaultStatus
 }
 
@@ -180,8 +190,25 @@ export interface PasswordResetVaultRequest {
   confirmation: string
 }
 
+/**
+ * What became of the offer to keep a copy of the sealed vault.
+ *
+ * A field of its own rather than folded into `reset`, because the two answer different questions and the
+ * page has to say both: whether the vault is gone, and whether anything was kept. `failed` is the one
+ * that changes the outcome — a copy that could not be written **aborts the reset**, because discarding
+ * the vault after failing to save it is the one result nobody asked for.
+ */
+export type VaultCopyOutcome =
+  /** Never offered: the confirmation token was wrong, so nothing happened at all. */
+  | 'none'
+  | 'saved'
+  /** Offered and turned down. The user chose to discard without keeping anything. */
+  | 'declined'
+  | 'failed'
+
 export interface PasswordResetVaultResponse {
   reset: boolean
+  copy: VaultCopyOutcome
   vault: VaultStatus
 }
 
@@ -195,8 +222,15 @@ export interface PasswordImportResponse {
    * refused — that arrives as `imported` with a `report.refusal`.
    */
   outcome: 'imported' | 'cancelled' | 'locked' | 'unreadable'
-  /** Present only for `imported`. Counts and origins; never a password. */
-  report?: ChromeImportResult
+  /**
+   * Present only for `imported`. Counts and origins; never a password.
+   *
+   * `| undefined` written out, which under `exactOptionalPropertyTypes` is not the same type as a bare
+   * `?`. It is the honest one for a value that crossed IPC: an absent property and one holding
+   * `undefined` arrive indistinguishable, so declaring only the first would be a claim the wire cannot
+   * keep — and the two-way assertion in `schema.ts` fails if it is made.
+   */
+  report?: ChromeImportResult | undefined
   /**
    * The file that was read, so the page can tell the user to delete it.
    *
@@ -206,7 +240,7 @@ export interface PasswordImportResponse {
    * not a secret from a page that is already allowed to list the user's accounts, and the full path
    * rather than the file name because "delete this" is only actionable if it says where.
    */
-  filePath?: string
+  filePath?: string | undefined
   vault: VaultStatus
 }
 
@@ -226,9 +260,12 @@ export interface PasswordCalls {
     request: PasswordForgetNeverSavedRequest
     response: PasswordOkResponse
   }
-  'passwords:unlock': { request: PasswordUnlockRequest; response: PasswordUnlockResponse }
+  /** The lock's state on its own, for a page that has to redraw it without re-reading the list. */
+  'passwords:vaultStatus': { request: void; response: PasswordVaultStateResponse }
+  /** No payload: there is nothing to send, and that is the point. See above. */
+  'passwords:requestUnlock': { request: void; response: PasswordUnlockResponse }
   'passwords:lock': { request: void; response: PasswordVaultStateResponse }
-  'passwords:setMasterPassword': {
+  'passwords:beginSetMasterPassword': {
     request: PasswordMasterPasswordRequest
     response: PasswordMasterPasswordResponse
   }
@@ -255,9 +292,10 @@ export const PASSWORD_CHANNELS = [
   'passwords:update',
   'passwords:remove',
   'passwords:forgetNeverSaved',
-  'passwords:unlock',
+  'passwords:vaultStatus',
+  'passwords:requestUnlock',
   'passwords:lock',
-  'passwords:setMasterPassword',
+  'passwords:beginSetMasterPassword',
   'passwords:import',
   'passwords:resetVault'
 ] as const satisfies readonly PasswordChannel[]

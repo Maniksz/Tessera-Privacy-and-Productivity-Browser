@@ -1,3 +1,4 @@
+import { TILE_COUNT, type LayoutId } from '../split/layout.js'
 import { TAB_GROUP_COLORS, type TabGroupColor } from './palette.js'
 
 /**
@@ -23,10 +24,25 @@ import { TAB_GROUP_COLORS, type TabGroupColor } from './palette.js'
  *   - its **group**, or none — this file.
  *
  * A group says nothing about where a tab is shown. Grouping four tabs does not put
- * them in four tiles, and a `2x2` layout does not make a group. The one place the two
- * touch is `collapsed`: a tab the strip is not showing must not be holding a tile, and
- * `tabsHiddenByCollapse` is how the core is told which those are. Even there the rule
- * is spec 2's — *detach, never close*.
+ * them in four tiles, and a `2x2` layout does not make a group. The two places the two
+ * touch are both narrow. `collapsed`: a tab the strip is not showing must not be
+ * holding a tile, and `tabsHiddenByCollapse` is how the core is told which those are.
+ * And `layout`, below — which is a *recording* of tiles the group's tabs have left, not
+ * a claim on tiles they hold. Even there the rule is spec 2's — *detach, never close*.
+ *
+ * ## Why the group is where a displaced arrangement lives
+ *
+ * Asking for a new tab puts the grid away: the new tab gets the whole window and the
+ * pages that were in the panes stay loaded and stay in the strip
+ * (`TileOccupancyController.claimTileForNewTab`). What used to be lost in that moment
+ * was the *arrangement* — which layout it was and who sat in which tile — and there was
+ * no way back to it.
+ *
+ * A group is the one thing in this design that already means "these tabs belong
+ * together", survives being written down, and has a place in the strip the user can
+ * click. So the arrangement is recorded on it, and activating a member puts it back.
+ * The alternative — a nameless stack of previous layouts kept by the window — would be
+ * invisible, unclickable and would not survive the window closing.
  *
  * ## Why membership lives on the group
  *
@@ -65,6 +81,38 @@ export const MAX_TAB_GROUP_NAME_LENGTH = 40
  */
 export const MAX_TAB_GROUPS = 50
 
+/**
+ * Tiles that must still hold one of the group's tabs for its arrangement to be worth
+ * keeping.
+ *
+ * Two, because one page in one pane is not an arrangement — it is the single view the
+ * browser is about to switch to anyway, and recording it would make a group out of
+ * every new tab opened from a window that happened to have one pane filled. Also the
+ * floor on the way back down: a group whose members have closed until one is left has
+ * nothing left to restore, and applying a four-tile layout to seat one page would put
+ * three empty panes on screen — the one outcome `TileOccupancyController` exists to
+ * prevent.
+ */
+export const MIN_ARRANGED_TILES = 2
+
+/**
+ * Where the group's tabs sat, the last time the browser took their tiles away.
+ *
+ * A recording of one displacement, not a preference and not a live assignment. `tiles`
+ * is one entry per tile of `id`, in tile order, naming the member that was in it or
+ * `null` for a tile that was empty — so restoring is "apply this layout, put these tabs
+ * back where they were" and nothing has to be guessed.
+ *
+ * Positional rather than a list of tab ids, because the position *is* the information: a
+ * member that has closed since must leave its tile empty rather than let the others
+ * shift along, or coming back to a `2x2` would rearrange the three pages that survived.
+ */
+export interface TabGroupLayout {
+  id: LayoutId
+  /** Member tab id per tile; `null` for an empty tile. */
+  tiles: Array<string | null>
+}
+
 export interface TabGroup {
   id: string
   /**
@@ -86,6 +134,19 @@ export interface TabGroup {
    */
   tabIds: string[]
   createdAt: number
+  /**
+   * The arrangement these tabs were displaced from, while there is one to go back to.
+   *
+   * Absent is the normal state: a group the user made by hand has never been displaced,
+   * and a group whose arrangement has been restored has handed it back. Every invariant
+   * it has to obey is enforced in one place — see `sanitisedLayout`.
+   *
+   * Declared `| undefined` rather than plain optional because the wire and storage
+   * schemas express it with zod's `.optional()`, whose output type carries `undefined`;
+   * the two-way assignments that keep those schemas honest would not compile otherwise.
+   * Callers still write it with a conditional spread, so absent stays absent on disk.
+   */
+  layout?: TabGroupLayout | undefined
 }
 
 export interface TabGroupDocument {
@@ -276,6 +337,78 @@ export function nextTabGroupColor(groups: readonly TabGroup[]): TabGroupColor {
   return unused[0] ?? TAB_GROUP_COLORS[0]
 }
 
+// --- arrangements ------------------------------------------------------------
+
+/** The members an arrangement seats, in tile order, skipping the empty tiles. */
+export function arrangedTabs(layout: TabGroupLayout): string[] {
+  return layout.tiles.filter((tabId): tabId is string => tabId !== null)
+}
+
+/**
+ * Which group an arrangement being put away should be recorded on.
+ *
+ * `reuse` names a group that already holds every seated tab, `create` asks for a new one
+ * over exactly them, and `none` means this arrangement is not to be kept.
+ */
+export type ArrangementHolder =
+  { kind: 'reuse'; groupId: string } | { kind: 'create' } | { kind: 'none' }
+
+/**
+ * The whole decision behind "which group keeps this arrangement", in one function.
+ *
+ * Here rather than in `TileOccupancyController` because it is the part with the
+ * interesting cases, and a condition buried in a controller can only be tested through a
+ * window's worth of state. Three answers, and the third is the one that is easy to miss:
+ *
+ *   - **Every seated tab is already in one and the same group** — record it there. This
+ *     is what stops the feature from being group spam: a window collapsed, restored and
+ *     collapsed again reuses the group it made the first time, keeping its colour and
+ *     whatever name the user has since given it, instead of leaving a trail of
+ *     one-per-displacement chips down the strip.
+ *   - **No seated tab is in any group** — the ordinary case, and the only one that may
+ *     create. The new group is over exactly the seated tabs.
+ *   - **Anything else** — some seated tabs grouped and some not, or spread over two
+ *     groups — and nothing is kept. Creating a group here would be destructive:
+ *     `addGroup` takes its members away from whatever held them, so remembering a layout
+ *     would shrink the user's own "Steuererklärung 2026" and dissolve it outright if the
+ *     arrangement held all of it. Adding the loose tabs to the group instead is no
+ *     better — it hands them a colour and a bracket the user did not ask for, and
+ *     reorders the strip to make the run contiguous. Forgetting a layout is recoverable
+ *     in one drag; silently editing a group the user built is not, and the browser must
+ *     not do the second in order to achieve the first. The stated cost: after dropping an
+ *     ungrouped tab into a restored arrangement, the next displacement is not recorded.
+ *
+ * Also the place `MIN_ARRANGED_TILES` is applied, so "is this worth keeping at all" and
+ * "where would it go" cannot answer differently.
+ */
+export function groupToHoldArrangement(
+  groups: readonly TabGroup[],
+  layout: TabGroupLayout
+): ArrangementHolder {
+  const seated = arrangedTabs(layout)
+  if (seated.length < MIN_ARRANGED_TILES) return { kind: 'none' }
+
+  const owners = new Set(seated.map((tabId) => groupOfTab(groups, tabId)?.id))
+  if (owners.size !== 1) return { kind: 'none' }
+
+  // Exactly one owner, so the single entry is either a group id or the `undefined` that
+  // stands for "ungrouped". Destructured rather than indexed: there is no third case to
+  // guard against and a guard for one would be a branch no test can reach.
+  const [only] = [...owners]
+  if (only !== undefined) return { kind: 'reuse', groupId: only }
+
+  /*
+    The cap, checked here rather than walked into.
+
+    `newTabGroup` throws past `MAX_TAB_GROUPS`, and this caller is not a user pressing a
+    button: the refusal would travel up through `claimTileForNewTab` into `createTab`, so a
+    window that had somehow collected fifty groups could no longer open a tab at all.
+    Remembering a layout is never worth that, and a window at the cap has fifty groups the
+    user can dissolve.
+  */
+  return groups.length >= MAX_TAB_GROUPS ? { kind: 'none' } : { kind: 'create' }
+}
+
 // --- writes ------------------------------------------------------------------
 
 export interface CreateGroupInput {
@@ -288,6 +421,13 @@ export interface CreateGroupInput {
   name?: string
   /** Defaults to the next unused palette slot. */
   color?: TabGroupColor
+  /**
+   * The arrangement the group is being formed to remember, for the one caller that has
+   * one: a displacement that found none of these tabs grouped. Set here rather than by a
+   * `setGroupLayout` straight after, so the group reaches the strip complete instead of
+   * being broadcast once without it and once with.
+   */
+  layout?: TabGroupLayout
 }
 
 export interface CreateContext {
@@ -316,14 +456,19 @@ export function newTabGroup(
   const tabIds = [...new Set(input.tabIds)]
   if (tabIds.length === 0) throw new EmptyTabGroupError()
 
-  return {
-    id: context.id,
-    name: cleanGroupName(input.name ?? ''),
-    color: input.color ?? nextTabGroupColor(groups),
-    collapsed: false,
-    tabIds,
-    createdAt: context.now
-  }
+  return withLayout(
+    {
+      id: context.id,
+      name: cleanGroupName(input.name ?? ''),
+      color: input.color ?? nextTabGroupColor(groups),
+      collapsed: false,
+      tabIds,
+      createdAt: context.now
+    },
+    // Validated against the deduplicated member list, not the caller's: an arrangement
+    // may only name tabs the group actually has.
+    sanitisedLayout(input.layout, tabIds)
+  )
 }
 
 /**
@@ -356,6 +501,29 @@ export function setGroupCollapsed(
   collapsed: boolean
 ): TabGroup[] {
   return patchGroup(groups, id, (group) => ({ ...group, collapsed }))
+}
+
+/**
+ * Records an arrangement on a group, or takes the one it carries away.
+ *
+ * `null` is not a failure but the *other* half of the feature: a restore consumes the
+ * recording it used. See `TabGroupController.takeArrangementFor` for why replaying one
+ * twice would fight the user.
+ *
+ * An arrangement that does not describe this group — the wrong number of tiles for its
+ * layout, a tab the group does not have, one tab in two tiles — is dropped rather than
+ * stored. A caller cannot reach that through the types, but the same check has to run on
+ * a file read from disk, and one implementation of an invariant is the point of this
+ * file.
+ */
+export function setGroupLayout(
+  groups: readonly TabGroup[],
+  id: string,
+  layout: TabGroupLayout | null
+): TabGroup[] {
+  return patchGroup(groups, id, (group) =>
+    withLayout(group, layout === null ? null : sanitisedLayout(layout, group.tabIds))
+  )
 }
 
 /**
@@ -487,6 +655,15 @@ export function retainTabs(groups: readonly TabGroup[], liveTabIds: readonly str
  *     and a quantity must never reach the schema: validation failure replaces the
  *     whole document with defaults, so a `.max()` there would turn "grew larger than
  *     expected" into "lost every group".
+ *   - **An arrangement that does not describe its group.** A `tiles` array of the wrong
+ *     length for its layout, a tile naming a tab the group does not have, the same tab in
+ *     two tiles. Each would be honoured on the next click and would move real pages:
+ *     a short `tiles` would leave the last panes empty, a stale id would seat nothing
+ *     while the tab that *is* there is evicted. The group and its tabs survive; only the
+ *     unusable recording goes, which costs the user a layout and never a page.
+ *
+ * A document with no `layout` anywhere is the normal case, not a repair — that is every
+ * file this browser has written so far.
  */
 export function repairGroups(groups: readonly TabGroup[]): TabGroup[] {
   const seenIds = new Set<string>()
@@ -506,7 +683,14 @@ export function repairGroups(groups: readonly TabGroup[]): TabGroup[] {
     if (tabIds.length === 0) continue
 
     seenIds.add(group.id)
-    repaired.push({ ...group, name: cleanGroupName(group.name), tabIds })
+    repaired.push(
+      withLayout(
+        { ...group, name: cleanGroupName(group.name), tabIds },
+        // Against the repaired member list: a tile naming a tab this pass has just taken
+        // away from the group would otherwise survive as a seat nobody can fill.
+        sanitisedLayout(group.layout, tabIds)
+      )
+    )
   }
 
   return repaired
@@ -547,9 +731,85 @@ function withMembersFiltered(
   groups: readonly TabGroup[],
   keep: (tabId: string) => boolean
 ): TabGroup[] {
-  return groups
-    .map((group) => ({ ...group, tabIds: group.tabIds.filter(keep) }))
-    .filter((group) => group.tabIds.length > 0)
+  return groups.map((group) => keptMembers(group, keep)).filter((group) => group.tabIds.length > 0)
+}
+
+/**
+ * One group with the departing members gone, from its list *and* from its arrangement.
+ *
+ * The tile of a member that left is emptied rather than closed up, which is the whole
+ * reason `tiles` is positional: closing it up would move the pages that are still there,
+ * so coming back to a `2x2` after one of four tabs closed would rearrange the other
+ * three. `sanitisedLayout` then decides whether what is left is still an arrangement —
+ * below `MIN_ARRANGED_TILES` there is nothing worth restoring, and the recording goes.
+ */
+function keptMembers(group: TabGroup, keep: (tabId: string) => boolean): TabGroup {
+  const tabIds = group.tabIds.filter(keep)
+  const emptied =
+    group.layout === undefined
+      ? undefined
+      : {
+          ...group.layout,
+          tiles: group.layout.tiles.map((tabId) => (tabId !== null && keep(tabId) ? tabId : null))
+        }
+  return withLayout({ ...group, tabIds }, sanitisedLayout(emptied, tabIds))
+}
+
+/**
+ * An arrangement a group may legally carry, or `null` when what it was handed is not
+ * one.
+ *
+ * The single gate. Everything that can put a `layout` on a group goes through it — a
+ * creation, a later recording, a member leaving, a file read off disk — so there is one
+ * account of what makes an arrangement usable rather than four that can disagree. What it
+ * insists on, and what each rules out:
+ *
+ *   - **One entry per tile of its own layout.** A short array would leave the last panes
+ *     empty and a long one would silently drop members; `2x2` and `1x4` both have four
+ *     tiles, so the count cannot be inferred from the array and the id cannot be inferred
+ *     from the count.
+ *   - **Every named tab is a member.** A tile naming a tab the group does not have is a
+ *     seat nobody can take, and it would still evict whatever is in that tile on restore.
+ *   - **No tab in two tiles.** One tab cannot be in two places; `SplitController.assignTab`
+ *     would move it, so the earlier tile would end up empty and the arrangement would not
+ *     be the one that was recorded.
+ *   - **At least `MIN_ARRANGED_TILES` tabs left to seat.** See there.
+ *
+ * Returns a copy, so a stored arrangement is never the array a caller still holds.
+ */
+function sanitisedLayout(
+  layout: TabGroupLayout | undefined,
+  tabIds: readonly string[]
+): TabGroupLayout | null {
+  if (layout === undefined) return null
+  if (layout.tiles.length !== TILE_COUNT[layout.id]) return null
+
+  const members = new Set(tabIds)
+  const seated = new Set<string>()
+  for (const tabId of layout.tiles) {
+    if (tabId === null) continue
+    if (!members.has(tabId) || seated.has(tabId)) return null
+    seated.add(tabId)
+  }
+  if (seated.size < MIN_ARRANGED_TILES) return null
+
+  return { id: layout.id, tiles: [...layout.tiles] }
+}
+
+/**
+ * A copy of the group carrying the given arrangement, or none at all.
+ *
+ * `delete` rather than assigning `undefined`, because `exactOptionalPropertyTypes` is on
+ * and the two are not the same thing here: a key present with an `undefined` value is
+ * written to the document as a key, and every file this browser has produced so far has
+ * no `layout` key at all. Keeping "absent" absent is what makes the storage schema's
+ * `.optional()` mean what it says.
+ */
+function withLayout(group: TabGroup, layout: TabGroupLayout | null): TabGroup {
+  const next = { ...group }
+  if (layout === null) delete next.layout
+  else next.layout = layout
+  return next
 }
 
 /**
@@ -574,17 +834,25 @@ function patchGroup(
 }
 
 /**
- * Copies a group, member list included.
+ * Copies a group, member list and arrangement included.
  *
  * Every operation returns groups whose arrays no caller already holds, so a result
  * cannot be mutated into the value it was derived from — the bug class where a store's
- * "previous" and "next" documents turn out to be the same object.
+ * "previous" and "next" documents turn out to be the same object. `tiles` needs the same
+ * treatment as `tabIds` and for the same reason: it is the second array on a group.
  */
 function cloneGroup(group: TabGroup): TabGroup {
-  return { ...group, tabIds: [...group.tabIds] }
+  const clone: TabGroup = { ...group, tabIds: [...group.tabIds] }
+  if (clone.layout !== undefined) clone.layout = { ...clone.layout, tiles: [...clone.layout.tiles] }
+  return clone
 }
 
-function cloneGroups(groups: readonly TabGroup[]): TabGroup[] {
+/**
+ * Exported because the store hands snapshots out to windows and needs the same depth.
+ * It had its own shallow copy of this rule, which was correct until a group grew a second
+ * array.
+ */
+export function cloneGroups(groups: readonly TabGroup[]): TabGroup[] {
   return groups.map(cloneGroup)
 }
 

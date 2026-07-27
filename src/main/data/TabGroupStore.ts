@@ -1,7 +1,9 @@
 import { z } from 'zod'
+import { LAYOUT_IDS } from '@shared/split/layout.js'
 import {
   addGroup,
   addTabToGroup,
+  cloneGroups,
   dissolveGroup,
   emptyTabGroupDocument,
   findGroup,
@@ -13,9 +15,11 @@ import {
   repairGroups,
   retainTabs,
   setGroupCollapsed,
+  setGroupLayout,
   type CreateGroupInput,
   type TabGroup,
-  type TabGroupDocument
+  type TabGroupDocument,
+  type TabGroupLayout
 } from '@shared/tabgroups/model.js'
 import {
   FALLBACK_TAB_GROUP_COLOR,
@@ -56,6 +60,11 @@ import type { BrowsingMode } from './HistoryStore.js'
  *   - **Name length** and **group count** are quantities and are trimmed by
  *     `repairGroups`, never capped here. `.max()` in a schema turns "grew larger than
  *     expected" into "lost every group".
+ *   - A **layout** that is not of this shape heals to nothing. It is the one field that is
+ *     pure convenience: losing it costs the user one arrangement they can rebuild with a
+ *     drag, and rejecting the document over it would cost them every group they have. The
+ *     cross-field facts it also has to obey — the tile count matching the layout, the
+ *     members being members — cannot be stated here at all and belong to `repairGroups`.
  *
  * What stays strict is identity: `id` and the member ids. A group whose id is a number
  * is not a document this browser wrote, and defaults are the only safe answer.
@@ -71,7 +80,14 @@ const tabGroupSchema = z.object({
   color: z.enum(TAB_GROUP_COLORS).catch(FALLBACK_TAB_GROUP_COLOR),
   collapsed: z.boolean().catch(false),
   tabIds: z.array(z.string().min(1)),
-  createdAt: z.number().int().nonnegative().catch(0)
+  createdAt: z.number().int().nonnegative().catch(0),
+  layout: z
+    .object({ id: z.enum(LAYOUT_IDS), tiles: z.array(z.string().min(1).nullable()) })
+    .optional()
+    // Placed on the whole object rather than on its fields, because half an arrangement is
+    // not a lesser arrangement: a layout id with no tiles, or tiles with no layout, would
+    // move pages on the next click. Either it is one or it is not there.
+    .catch(undefined)
 })
 
 const tabGroupDocumentSchema = z.object({
@@ -118,6 +134,11 @@ export interface TabGroupBook {
   rename(id: string, name: string): void
   recolor(id: string, color: TabGroupColor): void
   setCollapsed(id: string, collapsed: boolean): void
+  /**
+   * Records the arrangement the group's tabs were displaced from, or — with `null` —
+   * takes back the one a restore has just used up.
+   */
+  setLayout(id: string, layout: TabGroupLayout | null): void
   dissolve(id: string): void
   addTab(groupId: string, tabId: string, index?: number): void
   /** Also the close path: a closed tab leaves its group like any other departure. */
@@ -249,6 +270,10 @@ export class TabGroupStore implements TabGroupBook {
     this.#cell.write((groups) => setGroupCollapsed(groups, id, collapsed))
   }
 
+  setLayout(id: string, layout: TabGroupLayout | null): void {
+    this.#cell.write((groups) => setGroupLayout(groups, id, layout))
+  }
+
   dissolve(id: string): void {
     this.#cell.write((groups) => dissolveGroup(groups, id))
   }
@@ -329,13 +354,15 @@ function memoryCell(): GroupCell {
 }
 
 /**
- * A copy nobody else holds, member lists included.
+ * A copy nobody else holds, member lists and arrangements included.
  *
- * A shallow `[...groups]` would hand out the stored `tabIds` arrays, and a caller that
- * pushed to one would have changed the document without going through a rule.
+ * A shallow `[...groups]` would hand out the stored arrays, and a caller that pushed to
+ * one would have changed the document without going through a rule. `cloneGroups` rather
+ * than a copy written out here: this file had its own, and it was correct right up until a
+ * group grew a second array.
  */
 function snapshot(groups: readonly TabGroup[]): TabGroup[] {
-  return groups.map((group) => ({ ...group, tabIds: [...group.tabIds] }))
+  return cloneGroups(groups)
 }
 
 let counter = 0

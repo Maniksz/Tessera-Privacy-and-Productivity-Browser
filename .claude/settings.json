@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "disableAutoMode": "disable",
+    "deny": [
+      "Bash(node scripts/smoke.mjs*)",
+      "Bash(pnpm test:smoke*)",
+      "Bash(pnpm run test:smoke*)",
+      "Bash(pnpm dev*)",
+      "Bash(pnpm run dev*)",
+      "Bash(pnpm dev:watch*)",
+      "Bash(pnpm run dev:watch*)",
+      "Bash(pnpm start*)",
+      "Bash(pnpm run start*)",
+      "Bash(electron-vite dev*)",
+      "Bash(electron-vite preview*)",
+      "Bash(npx electron*)"
+    ]
+  }
+}

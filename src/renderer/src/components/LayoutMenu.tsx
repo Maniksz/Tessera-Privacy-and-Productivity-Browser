@@ -17,6 +17,12 @@ import { LAYOUT_LABELS, LayoutIcon } from './LayoutIcon.js'
  * would land on the page instead. Instead it reports where it is and lets the overlay layer
  * draw the menu above the views. `open` comes from the core rather than from local state, so
  * `aria-expanded` cannot claim a menu that has already been dismissed.
+ *
+ * The one button here carries no key in its tooltip, and that is not an omission. This button opens a
+ * menu; it does not apply a layout. The four keys that *do* apply one (`splitLayout1`–`4`, via
+ * `LAYOUT_SHORTCUTS`) belong on the menu's own entries, which are drawn by `LayoutMenuSurface` on the
+ * overlay layer. Putting `LAYOUT_SHORTCUTS[current]` here instead would print the key for the
+ * arrangement the window is already in — an answer to a question nobody asked.
  */
 
 export function LayoutMenu({

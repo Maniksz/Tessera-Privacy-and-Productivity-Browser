@@ -5,7 +5,7 @@
   "private": true,
   "//type": "Deliberately NOT \"module\". Electron's built-in `electron` module is CommonJS and the npm package publishes no `electron/main` subpath, so named ESM imports from it fail to link at runtime. Sources stay ESM; only the emitted main/preload bundles are CommonJS.",
   "main": "./out/main/index.js",
-  "author": "m3connect",
+  "author": "Maurice",
   "license": "GPL-3.0-or-later",
   "engines": {
     "node": ">=22"
@@ -35,7 +35,8 @@
     "package": "pnpm run build && electron-builder --publish never",
     "package:win": "pnpm run build && electron-builder --win --publish never",
     "package:linux": "pnpm run build && electron-builder --linux --publish never",
-    "package:mac": "pnpm run build && electron-builder --mac --publish never"
+    "package:mac": "pnpm run build && electron-builder --mac --publish never",
+    "release:alpha": "node scripts/release.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",

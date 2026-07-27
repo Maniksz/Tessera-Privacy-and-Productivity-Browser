@@ -9,9 +9,16 @@ import {
   revealState,
   type RevealState
 } from '@shared/passwords/reveal.js'
-import type { PasswordCalls, PasswordChannel } from '@shared/passwords/api.js'
-import { passwordMessage, type PasswordMessageKey } from '@shared/passwords/messages.js'
-import type { VaultKeyProtection } from '@shared/passwords/vault.js'
+import {
+  RESET_VAULT_CONFIRMATION,
+  vaultHasMasterPassword,
+  type VaultKeyProtection,
+  type VaultStatus
+} from '@shared/passwords/vault.js'
+import type { CsvRefusal, ChromeImportResult } from '@shared/passwords/chrome-import.js'
+import { totalSkipped } from '@shared/passwords/chrome-import.js'
+import type { MessageKey } from '@shared/i18n/catalog.js'
+import { bridgeAvailable, invoke } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
 
 /**
@@ -20,10 +27,8 @@ import { useInternalI18n } from './useInternalI18n.js'
  * ## Why a list of credentials is drawn this way
  *
  * A saved-password list is itself a secret, and an unlocked passwords tab left open on a desk is —
- * in most browsers' design — the whole vault. `shared/passwords/reveal.ts` carries the full argument,
- * including the honest admission that meaningful re-authentication is not achievable with
- * `safeStorage` and needs a master password, with the design for one written out. What this page does
- * with that:
+ * in most browsers' design — the whole vault. `shared/passwords/reveal.ts` carries the full argument.
+ * What this page does with it:
  *
  *   1. **It is never sent the passwords.** `passwords:list` answers with origins, usernames and
  *      timestamps. There is no call on this page's allowlist that returns more than one secret.
@@ -33,8 +38,19 @@ import { useInternalI18n } from './useInternalI18n.js'
  *      being visible — another tab, a minimised window, a locked screen.
  *
  * So the worst case for a forgotten tab is a list of sites and names, plus one password for thirty
- * seconds. That is a real bound, and it is as far as this can honestly be taken without a master
- * password.
+ * seconds — and with a master password set, only for as long as the vault is open.
+ *
+ * ## The one thing this page cannot do, and it is the important one
+ *
+ * **It cannot ask for the master password.** There is no field for it here and no channel that would
+ * accept one. `passwords:requestUnlock` sends nothing: the core raises a prompt on the overlay layer,
+ * reads the keystrokes in the main process, and answers with one of four words.
+ *
+ * That is not tidiness. The address bar is the only thing distinguishing this page from a website
+ * imitating it, exactly as for every internal page in every browser — so a design where *this* page
+ * could ask for the master password is a design where the imitation could too, and the master
+ * password is the one secret whose loss costs all the others. Moving the field into browser chrome a
+ * page cannot draw is the only version of this that a lookalike cannot copy.
  *
  * ## Why the address is shown with its scheme
  *
@@ -45,54 +61,16 @@ import { useInternalI18n } from './useInternalI18n.js'
  *
  * ## Privileges
  *
- * An internal page rendered as content: the per-page allowlist grants the six password channels and
- * `i18n:getCatalog`, and nothing else. It cannot read a setting, touch a tab, or reach the window.
+ * An internal page rendered as content: the per-page allowlist grants twelve password channels and
+ * `i18n:getCatalog`, and nothing else. It cannot read a setting, touch a tab, or reach the window —
+ * and it cannot answer the master-password prompt it asks for.
  */
 
 /** What a concealed password looks like. Not text, so it needs no translation. */
-const MASK = '••••••••••'
+const MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'
 
 /** How often the countdown is re-checked. A second is enough for a thirty-second bound. */
 const TICK_MS = 1000
-
-/**
- * The bridge, as this page needs to see it.
- *
- * The typed helper in `bridge.ts` is generic over `InternalInvokeChannel`, which is derived from
- * `INTERNAL_PAGE_INVOKE_CHANNELS` — and the `passwords` entry there lands in a separate, coordinated
- * edit to a file this change does not own. So the six channels are declared here, once, against the
- * request and response types in `shared/passwords/api.ts`, which is also what the core's `PasswordApi`
- * is typed against. When the allowlist entry is in place this whole block collapses to
- * `import { invoke } from './bridge.js'` and the compiler takes over again.
- */
-interface PasswordBridge {
-  invoke(channel: PasswordChannel, payload?: unknown): Promise<unknown>
-}
-
-function passwordBridge(): PasswordBridge | null {
-  const bridge: unknown = window.tesseraInternal
-  if (typeof bridge !== 'object' || bridge === null) return null
-  return bridge as PasswordBridge
-}
-
-async function call<C extends PasswordChannel>(
-  channel: C,
-  payload: PasswordCalls[C]['request']
-): Promise<PasswordCalls[C]['response']> {
-  const bridge = passwordBridge()
-  if (bridge === null) {
-    throw new Error('tessera internal bridge is unavailable on this page')
-  }
-  const answer = await bridge.invoke(channel, payload)
-  // One assertion, at the boundary the contract will type once its entries land. The core validates
-  // both directions in `ipc/router.ts`, so this is a typing gap rather than a trust gap.
-  return answer as PasswordCalls[C]['response']
-}
-
-interface Revealed {
-  readonly state: RevealState
-  readonly password: string
-}
 
 /**
  * One sentence per protection level, keyed by the level itself.
@@ -101,31 +79,56 @@ interface Revealed {
  * legal identifier. Written out so a level added to `VaultKeyProtection` without a sentence here is a compile
  * error rather than a blank paragraph on the page that explains the guarantee.
  */
-const PROTECTION_MESSAGES: Readonly<Record<VaultKeyProtection, PasswordMessageKey>> = {
+const PROTECTION_MESSAGES: Readonly<Record<VaultKeyProtection, MessageKey>> = {
   'keystore+master': 'passwords.protection.keystoreMaster',
   master: 'passwords.protection.master',
   keystore: 'passwords.protection.keystore',
   plain: 'passwords.protection.plain'
 }
 
+/**
+ * Why a whole file was refused, per reason.
+ *
+ * Total over `CsvRefusal`, so a reason added to the parser without a sentence here is a compile error. The
+ * alternative is the screen somebody reads once, after moving every credential they own, showing nothing.
+ */
+const IMPORT_REFUSALS: Readonly<Record<CsvRefusal, MessageKey>> = {
+  empty: 'passwords.importRefusedEmpty',
+  'unknown-columns': 'passwords.importRefusedColumns',
+  'too-large': 'passwords.importRefusedTooLarge',
+  'too-many-rows': 'passwords.importRefusedTooManyRows'
+}
+
+/** What the lock is doing, so a slow derivation is not read as a dead button. */
+type Busy = 'unlock' | 'lock' | 'master' | 'import' | 'reset' | null
+
+interface Revealed {
+  readonly state: RevealState
+  readonly password: string
+}
+
 export function PasswordsPage(): React.ReactNode {
-  const { locale, t: translateKey } = useInternalI18n()
-  const t = useCallback(
-    (key: PasswordMessageKey, params?: Record<string, string | number>): string =>
-      translateKey(passwordMessage(key), params),
-    [translateKey]
-  )
+  const { locale, t } = useInternalI18n()
 
   const [credentials, setCredentials] = useState<PasswordSummary[]>([])
   const [neverSaved, setNeverSaved] = useState<string[]>([])
   /*
-    The vault's protection level, from `VaultKeyProtection` rather than a two-way flag.
+    The whole `VaultStatus`, not only its protection level.
 
-    It was `'os-keystore' | 'unencrypted'`, which cannot express the state that matters most once a master
-    password exists: key store *and* master password, versus only one of them. Starting at the weakest value is
-    deliberate — a page about credentials must not claim a guarantee it has not yet been told it has.
+    Starting from the weakest and *locked* is deliberate in both halves. A page about credentials must not
+    claim a guarantee it has not been told it has; and drawing the unlocked view before the first answer
+    arrives would flash an empty list at somebody whose vault is merely closed, which reads as "they are
+    gone".
   */
-  const [protection, setProtection] = useState<VaultKeyProtection>('plain')
+  const [vault, setVault] = useState<VaultStatus>({
+    protection: 'plain',
+    unlocked: false,
+    unreadable: false,
+    idleTimeoutMs: 0
+  })
+  const [busy, setBusy] = useState<Busy>(null)
+  const [importReport, setImportReport] = useState<ChromeImportResult | null>(null)
+  const [importedFile, setImportedFile] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -155,15 +158,15 @@ export function PasswordsPage(): React.ReactNode {
   )
 
   const refresh = useCallback(async (): Promise<void> => {
-    const answer = await call('passwords:list', undefined)
+    const answer = await invoke('passwords:list')
     setCredentials(answer.credentials)
     setNeverSaved(answer.neverSaved)
-    setProtection(answer.vault.protection)
+    setVault(answer.vault)
   }, [])
 
   useEffect(() => {
     let cancelled = false
-    if (passwordBridge() === null) {
+    if (!bridgeAvailable()) {
       // Reported through the same asynchronous path as everything else, so this effect holds no
       // synchronous state write. Same shape as the history page.
       queueMicrotask(() => {
@@ -229,7 +232,7 @@ export function PasswordsPage(): React.ReactNode {
 
   const reveal = (entry: PasswordSummary): void => {
     void run(async () => {
-      const answer = await call('passwords:reveal', { id: entry.id })
+      const answer = await invoke('passwords:reveal', { id: entry.id })
       if (answer.password === null) {
         // The entry went between the row being drawn and the button being pressed. Refreshing is a
         // truer answer than an error about an id.
@@ -248,7 +251,7 @@ export function PasswordsPage(): React.ReactNode {
   const remove = (entry: PasswordSummary): void => {
     if (!globalThis.confirm(t('passwords.removeConfirm', { site: entry.origin }))) return
     void run(async () => {
-      const answer = await call('passwords:remove', { id: entry.id })
+      const answer = await invoke('passwords:remove', { id: entry.id })
       if (answer.removed) setNotice(t('passwords.removed'))
       setRevealed(null)
       await refresh()
@@ -257,7 +260,7 @@ export function PasswordsPage(): React.ReactNode {
 
   const saveEdit = (entry: PasswordSummary): void => {
     void run(async () => {
-      await call('passwords:update', { id: entry.id, password: draftPassword })
+      await invoke('passwords:update', { id: entry.id, password: draftPassword })
       setEditing(null)
       setDraftPassword('')
       setRevealed(null)
@@ -268,7 +271,7 @@ export function PasswordsPage(): React.ReactNode {
 
   const add = (): void => {
     void run(async () => {
-      const answer = await call('passwords:create', {
+      const answer = await invoke('passwords:create', {
         url: draftSite,
         username: draftUsername,
         password: draftNew
@@ -288,10 +291,144 @@ export function PasswordsPage(): React.ReactNode {
 
   const forgetNeverSaved = (origin: string): void => {
     void run(async () => {
-      await call('passwords:forgetNeverSaved', { origin })
+      await invoke('passwords:forgetNeverSaved', { origin })
       await refresh()
     })
   }
+
+  // --- the lock ---------------------------------------------------------------
+
+  /**
+   * Asks the core to raise the prompt, and waits.
+   *
+   * There is no field here and nothing is sent. What comes back is one of four words, and the promise
+   * stays pending while somebody is being asked — which can be a minute if they walk away, so the button
+   * says it is working. `cancelled` says nothing at all: the person closed the prompt, and telling them so
+   * would be the browser reporting their own action back to them.
+   */
+  const requestUnlock = (): void => {
+    void run(async () => {
+      setBusy('unlock')
+      try {
+        const answer = await invoke('passwords:requestUnlock')
+        setVault(answer.vault)
+        if (answer.outcome === 'wrong-password') setNotice(t('passwords.unlockFailed'))
+        if (answer.outcome === 'unlocked') await refresh()
+      } finally {
+        setBusy(null)
+      }
+    })
+  }
+
+  const lockNow = (): void => {
+    void run(async () => {
+      setBusy('lock')
+      try {
+        const answer = await invoke('passwords:lock')
+        setVault(answer.vault)
+        // The revealed password goes with the key. Leaving it on screen after locking would make the
+        // button a claim the page had not honoured.
+        setRevealed(null)
+        await refresh()
+      } finally {
+        setBusy(null)
+      }
+    })
+  }
+
+  /**
+   * Starts a master-password sequence.
+   *
+   * The intent only. Which questions get asked is the core's decision, derived from the vault as it
+   * actually is — see `MasterPasswordPrompt.requestMasterPassword`, which turns "set" on a vault that
+   * already has one into "change" so that the existing password still has to be proved.
+   */
+  const masterPassword = (intent: 'set' | 'change' | 'remove'): void => {
+    void run(async () => {
+      setBusy('master')
+      try {
+        const answer = await invoke('passwords:beginSetMasterPassword', { intent })
+        setVault(answer.vault)
+        if (answer.outcome === 'set') setNotice(t('passwords.masterPasswordSet'))
+        if (answer.outcome === 'changed') setNotice(t('passwords.masterPasswordChanged'))
+        if (answer.outcome === 'removed') setNotice(t('passwords.masterPasswordRemoved'))
+        if (answer.outcome === 'wrong-password') setNotice(t('passwords.unlockFailed'))
+      } finally {
+        setBusy(null)
+      }
+    })
+  }
+
+  /**
+   * Imports an exported CSV.
+   *
+   * No file input, deliberately: the core opens the chooser and reads the file. A `<input type="file">`
+   * here would have put an entire exported vault — every password the user has ever had, in clear text —
+   * into one IPC message and into this renderer's heap, which is the one thing this page is built not to
+   * hold. See `shared/passwords/api.ts`.
+   */
+  const importFile = (): void => {
+    void run(async () => {
+      setBusy('import')
+      try {
+        const answer = await invoke('passwords:import')
+        setVault(answer.vault)
+        // Cancelling is an answer and not a failure, so it says nothing at all.
+        if (answer.outcome === 'cancelled') return
+        if (answer.outcome === 'unreadable') {
+          setNotice(t('passwords.importUnreadable'))
+          return
+        }
+        if (answer.outcome === 'locked') {
+          setNotice(t('passwords.importLocked'))
+          return
+        }
+        setImportReport(answer.report ?? null)
+        setImportedFile(answer.filePath ?? null)
+        await refresh()
+      } finally {
+        setBusy(null)
+      }
+    })
+  }
+
+  /**
+   * Destroys the vault, and does not ask the confirming question itself.
+   *
+   * The sentence about keeping a copy is asked by the *core*, in a native dialogue, because that is where
+   * the file chooser is and because the choice must be made at the moment of no return rather than two
+   * clicks earlier. So this page asks only "are you sure", and the core asks "shall I keep a copy first".
+   *
+   * `copy: 'failed'` comes back with `reset: false`: nothing was deleted, because discarding a vault right
+   * after failing to save it is the outcome the offer exists to prevent. The page says so rather than
+   * reporting a success it did not get.
+   */
+  const resetVault = (): void => {
+    if (!globalThis.confirm(t('passwords.resetVault'))) return
+    void run(async () => {
+      setBusy('reset')
+      try {
+        const answer = await invoke('passwords:resetVault', {
+          confirmation: RESET_VAULT_CONFIRMATION
+        })
+        setVault(answer.vault)
+        if (answer.copy === 'failed') {
+          setNotice(t('passwords.unreadableBody'))
+          return
+        }
+        if (answer.reset) {
+          setRevealed(null)
+          setNotice(t('passwords.resetVaultDone'))
+          await refresh()
+        }
+      } finally {
+        setBusy(null)
+      }
+    })
+  }
+
+  const hasMaster = vaultHasMasterPassword(vault.protection)
+  const idleMinutes = Math.round(vault.idleTimeoutMs / 60_000)
 
   return (
     <main className="passwords">
@@ -327,7 +464,7 @@ export function PasswordsPage(): React.ReactNode {
           master password, or only one of them. A page about credentials must not round its own guarantee up.
         */}
         {/* The table covers every member of the union, so this read is total. */}
-        {t(PROTECTION_MESSAGES[protection])}
+        {t(PROTECTION_MESSAGES[vault.protection])}
       </p>
 
       {notice !== null && (
@@ -335,6 +472,149 @@ export function PasswordsPage(): React.ReactNode {
           {notice}
         </p>
       )}
+
+      {/*
+        The vault, and what can be done to it. Above the list, because when the vault is closed there is
+        no list and this is the only thing on the page that leads anywhere.
+      */}
+      <section className="passwords__vault">
+        <h2 className="passwords__groupTitle">{t('passwords.masterPasswordTitle')}</h2>
+
+        {/*
+          Unreadable is its own state and must not offer a password field.
+
+          `unlocked: false` means "type your master password"; this means "no master password will help,
+          and nothing here will silently overwrite your vault to make the browser start". A single boolean
+          would have made the page ask for something that cannot work. See `VaultStatus.unreadable`.
+        */}
+        {vault.unreadable ? (
+          <>
+            <h3 className="passwords__lockTitle">{t('passwords.unreadableTitle')}</h3>
+            <p className="passwords__lockBody">{t('passwords.unreadableBody')}</p>
+          </>
+        ) : (
+          !vault.unlocked && (
+            <>
+              <h3 className="passwords__lockTitle">{t('passwords.lockedTitle')}</h3>
+              <p className="passwords__lockBody">{t('passwords.idleNotice', { minutes: idleMinutes })}</p>
+              <button
+                type="button"
+                className="passwords__primary"
+                disabled={busy !== null}
+                onClick={requestUnlock}
+              >
+                {t('passwords.unlock')}
+              </button>
+            </>
+          )
+        )}
+
+        <div className="passwords__vaultActions">
+          {/*
+            Locking is offered only when there is something to lock back to.
+
+            A vault with no master password reopens without asking anybody, so a lock button on it would
+            close the vault and then silently reopen it — a control that appears to do something and does
+            nothing. `PasswordVault.sweepIdle` refuses to idle-lock such a vault for the same reason.
+          */}
+          {vault.unlocked && hasMaster && (
+            <button type="button" disabled={busy !== null} onClick={lockNow}>
+              {t('passwords.lockNow')}
+            </button>
+          )}
+          {vault.unlocked && !hasMaster && (
+            <button type="button" disabled={busy !== null} onClick={() => masterPassword('set')}>
+              {t('passwords.setMasterPassword')}
+            </button>
+          )}
+          {vault.unlocked && hasMaster && (
+            <>
+              <button type="button" disabled={busy !== null} onClick={() => masterPassword('change')}>
+                {t('passwords.changeMasterPassword')}
+              </button>
+              <button type="button" disabled={busy !== null} onClick={() => masterPassword('remove')}>
+                {t('passwords.removeMasterPassword')}
+              </button>
+            </>
+          )}
+          {vault.unlocked && (
+            <button type="button" disabled={busy !== null} onClick={importFile}>
+              {t('passwords.import')}
+            </button>
+          )}
+          {/*
+            Offered even while locked, and especially then: a forgotten master password is the only reason
+            anybody wants this, and it is exactly the state in which nothing else on this page works.
+          */}
+          <button
+            type="button"
+            className="passwords__action--danger"
+            disabled={busy !== null}
+            onClick={resetVault}
+          >
+            {t('passwords.resetVault')}
+          </button>
+        </div>
+
+        {importReport !== null && (
+          <div className="passwords__importReport" role="status">
+            {/* A file refused whole has no counts worth printing, so it prints the reason instead. */}
+            {importReport.refusal !== null ? (
+              <p>{t(IMPORT_REFUSALS[importReport.refusal])}</p>
+            ) : (
+              <>
+                <p>
+                  {t('passwords.importSummary', {
+                    imported: importReport.imported,
+                    skipped: totalSkipped(importReport.skipped)
+                  })}
+                </p>
+                {importReport.duplicatesIdentical > 0 && (
+                  <p>{t('passwords.importDuplicates', { count: importReport.duplicatesIdentical })}</p>
+                )}
+                {/*
+                  The only line in the report worth acting on, so the colliding accounts are named — origins
+                  and usernames, never a password. See `main/passwords/import.ts` for why the stored one wins.
+                */}
+                {importReport.duplicatesConflicting > 0 && (
+                  <>
+                    <p>
+                      {t('passwords.importConflicts', {
+                        count: importReport.duplicatesConflicting
+                      })}
+                    </p>
+                    <ul className="passwords__list">
+                      {importReport.conflicts.map((conflict) => (
+                        <li key={`${conflict.origin} ${conflict.username}`}>
+                          {conflict.origin} · {conflict.username}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {importReport.full > 0 && (
+                  <p>{t('passwords.importFull', { count: importReport.full })}</p>
+                )}
+                {importReport.notesDropped > 0 && (
+                  <p>{t('passwords.importNotesDropped', { count: importReport.notesDropped })}</p>
+                )}
+              </>
+            )}
+            {/*
+              The largest exposure this whole feature creates, named.
+
+              It is not in the vault: it is the plain-text CSV of every password the user owns, now sitting
+              in their downloads folder. This browser will not delete somebody else's file behind their
+              back, so the honest alternative is to say where it is and what is in it.
+            */}
+            {importedFile !== null && (
+              <p className="passwords__warning">
+                {t('passwords.importDeleteFile', { path: importedFile })}
+              </p>
+            )}
+          </div>
+        )}
+      </section>
 
       {adding && (
         <section className="passwords__form">

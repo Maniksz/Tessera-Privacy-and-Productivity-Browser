@@ -9,6 +9,12 @@ import {
   anyInternalInvokeChannels,
   mayInternalPageInvoke
 } from '@shared/ipc/channels.js'
+import {
+  DEFAULT_BINDINGS,
+  SHORTCUT_ACTIONS,
+  type ShortcutAction
+} from '@shared/shortcuts/bindings.js'
+import { platformSchema } from '@shared/model.js'
 
 /**
  * Architecture tests — fitness functions.
@@ -103,6 +109,40 @@ function importsOf(text: string): string[] {
 }
 
 /** Value imports only; `import type` is erased and costs nothing at runtime. */
+/** Every file under a directory, recursively. Absolute paths. */
+function filesUnder(directory: string): string[] {
+  const found: string[] = []
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) found.push(...filesUnder(path))
+    else if (entry.isFile()) found.push(path)
+  }
+  return found
+}
+
+/**
+ * Whether a Stryker `mutate` entry still names something.
+ *
+ * Only the two shapes the config actually uses: a path, and a directory with `**` under it. A general
+ * glob engine here would be a second implementation of Stryker's matching to keep in step — what is
+ * being asked is narrower and answerable exactly: *is there anything at all behind this entry?*
+ */
+function matchesSomething(pattern: string): boolean {
+  const [prefix] = pattern.split('**')
+  if (prefix === pattern) return existsSync(join(ROOT, pattern))
+
+  const directory = join(ROOT, prefix ?? '')
+  return existsSync(directory) && containsTypeScript(directory)
+}
+
+function containsTypeScript(directory: string): boolean {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory() && containsTypeScript(join(directory, entry.name))) return true
+    if (entry.isFile() && entry.name.endsWith('.ts')) return true
+  }
+  return false
+}
+
 function valueImportsOf(text: string): string[] {
   const specifiers: string[] = []
   const pattern = /(?:^|\n)\s*import\s+(?!type\s)([^;]*?)from\s+['"]([^'"]+)['"]/g
@@ -234,6 +274,23 @@ describe('bundle weight', () => {
       { match: /^overlay-.*\.js$/, maxKb: 20, note: 'overlay surface, one per window' },
       { match: /^vendor-react-.*\.js$/, maxKb: 240, note: 'React, shared between entries' },
       { match: /\.css$/, maxKb: 24, note: 'stylesheet' },
+      /*
+        Raised from 40 kB once, and only the catalogue chunk is near it.
+
+        Forty-four keys arrived in two locales for the password vault — the lock, the master password, the
+        CSV import and the vault reset — which is eighty-eight sentences, and several of them are long
+        because being brief about them would mean being vague. `protection.keystore` has to say that anyone
+        already signed in as this user can read the vault; `resetVaultConfirm` has to say in one breath that
+        a copy is worth keeping and unreadable without the password just forgotten. Those are the sentences
+        the feature exists to be honest with, and shortening them is the wrong saving.
+
+        What would lower it rather than raise it again: the catalogue is one chunk holding *both* locales,
+        and a renderer only ever renders one. Splitting it per locale and importing the chosen one would
+        roughly halve this and is a real change with a real risk — the chunk is fetched before first paint —
+        so it belongs in its own pass rather than smuggled in with a feature. What would not justify another
+        raise: more keys for a screen nobody has designed yet.
+      */
+      { match: /^catalog-.*\.js$/, maxKb: 46, note: 'message catalogue, both locales' },
       { match: /\.js$/, maxKb: 40, note: 'shared chunk' }
     ]
 
@@ -394,27 +451,45 @@ describe('IPC discipline', () => {
     const block = /export const SHORTCUT_ACTIONS = \[([\s\S]*?)\] as const/.exec(bindings)?.[1]
     expect(block, 'could not find SHORTCUT_ACTIONS').toBeDefined()
 
-    /** Actions with no menu item, each for a stated reason. */
+    /*
+      Actions this scan does not require an item for, each for a stated reason.
+
+      **This list was over-permissive by eight entries** and that is worth recording, because an
+      allowlist in a fitness test is the one place where being wrong is invisible: it does not fail, it
+      simply stops checking. `nextTab`, `previousTab`, `tileLeft/Right/Up/Down` and `toggleTileMaximized`
+      were all listed as "deliberately no menu item" and all four have had one for some time — so the
+      test skipped eight actions it could have been guarding. Removing them from here is the whole point
+      of the correction: they are now checked.
+
+      What remains is genuinely not found by *this* scan, and the two halves are different problems.
+    */
     const withoutMenuItem = new Set([
-      // Handled in the renderer where the caret is, because spec 9 requires them to leave text editing alone.
+      /*
+        Really unregistered, and deliberately so: as a menu accelerator, `Escape` would be taken from
+        every text field and every page that uses it. These need `before-input-event` in the focused
+        `webContents`, which is not a menu item and cannot be one.
+      */
       'escape',
       'stop',
-      // Tab cycling is positional; a menu item for "next tab" would be a menu item that means something
-      // different every time it is read.
-      'nextTab',
-      'previousTab',
-      'lastTab',
-      // Split-view layouts and tile moves live in the layout picker, which draws each arrangement.
+      /*
+        Registered, but through `accel(shortcut)` with a *variable* in the `LAYOUT_IDS` loop — so the
+        literal this test searches for is never written. Exempt from the scan, not from the menu: the
+        keys fire. Anything moved into that loop has to be added here for the same reason, which is why
+        the reason is written down rather than the entries just being listed.
+      */
       'splitLayout1',
       'splitLayout2',
       'splitLayout3',
-      'splitLayout4',
-      'tileLeft',
-      'tileRight',
-      'tileUp',
-      'tileDown',
-      'toggleTileMaximized'
+      'splitLayout4'
     ])
+
+    /*
+      `lastTab` used to sit in that set as a genuine gap. It is wired now — `appMenu.ts` resolves it as
+      the literal `accel('lastTab')` precisely so this scan finds it, rather than through the loop that
+      registers the eight positional keys. Those eight are still invisible to every test here, because
+      `TAB_BY_INDEX_ACCELERATORS` holds accelerators and not `ShortcutAction`s; the collision test in
+      `tests/tab-position-accelerators.test.ts` is what covers them.
+    */
 
     const actions = (block?.match(/'([a-zA-Z0-9]+)'/g) ?? []).map((quoted) => quoted.slice(1, -1))
     expect(actions.length).toBeGreaterThan(20)
@@ -423,6 +498,233 @@ describe('IPC discipline', () => {
       expect(menu, `${action} has a shortcut but no menu item to fire it`).toContain(
         `accel('${action}')`
       )
+    }
+  })
+
+  /** Narrows a name scraped out of the menu source to the union the binding table is keyed by. */
+  const isShortcutAction = (name: string): name is ShortcutAction =>
+    (SHORTCUT_ACTIONS as readonly string[]).includes(name)
+
+  it('lets nothing but the password prompt listen to master-password keystrokes', async () => {
+    /*
+      `passwords/overlay-keys.ts` is a module-level registry of listeners that receive the **characters
+      of a master password**, one at a time, before anything else in the browser sees them. Its own
+      docblock says "an architecture test holds that line" and names the subscriber. There was no such
+      test: the narrowness the whole design rests on was a sentence.
+
+      Asserted against what is actually true rather than against that sentence, which is slightly wrong.
+      The subscriber is `ipc/password-handlers.ts`, which forwards to `MasterPasswordPrompt` — so the
+      list below has two entries and not one. Correcting the claim rather than the code, because the
+      arrangement is right: the handler is where the prompt is already assembled.
+
+      What must fail here: any new listener anywhere else. A logger, a telemetry hook, a "remember what
+      the user typed" convenience — each of them a one-line subscription, and each of them a plaintext
+      master password somewhere it must never be.
+    */
+    const allowed = new Set(['src/main/ipc/password-handlers.ts', 'src/main/passwords/overlay-keys.ts'])
+
+    for (const file of await collect('src')) {
+      if (allowed.has(file.relative)) continue
+      // Comments stripped, string literals kept: this is about a call, and the modules that explain
+      // the rule name the function in prose.
+      expect(
+        codeOnly(file.text),
+        `${file.relative} subscribes to master-password keystrokes`
+      ).not.toMatch(/\bonOverlayKey\s*\(/)
+    }
+  })
+
+  it('names no remote debugging switch and opens no debugger socket', () => {
+    /*
+      The reason this rule exists is not tidiness. Driving the browser over the DevTools Protocol —
+      spawn it with an open debugging port, find each renderer over `http://127.0.0.1:<port>/json`,
+      speak to it over a WebSocket — is the standard way cookies and saved passwords are stolen out of
+      a browser, so endpoint protection flags the *shape* and not the intent. It did: a smoke run
+      alerted the user's IT department, and the harness was rebuilt to drive the app from inside its own
+      main process instead.
+
+      A re-introduction will not arrive as a decision. It arrives as a convenience — "just to debug this
+      one thing" — in a script nobody reviews twice, so the ban belongs somewhere that fails.
+
+      Matched on the *switch spelling* rather than on the words "debugging port", deliberately: the
+      comments that explain the ban would otherwise trip it, and a test that has to be worded around is
+      a test somebody eventually deletes.
+
+      Which is also why the pattern is assembled from fragments instead of written as one literal. Written
+      out, this file contains the very strings it forbids and fails on itself — and the tempting repair is
+      to exempt the scanner from its own rule, which would leave the whole `tests/` directory unguarded.
+      Split, the file is honestly clean and nothing needs exempting.
+    */
+    const forbidden = new RegExp(
+      [
+        ['--remote', '-debugging'],
+        ['--insp', 'ect\\b'],
+        ['webSocket', 'DebuggerUrl'],
+        ['devtools', '/page/'],
+        ['new Web', 'Socket\\(']
+      ]
+        .map((halves) => halves.join(''))
+        .join('|')
+    )
+    const offenders: string[] = []
+
+    for (const directory of ['src', 'scripts', 'tests']) {
+      for (const file of filesUnder(join(ROOT, directory))) {
+        if (!/\.(ts|tsx|mjs|js)$/.test(file)) continue
+        if (forbidden.test(readFileSync(file, 'utf8'))) offenders.push(relative(ROOT, file))
+      }
+    }
+
+    expect(offenders, 'the CDP harness is back; see this test for why that alerts somebody').toEqual([])
+  })
+
+  it('keeps the application from statically importing its own checks', () => {
+    /*
+      Two things at once, and the size metric catches neither.
+
+      The checks are two thousand lines of assertions. Reached by a static import they would land in
+      `out/main/index.js` and be parsed at every launch by every user — and the main-process budget is
+      already over. A refactor turning the runtime `import()` into a static one is invisible until the
+      number creeps up months later.
+
+      And the loader must stay behind the switch, which must stay behind `app.isPackaged`. A shipped
+      browser that can be told on the command line to load and execute an arbitrary module from disk is
+      not a development convenience, it is a code-execution route with a friendly name. The unit test for
+      `readCheckModule` proves the function refuses when told it is packaged; only this proves the caller
+      asks the question.
+    */
+    const entry = readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8')
+
+    for (const specifier of importsOf(entry)) {
+      expect(specifier, 'the checks would be bundled into every launch').not.toMatch(/scripts\//)
+    }
+    expect(entry, 'the check module must be loaded at runtime, not linked in').toMatch(
+      /await import\(/
+    )
+    expect(entry, 'nothing proves the packaged build refuses the switch').toMatch(
+      /readCheckModule\(\s*process\.argv,\s*\{\s*packaged:\s*app\.isPackaged\s*\}\s*\)/
+    )
+  })
+
+  it('has every entry of the mutation allowlist match at least one file', () => {
+    /*
+      `mutate` in `stryker.config.json` is an allowlist, and its own comment says why that is dangerous:
+      "an omission is invisible, because the overall score stays healthy while saying nothing about the
+      code that was left out." The same comment warns about "a glob that matches nothing" — and nothing
+      checked for one.
+
+      So a module that is renamed or moved silently stops being mutated. The score does not drop; it
+      simply stops covering that file, and the number keeps looking like an answer. This is the one
+      failure the allowlist cannot survive, so it is the one thing asserted about it.
+    */
+    const config: unknown = JSON.parse(readFileSync(join(ROOT, 'stryker.config.json'), 'utf8'))
+    const entries = (config as { mutate?: unknown }).mutate
+    expect(Array.isArray(entries), 'stryker.config.json has no mutate array').toBe(true)
+    if (!Array.isArray(entries)) return
+
+    const patterns = entries.filter(
+      (entry): entry is string => typeof entry === 'string' && !entry.startsWith('!')
+    )
+    // Guards against a future config shape that leaves this test asserting nothing.
+    expect(patterns.length).toBeGreaterThan(30)
+
+    for (const pattern of patterns) {
+      expect(matchesSomething(pattern), `${pattern} in mutate matches no file`).toBe(true)
+    }
+  })
+
+  it('mutates every menu item template, which is where two of them scored worst', () => {
+    /*
+      The `*-items.ts` modules are pure templates precisely so they can be mutation-tested, and two of
+      them scored 52.6 % and 59.7 % on their first run — the tests asserted which items appeared and
+      never clicked one, so every boundary mutant survived. A new one left out of the allowlist would
+      repeat that with no number anywhere to show it.
+    */
+    const config: unknown = JSON.parse(readFileSync(join(ROOT, 'stryker.config.json'), 'utf8'))
+    const listed = new Set((config as { mutate?: string[] }).mutate ?? [])
+    const menuDirectory = join(ROOT, 'src/main/menu')
+
+    for (const name of readdirSync(menuDirectory)) {
+      // `-accelerators.ts` as well as `-items.ts`: both families are pure menu templates, and the
+      // second one arrived after this test and would not have been required by it.
+      if (!name.endsWith('-items.ts') && !name.endsWith('-accelerators.ts')) continue
+      expect(listed, `src/main/menu/${name} is not in the mutation allowlist`).toContain(
+        `src/main/menu/${name}`
+      )
+    }
+  })
+
+  it('puts no accelerator inside a menu only one platform receives', () => {
+    /*
+      `Control+Tab` and `Control+Shift+Tab` were registered by exactly one thing: two items in
+      `windowMenu`, which was pushed under `if (isMac)`. So on Windows and Linux those keys did nothing
+      at all, while the settings screen listed them and the renderer sat waiting for an action that was
+      never sent — the rule stated at the top of `appMenu.ts` ("no feature reachable on one platform
+      only", spec 10) broken by the file that states it.
+
+      Scanned rather than executed, and narrowly: building the menu needs an Electron process. So this
+      catches the shape the defect actually had — a whole submenu behind a platform test — and not the
+      general case of one item behind one. Worth having anyway: the general case is visible in review
+      because the condition sits next to the accelerator, and this one was four hundred lines away.
+    */
+    const menu = readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8')
+    const conditionalPushes = [...menu.matchAll(/if\s*\(\s*isMac\s*\)\s*template\.push\(([^)]*)\)/g)]
+
+    for (const push of conditionalPushes) {
+      const names = (push[1] ?? '').split(',').map((name) => name.trim())
+      for (const name of names) {
+        if (name === '') continue
+        const declaration = new RegExp(
+          `const ${name}: MenuItemConstructorOptions = \\{[\\s\\S]*?\\n  \\}`
+        ).exec(menu)
+        expect(
+          declaration?.[0] ?? '',
+          `${name} is pushed on macOS only, so any accelerator in it is dead elsewhere`
+        ).not.toMatch(/accel\(/)
+      }
+    }
+  })
+
+  it('registers the alternative accelerators as well as the primary one', () => {
+    /*
+      `accel()` returns element zero. Every action with a second key therefore had that key listed in
+      the settings screen and registered nowhere — `Alt+D`, `F6`, `F3`, `Control+PageDown`, the keypad
+      zoom keys, and on macOS the `F11` that people arrive with from Windows.
+
+      The test above cannot see this: an action with two keys passes it while half of them are dead.
+      What is asserted here is that the one mechanism which fixes it is actually applied to the
+      template, because it is one call and its absence is invisible.
+    */
+    const menu = readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8')
+    expect(menu, 'the built menu declares only each action’s first key').toMatch(
+      /withAlternativeAccelerators\(\s*template,/
+    )
+  })
+
+  it('gives no checkbox menu item an action with a second key', () => {
+    /*
+      The one shape `withAlternativeAccelerators` refuses to clone, asserted where the refusal can be
+      noticed. A checkbox item's handler reads `item.checked`, and a hidden clone has its own — so a
+      cloned "show the bookmarks bar" would be a key that always writes the same value instead of
+      toggling. Rather than clone it wrongly or silently skip it, the combination is held not to exist.
+    */
+    const menu = readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8')
+    const checkboxActions = new Set<string>()
+    for (const block of menu.matchAll(/\{[^{}]*type:\s*'(?:checkbox|radio)'[^{}]*\}/g)) {
+      const [, action] = /accel\('([a-zA-Z0-9]+)'\)/.exec(block[0]) ?? []
+      if (action !== undefined) checkboxActions.add(action)
+    }
+    // The bookmarks bar at least, or the regex above has stopped matching what it is aimed at.
+    expect(checkboxActions.size).toBeGreaterThan(0)
+
+    for (const action of checkboxActions) {
+      if (!isShortcutAction(action)) throw new Error(`${action} is not a shortcut action`)
+      for (const platform of platformSchema.options) {
+        expect(
+          DEFAULT_BINDINGS[platform][action],
+          `${action} is a checkbox item, so its second key on ${platform} would not toggle`
+        ).toHaveLength(1)
+      }
     }
   })
 

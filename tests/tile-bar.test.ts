@@ -8,6 +8,7 @@ import {
   tileBarAllows,
   tileBarBounds,
   tileBarPresentation,
+  tileBarRefresh,
   tileBarStep,
   tileBarVisibility,
   type TileBarMode,
@@ -88,6 +89,34 @@ describe('revealing the bar', () => {
   it('reveals within a narrower band than it closes on', () => {
     // If these ever met, the hysteresis would be gone and so would the reason for two constants.
     expect(TILE_BAR_REVEAL_WITHIN).toBeLessThan(TILE_BAR_HEIGHT)
+  })
+
+  it('keeps the three thresholds in the one order that works', () => {
+    /*
+      The reveal band was raised because six pixels was too tight to aim at, and this is the
+      constraint that raising it has to respect. Reveal below hold, hold below the reported
+      departure: bring reveal up to or past the hold threshold and every position answers "show",
+      including the one a surface reports when the pointer has left — so the bar never goes away.
+      Bring the departure constant down to the hold threshold and it reads as "still inside".
+    */
+    expect(TILE_BAR_REVEAL_WITHIN).toBeLessThan(TILE_BAR_HEIGHT)
+    expect(TILE_BAR_HEIGHT).toBeLessThan(TILE_BAR_POINTER_AWAY)
+  })
+
+  it('reveals from far enough out to be aimed at rather than stabbed at', () => {
+    // The complaint: the bar came out only within six pixels of the edge. The number itself is a
+    // judgement, but a band this narrow is not reachable on purpose, so it has a floor.
+    expect(TILE_BAR_REVEAL_WITHIN).toBeGreaterThanOrEqual(12)
+    for (let y = 0; y <= 12; y += 1) expect(tileBarVisibility(false, y), `y=${y}`).toBe(true)
+  })
+
+  it('leaves a gap between revealing and dismissing for the pointer to rest in', () => {
+    // Everything strictly between the two thresholds must answer "whatever it already was", or the
+    // bar flickers under the pointer that opened it.
+    for (let y = TILE_BAR_REVEAL_WITHIN + 1; y <= TILE_BAR_HEIGHT; y += 1) {
+      expect(tileBarVisibility(false, y), `closed, y=${y}`).toBe(false)
+      expect(tileBarVisibility(true, y), `open, y=${y}`).toBe(true)
+    }
   })
 
   it('reads a reported departure as away, whichever edge the pointer left by', () => {
@@ -364,5 +393,147 @@ describe('the step the core takes', () => {
 
   it('does nothing at all when the bar is switched off', () => {
     expect(step(null, { invokedBy: 'pointer', tileIndex: 0, y: 0 }, 'off').do).toBe('nothing')
+  })
+
+  describe('with a single tile', () => {
+    const one: Array<Rect | null> = [{ x: 0, y: 88, width: 1440, height: 812 }]
+    const single = (
+      request: Parameters<typeof tileBarStep>[0]['request'],
+      mode: TileBarMode = 'hover'
+    ): ReturnType<typeof tileBarStep> =>
+      tileBarStep({ current: null, mode, request, rects: one, tabOf })
+
+    it('never presents a bar, however close the pointer comes', () => {
+      // The toolbar above steers the same page, so a second address field over the top of it is a
+      // duplicate that costs forty pixels of the document.
+      expect(single({ invokedBy: 'pointer', tileIndex: 0, y: 0 }).do).toBe('hide')
+      expect(single({ invokedBy: 'pointer', tileIndex: 0, y: TILE_BAR_REVEAL_WITHIN }).do).toBe(
+        'hide'
+      )
+    })
+
+    it('refuses the keyboard route too, since the reason is the same', () => {
+      expect(single({ invokedBy: 'keyboard', tileIndex: 0 }).do).toBe('hide')
+    })
+
+    it('still says nothing rather than hide when the setting excludes the request', () => {
+      // Order matters: the setting is answered first, so a mouse move in keyboard-only mode cannot
+      // take down a bar the user opened with the shortcut — not even in a layout that has none.
+      expect(single({ invokedBy: 'pointer', tileIndex: 0, y: 0 }, 'keyboard').do).toBe('nothing')
+    })
+
+    it('presents again as soon as there is a second tile', () => {
+      expect(step(null, { invokedBy: 'keyboard', tileIndex: 0 }).do).toBe('present')
+    })
+  })
+})
+
+describe('refreshing a bar that is already up', () => {
+  /*
+    The reported bug: pressing back in a tile's own bar left forward greyed out until the bar was
+    re-opened, because the presentation is a snapshot taken when the bar appears.
+
+    Every test here is about one of the two halves of the fix — that a changed tab produces a new
+    presentation, and that an *unchanged* one produces nothing at all. The second half is not an
+    optimisation: a bar the keyboard opened holds the focus and has an address field somebody may be
+    typing in, and this is called on every tab change.
+  */
+  const rects = computeTileRects('1x2', { 'v-1': 0.5 }, CONTENT)
+  const tabOf = (state: TileBarTab | null) => () => state
+
+  const barFor = (state: TileBarTab, invokedBy: 'pointer' | 'keyboard' = 'pointer') => {
+    const presentation = tileBarPresentation({ tileIndex: 0, rects, tab: state, invokedBy })
+    if (presentation === null) throw new Error('the fixture layout has no first tile')
+    return presentation
+  }
+
+  it('publishes the new state after the page went back', () => {
+    // Exactly the reported gesture: back was possible, forward was not, and after the navigation the
+    // opposite is true. What the user saw was the first pair, on screen, after the second was true.
+    const current = barFor(tab('a', { canGoBack: true, canGoForward: false }))
+    const action = tileBarRefresh({
+      current,
+      mode: 'hover',
+      rects,
+      tabOf: tabOf(tab('a', { canGoBack: false, canGoForward: true }))
+    })
+
+    expect(action.do).toBe('present')
+    if (action.do !== 'present') return
+    expect(action.presentation.canGoForward).toBe(true)
+    expect(action.presentation.canGoBack).toBe(false)
+  })
+
+  it('does nothing when the bar would look exactly the same', () => {
+    const state = tab('a', { canGoBack: true })
+    expect(tileBarRefresh({ current: barFor(state), mode: 'hover', rects, tabOf: tabOf(state) }).do).toBe(
+      'nothing'
+    )
+  })
+
+  it('keeps the invocation that opened the bar, so a keyboard bar keeps its focus', () => {
+    /*
+      The field that decides whether the layer takes the focus. Re-presented as a pointer bar, a bar
+      the user opened with the shortcut would lose the focus on the first navigation — which is the
+      keyboard route (spec 7) breaking itself.
+    */
+    const current = barFor(tab('a', { canGoBack: true }), 'keyboard')
+    const action = tileBarRefresh({
+      current,
+      mode: 'keyboard',
+      rects,
+      tabOf: tabOf(tab('a', { canGoForward: true }))
+    })
+
+    expect(action.do).toBe('present')
+    if (action.do !== 'present') return
+    expect(action.presentation.invokedBy).toBe('keyboard')
+    expect(takesFocus(action.presentation)).toBe(true)
+  })
+
+  it('follows the url as well as the buttons', () => {
+    // A navigation inside the same page's history changes the address and can change nothing else.
+    const current = barFor(tab('a'))
+    const action = tileBarRefresh({
+      current,
+      mode: 'hover',
+      rects,
+      tabOf: tabOf({ ...tab('a'), url: 'https://example.com/elsewhere' })
+    })
+    expect(action.do).toBe('present')
+  })
+
+  it('takes the bar down when the tab left the tile', () => {
+    // The tile emptied under the bar — a tab dragged out, or closed. There is nothing left for back
+    // and forward to act on, and a bar over an empty tile still swallows the pointer inside it.
+    expect(
+      tileBarRefresh({ current: barFor(tab('a')), mode: 'hover', rects, tabOf: tabOf(null) }).do
+    ).toBe('hide')
+  })
+
+  it('takes the bar down when the setting was switched off while it was up', () => {
+    // A refresh must not be the thing that keeps a bar alive that the user has just turned off.
+    expect(
+      tileBarRefresh({ current: barFor(tab('a')), mode: 'off', rects, tabOf: tabOf(tab('a')) }).do
+    ).toBe('hide')
+  })
+
+  it('leaves a keyboard-opened bar standing in keyboard-only mode', () => {
+    // The counterpart: `hover` reports are excluded in that mode, the bar itself is not.
+    const state = tab('a', { canGoBack: true })
+    const action = tileBarRefresh({
+      current: barFor(state, 'keyboard'),
+      mode: 'keyboard',
+      rects,
+      tabOf: tabOf({ ...state, canGoForward: true })
+    })
+    expect(action.do).toBe('present')
+  })
+
+  it('does nothing at all when the layer is not showing a bar', () => {
+    // Called on every tab change, so most of the time this is the case.
+    expect(tileBarRefresh({ current: null, mode: 'hover', rects, tabOf: tabOf(tab('a')) }).do).toBe(
+      'nothing'
+    )
   })
 })

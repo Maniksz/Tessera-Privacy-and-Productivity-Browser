@@ -200,9 +200,10 @@ metrics.push(
  * Largest file, as a proxy for a module that has quietly become several.
  * A cap rather than a target: some files legitimately hold a big table.
  */
-const largest = sourceFiles
+const bySize = sourceFiles
   .map((file) => ({ file: relative(ROOT, file), lines: lineCount(file) }))
-  .sort((a, b) => b.lines - a.lines)[0]
+  .sort((a, b) => b.lines - a.lines)
+const largest = bySize[0]
 
 metrics.push(
   check(`largest source file (${largest?.file ?? 'none'})`, largest?.lines ?? 0, {
@@ -227,6 +228,29 @@ metrics.push(
     max: 780,
     unit: ' lines',
     reason: 'a file this long is usually two modules that have not been separated'
+  })
+)
+
+/**
+ * How many files are over that bar, not just the worst one.
+ *
+ * The bar above is per file, but only the maximum was ever measured — so once one file sat over it, every
+ * other file could drift past it in silence. That is exactly what happened: `shared/tabgroups/model.ts`
+ * reached 863 lines, over the bar and forty lines from being reported at all, while the number on screen
+ * went on naming `catalog.ts`.
+ *
+ * One is tolerated because the largest file is already its own failing check with its own written-down next
+ * step; a second is a trend rather than an exception, and a trend is what this whole file exists to notice.
+ */
+const overBar = bySize.filter((entry) => entry.lines > 780)
+
+metrics.push(
+  check('files over the per-file line bar', overBar.length, {
+    max: 1,
+    unit: ' files',
+    // Named in the reason rather than the label: six paths in a table column push every other row's
+    // numbers off the screen, and the point of the table is that the numbers line up.
+    reason: `the bar above measures only the worst file, so a second overlong file is otherwise invisible — ${overBar.map((entry) => `${entry.file} (${entry.lines})`).join(', ')}`
   })
 )
 

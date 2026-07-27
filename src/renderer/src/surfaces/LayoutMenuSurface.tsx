@@ -5,6 +5,9 @@ import { anchorSurface, type Rect } from '@shared/ui/anchor.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import { LAYOUT_LABELS, LayoutIcon } from '../components/LayoutIcon.js'
+import { LAYOUT_SHORTCUTS } from '@shared/split/labels.js'
+import { shortcutKey } from '@shared/shortcuts/format.js'
+import type { Platform } from '@shared/model.js'
 
 /**
  * The split-layout menu, drawn on the overlay surface.
@@ -15,9 +18,14 @@ import { LAYOUT_LABELS, LayoutIcon } from '../components/LayoutIcon.js'
  */
 
 export function LayoutMenuSurface({
-  presentation
+  presentation,
+  platform,
+  overrides
 }: {
   presentation: LayoutMenuPresentation
+  /** `null` until the window state arrives; the entries then render without their keys. */
+  platform: Platform | null
+  overrides: Readonly<Record<string, string>>
 }): React.ReactNode {
   const { t } = useI18n()
   const menuRef = useRef<HTMLDivElement>(null)
@@ -54,6 +62,20 @@ export function LayoutMenuSurface({
     // The core dismisses the surface as part of applying the layout, so the menu never
     // lingers showing a radio state the window no longer matches.
     void invoke('split:setLayout', { layout })
+  }
+
+  /**
+   * The key that applies this arrangement, or `''` for one that has none.
+   *
+   * Four of the seven have a key (`LAYOUT_SHORTCUTS`), and they are the *only* place those four are
+   * visible: they are registered in the application menu through a loop, so no menu the user opens spells
+   * them out, and the button that opens this menu deliberately shows none — it opens a menu rather than
+   * applying a layout, so the key of the arrangement the window is already in would answer a question
+   * nobody asked.
+   */
+  const keyFor = (layout: LayoutId): string => {
+    const action = LAYOUT_SHORTCUTS[layout]
+    return action === undefined ? '' : shortcutKey(platform, action, overrides)
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -106,6 +128,11 @@ export function LayoutMenuSurface({
             <span className="menu__hint">
               {t('toolbar.layoutTileCount', { count: TILE_COUNT[layout] })}
             </span>
+            {/*
+              The key in its own column, which is where a menu is read for one — not in a tooltip. Three
+              of the seven arrangements have no key and get an empty cell rather than a shifted row.
+            */}
+            <span className="menu__key">{keyFor(layout)}</span>
           </button>
         )
       })}

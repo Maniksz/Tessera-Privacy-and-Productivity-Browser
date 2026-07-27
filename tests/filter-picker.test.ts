@@ -95,6 +95,25 @@ describe('classifyElementId', () => {
     expect(classifyElementId('x')).toBe('too-short')
   })
 
+  it('refuses a name with no vowel in it, which is the signal nothing else catches', () => {
+    // `hdrbtn` is one long run of letters, so the case-alternation signal says nothing
+    // about it and there are no digits to mix — the vowel rule is the only thing
+    // refusing it. Without a case like this, that rule could be switched off entirely
+    // (or inverted to "contains a consonant") and every existing name would still be
+    // judged the same way, so `sc-`-style hashes with a long lower-case run would start
+    // being accepted.
+    expect(classifyElementId('hdrbtn')).toBe('hash-like')
+  })
+
+  it('refuses letters and digits alternating in short runs', () => {
+    // What a CSS minifier emits. Three runs of one character is the whole signal here:
+    // the run pattern is `a`, `1`, `b`, and neither the vowel rule nor the mixed-shape
+    // rule (which wants five characters) applies. It is also the case that pins how a
+    // run is measured — merging digits into the letters beside them would leave one run
+    // of three and this name would be accepted.
+    expect(classifyElementId('a1b')).toBe('hash-like')
+  })
+
   it('accepts a two-character name, which `ad` and `nav` shorthands use', () => {
     expect(classifyElementId('ad')).toBe('usable')
   })
@@ -127,6 +146,23 @@ describe('classifyClassName', () => {
     }
   })
 
+  it('refuses a state prefix even when the word after it is not a state word', () => {
+    /*
+      Every name in the test above is caught twice — `is-open` has `open` in it, which
+      the word list holds on its own. So the prefix check could be deleted, or made to
+      look at the *end* of the name instead of the start, and nothing would notice.
+
+      These four are caught only by the prefix. `.is-featured` is set while a card is
+      the featured one and cleared when the next article takes over, and Vue's
+      `v-leave-to` exists for the few hundred milliseconds of a transition: a rule built
+      on either blocks intermittently, which is harder to report than one that never
+      works at all.
+    */
+    for (const name of ['is-featured', 'has-dropdown', 'v-leave-to', 'ng-star-inserted']) {
+      expect(classifyClassName(name), name).toBe('state-name')
+    }
+  })
+
   it('refuses a utility class, which is a counter by another name', () => {
     expect(classifyClassName('mt-4')).toBe('counter-suffix')
     expect(classifyClassName('col-md-6')).toBe('counter-suffix')
@@ -137,6 +173,37 @@ describe('classifyClassName', () => {
     // `topAdContainer` has a word in it and survives.
     expect(classifyClassName('topAdContainer')).toBe('usable')
     expect(classifyClassName('AdSlot')).toBe('usable')
+    // An acronym is one run, not one run per letter. `MPU` is the ad industry's own name
+    // for a mid-page unit, so `.MPUadTop` is exactly the class a publisher writes by
+    // hand — and counting `M`, `P`, `U` separately would make every acronym look like
+    // `bdVaJa` and cost the picker the one class that names the slot.
+    expect(classifyClassName('MPUadTop')).toBe('usable')
+  })
+
+  it('needs three short runs before it reads a name as alternating case', () => {
+    /*
+      Both sides of the threshold, which nothing pinned: `>= 3` could have been `> 3` and
+      every existing name would have been judged the same way.
+
+      Three is where a hash starts to be distinguishable from an abbreviation. `.aBc` is
+      what a minifier emits; `.IDs` is two runs and a word people write, and refusing it
+      would cost a working selector for nothing.
+    */
+    expect(classifyClassName('aBc')).toBe('hash-like')
+    expect(classifyClassName('IDs')).toBe('usable')
+  })
+
+  it('needs five characters before letters beside digits count as a hash', () => {
+    /*
+      The other threshold in the same file, and the same story: `>= 5` survived being
+      changed to `> 5` and to `< 5`, because no test used a name of exactly five.
+
+      `.box1a` is a CSS-modules build; `.ad-1box` is a hand-written slot name whose
+      second word is too short to judge, and refusing it would send the picker to an
+      ancestor or a positional step for a page that named its advert plainly.
+    */
+    expect(classifyClassName('box1a')).toBe('hash-like')
+    expect(classifyClassName('ad-1box')).toBe('usable')
   })
 
   it('does not read a non-ASCII name as a hash', () => {
@@ -171,6 +238,19 @@ describe('classifyAttribute', () => {
   it('refuses a value it would have to escape, or a paragraph of prose', () => {
     expect(classifyAttribute('title', 'say "hello"')).toBe('not-an-identifier')
     expect(classifyAttribute('title', 'x'.repeat(65))).toBe('not-an-identifier')
+    // 64 is the limit and it admits 64. Only the pair pins it: with `>= 64` a value the
+    // selector can carry perfectly well would be refused, and the rule the user
+    // confirmed would be built on something weaker instead. `ax` rather than `x`, because
+    // sixty-four consonants are refused as a hash and would prove nothing about length.
+    expect(classifyAttribute('title', 'ax'.repeat(32))).toBe('usable')
+  })
+
+  it('does not read a number with a separator as a hash', () => {
+    // The mixed-shape rule asks for *letters* beside the digits. Relaxed to "any
+    // non-letter" it would refuse a price or a version — values a publisher does put on
+    // its own elements — and it would do so with the reason "looks generated", which is
+    // the one message the picker shows the user.
+    expect(classifyAttribute('data-price', '12.34')).toBe('usable')
   })
 })
 

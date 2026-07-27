@@ -21,6 +21,7 @@ interface Harness {
   split: SplitController
   fullScreenable: boolean[]
   exitedWindowFullscreen: number
+  toggledWindowFullscreen: number
   askedPages: string[]
   changes: number
   scope: 'tile' | 'window'
@@ -32,6 +33,7 @@ function harness(layout: LayoutId = '2x2'): Harness {
     split,
     fullScreenable: [],
     exitedWindowFullscreen: 0,
+    toggledWindowFullscreen: 0,
     askedPages: [],
     changes: 0,
     scope: 'tile'
@@ -45,6 +47,9 @@ function harness(layout: LayoutId = '2x2'): Harness {
     },
     exitWindowFullscreen: () => {
       state.exitedWindowFullscreen! += 1
+    },
+    toggleWindowFullscreen: () => {
+      state.toggledWindowFullscreen! += 1
     },
     askPageToExitFullscreen: (tabId) => {
       state.askedPages!.push(tabId)
@@ -123,6 +128,60 @@ describe('a page asking for fullscreen', () => {
     h.controller.onPageEnter('tab-b')
     h.controller.onPageLeave()
     expect(h.split.fullscreenTile).toBeNull()
+  })
+})
+
+describe('the fullscreen key', () => {
+  it("uses the window's own fullscreen in a single pane", () => {
+    const h = harness('1x1')
+    h.controller.toggleFullscreen()
+    expect(h.toggledWindowFullscreen).toBe(1)
+    expect(h.split.fullscreenTile).toBeNull()
+  })
+
+  it('fullscreens the active tile in a split layout instead of doing nothing', () => {
+    /*
+      The bug this is here for. `applyPolicy` marks a split window un-fullscreenable, and
+      `setFullScreen` on such a window is silence rather than an error — so the key was dead in
+      exactly the mode this browser is for. What must not come back is a version that asks the
+      window anyway: it would still do nothing, and this assertion would still pass without the
+      second one.
+    */
+    const h = harness('2x2')
+    h.split.setActiveTile(2)
+    h.controller.toggleFullscreen()
+
+    expect(h.split.fullscreenTile).toBe(2)
+    expect(h.toggledWindowFullscreen).toBe(0)
+    expect(h.changes).toBe(1)
+  })
+
+  it('takes the tile back out on a second press', () => {
+    const h = harness('2x2')
+    h.split.assignTab('tab-b', 1)
+    h.split.setActiveTile(1)
+    h.controller.toggleFullscreen()
+    h.controller.toggleFullscreen()
+
+    expect(h.split.fullscreenTile).toBeNull()
+    // Asked of the page too, for the case where the page is why the tile was fullscreen.
+    expect(h.askedPages).toEqual(['tab-b'])
+  })
+
+  it('goes back to the window once the user asks for window scope', () => {
+    // Same layout, different setting: the whole point of `splitView.fullscreenScope`.
+    const h = harness('2x2')
+    h.scope = 'window'
+    h.controller.toggleFullscreen()
+
+    expect(h.toggledWindowFullscreen).toBe(1)
+    expect(h.split.fullscreenTile).toBeNull()
+  })
+
+  it('re-applies the policy after a tile went fullscreen', () => {
+    const h = harness('2x2')
+    h.controller.toggleFullscreen()
+    expect(h.fullScreenable.length).toBeGreaterThan(0)
   })
 })
 

@@ -422,24 +422,60 @@ function checkedKey(key: Uint8Array): Uint8Array {
  * these parameters need `128 · n · r` = 128 MB, so the call fails with a message about memory rather
  * than about parameters — and the obvious "fix" is to lower `n`, which is the one thing that must
  * not happen.
+ *
+ * ## Why the call itself is inside a `try`, and not only its callback
+ *
+ * Node validates scrypt's cost parameters **synchronously**, while it is constructing the job, and
+ * *throws* rather than calling back: a non-power-of-two `N` raises
+ * `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`, as does a fractional cost or a `p`/`r` pair needing more than
+ * `maxmem`. Only a genuine allocation failure ever reaches the callback.
+ *
+ * That matters because `asVaultKdf` accepts any positive integer for `n` — it validates the shape of the
+ * file, not the arithmetic — so a hand-edited or corrupted `passwords.key` with `n: 3` is a file this
+ * module will happily try to derive from. Thrown from inside the promise executor, the raw Node error
+ * became the promise's rejection, so `openVaultKey` broke the `@throws` contract it documents:
+ * `PasswordVault.unlock` rethrows anything that is not one of this file's own errors, and the unlock
+ * crossed IPC as an unexpected error instead of settling as the `unreadable` outcome the design
+ * specifies — a page waiting on a promise that rejected with a Node error code.
+ *
+ * Wrapped here rather than fixed by rejecting an odd `n` in `asVaultKdf`, because the two are not
+ * equivalent: the ceiling and the `p`/`r` product fail the same way and have no equivalent shape check,
+ * so a guard in the validator would close one door of three. Both arms produce the same error for the
+ * same reason, which is what the caller's recovery is written against.
  */
 async function deriveWrappingKey(masterPassword: string, kdf: VaultKdf): Promise<Uint8Array> {
   const salt = Buffer.from(kdf.salt, 'base64')
   const maxmem = 128 * kdf.n * kdf.r + 1024 * 1024
   return new Promise<Uint8Array>((resolve, reject) => {
-    scrypt(
-      masterPassword,
-      salt,
-      DOCUMENT_KEY_BYTES,
-      { N: kdf.n, r: kdf.r, p: kdf.p, maxmem },
-      (error, derived) => {
-        if (error !== null) {
-          // The message is Node's and names parameters, never the candidate.
-          reject(new VaultKeyUnreadableError(`the master password could not be stretched: ${error.message}`))
-          return
+    const failed = (message: string): void => {
+      // The message is Node's and names parameters, never the candidate.
+      reject(new VaultKeyUnreadableError(`the master password could not be stretched: ${message}`))
+    }
+    try {
+      scrypt(
+        masterPassword,
+        salt,
+        DOCUMENT_KEY_BYTES,
+        { N: kdf.n, r: kdf.r, p: kdf.p, maxmem },
+        (error, derived) => {
+          if (error !== null) {
+            failed(error.message)
+            return
+          }
+          resolve(derived)
         }
-        resolve(derived)
-      }
-    )
+      )
+    } catch (error) {
+      /*
+        The synchronous arm: refused parameters, before any work was scheduled. See above.
+
+        `String(error)` rather than a narrowing to `Error` and a second arm for anything else. The
+        alternative reads as more careful and is worse here: the other arm is unreachable — Node throws
+        an `Error` — so it would be a branch no test can cover, in a directory this project holds at
+        100 %, and the honest ways out of that are both bad (a test that fakes `node:crypto` to prove a
+        `String()` call, or a lowered threshold).
+      */
+      failed(String(error))
+    }
   })
 }
