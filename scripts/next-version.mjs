@@ -1,69 +1,70 @@
 /**
- * Where the version goes next, for an alpha release.
+ * Where the version goes next.
  *
- * ## Why the default is the minor and not the patch
+ * ## The shape: `0.2.0-ALPHA`
  *
- * A first version of this bumped the patch — `0.1.0 → 0.1.1-alpha.0` — and that is wrong in the one way
- * a version number can be wrong: it *claims* something. `0.1.1` says "since 0.1.0, bug fixes only".
- * Every alpha of this browser so far has carried features, so publishing them as a patch tells the
- * reader of a changelog the opposite of what happened, and no tool can catch it because the number is
- * perfectly valid.
+ * A prerelease marker with no counter, so the *release* part carries the count: `0.2.0-ALPHA`,
+ * `0.3.0-ALPHA`, `0.4.0-ALPHA`. That is the form asked for, and it is coherent as long as the minor
+ * moves every time — which it does, because every alpha of this browser carries features.
  *
- * So the default is the minor, and the patch is available for the case it actually describes: an alpha
- * that only fixes something. The level is a decision about what changed, which is why it is a flag and
- * not arithmetic.
+ * The consequence, stated because it is a real constraint rather than a detail: **two alphas of the same
+ * minor are impossible.** There is nowhere to put the second. If a published alpha needs a fix without a
+ * feature, that is `--patch` and it becomes `0.2.1-ALPHA`.
  *
- * ## The rule while already on a prerelease
+ * ## Why the minor and not the patch
  *
- * From `0.2.0-alpha.3`, the default is `0.2.0-alpha.4` — the next alpha *of the same target*. That is
- * the common case by a wide margin: several alphas lead up to one release. Naming a level while on a
- * prerelease changes the target instead and restarts the count, which is what you want when a release
- * turns out to need more than was planned.
+ * A first version of this bumped the patch, and that is wrong in the one way a version number can be:
+ * `0.1.1` is valid, no tool objects, and it *claims* something untrue — "since 0.1.0, bug fixes only".
+ * Publishing a release full of features under it tells the reader of a changelog the opposite of what
+ * happened, for ever, because a published version cannot be renamed.
  *
- * Kept out of `src/` because nothing in the application needs it; the *ordering* rules that the browser
- * does need live in `src/main/updates/version.ts` and are tested there.
+ * ## Upper case, and the trap in it
+ *
+ * `ALPHA` is what the tags are to read. Semver compares prerelease identifiers as ASCII, where upper case
+ * sorts *below* lower case — so `0.2.0-ALPHA` is older than `0.2.0-alpha`. Mixing the two cases across
+ * releases would produce an ordering nobody expects, which is why this file only ever writes one of them.
+ *
+ * Kept out of `src/` because nothing in the application needs it; the *ordering* rules the browser does
+ * need live in `src/main/updates/version.ts` and are tested there.
  */
 
 /** @typedef {'major' | 'minor' | 'patch'} Level */
 
-const PATTERN = /^(\d+)\.(\d+)\.(\d+)(?:-alpha\.(\d+))?$/
+/** The marker every prerelease here carries. Upper case; see the note above. */
+export const PRERELEASE = 'ALPHA'
+
+const PATTERN = new RegExp(`^(\\d+)\\.(\\d+)\\.(\\d+)(?:-${PRERELEASE})?$`)
 
 /**
+ * The next version, for a release at the given level.
+ *
  * @param {string} current
- * @param {Level | null} level `null` means "the ordinary next step".
+ * @param {Level | null} level `null` means the ordinary step, which is the minor.
  * @returns {string}
  */
-export function nextAlpha(current, level = null) {
+export function nextVersion(current, level = null) {
   const match = PATTERN.exec(current.trim())
   if (match === null) {
     throw new Error(
-      `version "${current}" is neither x.y.z nor x.y.z-alpha.n, so there is no next alpha of it`
+      `version "${current}" is neither x.y.z nor x.y.z-${PRERELEASE}, so there is no next one`
     )
   }
 
-  const [, rawMajor, rawMinor, rawPatch, rawAlpha] = match
+  const [, rawMajor, rawMinor, rawPatch] = match
   const major = Number(rawMajor)
   const minor = Number(rawMinor)
   const patch = Number(rawPatch)
-  const onPrerelease = rawAlpha !== undefined
-
-  // Already an alpha and no level named: the next alpha of the same target.
-  if (onPrerelease && level === null) {
-    return `${major}.${minor}.${patch}-alpha.${Number(rawAlpha) + 1}`
-  }
 
   /*
-    From a release, or from a prerelease whose target is being changed.
-
-    The target is raised from the *release* part in both cases, which is what makes the result sort above
-    everything already published: an alpha of a version that is already out would sort below it, and every
-    user on the release channel would be offered nothing while every alpha user was offered a step
-    backwards.
+    Raised from the release part in every case, including when the current version is already a
+    prerelease. There is no counter to advance, so `0.2.0-ALPHA` steps to `0.3.0-ALPHA` — and it must,
+    because publishing `0.2.0-ALPHA` twice would mean two different builds answering to one version, and
+    every installation would then be certain it was already up to date.
   */
   const step = level ?? 'minor'
-  if (step === 'major') return `${major + 1}.0.0-alpha.0`
-  if (step === 'patch') return `${major}.${minor}.${patch + 1}-alpha.0`
-  return `${major}.${minor + 1}.0-alpha.0`
+  if (step === 'major') return `${major + 1}.0.0-${PRERELEASE}`
+  if (step === 'patch') return `${major}.${minor}.${patch + 1}-${PRERELEASE}`
+  return `${major}.${minor + 1}.0-${PRERELEASE}`
 }
 
 /**
@@ -77,4 +78,9 @@ export function levelFrom(argv) {
   if (argv.includes('--minor')) return 'minor'
   if (argv.includes('--patch')) return 'patch'
   return null
+}
+
+/** The git tag for a version. One place, so the tag and the release can never disagree. */
+export function tagFor(version) {
+  return `v${version}`
 }
