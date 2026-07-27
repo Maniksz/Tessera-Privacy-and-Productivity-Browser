@@ -568,6 +568,71 @@ selbst aus (`All N checks passed.`), niemand muss sie glauben.
 Nicht in der echten App geprüft ist damit alles seit dem letzten grünen Lauf: Tooltip-Kürzel, Layout-Kürzel im
 Menü, Zoom-Geste, Auffrischen der Kachelleiste, Fenstermenü auf allen Plattformen, und das Harness selbst.
 
+## Releases und Updates
+
+Gewünscht: „wenn ich nun pushe, soll der browser merken, da ist ein update", plus ein lokaler Befehl für
+Alpha-Freigaben. Entschieden vom Benutzer: **GitHub dauerhaft** als Quelle, **automatisch prüfen aber nichts
+ohne Genehmigung herunterladen**, und **keine Apple-Developer-ID** vorhanden.
+
+### Der Fund, der das Ganze getragen hat
+
+`electron-updater` war **schon eine Laufzeitabhängigkeit und wurde von nichts importiert.** Dieselbe Klasse
+wie `installAutofill()`: bezahlt, nie verdrahtet. Die Mechanik für „Update ohne Neuinstallation" lag also
+bereits im Baum.
+
+### Warum SSH dafür nicht genügt, und was stattdessen geht
+
+SSH authentifiziert den Git-Transport. Eine GitHub-Freigabe anzulegen ist die REST-API über HTTPS, die keine
+SSH-Schlüssel annimmt — dafür gibt es keinen SSH-Weg. Ein *Tag* zu pushen braucht dagegen nur den Schlüssel,
+der schon da ist, und `.github/workflows/release.yml` veröffentlicht von der anderen Seite mit
+`secrets.GITHUB_TOKEN`, den GitHub für diesen einen Lauf prägt und danach verwirft. **Kein Token auf einer
+Maschine.**
+
+Der zweite Grund ist gewichtiger als die Bequemlichkeit: **ein lokales Release ist bauartbedingt
+unvollständig.** `electron-builder` packt nur für die Plattform, auf der es läuft — ein auf dem Mac
+geschnittenes Release trägt `latest-mac.yml` und sonst nichts, Windows- und Linux-Nutzer sehen also **nie** ein
+Update, weil die Datei, die ihr Updater liest, nie hochgeladen wurde. Kein fehlender Komfort, sondern ein
+Release, das für zwei Drittel der beworbenen Plattformen still nicht funktioniert.
+
+Ablauf: `pnpm run release:alpha` hebt nur die Version (`0.1.0 → 0.1.1-alpha.0`) und **druckt** die
+Git-Befehle — committen und taggen bleibt beim Benutzer. `release:alpha:local` ist der Token-Weg für ein
+schnelles Einzelartefakt; er liest den Token aus dem macOS-Schlüsselbund, weil ein Token im Shell-Profil eine
+Klartextdatei und einer auf der Kommandozeile ein Eintrag in `~/.zsh_history` ist.
+
+### Was angehängt wird, und was daran wichtig ist
+
+| Runner | Artefakte |
+|---|---|
+| macOS | `.dmg`, **`.zip`**, `latest-mac.yml` |
+| Windows | `.exe` (NSIS), `latest.yml` |
+| Linux | `.AppImage`, `.deb`, `.rpm`, `latest-linux.yml` |
+
+Die `.zip` ist kein Beifang: **Squirrel.Mac aktualisiert aus einem Zip, nicht aus einem Dmg.** Und die
+`latest*.yml` sind der eigentliche Feed — Version, Dateinamen, SHA-512-Summen. Genau die fehlen bei von Hand
+hochgeladenen Dateien, weshalb so ein Release vollständig aussieht und nichts aktualisiert.
+
+Einschränkungen: `.deb` und `.rpm` kann `electron-updater` nicht aktualisieren, auf Linux nur das AppImage.
+Und drei Runner veröffentlichen gleichzeitig in dasselbe Tag — `electron-builder` sucht die Freigabe zum Tag
+und legt sie sonst an, was selten ein Wettlauf sein kann; sichtbar als doppelte oder fehlende Freigabe,
+reparierbar durch einen erneuten Lauf. `fail-fast: false` ist Absicht: ein Release mit zwei von drei Feeds ist
+reparierbar, ein abgebrochenes nicht nachvollziehbar.
+
+### Die Versionsordnung als eigenes Modul
+
+`src/main/updates/version.ts`, 27 Tests, weil jeder Fehler darin einen Nutzer trifft: `alpha.2` schlägt als
+Text `alpha.10` — ein **Downgrade, als Update angeboten**. Eine Freigabe ist neuer als alle ihre
+Vorabversionen, was das Gegenteil der alphabetischen Antwort ist; falsch gemacht bleibt ein Alpha-Tester für
+immer auf einer Vorabversion. Dazu ein Property-Test über eine zehnstufige Leiter, weil ein handgeschriebener
+Vergleich einzeln richtig und in Kombination inkonsistent sein kann.
+
+### macOS bleibt vorerst unsigniert
+
+`electron-builder.yml` verlangt `hardenedRuntime` und `notarize: true`, was ohne Developer-ID mitten im Build
+scheitert. Beide Wege — Workflow und lokales Skript — erkennen die Abwesenheit **vorher**, sagen es und bauen
+unsigniert weiter, mit der Folge im gleichen Satz: eine unsignierte Mac-App installiert sich von Hand und kann
+sich **nicht selbst aktualisieren**. Zwei Override-Zeilen zu entfernen ist die ganze Änderung, sobald das
+Zertifikat existiert.
+
 ## Bekannte Risiken
 
 | Risiko | Warum es offen ist |

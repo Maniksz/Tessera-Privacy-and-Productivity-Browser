@@ -188,3 +188,18 @@ einzuordnen.
 
 Ein Fehlschlag, der sich automatisieren lässt, wird zu einem Test und verlässt
 diese Liste. Die Liste soll kürzer werden, nicht länger.
+
+## Beim In-Prozess-Smoke-Lauf die Maschine nicht anfassen
+
+Der Ziehdurchlauf schickt echte Mauseingaben mit `webContents.sendInputEvent`, und daran hängen zwei
+Bedingungen, die es über CDP nicht gab:
+
+- **Ein Ereignis an ein unfokussiertes Fenster wird lautlos verworfen.** Schlimmer:
+  `BrowserWindowController.onBlur` bricht ein laufendes Ziehen ab und schließt die Overlay-Schicht — ein
+  Fokusverlust beendet die Geste also, und Zurückfokussieren macht das nicht rückgängig. Vor jedem Ereignis
+  wird deshalb fokussiert; ein Fensterwechsel von Hand schlägt trotzdem durch.
+- **Der echte Mauszeiger hebt eine eigene Zone hervor.** Ruht er über der Schicht, konkurriert seine Zone
+  mit der geprüften, und der Fehlschlag sieht aus wie ein Produktfehler.
+
+Also: starten, Zeiger aus dem Fenster legen, nichts anklicken, bis der Lauf durch ist. Ein Fehlschlag unter
+Missachtung davon ist kein Befund.

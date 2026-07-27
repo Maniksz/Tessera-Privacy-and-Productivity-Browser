@@ -505,6 +505,60 @@ describe('IPC discipline', () => {
   const isShortcutAction = (name: string): name is ShortcutAction =>
     (SHORTCUT_ACTIONS as readonly string[]).includes(name)
 
+  it('leaves no shape assertion pointing in only one direction', async () => {
+    /*
+      A wire schema and the interface it validates live in separate modules on purpose — the page is a
+      renderer and an architecture test keeps zod out of its bundle — so nothing but an assertion holds
+      the two together. `SameShape<A, B>` is the good form: one expression, bidirectional by
+      construction, impossible to half-write.
+
+      The older form is a *pair* of assignments, one per direction, and that is the hazard this catches.
+      Delete or forget one line and the remaining one still compiles, still looks like a guarantee, and
+      checks half of what it claims. Which half matters: a schema that grew a field the interface lacks
+      passes validation and arrives at the page as `unknown`; the reverse silently drops a column. The
+      codebase has had both.
+
+      So every `const _x: A = null as unknown as B` between two of *our* types must have its mirror.
+      Reported as the missing line, because that is the fix.
+
+      **One-directional is right for a different job, and the test would be wrong to forbid it.** Where
+      the wider side is an Electron type — `DownloadItemLike = null as unknown as DownloadItem` — the
+      assertion says "the real object satisfies the narrow view we wrote", and the reverse is deliberately
+      false: our interface names the four fields we use out of forty. Demanding the mirror there would
+      force either a fake-complete interface or the deletion of a real guarantee. So a right-hand side
+      imported from `electron` is excluded, and the exclusion is drawn from that file's own imports rather
+      than from a list of names, so it cannot go stale.
+    */
+    const pattern = /const\s+_\w+:\s*([\w.<>[\] ]+?)\s*=\s*null as unknown as\s*([\w.<>[\] ]+)/g
+    const missing: string[] = []
+
+    for (const file of await collect('src')) {
+      const fromElectron = new Set(
+        (/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+'electron'/.exec(file.text)?.[1] ?? '')
+          .split(',')
+          .map((name) => name.replace(/^\s*type\s+/, '').trim())
+          .filter((name) => name !== '')
+      )
+
+      const pairs = new Set<string>()
+      for (const match of file.text.matchAll(pattern)) {
+        const [, left, right] = match
+        if (left === undefined || right === undefined) continue
+        pairs.add(`${left.trim()}→${right.trim()}`)
+      }
+      for (const pair of pairs) {
+        const [left, right] = pair.split('→')
+        if (left === right) continue
+        // A narrowing of a third-party type, not a mirror of one of ours.
+        if (right !== undefined && fromElectron.has(right)) continue
+        if (pairs.has(`${right ?? ''}→${left ?? ''}`)) continue
+        missing.push(`${file.relative}: nothing asserts ${right ?? ''} is assignable to ${left ?? ''}`)
+      }
+    }
+
+    expect(missing, 'a one-directional shape assertion checks half of what it claims').toEqual([])
+  })
+
   it('lets nothing but the password prompt listen to master-password keystrokes', async () => {
     /*
       `passwords/overlay-keys.ts` is a module-level registry of listeners that receive the **characters

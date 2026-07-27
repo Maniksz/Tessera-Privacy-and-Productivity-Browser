@@ -1,14 +1,15 @@
 /**
  * Cuts an alpha release: raises the version, builds, publishes it to GitHub.
  *
- *   pnpm release:alpha            0.1.0 → 0.1.1-alpha.0, or alpha.3 → alpha.4
- *   pnpm release:alpha --dry-run  everything except the publish
+ *   pnpm release:alpha              0.1.0 → 0.2.0-alpha.0, or alpha.3 → alpha.4
+ *   pnpm release:alpha --patch      when the release really is fixes only
+ *   pnpm release:alpha --major      0.x → 1.0.0-alpha.0
+ *   pnpm release:alpha --dry-run    everything except the publish
  *
  * ## Why this is a script and not a line in package.json
  *
- * Because the version has to *move*, and where it moves to is a rule rather than a command.
- * `0.1.0 → 0.1.1-alpha.0` (the next patch, first alpha) and `0.1.1-alpha.3 → 0.1.1-alpha.4` (the next
- * alpha of the same patch) are two different answers to "bump", and a wrong one is not a typo: publish
+ * Because the version has to *move*, and where it moves to is a rule rather than a command — see
+ * `next-version.mjs`, which holds the rule and is tested. A wrong step is not a typo: publish
  * `0.1.0-alpha.4` after `0.1.0` and every user on the release channel is offered nothing while every
  * alpha user is offered a version *older* than what they have.
  *
@@ -29,6 +30,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { levelFrom, nextAlpha } from './next-version.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MANIFEST = new URL('../package.json', import.meta.url)
@@ -55,27 +57,6 @@ const run = (command, args) =>
 const capture = (command, args) =>
   execFileSync(command, args, { cwd: ROOT, encoding: 'utf8' }).trim()
 
-/**
- * The next alpha, from the version that is there now.
- *
- * Kept here rather than imported from `src/main/updates/version.ts` on purpose: that module is compiled
- * into the application and must stay free of anything only a release needs. The *ordering* rules are
- * tested there; this is one arithmetic step and its own tests are the two examples in the header.
- */
-function nextAlpha(current) {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-alpha\.(\d+))?$/.exec(current)
-  if (match === null) {
-    throw new Error(
-      `version "${current}" is neither x.y.z nor x.y.z-alpha.n, so there is no next alpha of it`
-    )
-  }
-  const [, major, minor, patch, alpha] = match
-  // Already an alpha: the next one of the same patch. A release: the first alpha of the *next* patch,
-  // because an alpha of a version that is already out would sort below it.
-  if (alpha !== undefined) return `${major}.${minor}.${patch}-alpha.${Number(alpha) + 1}`
-  return `${major}.${minor}.${Number(patch) + 1}-alpha.0`
-}
-
 function assertCleanTree() {
   const dirty = capture('git', ['status', '--porcelain'])
   if (dirty === '') return
@@ -88,7 +69,7 @@ function assertCleanTree() {
 
 const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
 const from = manifest.version
-const to = nextAlpha(from)
+const to = nextAlpha(from, levelFrom(process.argv))
 
 console.log(`${from} → ${to}${dryRun ? '  (dry run)' : ''}\n`)
 
