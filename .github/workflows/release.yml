@@ -1,0 +1,90 @@
+# Builds and publishes a release when a version tag is pushed.
+#
+#   git tag v0.1.1-alpha.0 && git push --follow-tags
+#
+# ## Why this exists rather than only the local `pnpm release:alpha`
+#
+# Two reasons, and neither is convenience.
+#
+# **No token on anybody's machine.** Creating a GitHub release is the REST API over HTTPS, and an SSH
+# key cannot authenticate it — so a local publish needs a personal access token, which then has to live
+# somewhere on disk. Here the token is `secrets.GITHUB_TOKEN`, which GitHub mints for this run, scopes to
+# this repository and destroys when the job ends. Nothing to store, nothing to leak, nothing to rotate.
+#
+# **A local release is incomplete by construction.** `electron-builder` can only package for the platform
+# it runs on, so a release cut on a Mac carries `latest-mac.yml` and nothing else — and Windows and Linux
+# users then never see an update, because the file their updater reads was never uploaded. That is not a
+# missing nicety; it is a release that silently does not work for two thirds of the platforms this browser
+# claims to support. Three runners are the only way to produce all three feeds.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# The only permission the job needs: create a release and attach files to it. Everything else stays
+# read-only, so a compromised dependency in a build cannot rewrite the repository.
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    strategy:
+      # Deliberately not fail-fast. One platform's build failing must not cancel the other two — a release
+      # with two of three feeds is worth having and can be completed by re-running one job, whereas a
+      # cancelled matrix leaves a half-published release nobody can reason about.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: --mac
+          - os: windows-latest
+            target: --win
+          - os: ubuntu-latest
+            target: --linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # Pinned to what this repository is developed with. A different pnpm resolves the lockfile
+          # differently, and a release built from other dependencies than the tests ran against is a
+          # release nobody has tested.
+          version: 10.32.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The gates, before anything is published. A release is the one artefact that cannot be taken back
+      # once somebody's browser has updated to it, so this is the place where being slow is correct.
+      - run: pnpm run typecheck
+      - run: pnpm run lint
+      - run: pnpm test
+
+      # The smoke checks are deliberately *not* run here. They drive a real browser window, which needs a
+      # display; more to the point, their value is in a human seeing where a drag went. See
+      # `scripts/smoke-checks.mjs`.
+
+      - name: Publish
+        # `--publish always` is what generates and uploads `latest*.yml` next to the installers. Without
+        # those files the release is a set of downloads that no running browser will ever notice.
+        #
+        # macOS is built unsigned until there is a Developer ID: `notarize` and a hardened runtime are
+        # asked for in `electron-builder.yml`, and without credentials the build fails at the signing step.
+        # The consequence is stated here rather than discovered later — **Squirrel.Mac will not replace an
+        # unsigned application**, so a mac alpha from this workflow installs by hand and cannot update
+        # itself. Removing the two overrides is the whole change once the certificate exists.
+        run: >
+          pnpm exec electron-builder ${{ matrix.target }}
+          ${{ matrix.os == 'macos-latest' && '--config.mac.notarize=false --config.mac.identity=null' || '' }}
+          --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

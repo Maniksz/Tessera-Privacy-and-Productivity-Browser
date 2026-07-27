@@ -34,6 +34,20 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MANIFEST = new URL('../package.json', import.meta.url)
 
 const dryRun = process.argv.includes('--dry-run')
+/*
+  Raise the version and stop — the route that needs no token at all.
+
+  Creating a GitHub release is the REST API over HTTPS, so an SSH key cannot authenticate it and a local
+  publish needs a personal access token on disk. Pushing a *tag* needs only the SSH key that is already
+  there, and `.github/workflows/release.yml` does the publishing from the other side with a token GitHub
+  mints for that run alone. It also builds for all three platforms, which this machine cannot: a release
+  cut here carries `latest-mac.yml` and nothing else, so Windows and Linux users would never be offered
+  the update.
+
+  So this mode is the recommended one, and the git commands are printed rather than run: committing and
+  tagging is the user's, not this script's.
+*/
+const prepareOnly = process.argv.includes('--prepare')
 
 const run = (command, args) =>
   execFileSync(command, args, { cwd: ROOT, stdio: 'inherit', env: process.env })
@@ -78,20 +92,102 @@ const to = nextAlpha(from)
 
 console.log(`${from} → ${to}${dryRun ? '  (dry run)' : ''}\n`)
 
-if (!dryRun) {
-  assertCleanTree()
-  if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
-    console.error(
-      'no GH_TOKEN (or GITHUB_TOKEN) in the environment; electron-builder needs one to create the release.'
-    )
-    console.error('A token with `contents: write` on this repository is enough.')
-    process.exit(1)
-  }
-}
-
 const writeVersion = (version) => {
   manifest.version = version
   writeFileSync(MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`)
+}
+
+
+/**
+ * The token, from the environment or from the macOS Keychain.
+ *
+ * The Keychain is offered because the obvious alternatives are both bad: a token in a shell profile is a
+ * secret in a plain file that every process the user runs can read, and a token typed on the command
+ * line is a secret in `~/.zsh_history`. `security` prints it on stdout, so it is captured and never
+ * inherited — an `stdio: 'inherit'` here would put the token on the terminal, which is the thing being
+ * avoided.
+ *
+ * Read at each run rather than cached anywhere, and never logged.
+ */
+function findToken() {
+  const fromEnvironment = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN
+  if (fromEnvironment !== undefined && fromEnvironment !== '') return fromEnvironment
+  if (process.platform !== 'darwin') return null
+
+  try {
+    const stored = execFileSync(
+      'security',
+      ['find-generic-password', '-s', KEYCHAIN_ITEM, '-w'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim()
+    return stored === '' ? null : stored
+  } catch {
+    // No such item, or the user declined the Keychain prompt. Both mean "no token", and the message
+    // below says how to put one there.
+    return null
+  }
+}
+
+const KEYCHAIN_ITEM = 'tessera-gh-token'
+
+function explainMissingToken() {
+  console.error('No GitHub token, so there is nothing that could create the release.\n')
+  console.error('Make one: GitHub → Settings → Developer settings → Personal access tokens →')
+  console.error('  Fine-grained tokens → this repository → Permissions → Contents: Read and write.\n')
+  console.error('Then either keep it in the Keychain, which is read automatically from now on:')
+  console.error(`  security add-generic-password -a "$USER" -s ${KEYCHAIN_ITEM} -w`)
+  console.error('  (prompts for the value, so it stays out of your shell history)\n')
+  console.error('…or pass it for one run:')
+  console.error('  GH_TOKEN=… pnpm run release:alpha')
+}
+
+/**
+ * Signing, and what a build does when there is none.
+ *
+ * `electron-builder.yml` asks for a hardened runtime and notarisation, which is right and which needs an
+ * Apple Developer ID. Without one the mac build fails partway through — after minutes of packaging — and
+ * the message is about credentials rather than about what to do. So the absence is detected first, said
+ * plainly, and turned into an unsigned build rather than a failure.
+ *
+ * The consequence is not cosmetic and is stated at the point of the decision: **Squirrel.Mac refuses to
+ * replace an application that is not signed**, so a mac alpha built this way can be downloaded and
+ * installed by hand but can never update itself. Windows and Linux are unaffected.
+ */
+function macSigningArguments() {
+  if (process.platform !== 'darwin') return []
+  const signable =
+    (process.env.CSC_LINK ?? '') !== '' ||
+    (process.env.CSC_NAME ?? '') !== '' ||
+    (process.env.APPLE_TEAM_ID ?? '') !== ''
+  if (signable) return []
+
+  console.log('No Apple signing credentials found, so this mac build will be unsigned.')
+  console.log('It installs by hand and cannot update itself — Squirrel.Mac will not replace an')
+  console.log('unsigned application. Windows and Linux builds are unaffected.\n')
+  return ['--config.mac.notarize=false', '--config.mac.identity=null']
+}
+
+if (prepareOnly) {
+  assertCleanTree()
+  writeVersion(to)
+  console.log(`package.json is now ${to}. Commit it, tag it, and push:\n`)
+  console.log(`  git commit -am "${to}"`)
+  console.log(`  git tag v${to}`)
+  console.log('  git push --follow-tags\n')
+  console.log('The Release workflow builds mac, Windows and Linux and publishes the prerelease.')
+  process.exit(0)
+}
+
+if (!dryRun) {
+  assertCleanTree()
+  const token = findToken()
+  if (token === null) {
+    explainMissingToken()
+    process.exit(1)
+  }
+  // Put it where electron-builder looks, without it having been in the environment of the shell that
+  // started this.
+  process.env.GH_TOKEN = token
 }
 
 /*
@@ -126,6 +222,7 @@ try {
   run('pnpm', [
     'exec',
     'electron-builder',
+    ...macSigningArguments(),
     '--publish',
     dryRun ? 'never' : 'always'
   ])
