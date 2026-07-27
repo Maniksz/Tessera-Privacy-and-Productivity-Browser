@@ -1,34 +1,26 @@
 /**
- * One command: raise the version, and publish a release with the files in it.
+ * One command: raise the version, build, and publish the release with the files in it.
  *
- *   pnpm run release              0.1.0 → 0.2.0-ALPHA, tagged v0.2.0-ALPHA
+ *   pnpm run release              0.2.0-ALPHA → 0.3.0-ALPHA
  *   pnpm run release --patch      for an alpha that only fixes something
  *   pnpm run release --major      0.x → 1.0.0-ALPHA
- *   pnpm run release --dry-run    everything up to the push, then put it all back
+ *   pnpm run release --dry-run    builds, publishes nothing, puts the version back
  *
- * ## What it does, in order
+ * Refuse on a dirty tree or an existing tag → raise the version → commit → annotated tag → **build and
+ * package here** → publish to GitHub → push the commit and the tag.
  *
- * Refuse on a dirty tree or an existing tag → raise the version → commit it → tag it → push. The build
- * and the publishing then happen in `.github/workflows/release.yml`: install, typecheck, lint, test,
- * build, and `electron-builder --publish always` on macOS, Windows **and** Linux.
+ * ## What this machine can and cannot produce
  *
- * ## Why the bytes are not built here
+ * `electron-builder` packages for the platform it runs on, so a run here uploads the macOS files: `.dmg`
+ * and `.zip` for x64 and arm64, plus `latest-mac.yml`. Pushing the tag then starts
+ * `.github/workflows/release.yml`, which adds Windows and Linux to the **same** release. So the release is
+ * complete either way; this command just does not wait for the other two.
  *
- * Because `electron-builder` can only package for the platform it runs on. A release cut on this machine
- * would carry the mac `.dmg`, the mac `.zip` and `latest-mac.yml` — and **nothing for Windows or Linux**,
- * including the `latest.yml` and `latest-linux.yml` their updaters read. Those users would never be
- * offered the update, and nothing anywhere would say why. That is not a missing convenience; it is a
- * release that silently does not work for two thirds of the platforms this browser claims to support.
+ * ## Why it needs a token, and where it looks
  *
- * So this is still one command. It ends with a push rather than an upload, and three runners produce a
- * release nobody has to complete by hand. `pnpm run package` is the separate job of getting an installer
- * onto this disk; it writes to `dist/` and publishes nothing.
- *
- * ## Why it touches git, when git is otherwise the user's
- *
- * Because a tag is the deliverable. The version has to be *in* the commit the tag points at — otherwise
- * the release says `0.2.0-ALPHA` while the code it was built from says `0.1.0`, and `app.getVersion()`
- * then reports the wrong thing to the update check for the whole life of that build.
+ * Creating a release is the GitHub REST API over HTTPS; an SSH key cannot authenticate it. `GH_TOKEN` or
+ * `GITHUB_TOKEN` from the environment, otherwise the macOS Keychain — because a token in a shell profile is
+ * a plain file every process can read, and one typed on the command line is a line in `~/.zsh_history`.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -64,6 +56,55 @@ function assertTagIsFree(tag) {
   process.exit(1)
 }
 
+const KEYCHAIN_ITEM = 'tessera-gh-token'
+
+/** The token, from the environment or the Keychain. Captured, never inherited, never logged. */
+function findToken() {
+  const fromEnvironment = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN
+  if (fromEnvironment !== undefined && fromEnvironment !== '') return fromEnvironment
+  if (process.platform !== 'darwin') return null
+  try {
+    const stored = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN_ITEM, '-w'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim()
+    return stored === '' ? null : stored
+  } catch {
+    return null
+  }
+}
+
+function explainMissingToken() {
+  console.error('No GitHub token, so the release cannot be created.\n')
+  console.error('Make one: GitHub → Settings → Developer settings → Personal access tokens →')
+  console.error('  Fine-grained → this repository → Permissions → Contents: Read and write.\n')
+  console.error('Keep it in the Keychain and it is found automatically from then on:')
+  console.error(`  security add-generic-password -a "$USER" -s ${KEYCHAIN_ITEM} -w`)
+  console.error('  (prompts for the value, so it stays out of your shell history)\n')
+  console.error('Or for one run:  GH_TOKEN=… pnpm run release')
+}
+
+/**
+ * Signing, and what a build does without it.
+ *
+ * `electron-builder.yml` asks for a hardened runtime and notarisation, which needs an Apple Developer ID.
+ * Without one the build fails minutes in, with a message about credentials. So the absence is detected
+ * first and turned into an unsigned build — and the consequence is said here rather than discovered:
+ * **Squirrel.Mac will not replace an unsigned application**, so this build installs by hand and cannot
+ * update itself. Removing these two overrides is the whole change once a certificate exists.
+ */
+function macSigningArguments() {
+  if (process.platform !== 'darwin') return []
+  const signable =
+    (process.env.CSC_LINK ?? '') !== '' ||
+    (process.env.CSC_NAME ?? '') !== '' ||
+    (process.env.APPLE_TEAM_ID ?? '') !== ''
+  if (signable) return []
+  console.log('No Apple signing credentials, so this mac build is unsigned: it installs by hand and')
+  console.log('cannot update itself. Windows and Linux from the workflow are unaffected.\n')
+  return ['--config.mac.notarize=false', '--config.mac.identity=null']
+}
+
 const manifest = JSON.parse(readFileSync(MANIFEST, 'utf8'))
 const from = manifest.version
 const to = nextVersion(from, levelFrom(process.argv))
@@ -73,6 +114,13 @@ console.log(`${from} → ${to}   tag ${tag}${dryRun ? '   (dry run)' : ''}\n`)
 
 assertCleanTree()
 assertTagIsFree(tag)
+
+const token = dryRun ? '' : findToken()
+if (!dryRun && token === null) {
+  explainMissingToken()
+  process.exit(1)
+}
+if (token !== null && token !== '') process.env.GH_TOKEN = token
 
 const writeVersion = (version) => {
   manifest.version = version
@@ -109,21 +157,42 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 
 writeVersion(to)
 
+if (!dryRun) {
+  run('git', ['commit', '-am', to])
+  /*
+    Annotated, because `git push --follow-tags` transmits annotated tags only. A lightweight tag plus
+    `--follow-tags` is what made an earlier version of this script report success while the tag stayed on
+    the machine — so no workflow ran and nothing was built.
+  */
+  run('git', ['tag', '-a', tag, '-m', to])
+}
+
+// Built here, which is the point: the files this run publishes are made on this machine.
+run('pnpm', ['run', 'build'])
+run('pnpm', [
+  'exec',
+  'electron-builder',
+  ...macSigningArguments(),
+  '--publish',
+  dryRun ? 'never' : 'always'
+])
+
 if (dryRun) {
-  console.log('Would now commit, tag and push:\n')
-  console.log(`  git commit -am ${to}`)
-  console.log(`  git tag ${tag}`)
-  console.log('  git push --follow-tags\n')
-  console.log(`dry run finished; version restored to ${from}`)
+  console.log(`\nBuilt into dist/. Nothing published; version restored to ${from}.`)
   process.exit(0)
 }
 
-run('git', ['commit', '-am', to])
-run('git', ['tag', tag])
-run('git', ['push', '--follow-tags'])
+run('git', ['push', 'origin', 'HEAD'])
+// By name, not via `--follow-tags`, and then verified: the only thing that answers "will the other two
+// platforms build?" is whether the tag is actually on the other side.
+run('git', ['push', 'origin', tag])
+if (!capture('git', ['ls-remote', '--tags', 'origin', tag]).includes(tag)) {
+  console.error(`\n${tag} did not reach the remote, so Windows and Linux will not build.`)
+  console.error(`The macOS files are published. Push the tag to finish it:  git push origin ${tag}`)
+  process.exit(1)
+}
 pushed = true
 
-console.log(`\nPushed ${tag}. GitHub is now running the gates, then building and publishing`)
-console.log('for macOS, Windows and Linux:')
+console.log(`\nPublished ${to} with the macOS files, and pushed ${tag}.`)
+console.log('The workflow is now adding Windows and Linux to the same release:')
 console.log('  https://github.com/Maniksz/Tessera-Privacy-and-Productivity-Browser/actions')
-console.log('\nThe release appears as a prerelease carrying the installers and the latest*.yml feeds.')
