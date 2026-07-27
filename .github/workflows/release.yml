@@ -65,9 +65,25 @@ jobs:
 
       # The gates, before anything is published. A release is the one artefact that cannot be taken back
       # once somebody's browser has updated to it, so this is the place where being slow is correct.
-      - run: pnpm run typecheck
+      #
+      # `pnpm run build` is `typecheck && electron-vite build`, so it is both the first gate and the thing
+      # that produces `out/`. Named as one command rather than split into a typecheck step plus an
+      # `electron-vite build` step, because `electron-builder.yml` takes `out/**/*` as its input and the
+      # first version of this workflow ran the gates and then packaged **without ever building** — which
+      # would have published a release that looks complete, downloads, installs, and contains no
+      # application. One command means the build cannot be the step that is forgotten.
+      - run: pnpm run build
       - run: pnpm run lint
       - run: pnpm test
+
+      # And a guard against the same class of mistake arriving another way — a build that succeeds and
+      # emits nothing, a changed output directory, a `files` glob that stops matching. Cheap, and it turns
+      # a silently empty release into a failed job.
+      - name: Check that there is something to package
+        shell: bash
+        run: |
+          test -f out/main/index.js || { echo "out/main/index.js is missing; nothing was built"; exit 1; }
+          test -d out/renderer || { echo "out/renderer is missing; nothing was built"; exit 1; }
 
       # The smoke checks are deliberately *not* run here. They drive a real browser window, which needs a
       # display; more to the point, their value is in a human seeing where a drag went. See

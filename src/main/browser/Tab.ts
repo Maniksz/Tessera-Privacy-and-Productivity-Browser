@@ -214,10 +214,18 @@ export class Tab {
     this.view = new WebContentsView({
       webPreferences: {
         session: options.session,
-        // A visited page gets no bridge at all (spec 6); an internal
-        // tessera:// page gets a narrow allowlist. The preload decides from the
-        // role argument below, which page content cannot influence.
-        preload: preloadFile(),
+        /*
+          The content bundle, which is the one that has no chrome bridge in it at all.
+
+          A visited page gets no bridge (spec 6); a `tessera://` page gets a narrow allowlist, decided
+          from its own address. Both live in this one file because both are shown in *this* view — a
+          tab starts on the start page and goes wherever the user types, and a preload is fixed when
+          the view is created.
+
+          The role argument is the cross-check rather than the switch: it lets the bundle notice it was
+          handed to a view the core created for the chrome UI. See `preloadFile` in `paths.ts`.
+        */
+        preload: preloadFile('content'),
         additionalArguments: [preloadRoleArgument('content')],
         sandbox: true,
         contextIsolation: true,

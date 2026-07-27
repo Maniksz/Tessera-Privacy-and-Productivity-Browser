@@ -234,9 +234,10 @@ export class OverlayLayer {
 
     const view = new WebContentsView({
       webPreferences: {
-        preload: preloadFile(),
-        // Trusted browser UI, exactly like the chrome renderer. The main process verifies
-        // this independently by web contents identity.
+        // Trusted browser UI, exactly like the chrome renderer: the chrome bundle, and the role
+        // argument it cross-checks itself against. The main process verifies this independently by
+        // web contents identity.
+        preload: preloadFile('chrome'),
         additionalArguments: [preloadRoleArgument('chrome')],
         sandbox: true,
         contextIsolation: true,

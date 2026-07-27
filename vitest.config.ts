@@ -131,6 +131,22 @@ export default defineConfig({
           is the subscription plumbing.
         */
         'src/main/passwords/install-autofill.ts',
+        /*
+          The `electron-updater` and `dialog` half of the update check, admitted on the same terms as
+          the three above and not as a way past a threshold.
+
+          It speaks to the module-level `autoUpdater` singleton, which resolves a platform-specific
+          subclass at first access and reads `app-update.yml` out of a packaged application's
+          resources — there is no version of that which runs in a unit test.
+
+          The condition for being listed here was met first: every decision was extracted into
+          `UpdateService`, which is covered in full. Whether to check, which channel is asked for,
+          who is offered what, which platform gets a download and which gets a web page, what a
+          failure says and whether it says anything at all — all of it is there and tested. What is
+          left in this file is translation: the library's throws into total results, and a
+          presentation into a message box.
+        */
+        'src/main/updates/install-updates.ts',
         '**/*.d.ts'
       ],
       thresholds: {
@@ -205,6 +221,24 @@ export default defineConfig({
           functions: 100,
           branches: 88,
           statements: 92
+        },
+        /*
+          The update check, held at what it reaches, which for the seam itself is all of it.
+
+          `UpdateService.ts` is at 100 in all four measures and that is the bar it has to keep: every
+          number in it is a refusal — a download nobody approved, a dialogue after a check nobody
+          asked for, a macOS build offered an update it cannot install — and a refusal that stops
+          being taken looks exactly like the feature working.
+
+          The figure is short of 100 only because of `version.ts`, whose remaining branches are the
+          unparseable arms of `parseVersion` reached through four different callers; each is covered
+          once and the duplicates cannot be reached separately without editing the source.
+        */
+        'src/main/updates/**': {
+          lines: 100,
+          functions: 100,
+          branches: 92,
+          statements: 96
         },
         'src/main/session/permission-policy.ts': {
           lines: 100,

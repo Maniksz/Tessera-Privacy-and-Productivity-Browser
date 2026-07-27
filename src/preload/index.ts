@@ -1,15 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import {
-  EVENT_CHANNELS,
   INTERNAL_PAGE_EVENT_CHANNELS,
   INTERNAL_PAGE_INVOKE_CHANNELS,
   isInternalPage,
   mayInternalPageInvoke,
   mayInternalPageListen,
-  type InternalPage,
-  INVOKE_CHANNELS,
-  isEventChannel,
-  isInvokeChannel
+  type InternalPage
 } from '@shared/ipc/channels.js'
 import {
   maskAudio,
@@ -24,44 +20,65 @@ import {
 } from '@shared/fingerprint/apply.js'
 // `wire.ts`, not `plan.ts`: the latter reaches a table of public suffixes this bundle never uses.
 import { FINGERPRINT_PLAN_CHANNEL, isMaskingPlan } from '@shared/fingerprint/wire.js'
+import { makeInvoker, makeSubscriber, markPreloadRan, type Role } from './bridge.js'
 import { installCosmeticFiltering } from './cosmetic.js'
 import { installElementPicker } from './picker.js'
 import { installAutofill } from './autofill.js'
 
 /**
- * The one preload script, for every renderer.
+ * The preload for tab views: everything a *document* gets, and nothing the browser's own interface
+ * needs.
  *
- * ## Why one file rather than one per role
+ * Loaded by `Tab.ts` through `preloadFile('content')`, which resolves to this bundle — `index.cjs`,
+ * the default name, deliberately: whatever goes wrong with a preload path, the file that answers to
+ * the obvious name is the one with the fewest privileges in it. The chrome bridge lives in
+ * `chrome.ts` and is a different file on disk.
  *
- * Two entry files that both import the shared channel list make Rollup emit a
- * shared chunk, and the entries then `require('./chunks/…')` at runtime. A
- * sandboxed preload cannot do that: `require` there is limited to a small set of
- * built-ins, so the split build would fail the moment it ran — while still
- * building cleanly. One self-contained file removes that failure mode entirely.
+ * ## Why two files rather than one file with a role branch
  *
- * ## How the role is decided
+ * This used to be one bundle that decided at startup whether to expose the chrome bridge, and every
+ * visited page parsed the bridge it could never be given — about two kilobytes of channel tables per
+ * page in every tab, and worse than the bytes: the code that hands out the full contract surface was
+ * *present* in the renderer a hostile page runs in, one mistaken condition away from being reachable.
  *
- * From `process.argv`, which the main process sets per renderer via
- * `webPreferences.additionalArguments`. Page content cannot alter the process
- * command line, so this is as trustworthy as picking a different file would be —
- * and unlike a URL check it is not fooled by a dev server or a crafted address.
+ * Two files close that off in a way a branch cannot. There is no `exposeInMainWorld('tessera', …)`
+ * in this bundle to reach, so however the role is spoofed — a crafted command line, a compromised
+ * renderer, a future refactor that gets a condition backwards — the chrome bridge cannot appear in a
+ * web page from here. The absent code is the guarantee; a branch is only a promise.
  *
- * Anything without an explicit role is treated as web content and gets nothing.
- * The default has to be the restrictive one.
+ * ## What the role argument is still for
+ *
+ * Not for dispatch any more — the file *is* the role. It is read to cross-check the two against each
+ * other: a view created with the chrome role but given this file is a wiring mistake, and it says so
+ * rather than quietly serving a renderer with no bridge and no explanation. The command line is the
+ * one input page content cannot alter, which is what makes it usable for that.
  *
  * ## Two gates, not one
  *
- * This file decides what to *expose*. The main process independently decides what
- * to *accept*, in `main/ipc/sender-policy.ts`. A compromised renderer is exactly
- * the case where this file's judgement cannot be relied on, so the core never
- * relies on it (spec 6).
+ * This file decides what to *expose*. The main process independently decides what to *accept*, in
+ * `main/ipc/sender-policy.ts`. A compromised renderer is exactly the case where this file's
+ * judgement cannot be relied on, so the core never relies on it (spec 6).
+ *
+ * ## Why an internal page's bridge is in *this* bundle
+ *
+ * Because a `tessera://` page is a tab. One `WebContentsView` shows the start page, then the site the
+ * user typed into it, and a view's preload is fixed when it is created — so the file that serves
+ * visited pages is the same file that has to serve our own. Putting the internal allowlist in the
+ * chrome bundle instead would mean either every internal page loses its bridge, or a tab that started
+ * on `tessera://start` loses its masking and blocking for every site it visits afterwards.
  */
 
 const ROLE_PREFIX = '--tessera-role='
 const INTERNAL_SCHEME = 'tessera:'
 
-type Role = 'chrome' | 'content'
-
+/**
+ * The role the *view* was created with, for comparison with the role of this *file*.
+ *
+ * Spelled out here rather than imported, and duplicated in `chrome.ts` on purpose: "what does this
+ * bundle do when the role disagrees with it" is the security-critical sentence about an entry, and it
+ * belongs in the entry rather than an import away. `tests/preload-roles.test.ts` holds the two copies
+ * to the same rule so the duplication cannot drift.
+ */
 function readRole(): Role {
   const argument = process.argv.find((value) => value.startsWith(ROLE_PREFIX))
   const role = argument?.slice(ROLE_PREFIX.length)
@@ -71,8 +88,9 @@ function readRole(): Role {
 
 function internalPageName(): InternalPage | null {
   try {
-    // Compiled under the Node config, which has no DOM lib on purpose — adding it
-    // would let genuinely browser-only APIs into the preload unnoticed.
+    // Narrowed to the two fields actually read, and both optional: the DOM types promise a
+    // `location` that always exists, and a preload runs early enough — and in torn-down frames
+    // often enough — that reading one must be allowed to come back empty instead of throwing.
     const scope = globalThis as { location?: { protocol?: string; hostname?: string } }
     if (scope.location?.protocol !== INTERNAL_SCHEME) return null
     /*
@@ -101,50 +119,23 @@ function currentHost(): string {
   }
 }
 
-/** Subscribes and returns its own unsubscribe function (spec 6). */
-function makeSubscriber(guard: (channel: string) => boolean) {
-  return (channel: string, listener: (payload: unknown) => void): (() => void) => {
-    if (!guard(channel)) {
-      throw new Error(`tessera: not allowed to listen to "${channel}"`)
-    }
-    const wrapped = (_event: unknown, payload: unknown): void => listener(payload)
-    ipcRenderer.on(channel, wrapped)
-    return () => {
-      ipcRenderer.removeListener(channel, wrapped)
-    }
-  }
-}
-
-function makeInvoker(guard: (channel: string) => boolean, label: string) {
-  return (channel: string, payload?: unknown): Promise<unknown> => {
-    if (!guard(channel)) {
-      return Promise.reject(new Error(`tessera: ${label} may not call "${channel}"`))
-    }
-    return ipcRenderer.invoke(channel, payload)
-  }
-}
-
-// Marks that the preload ran, and when. An integration test asserts this exists
-// before any page script executed — the timing window in which fingerprint
-// masking has to be installed to be worth anything (spec 4).
-Object.defineProperty(globalThis, '__tesseraPreload', {
-  value: Object.freeze({ version: 1, role: readRole(), appliedAt: 'document-start' }),
-  writable: false,
-  enumerable: false,
-  configurable: false
-})
+markPreloadRan('content')
 
 const role = readRole()
 /** Resolved once: the page cannot change its own address without a reload. */
 const internalPage = internalPageName()
 
 if (role === 'chrome') {
-  // The trusted browser UI: full contract surface, still name-checked.
-  contextBridge.exposeInMainWorld('tessera', {
-    invoke: makeInvoker(isInvokeChannel, 'chrome UI'),
-    on: makeSubscriber(isEventChannel),
-    channels: { invoke: INVOKE_CHANNELS, event: EVENT_CHANNELS }
-  })
+  /*
+    A view created for the browser's own interface, holding the preload for documents.
+
+    Nothing is exposed — least privilege when the two disagree — and the mistake is reported, because
+    the symptom on the other side is `window.tessera` being undefined with nothing to say why. See
+    `preloadFile()` in `src/main/paths.ts`.
+  */
+  console.error(
+    '[preload] the content preload was loaded into a chrome-role view; no bridge was exposed'
+  )
 } else if (internalPage !== null) {
   // Our own pages, but rendered as content: a narrow allowlist only. Nothing here
   // can change settings, touch tabs or reach the window.
@@ -168,10 +159,10 @@ if (role === 'chrome') {
  *
  * ## Who gets masked
  *
- * Web content only. The chrome UI, the overlay surface and the `tessera://`
- * pages are the browser's own interface: masking them would fake values our own
- * code reads, for an audience of nobody — there is no site there to hide from.
- * Role first, then scheme, mirroring the two checks above.
+ * Web content only. The `tessera://` pages are the browser's own interface: masking them would fake
+ * values our own code reads, for an audience of nobody — there is no site there to hide from. The
+ * chrome UI and the overlay surface never load this bundle at all, which is the other half of the
+ * same rule and is now enforced by which file they are given.
  *
  * ## Why the work happens elsewhere
  *

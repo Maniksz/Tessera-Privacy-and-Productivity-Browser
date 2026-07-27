@@ -129,6 +129,8 @@
     "src/main/menu/tab-position-accelerators.ts",
     "src/main/browser/page-keys.ts",
     "src/main/browser/tab-strip-position.ts",
+    "src/main/updates/UpdateService.ts",
+    "src/main/updates/version.ts",
     "src/shared/gestures/**/*.ts",
     "src/main/startup-flags.ts",
     "src/shared/media/**/*.ts",

@@ -17,9 +17,15 @@ import type { Platform } from '@shared/model.js'
 export interface ChromeWindowOptions {
   privateMode: boolean
   platform: Platform
-  /** Absolute path to the built preload bundle; `preloadFile()`. */
+  /**
+   * Absolute path to the built preload bundle for the chrome role; `preloadFile('chrome')`.
+   *
+   * The *only* bundle that contains the full bridge. A window given the content bundle instead ends
+   * up with no `window.tessera` at all rather than with a reduced one, which is why the role below is
+   * checked against the file rather than trusted on its own.
+   */
   preload: string
-  /** `preloadRoleArgument('chrome')` — what tells the preload to expose the full bridge. */
+  /** `preloadRoleArgument('chrome')` — the role the chrome bundle checks itself against. */
   roleArgument: string
 }
 
@@ -64,8 +70,10 @@ export function chromeWindowOptions(
         }),
     webPreferences: {
       preload: options.preload,
-      // Marks this renderer as the trusted chrome UI, so the preload exposes the full bridge. The
-      // main process verifies sender identity independently — see `sender-policy.ts`.
+      // Marks this renderer as the trusted chrome UI. The bundle above is what *holds* the full
+      // bridge; this is the second fact it requires before exposing it, so a window that ended up
+      // with the content bundle exposes nothing. The main process verifies sender identity
+      // independently as well — see `sender-policy.ts`.
       additionalArguments: [options.roleArgument],
       sandbox: true,
       contextIsolation: true,

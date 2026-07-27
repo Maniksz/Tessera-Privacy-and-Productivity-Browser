@@ -208,26 +208,46 @@ export function defaultDownloadsDir(): string {
   return app.getPath('downloads')
 }
 
+/** Which preload a renderer gets. A file each, not a flag — see `preloadFile`. */
+export type PreloadRole = 'chrome' | 'content'
+
 /**
- * The single built preload bundle, emitted by electron-vite as CommonJS.
+ * The built preload bundle for a role, emitted by electron-vite as CommonJS.
  *
- * One file for every renderer; the role is passed separately via
- * `webPreferences.additionalArguments`. See `src/preload/index.ts` for why the
- * build cannot be split.
+ * Two bundles, and which one a view is given is the *whole* of its bridge privilege:
+ *
+ *   - `content` — `index.cjs`, for tab views. Fingerprint masking, cosmetic filtering, the element
+ *     picker, autofill, and the narrow allowlist a `tessera://` page gets. No chrome bridge exists
+ *     inside it, so no page loading it can be given one however the role is spoofed.
+ *   - `chrome` — `chrome.cjs`, for the window and the overlay layer. The full contract surface, and
+ *     none of the per-document machinery those two have no document to apply it to.
+ *
+ * Content keeps the default name on purpose. `index.cjs` is what a stale path, a hand-written
+ * `webPreferences` or a future copy-paste will name, and the file that answers to the obvious name
+ * should be the one with the least in it. It is also the file `scripts/metrics.mjs` weighs, which is
+ * right: the budget exists because a tab view parses its preload once per page.
+ *
+ * Getting this wrong fails at runtime rather than at build time — a view whose bridge is absent —
+ * so `tests/preload-roles.test.ts` checks each call site against the role its view actually has.
  */
-export function preloadFile(): string {
-  return join(__dirname, '../preload', 'index.cjs')
+export function preloadFile(role: PreloadRole): string {
+  return join(__dirname, '../preload', role === 'chrome' ? 'chrome.cjs' : 'index.cjs')
 }
 
 export const PRELOAD_ROLE_PREFIX = '--tessera-role='
 
 /**
- * The argument that tells the preload which role a renderer has.
+ * The argument that tells a preload which role its renderer was created for.
  *
- * Set by the main process per renderer, which is the only source page content
- * cannot influence — unlike a URL, which a dev server or a crafted address can
- * make ambiguous.
+ * Kept after the split, with a smaller job: it no longer *chooses* what to expose — the file does
+ * that — and is instead the second of two facts that have to agree before a bridge appears. Each
+ * entry compares the role it was given against the role it is, and exposes nothing when they differ.
+ * So a view handed the wrong bundle ends with no bridge and a line in the console, rather than with
+ * privileges nobody meant to grant.
+ *
+ * Set by the main process per renderer, which is the only source page content cannot influence —
+ * unlike a URL, which a dev server or a crafted address can make ambiguous.
  */
-export function preloadRoleArgument(role: 'chrome' | 'content'): string {
+export function preloadRoleArgument(role: PreloadRole): string {
   return `${PRELOAD_ROLE_PREFIX}${role}`
 }

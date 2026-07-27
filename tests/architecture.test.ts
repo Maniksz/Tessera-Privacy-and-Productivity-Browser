@@ -505,6 +505,140 @@ describe('IPC discipline', () => {
   const isShortcutAction = (name: string): name is ShortcutAction =>
     (SHORTCUT_ACTIONS as readonly string[]).includes(name)
 
+  it('has something read every setting it offers', async () => {
+    /*
+      A setting nobody reads is a promise in a switch. The user turns it on, the store writes it down, the
+      screen draws it in its new position — and nothing anywhere changes, for ever, with no way for them to
+      find out.
+
+      This is not hypothetical here. `advanced.autoUpdate` sat in the table with no reader, and its *name*
+      claimed the opposite of what the browser did. Eight more were found the same way, and one of them is
+      serious enough to be the reason this test exists: `network.killSwitch` defaults to **true** and its
+      own comment states the specification's promise — no traffic at all if the tunnel drops. Nothing
+      implements it. A privacy browser shipping a kill switch that is a boolean in a file is worse than one
+      that does not offer the switch.
+
+      A key is "read" if its literal appears anywhere in `src/` outside the definition table. That is a low
+      bar on purpose — the alternative is tracing data flow, and this test is meant to catch total absence,
+      which is the failure that actually happens.
+
+      The allowlist below is a debt list, and it may only shrink. Each entry has to say what is missing,
+      because "listed here" must not become a place to park a feature quietly.
+    */
+    const definitions = readFileSync(join(ROOT, 'src/shared/settings/definitions.ts'), 'utf8')
+    const keys = [...definitions.matchAll(/^\s*'([a-zA-Z]+\.[a-zA-Z]+)':\s*def\(/gm)].map(
+      (match) => match[1] ?? ''
+    )
+    expect(keys.length, 'the settings table stopped matching this scan').toBeGreaterThan(40)
+
+    /** Declared, not yet honoured. Each line is a bug with a name. */
+    const notYetRead = new Map([
+      ['network.killSwitch', 'spec 4 promises no traffic when the tunnel drops; nothing implements it'],
+      ['network.proxyMode', 'no proxy is ever configured from settings'],
+      ['network.proxyUrl', 'same; the address is stored and unused'],
+      ['privacy.malwareProtection', 'no reputation check exists'],
+      ['advanced.spellcheckLanguages', 'the session’s spellchecker is never told'],
+      ['advanced.unloadInactiveTabs', 'no tab is ever unloaded on a timer'],
+      ['advanced.unloadAfterMinutes', 'same timer, same absence'],
+      ['search.suggestFromOpenTabs', 'the omnibox never consults open tabs'],
+      /*
+        Seven more, found by this test rather than by review. The first is the one a user would notice
+        soonest: the browser follows the operating system's theme through `prefers-color-scheme` in CSS,
+        so the *setting* is never consulted and choosing "light" or "dark" does nothing at all.
+      */
+      ['appearance.theme', 'CSS follows the OS; light and dark are never applied'],
+      ['appearance.tabBarPosition', 'the strip is always drawn in one place'],
+      ['search.suggestFromHistory', 'the omnibox draws no suggestions from history'],
+      ['search.suggestFromBookmarks', 'nor from bookmarks'],
+      ['search.remoteSuggestions', 'no suggestion is ever fetched, so the switch guards nothing'],
+      ['splitView.showTileHeaders', 'tiles have no headers to show or hide'],
+      ['privacy.partitionStatePerSite', 'one partition per browsing mode, never per site']
+    ])
+
+    const sources = (await collect('src')).filter(
+      (file) => file.relative !== 'src/shared/settings/definitions.ts'
+    )
+    const unread: string[] = []
+    for (const key of keys) {
+      if (sources.some((file) => file.text.includes(`'${key}'`))) continue
+      if (notYetRead.has(key)) continue
+      unread.push(key)
+    }
+
+    expect(unread, 'nothing in src reads these settings, so switching them does nothing').toEqual([])
+
+    // The debt list may only shrink: a key that has since gained a reader must leave it, or the list
+    // stops describing anything.
+    const stale = [...notYetRead.keys()].filter((key) =>
+      sources.some((file) => file.text.includes(`'${key}'`))
+    )
+    expect(stale, 'these settings are read now and should leave the debt list').toEqual([])
+  })
+
+  it('starts every installer it has', async () => {
+    /*
+      The test that would have caught `installAutofill()`.
+
+      Autofill was built, tested and complete, and `installAutofill()` was never called — so the feature
+      did not run at all, and nothing failed. An `install*` function is the shape that has this problem:
+      it is the whole wiring of a feature, it is called exactly once, and its absence looks like nothing.
+
+      Matched against `codeOnly`, so a docblock that mentions the name does not stand in for calling it.
+
+      Searched across the whole core rather than only `src/main/index.ts`, which was this test's first and
+      wrong shape: `installRequestPipeline` is called from `WindowRegistry`, where the session it installs
+      into lives, and that is the right place for it. What is being asserted is that an installer is called
+      *somewhere*, because the failure being caught is one that was called nowhere.
+    */
+    const core = await collect('src/main')
+    const callers = core.map((file) => ({ relative: file.relative, code: codeOnly(file.text) }))
+
+    for (const file of core) {
+      const [, name] = /export function (install\w+)/.exec(file.text) ?? []
+      if (name === undefined) continue
+      const called = callers.some(
+        (caller) => caller.relative !== file.relative && caller.code.includes(`${name}(`)
+      )
+      expect(called, `${name} is exported and never called, so its feature does not run`).toBe(true)
+    }
+  })
+
+  it('gives no channel an update command', () => {
+    /*
+      The update check has no IPC channel, and that is the property that keeps a *page* from being able to
+      trigger it. The only two callers are a timer and a menu item.
+
+      Worth a test rather than a comment because the pressure to add one is real and reasonable-sounding —
+      a settings page wanting a "check now" button — and the cost is that any page in any tab can then make
+      the browser talk to GitHub on demand.
+    */
+    for (const channel of INVOKE_CHANNELS) {
+      expect(channel, 'an update channel makes the check reachable from a page').not.toMatch(
+        /^updates?:/
+      )
+    }
+  })
+
+  it('keeps macOS in-place updates off while the workflow builds unsigned', () => {
+    /*
+      Two halves of one decision, four hundred lines and two file formats apart. Squirrel.Mac refuses to
+      replace an unsigned application, so offering a mac user a download that cannot install is worse than
+      sending them to the release page.
+
+      Coupled in the direction that hurts: if the workflow still disables signing, the source must still
+      say so. The reverse is deliberately not asserted — obtaining a certificate and flipping the constant
+      is a change somebody makes on purpose, and this test must not be the thing that blocks it.
+    */
+    const workflow = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8')
+    if (!workflow.includes('--config.mac.identity=null')) return
+
+    const source = readFileSync(join(ROOT, 'src/main/updates/UpdateService.ts'), 'utf8')
+    expect(
+      `${source}${readFileSync(join(ROOT, 'src/main/updates/install-updates.ts'), 'utf8')}`,
+      'the workflow builds mac unsigned, so in-place updates must stay off'
+    ).toMatch(/MAC_BUILD_IS_SIGNED\s*[:=]\s*false/)
+  })
+
   it('leaves no shape assertion pointing in only one direction', async () => {
     /*
       A wire schema and the interface it validates live in separate modules on purpose — the page is a

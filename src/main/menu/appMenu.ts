@@ -31,6 +31,15 @@ export interface MenuDeps {
   settings: SettingsStore
   locale: Locale
   platform: Platform
+  /**
+   * Asks for an update check, now, because a person said so.
+   *
+   * A callback rather than the service itself, so this file keeps knowing nothing about updates —
+   * and so the menu cannot reach the other things the service can do. `UpdateService.checkNow`
+   * returns `void` and never rejects, which a menu handler needs: a promise nobody holds ends the
+   * process when it rejects.
+   */
+  checkForUpdates: () => void
 }
 
 export function buildApplicationMenu(deps: MenuDeps): Menu {
@@ -399,6 +408,24 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
     label: t('menu.help'),
     role: 'help',
     submenu: [
+      /*
+        The only way to ask for an update check on purpose.
+
+        No accelerator, and none in the binding table either — this is the direction that is fine: the
+        fitness test in `tests/architecture.test.ts` holds every `ShortcutAction` to *having* an item,
+        because an accelerator without one is a key that silently does nothing. An item without a key
+        is just a menu item.
+
+        Deliberately not the settings screen and not a button in the chrome: a check is the one update
+        operation that takes no argument and needs no state, and the menu is where every other browser
+        puts it. There is no IPC channel for it either, which is what keeps a web page from being able
+        to make this browser talk to GitHub — see `UpdateService`.
+      */
+      {
+        label: t('updates.checkNow'),
+        click: () => deps.checkForUpdates()
+      },
+      { type: 'separator' },
       {
         label: t('menu.help.about'),
         click: () => focused()?.createTab({ url: internalUrl('about') })

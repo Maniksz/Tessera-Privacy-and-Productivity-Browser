@@ -223,8 +223,48 @@ export const settingDefinitions = {
   'advanced.spellcheckLanguages': def(z.array(z.string()), ['de-DE', 'en-US'], 'advanced'),
   'advanced.unloadInactiveTabs': def(z.boolean(), true, 'advanced'),
   'advanced.unloadAfterMinutes': def(z.number().int().min(1).max(1440), 30, 'advanced'),
-  'advanced.autoUpdate': def(z.boolean(), true, 'advanced'),
-  'advanced.customShortcuts': def(z.record(z.string(), z.string()), {}, 'advanced')
+  'advanced.customShortcuts': def(z.record(z.string(), z.string()), {}, 'advanced'),
+
+  // --- Updates -------------------------------------------------------------
+  /**
+   * Whether the browser looks for a new version by itself, and the fact that looking means asking
+   * GitHub.
+   *
+   * **GitHub is named in the key, because the key is what the user reads.** The settings screen
+   * renders each label from the key itself, so `checkAutomaticallyOnGithub` puts the third party in
+   * the sentence beside the switch rather than in a document nobody opens. The privacy cost is
+   * spelled out in the `publish:` block of `electron-builder.yml`: on every check GitHub sees an IP
+   * address and, in aggregate, how many people run this browser.
+   *
+   * On by default, and that is a deliberate exception to this project's "ask first" instinct. An
+   * out-of-date browser is a security problem — the whole reason a browser updates at all is that
+   * its rendering engine is the most attacked surface on the machine — and a check is *only* a check:
+   * `UpdateService` downloads nothing and installs nothing without the user agreeing to each step.
+   * So the default is on and the switch is real.
+   *
+   * This replaces `advanced.autoUpdate`, which was read by nothing at all. The rename is not
+   * cosmetic: that name promised automatic updating, which is the opposite of what was decided —
+   * nothing is downloaded or installed without approval — and a setting whose name contradicts the
+   * behaviour is worse than a missing one.
+   */
+  'updates.checkAutomaticallyOnGithub': def(z.boolean(), true, 'advanced'),
+  /**
+   * Which releases the user is told about.
+   *
+   * The values are spelled out here rather than imported from `main/updates/version.ts`, because
+   * shared code may not depend on the core; `UpdateService` assigns this to an `UpdateChannel`, so
+   * the compiler catches the two drifting apart.
+   *
+   * **Default `alpha`, and this is the one default here that will need revisiting.** Every version
+   * this project has ever published is a prerelease — `electron-builder.yml` says
+   * `releaseType: prerelease` and the release script is called `release:alpha` — and GitHub's "latest
+   * release" excludes prereleases. A default of `stable` would therefore mean the update check finds
+   * nothing for everybody who has it, for as long as that stays true: a feature that is wired up,
+   * tested, and silently useless. What flips it: the first release without a prerelease component.
+   * At that point this default becomes `stable`; profiles that chose `alpha` keep it, which is
+   * correct, because they chose it.
+   */
+  'updates.channel': def(z.enum(['stable', 'alpha']), 'alpha', 'advanced')
 } satisfies Record<string, SettingDefinition>
 
 export type SettingsKey = keyof typeof settingDefinitions

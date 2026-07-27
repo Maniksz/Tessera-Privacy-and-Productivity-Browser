@@ -11,7 +11,7 @@ import { chromeWindowOptions } from '@main/browser/window-options.js'
 const base = {
   privateMode: false,
   platform: 'linux' as const,
-  preload: '/app/out/preload/index.cjs',
+  preload: '/app/out/preload/chrome.cjs',
   roleArgument: '--tessera-role=chrome'
 }
 
@@ -31,11 +31,13 @@ describe('the renderer a window hosts', () => {
     expect(chromeWindowOptions(base).webPreferences?.backgroundThrottling).toBe(false)
   })
 
-  it('carries the role argument the preload reads', () => {
+  it('carries the role argument the preload checks itself against', () => {
     /*
-      The role decides whether the full bridge is exposed. It is passed as a process argument rather
-      than inferred from the URL because page content cannot influence an argument — a dev server or a
-      crafted address can make a URL ambiguous.
+      Since the preload was split per role, the *file* decides which bridge exists at all and this
+      argument is the second fact the bundle requires before exposing it — so a window that ended up
+      with the content bundle exposes nothing rather than something smaller. It is passed as a process
+      argument rather than inferred from the URL because page content cannot influence an argument — a
+      dev server or a crafted address can make a URL ambiguous.
     */
     expect(chromeWindowOptions(base).webPreferences?.additionalArguments).toEqual([
       '--tessera-role=chrome'
@@ -43,7 +45,9 @@ describe('the renderer a window hosts', () => {
   })
 
   it('loads the preload it was given rather than resolving one itself', () => {
-    expect(chromeWindowOptions(base).webPreferences?.preload).toBe('/app/out/preload/index.cjs')
+    // `paths.ts` needs `app`, and this function is pure so its invariants can be unit-tested. Which
+    // bundle a window is supposed to get is checked in `preload-roles.test.ts` instead.
+    expect(chromeWindowOptions(base).webPreferences?.preload).toBe('/app/out/preload/chrome.cjs')
   })
 })
 

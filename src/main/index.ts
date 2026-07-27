@@ -77,6 +77,7 @@ import { PasswordVault } from './passwords/PasswordVault.js'
 import { AutofillService } from './passwords/AutofillService.js'
 import { installAutofill } from './passwords/install-autofill.js'
 import { MasterPasswordPrompt } from './passwords/MasterPasswordPrompt.js'
+import { installUpdateChecks } from './updates/install-updates.js'
 
 /**
  * Application entry point.
@@ -684,8 +685,34 @@ async function main(): Promise<void> {
     userRules
   })
 
+  /*
+    The update check, started here and belonging to the application rather than to a window.
+
+    One timer for the program: a check per window would multiply the requests by however many windows
+    somebody keeps open, and a timer created with a private window would outlive the session it was
+    born in. `installUpdateChecks` starts it — it does not return something for a caller to remember
+    to start, because that is exactly the shape `installAutofill()` had while autofill did not run at
+    all.
+
+    The two closures are read per use, not captured: the settings so that switching the check off
+    stops the next one instead of the next launch, and the window so a message box is modal to
+    whichever window the person is looking at when it appears — which may be a window that did not
+    exist when this line ran, or none at all on macOS.
+  */
+  const updates = installUpdateChecks({
+    getSettings: () => settings?.snapshot() ?? defaultSettings(),
+    locale: () => resolveLocale(settings?.get('appearance.uiLanguage')),
+    parentWindow: () => (windows?.focused() ?? windows?.controllers[0])?.window ?? null
+  })
+
   const locale = uiLocale(settings)
-  installApplicationMenu({ windows, settings, locale, platform: currentPlatform() })
+  installApplicationMenu({
+    windows,
+    settings,
+    locale,
+    platform: currentPlatform(),
+    checkForUpdates: () => updates.checkNow()
+  })
 
   // Rebuild the menu when the language or a shortcut changes, so accelerators
   // and labels never lag behind the settings (spec 5).
@@ -696,7 +723,8 @@ async function main(): Promise<void> {
         windows,
         settings,
         locale: uiLocale(settings),
-        platform: currentPlatform()
+        platform: currentPlatform(),
+        checkForUpdates: () => updates.checkNow()
       })
     }
     if ('network.secureDnsMode' in changed || 'network.secureDnsServers' in changed) {

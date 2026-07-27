@@ -137,7 +137,7 @@ export class BrowserWindowController {
       chromeWindowOptions({
         privateMode: options.privateMode,
         platform: currentPlatform(),
-        preload: preloadFile(),
+        preload: preloadFile('chrome'),
         roleArgument: preloadRoleArgument('chrome')
       })
     )

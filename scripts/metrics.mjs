@@ -329,6 +329,27 @@ if (existsSync(assetsDir)) {
     )
   }
 
+  /*
+    The chrome preload, budgeted separately and much smaller.
+
+    The preload was split by role: a tab loads `index.cjs` (everything a page needs) and the window and
+    overlay load `chrome.cjs` (the bridge and nothing else). Only the first was weighed, which left the
+    second free to grow unnoticed — and it is the one that holds the whole IPC contract, so it is exactly
+    the file where an accidental import costs the most privilege for the least visible reason.
+
+    Two kilobytes of headroom on three: the file is the bridge, and the bridge is small.
+  */
+  const chromePreload = join(ROOT, 'out/preload/chrome.cjs')
+  if (existsSync(chromePreload)) {
+    metrics.push(
+      check('chrome preload', Math.round(statSync(chromePreload).size / 1000), {
+        max: 5,
+        unit: ' kB',
+        reason: 'it holds the whole IPC bridge; growth here is privilege the window did not ask for'
+      })
+    )
+  }
+
   const main = join(ROOT, 'out/main/index.js')
   if (existsSync(main)) {
     metrics.push(
