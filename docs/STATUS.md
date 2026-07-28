@@ -605,13 +605,20 @@ Klartextdatei und einer auf der Kommandozeile ein Eintrag in `~/.zsh_history` is
 |---|---|
 | macOS | `.dmg`, **`.zip`**, `latest-mac.yml` |
 | Windows | `.exe` (NSIS), `latest.yml` |
-| Linux | `.AppImage`, `.deb`, `.rpm`, `latest-linux.yml` |
+| Linux | `.AppImage` (x64 und arm64), `latest-linux.yml` |
 
 Die `.zip` ist kein Beifang: **Squirrel.Mac aktualisiert aus einem Zip, nicht aus einem Dmg.** Und die
 `latest*.yml` sind der eigentliche Feed — Version, Dateinamen, SHA-512-Summen. Genau die fehlen bei von Hand
 hochgeladenen Dateien, weshalb so ein Release vollständig aussieht und nichts aktualisiert.
 
-Einschränkungen: `.deb` und `.rpm` kann `electron-updater` nicht aktualisieren, auf Linux nur das AppImage.
+`.deb` und `.rpm` sind **entfernt**, nicht vergessen: beide brauchen einen Paket-*Maintainer*, den
+electron-builder aus `author.email` zieht — und es gibt keine Adresse, die dort richtig wäre. Die in git
+zeigt auf einen Arbeitgeber, der als Urheber dieses Projekts ausdrücklich abgelehnt wurde, und ein
+Platzhalter ist in einem ausgelieferten Paket schlimmer als ein fehlendes Paket: wer daran schreibt,
+bekommt Schweigen statt einer Antwort. Der Build fiel genau darüber, nachdem AppImage x64 und arm64 schon
+fertig waren. AppImage braucht keinen Maintainer, läuft ohne Installation auf jeder Distribution und ist
+das Format, das `electron-updater` auf Linux am zuverlässigsten aktualisiert. Die Abhängigkeitslisten für
+beide bleiben in `electron-builder.yml` stehen — inert ohne Ziel, aber sie waren die Recherche wert.
 Und drei Runner veröffentlichen gleichzeitig in dasselbe Tag — `electron-builder` sucht die Freigabe zum Tag
 und legt sie sonst an, was selten ein Wettlauf sein kann; sichtbar als doppelte oder fehlende Freigabe,
 reparierbar durch einen erneuten Lauf. `fail-fast: false` ist Absicht: ein Release mit zwei von drei Feeds ist

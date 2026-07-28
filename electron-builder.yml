@@ -39,13 +39,20 @@ nsis:
 
 # --- Linux -------------------------------------------------------------------
 linux:
+  # AppImage only, and both architectures.
+  #
+  # `.deb` and `.rpm` were here and are gone by decision. Both require a package *maintainer*, which
+  # electron-builder derives from `author.email` — and there is no address to put there that would not be
+  # wrong: the one in git points at an employer that was explicitly declined as this project's author, and
+  # a placeholder nobody reads is worse in a shipped package than a missing package, because a user who
+  # writes to it gets silence instead of an answer.
+  #
+  # AppImage needs no maintainer, runs on any distribution without being installed, and is the Linux format
+  # `electron-updater` handles most reliably. When there is a real address to stand behind, the two targets
+  # come back in one line each.
   target:
     - target: AppImage
       arch: [x64, arm64]
-    - target: deb
-      arch: [x64, arm64]
-    - target: rpm
-      arch: [x64]
   # A directory, because Linux installs one file per hicolor size rather than one
   # multi-resolution container.
   icon: build/icons
@@ -57,6 +64,10 @@ linux:
       Categories: Network;WebBrowser
       StartupWMClass: tessera
       StartupNotify: 'true'
+# The dependency lists for `.deb` and `.rpm`, kept although neither is built any more — see the note on
+# `linux.target`. They are inert without a target, and they are the part that took research: getting one of
+# these wrong produces a package that installs and then fails to start. Deleting them would mean working
+# them out again the day there is a maintainer address.
 deb:
   depends:
     - libgtk-3-0
