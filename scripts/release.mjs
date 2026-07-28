@@ -50,10 +50,25 @@ function assertCleanTree() {
 
 /** Refuse a tag that exists: pushing it would fail, and moving it would be worse. */
 function assertTagIsFree(tag) {
-  if (capture('git', ['tag', '--list', tag]) === '') return
-  console.error(`The tag ${tag} already exists, so this version has been released before.`)
-  console.error('Pick another level (--patch, --major), or delete that tag deliberately first.')
-  process.exit(1)
+  if (capture('git', ['tag', '--list', tag]) !== '') {
+    console.error(`The tag ${tag} exists locally, so this version has been released before.`)
+    console.error('Pick another level (--patch, --major), or delete that tag deliberately first.')
+    process.exit(1)
+  }
+  /*
+    The remote as well, and this half is not thoroughness.
+
+    A publish that fails creates the tag on GitHub anyway — creating a release creates a tag, against
+    whatever the remote branch points at, which is the commit *before* the version bump. That tag then
+    describes a commit whose `package.json` names a different version, and the next run would happily build
+    against it. It happened twice; the local check cannot see it, because the local tag was cleaned up.
+  */
+  if (capture('git', ['ls-remote', '--tags', 'origin', tag]).includes(tag)) {
+    console.error(`The tag ${tag} already exists on the remote.`)
+    console.error('If a failed run left it behind, remove it and any release attached to it:')
+    console.error(`  git push origin :refs/tags/${tag}`)
+    process.exit(1)
+  }
 }
 
 const KEYCHAIN_ITEM = 'tessera-gh-token'
@@ -161,10 +176,35 @@ if (!dryRun) {
   run('git', ['commit', '-am', to])
   /*
     Annotated, because `git push --follow-tags` transmits annotated tags only. A lightweight tag plus
-    `--follow-tags` is what made an earlier version of this script report success while the tag stayed on
-    the machine — so no workflow ran and nothing was built.
+    `--follow-tags` is what once made this script report success while the tag stayed on the machine — so
+    no workflow ran and nothing was built.
   */
   run('git', ['tag', '-a', tag, '-m', to])
+
+  /*
+    Pushed *before* anything is published. This order is the whole lesson of two failed attempts.
+
+    GitHub refuses to create a published release for a tag that does not exist on the remote — "Published
+    releases must have a valid tag", a 422 in the middle of uploading. And the attempt does not fail
+    cleanly: it leaves a tag behind on GitHub pointing at whatever the remote branch happened to be, which
+    is the commit *before* the version bump. So the remote ends up with a tag whose `package.json` names a
+    different version, which is worse than no release at all.
+
+    Tag first, verified there, and only then is there something for a release to attach to.
+  */
+  run('git', ['push', 'origin', 'HEAD'])
+  run('git', ['push', 'origin', tag])
+  if (!capture('git', ['ls-remote', '--tags', 'origin', tag]).includes(tag)) {
+    console.error(`\n${tag} did not reach the remote, so there is nothing to publish against.`)
+    console.error(`Push it by hand and run again:  git push origin ${tag}`)
+    process.exit(1)
+  }
+  /*
+    From here the version and the tag stay, whatever happens next. They are on the remote and the workflow
+    is already building this tag for all three platforms; undoing them locally would only make this machine
+    disagree with what everyone else can see.
+  */
+  pushed = true
 }
 
 // Built here, which is the point: the files this run publishes are made on this machine.
@@ -182,17 +222,6 @@ if (dryRun) {
   process.exit(0)
 }
 
-run('git', ['push', 'origin', 'HEAD'])
-// By name, not via `--follow-tags`, and then verified: the only thing that answers "will the other two
-// platforms build?" is whether the tag is actually on the other side.
-run('git', ['push', 'origin', tag])
-if (!capture('git', ['ls-remote', '--tags', 'origin', tag]).includes(tag)) {
-  console.error(`\n${tag} did not reach the remote, so Windows and Linux will not build.`)
-  console.error(`The macOS files are published. Push the tag to finish it:  git push origin ${tag}`)
-  process.exit(1)
-}
-pushed = true
-
-console.log(`\nPublished ${to} with the macOS files, and pushed ${tag}.`)
-console.log('The workflow is now adding Windows and Linux to the same release:')
+console.log(`\nPublished ${to}: the macOS files are attached to ${tag}.`)
+console.log('The workflow is adding Windows and Linux to the same release:')
 console.log('  https://github.com/Maniksz/Tessera-Privacy-and-Productivity-Browser/actions')
