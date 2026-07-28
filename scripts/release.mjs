@@ -6,21 +6,27 @@
  *   pnpm run release --major      0.x → 1.0.0-ALPHA
  *   pnpm run release --dry-run    builds, publishes nothing, puts the version back
  *
- * Refuse on a dirty tree or an existing tag → raise the version → commit → annotated tag → **build and
- * package here** → publish to GitHub → push the commit and the tag.
+ * Refuse on a dirty tree or an existing tag → raise the version → commit → annotated tag → push both →
+ * build and package here into `dist/`. The push starts `.github/workflows/release.yml`, which is what
+ * publishes the release, for all three platforms.
  *
- * ## What this machine can and cannot produce
+ * ## Why this does not publish, when it is a release command
  *
- * `electron-builder` packages for the platform it runs on, so a run here uploads the macOS files: `.dmg`
- * and `.zip` for x64 and arm64, plus `latest-mac.yml`. Pushing the tag then starts
- * `.github/workflows/release.yml`, which adds Windows and Linux to the **same** release. So the release is
- * complete either way; this command just does not wait for the other two.
+ * Because two publishers cannot share one release, and both orders fail. Publish before pushing the tag and
+ * GitHub refuses — a published release needs an existing tag. Push first and the workflow has already
+ * created the release by the time the local upload starts, so creating it again is `already_exists`. Both
+ * happened, in that order.
  *
- * ## Why it needs a token, and where it looks
+ * The workflow is therefore the only publisher, and it is also the only one that can produce all three
+ * platforms: `electron-builder` packages for the platform it runs on, so a local publish would upload macOS
+ * and leave Windows and Linux users with no feed file and no way to know why. The local build stays because
+ * the *files* are worth having: `dist/` ends up with this machine's installers.
  *
- * Creating a release is the GitHub REST API over HTTPS; an SSH key cannot authenticate it. `GH_TOKEN` or
- * `GITHUB_TOKEN` from the environment, otherwise the macOS Keychain — because a token in a shell profile is
- * a plain file every process can read, and one typed on the command line is a line in `~/.zsh_history`.
+ * ## No token, and that is the point
+ *
+ * A local publish needed one — creating a release is the GitHub REST API over HTTPS, which an SSH key
+ * cannot authenticate. Since the workflow publishes, the token it uses is `secrets.GITHUB_TOKEN`, minted
+ * for that run and destroyed with it. Nothing to create, store or rotate on anybody's machine.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -71,34 +77,6 @@ function assertTagIsFree(tag) {
   }
 }
 
-const KEYCHAIN_ITEM = 'tessera-gh-token'
-
-/** The token, from the environment or the Keychain. Captured, never inherited, never logged. */
-function findToken() {
-  const fromEnvironment = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN
-  if (fromEnvironment !== undefined && fromEnvironment !== '') return fromEnvironment
-  if (process.platform !== 'darwin') return null
-  try {
-    const stored = execFileSync('security', ['find-generic-password', '-s', KEYCHAIN_ITEM, '-w'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim()
-    return stored === '' ? null : stored
-  } catch {
-    return null
-  }
-}
-
-function explainMissingToken() {
-  console.error('No GitHub token, so the release cannot be created.\n')
-  console.error('Make one: GitHub → Settings → Developer settings → Personal access tokens →')
-  console.error('  Fine-grained → this repository → Permissions → Contents: Read and write.\n')
-  console.error('Keep it in the Keychain and it is found automatically from then on:')
-  console.error(`  security add-generic-password -a "$USER" -s ${KEYCHAIN_ITEM} -w`)
-  console.error('  (prompts for the value, so it stays out of your shell history)\n')
-  console.error('Or for one run:  GH_TOKEN=… pnpm run release')
-}
-
 /**
  * Signing, and what a build does without it.
  *
@@ -129,13 +107,6 @@ console.log(`${from} → ${to}   tag ${tag}${dryRun ? '   (dry run)' : ''}\n`)
 
 assertCleanTree()
 assertTagIsFree(tag)
-
-const token = dryRun ? '' : findToken()
-if (!dryRun && token === null) {
-  explainMissingToken()
-  process.exit(1)
-}
-if (token !== null && token !== '') process.env.GH_TOKEN = token
 
 const writeVersion = (version) => {
   manifest.version = version
@@ -207,21 +178,26 @@ if (!dryRun) {
   pushed = true
 }
 
-// Built here, which is the point: the files this run publishes are made on this machine.
+/*
+  Built here, published there — and the split is not a preference, it is the only arrangement that works.
+
+  Two publishers cannot share one release. Pushing the tag *starts the workflow*, which creates the release
+  within seconds; a local `--publish always` then asks GitHub to create the same one and gets
+  `422 already_exists`. Ordering them the other way is no better: GitHub refuses a published release for a
+  tag that does not exist yet, which was the previous failure. There is no sequence in which both publish.
+
+  So the workflow is the only publisher — it is also the only one that *can* produce all three platforms —
+  and this build exists for the files themselves: `dist/` gets the installers for this machine, which is
+  what you want when you are about to try the thing you just tagged, or hand somebody a file directly.
+*/
 run('pnpm', ['run', 'build'])
-run('pnpm', [
-  'exec',
-  'electron-builder',
-  ...macSigningArguments(),
-  '--publish',
-  dryRun ? 'never' : 'always'
-])
+run('pnpm', ['exec', 'electron-builder', ...macSigningArguments(), '--publish', 'never'])
 
 if (dryRun) {
-  console.log(`\nBuilt into dist/. Nothing published; version restored to ${from}.`)
+  console.log(`\nBuilt into dist/. Nothing tagged or published; version restored to ${from}.`)
   process.exit(0)
 }
 
-console.log(`\nPublished ${to}: the macOS files are attached to ${tag}.`)
-console.log('The workflow is adding Windows and Linux to the same release:')
+console.log(`\n${to} is tagged and pushed, and dist/ holds this machine's installers.`)
+console.log('The workflow is building and publishing the release for macOS, Windows and Linux:')
 console.log('  https://github.com/Maniksz/Tessera-Privacy-and-Productivity-Browser/actions')
