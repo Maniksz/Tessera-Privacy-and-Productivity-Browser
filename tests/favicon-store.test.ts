@@ -929,6 +929,15 @@ describe('the file a site is stored in', () => {
       keep. The file names are hashes for the same reason — mode and name are two halves
       of one decision, and only one of them was asserted.
     */
+    /*
+      Skipped on Windows, which has no POSIX mode: `fs.stat` there reports `0o666` whatever was passed to
+      `writeFile`, so this assertion could only ever fail — and it did, in a release workflow, which is how
+      a build with no `.exe` came to exist. The requirement is not skipped, only this way of checking it:
+      on Windows the file inherits the ACL of the user's profile directory, which is what the mode achieves
+      here. What must not happen is deleting the assertion because one platform cannot see it.
+    */
+    if (process.platform === 'win32') return
+
     const h = await harness()
     await h.store.cacheFor('normal').ensure(PAGE, [ICON])
 

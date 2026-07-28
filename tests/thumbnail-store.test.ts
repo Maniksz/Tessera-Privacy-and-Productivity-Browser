@@ -921,6 +921,14 @@ describe('on disk', () => {
 
   it('writes the picture readable by nobody else', async () => {
     /*
+      Skipped on Windows, which has no POSIX mode: `fs.stat` there reports `0o666` whatever was passed to
+      `writeFile`, so this assertion could only ever fail — and it did, in a release workflow, which is how
+      a build with no `.exe` came to exist. The requirement is not skipped, only this way of checking it:
+      on Windows the file inherits the ACL of the user's profile directory, which is what the mode achieves
+      here. What must not happen is deleting the assertion because one platform cannot see it.
+    */
+    if (process.platform === 'win32') return
+    /*
       `0o600` is passed explicitly and this is what asks for it. A thumbnail is a
       photograph of the user's screen — an inbox, a bank statement, whatever was open — and
       the default mode would be `0644`, so on a shared machine every other account could

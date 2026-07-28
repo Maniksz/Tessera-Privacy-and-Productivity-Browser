@@ -536,6 +536,14 @@ describe('reading the key file', () => {
 
 describe('writing and deleting the key file', () => {
   it('creates the directory it was pointed at, readable only by its owner', async () => {
+    /*
+      The mode check is skipped on Windows, which has no POSIX mode: `fs.stat` there reports `0o666`
+      whatever was passed to `writeFile`, so it could only ever fail — and it did, in a release workflow,
+      which is how a build with no `.exe` came to exist. The *requirement* is not skipped, only this way of
+      checking it: on Windows the file inherits the ACL of the user's profile directory, which is what the
+      mode achieves here. What must not happen is deleting the assertion because one platform cannot see it.
+    */
+    const posixModes = process.platform !== 'win32'
     const path = join(await tempDir(), 'profile', 'passwords.key')
     const file = await wrapCheaply({
       key: newVaultKey(),
@@ -545,7 +553,7 @@ describe('writing and deleting the key file', () => {
     await writeVaultKeyFile(path, file)
 
     const info = await stat(path)
-    expect(info.mode & 0o777).toBe(0o600)
+    if (posixModes) expect(info.mode & 0o777).toBe(0o600)
   })
 
   it('leaves no temporary file behind once the rename is done', async () => {

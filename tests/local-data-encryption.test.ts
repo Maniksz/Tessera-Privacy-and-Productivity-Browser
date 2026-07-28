@@ -300,6 +300,14 @@ describe('local data key', () => {
   })
 
   it('creates the key file readable only by its owner', async () => {
+    /*
+      Skipped on Windows, which has no POSIX mode: `fs.stat` there reports `0o666` whatever was passed to
+      `writeFile`, so this assertion could only ever fail — and it did, in a release workflow, which is how
+      a build with no `.exe` came to exist. The requirement is not skipped, only this way of checking it:
+      on Windows the file inherits the ACL of the user's profile directory, which is what the mode achieves
+      here. What must not happen is deleting the assertion because one platform cannot see it.
+    */
+    if (process.platform === 'win32') return
     const keyFilePath = await tempPath('local-data.key')
     await loadOrCreateLocalDataKey({ safeStorage: fakeKeystore(), keyFilePath })
     const info = await stat(keyFilePath)

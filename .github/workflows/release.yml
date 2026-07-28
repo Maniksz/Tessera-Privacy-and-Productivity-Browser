@@ -29,7 +29,36 @@ permissions:
   contents: write
 
 jobs:
+  # The gates, once, before anything is published.
+  #
+  # Once and not per platform, and that is a correction rather than a saving. Run on all three, the suite
+  # failed on Windows — not on anything about the product, but on four assertions that read a file's POSIX
+  # mode, which Windows does not have. So a release with no `.exe` was produced by a *test* that could never
+  # have passed there, and the Windows job died before it built anything.
+  #
+  # These are pure-logic tests over shared modules; there is nothing platform-specific for them to catch that
+  # three runs would find and one would not. What *is* platform-specific is the build, and that still happens
+  # on each.
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run lint
+      - run: pnpm test
+
   publish:
+    # Nothing is published unless the gates passed. A release cannot be taken back once a browser has
+    # updated to it, so this is the place where being slow is correct.
+    needs: gates
     strategy:
       # Deliberately not fail-fast. One platform's build failing must not cancel the other two — a release
       # with two of three feeds is worth having and can be completed by re-running one job, whereas a
@@ -63,18 +92,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The gates, before anything is published. A release is the one artefact that cannot be taken back
-      # once somebody's browser has updated to it, so this is the place where being slow is correct.
-      #
-      # `pnpm run build` is `typecheck && electron-vite build`, so it is both the first gate and the thing
-      # that produces `out/`. Named as one command rather than split into a typecheck step plus an
-      # `electron-vite build` step, because `electron-builder.yml` takes `out/**/*` as its input and the
-      # first version of this workflow ran the gates and then packaged **without ever building** — which
-      # would have published a release that looks complete, downloads, installs, and contains no
-      # application. One command means the build cannot be the step that is forgotten.
+      # `pnpm run build` is `typecheck && electron-vite build`, so it type-checks on this platform *and*
+      # produces `out/`. It has to be here rather than only in the gates job: `electron-builder.yml` takes
+      # `out/**/*` as its input, and the first version of this workflow ran the checks and then packaged
+      # **without ever building** — which would have published a release that looks complete, downloads,
+      # installs, and contains no application.
       - run: pnpm run build
-      - run: pnpm run lint
-      - run: pnpm test
 
       # And a guard against the same class of mistake arriving another way — a build that succeeds and
       # emits nothing, a changed output directory, a `files` glob that stops matching. Cheap, and it turns
