@@ -132,56 +132,59 @@ describe('a page asking for fullscreen', () => {
 })
 
 describe('the fullscreen key', () => {
-  it("uses the window's own fullscreen in a single pane", () => {
+  /*
+    F11 takes the *window*, in every layout. Reported in exactly those words — "with F11 I meant the
+    browser itself goes fullscreen, not videos/content" — after a first version put the key on the tile's
+    fullscreen whenever the scope was the tile.
+
+    The reason that first version existed is the thing these tests have to keep straight: `applyPolicy`
+    marks a split window un-fullscreenable so that a *page* cannot take it, and `setFullScreen` on such a
+    window is silence rather than an error. So the key has to lift the flag — and the flag cannot tell a
+    person from a page, which is why the lift belongs to the key and the restore belongs to leaving.
+  */
+  it('takes the window in a single pane', () => {
     const h = harness('1x1')
     h.controller.toggleFullscreen()
     expect(h.toggledWindowFullscreen).toBe(1)
-    expect(h.split.fullscreenTile).toBeNull()
   })
 
-  it('fullscreens the active tile in a split layout instead of doing nothing', () => {
-    /*
-      The bug this is here for. `applyPolicy` marks a split window un-fullscreenable, and
-      `setFullScreen` on such a window is silence rather than an error — so the key was dead in
-      exactly the mode this browser is for. What must not come back is a version that asks the
-      window anyway: it would still do nothing, and this assertion would still pass without the
-      second one.
-    */
+  it('takes the window in a split layout too, which is the whole correction', () => {
     const h = harness('2x2')
-    h.split.setActiveTile(2)
-    h.controller.toggleFullscreen()
-
-    expect(h.split.fullscreenTile).toBe(2)
-    expect(h.toggledWindowFullscreen).toBe(0)
-    expect(h.changes).toBe(1)
-  })
-
-  it('takes the tile back out on a second press', () => {
-    const h = harness('2x2')
-    h.split.assignTab('tab-b', 1)
-    h.split.setActiveTile(1)
-    h.controller.toggleFullscreen()
-    h.controller.toggleFullscreen()
-
-    expect(h.split.fullscreenTile).toBeNull()
-    // Asked of the page too, for the case where the page is why the tile was fullscreen.
-    expect(h.askedPages).toEqual(['tab-b'])
-  })
-
-  it('goes back to the window once the user asks for window scope', () => {
-    // Same layout, different setting: the whole point of `splitView.fullscreenScope`.
-    const h = harness('2x2')
-    h.scope = 'window'
     h.controller.toggleFullscreen()
 
     expect(h.toggledWindowFullscreen).toBe(1)
+    // And emphatically not the tile: that is what a *page* asking for fullscreen gets.
     expect(h.split.fullscreenTile).toBeNull()
   })
 
-  it('re-applies the policy after a tile went fullscreen', () => {
+  it('lifts the un-fullscreenable flag first, or the request is silence', () => {
+    /*
+      The mechanism, asserted directly. `applyPolicy` has told this window it may not go fullscreen;
+      without the lift, `setFullScreen` does nothing at all and the key looks broken — which is exactly how
+      the original bug presented.
+    */
+    const h = harness('2x2')
+    h.controller.applyPolicy()
+    expect(h.fullScreenable).toEqual([false])
+
+    h.controller.toggleFullscreen()
+    expect(h.fullScreenable, 'the flag was not lifted for the key').toEqual([false, true])
+  })
+
+  it('does not restore the policy itself, so the user can get back out', () => {
+    // Restoring here would mark the window un-fullscreenable while it is fullscreen. The window
+    // controller re-applies the policy on `leave-full-screen`, which is when a page could take it.
     const h = harness('2x2')
     h.controller.toggleFullscreen()
-    expect(h.fullScreenable.length).toBeGreaterThan(0)
+    expect(h.fullScreenable.at(-1)).toBe(true)
+  })
+
+  it('still takes the window when the user asked for window scope', () => {
+    // Nothing to lift in that case, and the answer is the same either way.
+    const h = harness('2x2')
+    h.scope = 'window'
+    h.controller.toggleFullscreen()
+    expect(h.toggledWindowFullscreen).toBe(1)
   })
 })
 

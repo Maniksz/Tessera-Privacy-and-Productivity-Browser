@@ -249,6 +249,16 @@ export class BrowserWindowController {
     }
     const onLeaveFullscreen = (): void => {
       this.split.setWindowFullscreen(false)
+      /*
+        The confinement comes back here, and this is the only place it can.
+
+        `toggleFullscreen` lifts `fullScreenable` so the *user's* key can take the window — the flag cannot
+        tell a person from a page, so it has to be lifted for the request the person made. Left lifted, a
+        video in one pane could then take the whole window and blank the other three, which is the thing
+        spec 2 is about. Restoring it on the way *in* would trap the user in fullscreen; on the way out is
+        both the earliest safe moment and the one that needs no second flag to remember why.
+      */
+      this.#seams.fullscreen.applyPolicy()
       this.relayout()
       this.#scheduleBroadcast()
     }

@@ -63,41 +63,36 @@ export class TileFullscreenController {
   }
 
   /**
-   * The fullscreen key — F11, or Ctrl+Cmd+F on macOS (spec 2, spec 9).
+   * The fullscreen key — F11, or Ctrl+Cmd+F on macOS (spec 9).
    *
-   * Two things it can mean, and the layout decides which. In a single pane it is the window's own
-   * fullscreen, as in any browser. In a split layout with the scope set to the tile — the default —
-   * the window is deliberately not fullscreenable, and *this is the bug the method was written for*:
-   * `setFullScreen` on a window that has been told it may not go fullscreen is not an error, it is
-   * silence, so the key did nothing whatsoever in precisely the mode this browser exists for.
+   * **The window goes fullscreen. Always, in every layout.** That is what the key means in every
+   * browser: the chrome and the desktop go away and the window fills the screen, with whatever
+   * arrangement of tiles it was showing still inside it.
    *
-   * Fullscreen of the tile rather than nothing, because that is what "the fullscreen scope is the
-   * tile" already means everywhere else — it is the answer this browser gives when a *page* asks for
-   * fullscreen in a pane, and the key asking for the same thing should not get a different one.
+   * ## Why this needs a line of its own rather than just calling the window
+   *
+   * `applyPolicy` marks a split window **not fullscreenable**, and `setFullScreen` on such a window is
+   * not an error — it is silence. That policy exists for one requester: a *page*. A video asking for
+   * fullscreen in one pane must not blank the other three, and marking the window un-fullscreenable is
+   * the mechanism that confines it. But `fullScreenable` is one window-level flag and cannot tell a
+   * person pressing a key from a page calling an API, so the flag has to be lifted for the request the
+   * person made.
+   *
+   * A first version of this read the flag instead of lifting it, and put the key on the *tile's*
+   * fullscreen in a split layout. That is a coherent reading of "the fullscreen scope is the tile" and
+   * it is not what the key means: reported as "with F11 I meant the browser itself goes fullscreen, not
+   * videos/content".
+   *
+   * ## Why the policy is not restored here
+   *
+   * Leaving the window fullscreenable while it *is* fullscreen is what lets the user out again — by the
+   * key, the green button, or the escape ladder. `BrowserWindowController` re-applies the policy on
+   * `leave-full-screen`, which is the moment a page could take the window and therefore the moment the
+   * confinement has to be back.
    */
   toggleFullscreen(): void {
-    if (windowFullscreenPermitted(this.host.split.layout, this.host.fullscreenScope())) {
-      this.host.toggleWindowFullscreen()
-      return
-    }
-
-    const fullscreenTile = this.host.split.fullscreenTile
-    if (fullscreenTile === null) {
-      this.host.split.enterTileFullscreen(this.host.split.activeTile)
-    } else {
-      this.host.split.leaveTileFullscreen()
-      /*
-        Asked of the page as well, for the case where the page is the reason the tile is fullscreen: a
-        video left in its own fullscreen keeps drawing its fullscreen player interface inside a pane
-        that is no longer fullscreen. Harmless when the page never asked — `document.exitFullscreen`
-        on a document that is not fullscreen rejects, and the host swallows that.
-      */
-      const tabId = this.host.split.tabIdAt(fullscreenTile)
-      if (tabId !== null) this.host.askPageToExitFullscreen(tabId)
-    }
-
-    this.applyPolicy()
-    this.host.changed()
+    this.host.setFullScreenable(true)
+    this.host.toggleWindowFullscreen()
   }
 
   /** A page asked for fullscreen. The tile it lives in becomes the fullscreen one. */

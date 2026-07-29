@@ -219,11 +219,21 @@ Zwei Fehler übereinander, beide behoben:
    Auf macOS steht nun `windowFullscreen: ['Control+Command+F', 'F11']` — die Plattformkonvention zuerst, weil
    das Menü sie zeigt, F11 daneben, weil Leute mit ihr in den Händen von Windows kommen.
 2. **Die Aktion war im Kachelmodus tot.** `applyPolicy()` setzt `setFullScreenable(false)`, sobald ein
-   Mehrkachel-Layout mit Kachel-Vollbild aktiv ist — und `setFullScreen` auf so einem Fenster ist kein Fehler,
-   sondern Stille. Die Taste tat also genau in dem Modus nichts, für den dieser Browser existiert. Neu:
-   `TileFullscreenController.toggleFullscreen()` entscheidet, was die Taste bedeutet — im Einzelfenster das
-   Fenstervollbild, im geteilten Layout das **Vollbild der aktiven Kachel**, weil „der Vollbild-Bereich ist die
-   Kachel" überall sonst schon das heißt.
+   Mehrkachel-Layout mit Kachel-Vollbild aktiv ist — und `setFullScreen` auf so einem Fenster ist kein
+   Fehler, sondern Stille. Die Taste tat also genau in dem Modus nichts, für den dieser Browser existiert.
+
+   **Korrektur einer falsch verstandenen Anforderung.** Die erste Fassung legte die Taste im Kachelmodus
+   auf das Vollbild der *aktiven Kachel* — eine in sich stimmige Lesart von „der Vollbild-Bereich ist die
+   Kachel", und nicht, was die Taste bedeutet. Gemeldet mit genau diesen Worten: „mit f11 meinte ich, dass
+   der browser selbst fullscreen geht und nicht videos/inhalte."
+
+   Jetzt nimmt F11 **immer das Fenster**, in jedem Layout, mit den Kacheln darin. Dafür muss die Sperre
+   gehoben werden, und der Grund, warum das nicht einfach ein Aufruf ist: `fullScreenable` ist **ein**
+   Fenster-Flag und kann einen Menschen an einer Taste nicht von einer Seite an einer API unterscheiden.
+   Die Sperre existiert für die Seite — ein Video in einer Kachel darf die anderen drei nicht schwärzen —
+   also wird sie für die Anfrage des Menschen gehoben und beim **Verlassen** des Vollbilds wieder gesetzt.
+   Beim Betreten wiederherzustellen würde den Benutzer im Vollbild einsperren; das Verlassen ist der
+   früheste sichere Zeitpunkt und braucht kein zweites Flag, um sich den Grund zu merken.
 
 Zwei Fitness-Funktionen dazu: dass der Mechanismus überhaupt auf die Vorlage angewandt wird, und dass **kein
 Ankreuz-Eintrag** eine Aktion mit zweiter Taste bekommt — ein verborgener Klon hat sein eigenes `checked`, eine
