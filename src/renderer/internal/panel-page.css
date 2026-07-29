@@ -40,12 +40,29 @@ body {
   The selector deliberately does not name `.panel--narrow`: it is more specific than that modifier, so
   the extensions panel's narrower width is undone here as well. On a page there is nothing for it to be
   narrow *against*.
+
+  ## The two declarations this block was missing
+
+  `display` and `overflow`, and between them the settings page could not be scrolled at all.
+
+  A panel is a column that fits a window: `max-height: 100%` with `overflow: hidden`, and a body that
+  takes the leftover room and scrolls inside it (`flex: 1; min-height: 0; overflow-y: auto`). Undoing
+  the height without undoing the clipping left the worst of both — the body was told to overflow
+  visibly and the parent still cut it off, so every setting past the fold was drawn and then hidden,
+  with nothing to scroll because the document never grew.
+
+  So the flex column goes too. On a page the header and the body are simply two blocks in normal flow;
+  the tab scrolls, which is what `.panelPage` was always for, and the body's `flex` and `min-height`
+  stop applying on their own once their parent is no longer a flex container — no override needed for
+  them, and none written, because a rule that does nothing is a rule the next person has to disprove.
 */
 .panelPage .panel {
+  display: block;
   position: static;
   width: 100%;
   max-width: none;
   max-height: none;
+  overflow: visible;
   border: none;
   border-radius: 0;
   background: none;

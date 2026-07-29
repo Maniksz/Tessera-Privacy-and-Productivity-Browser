@@ -739,18 +739,13 @@ body {
 }
 
 /*
-  U1: which of several tiles the toolbar, Ctrl+L, back/forward and the layout button act on.
-  `SplitDividers` only renders this when there is more than one tile — a `1x1` or a maximised tile
-  has no ambiguity to resolve, so there is nothing drawn here in either case.
+  No `.active-tile` rule here, and the absence is deliberate rather than pending.
 
-  An inset shadow rather than a border: a border would grow the box outward by its own width,
-  landing partway into the gutter or the neighbouring tile depending on rounding; `inset` keeps the
-  ring exactly on the edges `computeTileRects` already placed. Same weight and colour as the
-  keyboard focus ring in `tokens.css`, which is the accent's other job — "the thing that currently
-  has your input" — so the two read as one visual language instead of two.
+  There was one — a 2px `--accent` inset ring marking which tile the toolbar acts on. It is gone
+  along with the markup, because its colour and weight are exactly `.divider:hover` above while a
+  resting divider is `background: transparent`. A ring drawn in the wrong place therefore did not
+  read as a misplaced highlight but as the *divider* having moved, with the real one reported as
+  missing entirely. See the docblock in `SplitDividers.tsx` for how it came to be misplaced.
+
+  Whatever answers "which tile is active" next must not borrow the divider's own visual language.
 */
-.active-tile {
-  position: absolute;
-  box-shadow: inset 0 0 0 2px var(--accent);
-  border-radius: 2px;
-}

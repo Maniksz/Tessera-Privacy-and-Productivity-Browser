@@ -2,7 +2,6 @@ import { useRef, type PointerEvent } from 'react'
 import type { SplitState } from '@shared/model.js'
 import { DEFAULT_FRACTIONS, TILE_GUTTER, dividersFor } from '@shared/split/layout.js'
 import { invoke } from '../bridge.js'
-import { useTileRects } from '../useTileRects.js'
 
 /**
  * Draggable dividers between tiles (spec 2).
@@ -22,20 +21,35 @@ interface SplitDividersProps {
   contentTop: number
 }
 
+/*
+  ## Why there is no active-tile highlight here
+
+  There was one, briefly, and it is worth recording why it went rather than leaving the next person to
+  rediscover the same trap.
+
+  It drew a 2px `--accent` inset ring around `split.activeTile`, positioned from a `ResizeObserver` on
+  this very element. Two things made that worse than nothing. The measurement hook keyed its effect on
+  `[]`, and this component returns `null` for `1x1` and for a maximised tile — so on the common path the
+  ref was still `null` when the effect ran, no observer was ever installed, and switching to a split
+  afterwards never re-ran it. And the ring's colour and weight are exactly `.divider:hover`, while a
+  resting divider is `background: transparent`. So a ring in the wrong place did not read as a
+  misplaced highlight; it read as *the divider itself* having moved, with the real one — invisible until
+  hovered — reported as missing.
+
+  The lesson is the ordering, not the feature: a decoration laid over the one control this layer exists
+  for has to be verified in the running application before it ships, and it could not be. U1 comes back
+  when somebody can look at it — measured from the core's `computeTileRects` as before, but with an
+  effect that survives this component's own early returns.
+*/
 export function SplitDividers({ split, contentTop }: SplitDividersProps): React.ReactNode {
-  const { ref: containerRef, rects: tileRects } = useTileRects(split)
+  const containerRef = useRef<HTMLDivElement>(null)
   const dragging = useRef<string | null>(null)
 
-  // A maximised tile has no visible boundaries to drag, and only one tile is on screen — exactly
-  // the ambiguity the active-tile frame exists to resolve, so there is nothing here to draw either.
+  // A maximised tile has no visible boundaries to drag.
   if (split.maximizedTile !== null) return null
 
   const dividers = dividersFor(split.layout, split.fractions)
-  // No dividers means a single tile (`1x1`): which one is active is not a question, so U1's frame
-  // would be noise here — this early return already keeps it off, the same as for the maximised case.
   if (dividers.length === 0) return null
-
-  const activeRect = tileRects[split.activeTile] ?? null
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>, id: string): void => {
     event.preventDefault()
@@ -81,24 +95,6 @@ export function SplitDividers({ split, contentTop }: SplitDividersProps): React.
       // swallow clicks meant for the content views behind it.
       aria-hidden={false}
     >
-      {/*
-        U1: the only visible answer to "which tile does the toolbar act on". Purely decorative —
-        the tile itself already carries the real state — so it is `aria-hidden` on its own rather
-        than announced, and it sits under the divider handles in source order so a divider's own
-        hover/focus paint is never covered by it.
-      */}
-      {activeRect !== null && (
-        <div
-          className="active-tile"
-          aria-hidden="true"
-          style={{
-            left: activeRect.x,
-            top: activeRect.y,
-            width: activeRect.width,
-            height: activeRect.height
-          }}
-        />
-      )}
       {dividers.map((divider) => {
         const fraction = split.fractions[divider.id] ?? DEFAULT_FRACTIONS[split.layout][divider.id] ?? 0.5
         const vertical = divider.orientation === 'vertical'

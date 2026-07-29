@@ -55,10 +55,58 @@ jobs:
       - run: pnpm run lint
       - run: pnpm test
 
+  # The release itself, created exactly once before anything uploads into it.
+  #
+  # ## The defect this fixes
+  #
+  # The three publish jobs below run in parallel, and each one ran `electron-builder --publish always`
+  # against a release that did not exist yet. So all three asked GitHub "is there a release for this
+  # tag?", all three were told no, and all three posted one. One won; the others got
+  # `422 already_exists` and failed *after* having built their installers — a green build discarded at
+  # the last step, and a release carrying one platform's feed instead of three.
+  #
+  # It is a race, so it fails by timing rather than reliably: the log of the losing job still says
+  # "creating GitHub release reason=release doesn't exist", because that check happened before the
+  # winner's release existed. The Linux job failed twice over for the same reason at a smaller scale —
+  # x64 and arm64 upload as two parallel tasks inside the one process, so both posted too.
+  #
+  # ## Why a job rather than serialising the matrix
+  #
+  # `max-parallel: 1` would also work and costs three sequential platform builds, each with its own
+  # Electron download — the slowest possible fix for a problem that is one API call. Creating the
+  # release up front leaves the builds parallel and turns every publish step into what it should have
+  # been: an upload into something that already exists.
+  release:
+    needs: gates
+    runs-on: ubuntu-latest
+    steps:
+      # Shallow, because nothing here reads history — `gh` needs the repository context and no more.
+      - uses: actions/checkout@v4
+
+      - name: Create the release if it is not there yet
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Idempotent on purpose: re-running a partly failed release must not fail here, and a release
+        # created by an earlier attempt is left exactly as it is rather than replaced — its assets may
+        # already be attached.
+        #
+        # `--prerelease` matches `releaseType: prerelease` in `electron-builder.yml`. The two have to
+        # agree: a stable release created here would present an alpha to stable users as the newest
+        # version, which is the thing that setting exists to prevent.
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists, leaving it untouched"
+            exit 0
+          fi
+          gh release create "$tag" --prerelease --title "$tag" --generate-notes
+
   publish:
     # Nothing is published unless the gates passed. A release cannot be taken back once a browser has
     # updated to it, so this is the place where being slow is correct.
-    needs: gates
+    #
+    # And not until the release exists, so these three only ever upload into it.
+    needs: [gates, release]
     strategy:
       # Deliberately not fail-fast. One platform's build failing must not cancel the other two — a release
       # with two of three feeds is worth having and can be completed by re-running one job, whereas a
