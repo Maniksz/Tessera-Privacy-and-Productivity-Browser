@@ -26,7 +26,7 @@ gemeldet wurden.
 | 4 | Layout-Tasten alle oben rechts | ✅ | Ein Knopf mit Dropdown; Smoke prüft 1 Knopf, 5 Einträge, genau 1 aktiv |
 | 5 | Kein Settings-Knopf | ✅ | `SettingsPage.tsx` (Tab) und `SettingsPanel.tsx` (Overlay) rendern beide `renderer/shared/SettingsView.tsx` — eine Oberfläche, zwei Eingänge |
 | 6 | Kein Extension-Knopf | ✅ | Dito über `ExtensionsView.tsx`; `extensions.html` ist ein eigener Tab |
-| 7 | Tabs werden in der Multi-View nicht zur Tab-Gruppe | 🟡 | **Nicht beim Teilen, sondern beim Wegräumen.** `groupToHoldArrangement` legt eine (unbenannte) Gruppe an, wenn ein neuer Tab die Kacheln verdrängt — das war der Bedarf hinter dem Punkt. Eine Multi-View *als solche* erzeugt weiterhin keine Gruppe. Ob sie das soll, ist nie entschieden worden |
+| 7 | Tabs werden in der Multi-View nicht zur Tab-Gruppe | 🟡 **beauftragt** | Heute entsteht die Gruppe beim *Wegräumen*, nicht beim Teilen: `groupToHoldArrangement` legt eine unbenannte Gruppe an, wenn ein neuer Tab die Kacheln verdrängt. Am 29.07.2026 entschieden: **sie soll beim Teilen entstehen.** Was daran kippt, steht unter „Vier beauftragte Änderungen" |
 | 8 | In der Multi-View nur „main page" zurück; Wischen; Leiste am oberen Rand | ✅ | Drei Teile, alle drei da: aktive Kachel folgt dem Klick (`split:setActiveTile`), Hover-Leiste als `overlay/TileBarSurface.tsx`, Wischen über `decideNavigationGesture` in `TileInputController` — nach Zeiger geroutet, nicht nach Fokus |
 | 9 | Icons oben links zu klein | ✅ | 32×32 Knopf mit 20 px SVG |
 | 10 | Kein Home-Knopf | ✅ | Smoke: 4 Navigationsknöpfe |
@@ -145,6 +145,107 @@ weil die Ursache jedes Mal aussagekräftiger ist als der Fehler.
 ## Entschieden, noch nicht gebaut
 
 Diese Entscheidungen sind gefallen und hier festgehalten, damit sie nicht mit einer Sitzung verloren gehen.
+
+### Vier beauftragte Änderungen (29.07.2026)
+
+Beauftragt, nicht gebaut. Bei drei von vier ist die Änderung *kleiner* als ihre Folge, und die Folge ist
+jeweils der Teil, der beim Bauen schiefgehen kann.
+
+**1. Eine Multi-View ist eine Tab-Gruppe.** Heute entsteht eine Gruppe erst, wenn ein neuer Tab die Kacheln
+verdrängt (`groupToHoldArrangement`); künftig entsteht sie beim Teilen. Der Rückweg, den der Benutzer als
+Grund nennt, ist damit nicht neu zu bauen — `takeArrangementFor` gibt die Anordnung beim Anklicken eines
+Gruppen-Tabs schon zurück. Drei Dinge kippen mit:
+
+- **Die Aufnahme darf nicht mehr verbraucht werden.** `takeArrangementFor` löscht die Anordnung beim
+  Zurückgeben, mit gutem Grund: eine Aufnahme *einer Verdrängung* zweimal abzuspielen würde Arbeit
+  überschreiben, die der Benutzer danach gemacht hat. Bei einer Gruppe, die die Multi-View **ist**, ist die
+  Anordnung aber kein Andenken, sondern die Eigenschaft der Gruppe — und muss jeden Rücksprung überleben.
+  Wahrscheinlich zwei Begriffe statt einem: eine *Verdrängungsaufnahme* (einmalig, wie heute) und die
+  *Anordnung der Gruppe* (dauerhaft).
+- **Gemischte Herkunft wird von einer Ausnahme zum Normalfall.** Heute nimmt eine Kachelverteilung aus teils
+  Gruppenmitgliedern, teils losen Tabs bewusst *nichts* auf, weil `addGroup` Mitglieder ihrer alten Gruppe
+  entzieht und eine Aufnahme die selbstgebaute Gruppe des Benutzers verkleinern würde. Wenn jedes Teilen eine
+  Gruppe erzeugt, tritt genau dieser Fall bei jedem Ziehen aus einer bestehenden Gruppe ein. Die Regel dafür
+  ist noch nicht entschieden und ist der eigentliche Entwurf an dieser Änderung.
+- **Gruppen-Spam.** Jedes Teilen eine neue unbenannte Gruppe mit neuer Farbe wäre genau das, was der
+  `reuse`-Fall verhindern sollte. Eine Multi-View-Gruppe muss wiederverwendet werden, solange dieselben Tabs
+  darin sitzen.
+
+**2. Zoom pro View.** Kehrt Spezifikation 1 an dieser Stelle um — dort steht „dieselbe Seite zweimal geöffnet
+muss in beiden Tabs gleich aussehen", umgesetzt als `zoomRegistry` mit der Domain als Schlüssel. Die Geste
+selbst trifft die richtige Kachel schon gratis (`zoom-changed` kommt am `webContents` unter dem Zeiger an);
+was sich ändert, ist der **Schlüssel des Registers** und damit auch, was gespeichert wird: ein Zoom pro
+Domain ist eine Einstellung, ein Zoom pro Kachel ist Fensterzustand und gehört in die Sitzung, nicht in die
+Settings-Datei. Zwei Fragen sind dabei zu klären und nicht beauftragt: was eine *neue* Kachel als Zoom
+bekommt (100 %, oder den letzten der Domain als Startwert), und ob der Zoom eine Kachel überlebt, in die
+eine andere Seite navigiert.
+
+**3. Einklappen nimmt die Anordnung auf.** Die kleinste der vier: `keepArrangement` aus `setCollapsed`
+rufen. Die Grenze steht schon im Kommentar von `setCollapsed`, damit die zwei Pfade nicht verwechselt werden
+— Einklappen gibt die Kacheln der Mitglieder frei, und *diese* Freigabe war bisher die einzige, die nichts
+aufnahm. Hängt an Änderung 1: welcher der beiden Anordnungsbegriffe hier geschrieben wird, entscheidet sich
+dort.
+
+**4. Der Tresor bekommt Sync.** Reihenfolge unverändert — erst der lokale Tresor fertig (offen ist nur noch
+das Preload-Budget), dann Sync. Der Entwurf steht unter „Passwort-Tresor"; die dort ausdrücklich offene Frage
+bleibt offen und ist beim Bauen zu beantworten: **eine Cloud-Instanz derselben Software widerspricht der
+Prämisse dieses Produkts**, und ein Adapter, der beides kann, muss das mindestens sichtbar machen.
+
+**5. `#rehomeHiddenTabs` hängt an `adaptLayoutToTabs`, und die Kachelleiste bekommt Home und Schließen.**
+Eine Entscheidung und zwei Knöpfe, die zusammengehören: wenn eine neue Kachel bei ausgeschaltetem Anpassen
+leer bleibt, muss man aus der Kachel heraus etwas darin öffnen können — und den Tab darin schließen können,
+ohne ihn oben im Streifen zu suchen. Wörtlich: „damit ich nicht oben in den tabs suchen/raten muss."
+
+**Die Annahme dahinter war falsch und das ist der wichtigere Teil dieses Eintrags.** Der Auftrag lautete
+„dazu haben wir ja das `home` in dem overlay von einem tab" — **die Kachelleiste hat keinen Home-Knopf.** Sie
+trägt zurück, vor, neu laden/stopp und ein Adressfeld; der Home-Knopf sitzt nur in der Haupt-Toolbar
+(`Toolbar.tsx`). Punkt 10 der Ursprungsliste („kein Home-Knopf") ist für die Toolbar erledigt und war für die
+Kachelleiste nie gestellt. Zu bauen sind also **beide** Knöpfe, nicht einer.
+
+Billig ist es trotzdem, und aus einem Grund, der beim Bauen zählt: es braucht **keinen neuen Kanal und keine
+neue Berechtigung**. `tabs:close` existiert und nimmt genau `{ tabId }`; Home ist `nav:navigate` mit
+`HOME_URL`, und die Kachelleiste ruft `nav:navigate` mit `tabId` schon für ihr Adressfeld. Die Overlay-Schicht
+läuft mit der `chrome`-Rolle, und Tabs schließen ist chrome-only erlaubt.
+
+Die eine Falle: beide Knöpfe müssen **den Tab der Kachel** treffen, nicht den aktiven. Alle bestehenden
+Knöpfe dort übergeben deshalb `{ tabId }`, und aus demselben Grund tragen ihre Tooltips **keine** Kürzel —
+`accel('back')` navigiert den aktiven Tab, und Hovern ändert die aktive Kachel nicht. Ein Schließen-Knopf, der
+sich verirrt, schließt eine Seite, die der Benutzer gerade ansieht; das ist die einzige Aktion in dieser
+Leiste, die nicht rückgängig zu machen ist.
+
+### Vollbild und Kachelgröße — was auf unserer Seite geht und was nicht
+
+Gemeldet: ein Player, der im Vollbild steht, passt sich nicht an, wenn die Kachel ihre Größe ändert. Gefragt:
+„kann man das auch auf unserer seite machen?" **Teilweise, und die Grenze ist wichtiger als die Antwort.**
+
+Was heute passiert: `relayout()` ruft `tab.setBounds(rect)`, das Ansichtsfenster der Seite ändert sich,
+Chromium feuert `resize`, und die UA-Regel für `:fullscreen` füllt das Element. **Ein Player, der über CSS
+skaliert, folgt also schon.** Wer nicht folgt, hat seine Maße einmal in Pixeln gerechnet — `canvas.width`,
+eine gemessene Videobox — und rechnet sie nur in seinem `fullscreenchange`-Handler neu. Und genau das Ereignis
+feuert bei einer reinen Größenänderung nicht.
+
+Daraus folgt beides:
+
+- **Was nicht geht:** eine Seite dazu bringen, einen Wert neu zu lesen, den sie gecacht hat. Ein synthetisches
+  `resize` hilft nicht — das echte ist schon geflogen und wurde ignoriert.
+- **Was geht:** den Vollbildübergang **erneut auslösen**, damit der `fullscreenchange`-Handler des Players
+  läuft. Die halbe Mechanik liegt schon da: `askPageToExitFullscreen` ruft
+  `executeJavaScript('document.exitFullscreen?.()', true)`, und das `true` ist `userGesture` — genau das, was
+  ein erneutes `requestFullscreen` braucht.
+
+Drei Dinge, die dabei nicht Kosmetik sind:
+
+1. **Muss entprellt werden.** Beim Ziehen einer Trennlinie feuert `setBounds` pro Frame. Ein Aus-und-wieder-Ein
+   pro Frame wäre ein Stroboskop. Der Auslöser ist das *Ende* der Größenänderung, nicht die Änderung.
+2. **Es ist sichtbar.** Kurzes Schwarz, und viele Player zeigen ihre Bedienelemente beim Eintritt wieder. Für
+   manche Leute ist ein einmal falsch skalierter Player besser als ein Flackern bei jedem Ziehen — das ist der
+   Grund, das Verhalten überhaupt zur Frage zu machen und nicht still einzubauen.
+3. **Es ist eine Heuristik, kein Fix.** Ob es beim gemeldeten Player wirkt, ist nur an dem Player zu sehen.
+   Ein Element, dessen Referenz der Player nicht mehr hält, nimmt ein `requestFullscreen` nicht an; dann bleibt
+   es beim Aussteigen, was schlechter ist als nichts zu tun.
+
+Deshalb: **welcher Player?** Ohne einen konkreten Fall ist das eine Änderung, die in der Theorie funktioniert
+und im Wohnzimmer flackert.
 
 ### Passwort-Tresor
 
@@ -320,11 +421,16 @@ Chromium leitet Pinch und `Ctrl`-Rad an die Ansicht unter dem Zeiger, nicht an d
 Navigationsgesten brauchen für dieselbe Frage eine ganze Funktion (`decideNavigationGesture`), weil ihre
 Ereignisse ohne Position am Fenster ankommen.
 
-**Aber Zoom ist absichtlich pro Domain, nicht pro Kachel** (Spezifikation 1: „dieselbe Seite zweimal geöffnet
+**Zoom war absichtlich pro Domain, nicht pro Kachel** (Spezifikation 1: „dieselbe Seite zweimal geöffnet
 muss in beiden Tabs gleich aussehen", `zoomRegistry`). Die Geste geht deshalb durch `setZoomPercent` und ändert
 daran nichts. Folge, die man wissen sollte statt sie zu entdecken: **zwei Kacheln mit derselben Seite zoomen
-gemeinsam.** Zoom je Kachel wäre eine andere Spezifikation, nicht eine kleinere Änderung — Entscheidung beim
-Benutzer.
+gemeinsam.**
+
+**Der Benutzer hat das am 29.07.2026 umgekehrt: Zoom pro View.** Damit ist Spezifikation 1 an dieser Stelle
+aufgehoben — bewusst, auf Nachfrage, mit der Folge im gleichen Satz genannt. Zoom je Kachel ist keine kleinere
+Änderung, sondern eine andere Spezifikation: der Schlüssel des Registers wechselt, und damit wechselt auch der
+*Ort* — ein Zoom pro Domain ist eine Einstellung, ein Zoom pro Kachel ist Fensterzustand und gehört in die
+Sitzung. Siehe „Vier beauftragte Änderungen" für die zwei Fragen, die dabei noch offen sind.
 
 **Und ein Raster statt `± 10`.** Das Menü rechnete `percent ± 10`, was für einen Tastendruck geht und für ein
 Trackpad nicht: ein Pinch schickt einen Strom von Ereignissen, zehn pro Stufe kriecht oder überschießt, und es
@@ -350,9 +456,9 @@ allgemeinere: eine Zusicherung über die Oberfläche prüft, was gezeichnet wird
 
 | Frage | Stand |
 |---|---|
-| **Eine Gruppe einzuklappen nimmt nichts auf** | Einklappen gibt die Kacheln der Mitglieder frei, und *diese* Verdrängung wird nicht aufgenommen — Ausklappen verliert die Anordnung also weiterhin. `keepArrangement` aus `setCollapsed` zu rufen ist der naheliegende nächste Schritt; die Grenze steht im Kommentar von `setCollapsed`, damit die zwei Pfade nicht verwechselt werden |
+| ~~**Eine Gruppe einzuklappen nimmt nichts auf**~~ **entschieden: aufnehmen** | Einklappen gibt die Kacheln der Mitglieder frei, und *diese* Verdrängung wurde nicht aufgenommen — Ausklappen verlor die Anordnung. Beauftragt am 29.07.2026: `keepArrangement` aus `setCollapsed`. Die Grenze steht im Kommentar von `setCollapsed`, damit die zwei Pfade nicht verwechselt werden. Hängt an Änderung 1, weil sich dort entscheidet, *welche* Art Anordnung geschrieben wird |
 | **`#rehomeHiddenTabs` hängt nicht an `adaptLayoutToTabs`, `fillEmptyTiles` schon** | Bei ausgeschalteter Anpassung öffnet ein Layoutwechsel keine neuen Füllseiten, setzt aber weiterhin geladene versteckte Tabs in die neuen Panels. Verteidigbar — wer ausdrücklich vier Panels wählt, will vermutlich Seiten darin — aber nirgends aufgeschrieben, und der Kommentar zwei Zeilen darüber sagt „off means panes stay as they are". Verhalten nicht geändert, weil danach nicht gefragt wurde |
-| **Gemischte Herkunft nimmt nichts auf** | Wenn die Kacheln teils Mitglieder einer Benutzergruppe und teils lose Tabs halten, wird die Anordnung *nicht* aufgenommen. Absicht: `addGroup` nimmt Mitglieder ihrer alten Gruppe weg, eine Aufnahme würde also die selbstgebaute Gruppe des Benutzers verkleinern oder auflösen. Eine vergessene Anordnung kostet einen Ziehvorgang; eine stillschweigend umgebaute Gruppe hat kein Zurück |
+| **Gemischte Herkunft nimmt nichts auf** — und wird durch Änderung 1 vom Sonderfall zum Normalfall | Wenn die Kacheln teils Mitglieder einer Benutzergruppe und teils lose Tabs halten, wird die Anordnung *nicht* aufgenommen. Absicht: `addGroup` nimmt Mitglieder ihrer alten Gruppe weg, eine Aufnahme würde also die selbstgebaute Gruppe des Benutzers verkleinern oder auflösen. Eine vergessene Anordnung kostet einen Ziehvorgang; eine stillschweigend umgebaute Gruppe hat kein Zurück. **Sobald jedes Teilen eine Gruppe erzeugt, tritt dieser Fall bei jedem Ziehen aus einer bestehenden Gruppe ein** — die Regel dafür ist der eigentliche Entwurf an Änderung 1 und noch nicht entschieden |
 | **Zwei Module fehlen in der Stryker-Erlaubnisliste** | `tabgroups/strip.ts` und `tabgroups/schema.ts`. `TabGroupStore.ts` ist inzwischen eingetragen, ebenso `crypto/**`, `passwords/**` und `alternative-accelerators.ts`. Eine Fitness-Funktion prüft, dass **jeder Eintrag der Liste überhaupt eine Datei trifft** — der Konfig-Kommentar warnt selbst vor „einem Glob, der nichts trifft", geprüft wurde das nie. Sie kann eine *Auslassung* aber nicht finden: eine Erlaubnisliste weiß nicht, was ihr fehlt |
 
 ### Zwölf tote Tasten — erledigt, nachgezählt, und die Erlaubnisliste mit
@@ -513,18 +619,20 @@ Von den Benutzungsmeldungen sind alle vier abgearbeitet (siehe „Gemeldet, noch
 | **Preload-Budget**, Punkt 6 des Tresors | 26 kB gegen 22. Der Rest des Tresors ist gebaut *und* getestet; das ist die letzte Schuld daran. Der Weg ist der Rollen-Split, nicht das Nachladen |
 | **Erster Lauf des neuen Harness** | Bis dahin ist nichts seit dem letzten grünen Lauf in der echten App belegt. Sechs unzugeordnete Fehlschläge warten auf Einordnung; drei Verdachtsmomente stehen in der Reihenfolge, in der sie auszuschließen sind. **Läuft nur der Benutzer** — siehe die Vorgabe unten |
 
-**Entscheidungen, die beim Benutzer liegen**
+**Entscheidungen, die beim Benutzer lagen — am 29.07.2026 getroffen**
 
-| Frage | Was daran hängt |
+Vier Aufträge, zwei Zurückstellungen, eine offene Frage. Die Aufträge stehen ausgeführt-fertig beschrieben
+unter „Vier beauftragte Änderungen"; hier nur, was entschieden wurde.
+
+| Frage | Entscheidung |
 |---|---|
-| **Der Name** | Punkt 12. Die Vorarbeit ist fertig, die Umbenennung ist eine Zeile in `product.ts` plus zwei Paketdateien. Daran hängt auch das echte App-Symbol — das aktuelle ist ein bewusster Platzhalter |
-| **`electron-builder.yml` Zeile 3 und 106** | Steht weiterhin „tessera contributors" (`copyright` und `NSHumanReadableCopyright`). Welcher Name dort hingehört, ist nicht meine Entscheidung. *Korrektur: hier stand Zeile 95, die zweite Stelle ist 106* |
-| **Apple Developer-ID** | Ohne sie bleibt die Mac-App unsigniert und kann sich **nicht selbst aktualisieren**. Zwei Override-Zeilen entfernen ist die ganze Änderung, sobald das Zertifikat existiert |
-| **Soll eine Multi-View eine Tab-Gruppe sein?** | Punkt 7. Heute entsteht eine Gruppe nur beim *Wegräumen* der Kacheln, nicht beim Teilen. Beides ist verteidigbar; entschieden ist es nicht |
-| **Zoom: pro Domain oder pro Kachel?** | Heute pro Domain (Spezifikation 1), zwei Kacheln mit derselben Seite zoomen also gemeinsam |
-| **Eingeklappte Gruppe nimmt keine Anordnung auf** | Ausklappen verliert die Kachelaufteilung weiterhin. `keepArrangement` aus `setCollapsed` zu rufen ist der naheliegende Schritt |
-| **`#rehomeHiddenTabs` hängt nicht an `adaptLayoutToTabs`** | `fillEmptyTiles` schon. Verteidigbar, aber nirgends aufgeschrieben, und der Kommentar daneben sagt das Gegenteil |
-| **Netz-Sync des Tresors** | KDBX/Vaultwarden, ausdrücklich später — aber die Naht dafür sollte jetzt definiert werden, solange der Tresor offen ist |
+| **Der Name** und das echte App-Symbol | **Zurückgestellt** — „lassen wir erstmal so". Der Platzhalter bleibt, `product.ts` bleibt die eine Quelle. Damit bleibt auch `electron-builder.yml` Zeile 3 und 106 bei „tessera contributors": ein Copyright-Name, der vor dem Produktnamen entschieden wird, müsste zweimal geändert werden |
+| **Apple Developer-ID** | **Zurückgestellt** — keine vorhanden. Folge unverändert und bewusst getragen: die Mac-App bleibt unsigniert, installiert sich von Hand und **aktualisiert sich nicht selbst**. Windows und Linux sind davon nicht betroffen. Zwei Override-Zeilen entfernen ist die ganze Änderung, sobald ein Zertifikat existiert |
+| **Soll eine Multi-View eine Tab-Gruppe sein?** | **Ja.** Begründung des Benutzers wörtlich: „damit ich wenn ich neue tabs öffne auch wieder zurück in die multi-view gruppe kann." Das ist Punkt 7 aus der Ursprungsliste, und es ist derselbe Bedarf, den `keepArrangement` schon halb erfüllt — nur soll die Gruppe **beim Teilen** entstehen, nicht erst beim Verdrängen |
+| **Zoom: pro Domain oder pro Kachel?** | **Pro View.** Kehrt Spezifikation 1 an dieser Stelle um |
+| **Eingeklappte Gruppe nimmt keine Anordnung auf** | **Ja, aufnehmen.** `keepArrangement` aus `setCollapsed` |
+| **Netz-Sync des Tresors** | **Ja, der Tresor soll Sync bekommen.** Reihenfolge unverändert: erst lokaler Tresor fertig, dann Sync — aber die Naht wird jetzt definiert |
+| **`#rehomeHiddenTabs` hängt nicht an `adaptLayoutToTabs`** | **Entschieden: der Schalter steuert beides.** Aus heißt aus — eine neue Kachel bleibt leer, auch wenn geladene versteckte Tabs vorhanden sind. Der Kommentar im Code („off means panes stay as they are") stimmt damit wieder. Begründung des Benutzers: „die seiten muss man dann eben öffnen" — und dafür braucht die Kachelleiste zwei Knöpfe, die sie noch nicht hat, siehe unten |
 
 **Features, die nie gebaut wurden**
 
@@ -539,6 +647,7 @@ Von den Benutzungsmeldungen sind alle vier abgearbeitet (siehe „Gemeldet, noch
 - **Sechs Dateien über der Zeilenmarke** — dieselbe Zahl wie zuvor, aber **nicht dieselben Dateien und alle größer**: `catalog.ts` 1152 → **1219**, `BrowserWindowController.ts` 918 → **1009**, `main/index.ts` 861 → **950**. Für `BrowserWindowController` ist der nächste Schritt schon benannt (`#wireWindowEvents` nach `window-events.ts`).
 - **Eine Fitness-Funktion fehlt noch**: keine Schaltfläche mit Kürzel darf eine Aktion aus einer Liste toter Tasten nennen. Die zweite — jede gespiegelte Form braucht ihre Zusicherung in **beide** Richtungen — ist geschrieben (`tests/architecture.test.ts:655`), samt der Ausnahme für Verengungen fremder Typen, wo eine Rückrichtung falsch wäre.
 - **`TileInputController` hat weiterhin keine eigene Testdatei.** Die reinen Entscheidungen sind abgedeckt (`tile-bar.test.ts`, `gestures/`), die Naht nicht.
+- **`shortcuts:getBindings` hat keinen Abnehmer.** Der Kanal existiert, der Handler berechnet Konfliktnotizen und übersetzt sie, und in `src/renderer/**` ruft ihn niemand — die Einstellungsseite zeichnet überhaupt keine Kürzelliste. Entweder die Liste bauen oder den Kanal entfernen; beides ist eine Entscheidung, keine Arbeit. Steht seit dem Tasten-Fund im Abschnitt „Zwölf tote Tasten" als *Randbemerkung* und war deshalb in keiner Liste von Offenem — ausgerechnet die Bauart, die dieses Dokument dreimal in die Irre geführt hat.
 - **TypeScript 7** — gemessen null Typfehler, absichtlich verschoben; Blocker ist `@typescript-eslint/parser` (`<6.1.0`).
 
 ### Erledigt, hier aber weiter als offen geführt
@@ -704,7 +813,8 @@ Zertifikat existiert.
 
 | Risiko | Warum es offen ist |
 |---|---|
-| `setFullScreenable(false)` als Mechanismus für Kachel-Vollbild ist **nur auf macOS geprüft** | Windows und Linux, besonders Wayland-Compositor, sind das größte Unbekannte. Erster Punkt in `docs/QA.md` |
+| `setFullScreenable(false)` als Mechanismus für Kachel-Vollbild — **auf Windows bestätigt**, Linux offen | Vom Benutzer am 29.07.2026 gemeldet: „auf windows klappen die full screens innerhalb der kacheln." Damit ist das größte Unbekannte dieses Risikos abgeräumt — der Mechanismus trägt auf zwei von drei Plattformen. Offen bleibt **Linux, besonders Wayland**, wo ein Compositor die Fenstergröße anders verhandelt. Erster Punkt in `docs/QA.md` |
+| **Ein Player im Vollbild passt sich einer geänderten Kachelgröße nicht an** | Ebenfalls am 29.07.2026 gemeldet, und es ist die Kehrseite des Befundes darüber: das Kachel-Vollbild trägt, aber der Inhalt darin folgt nicht immer. Ursache und was auf unserer Seite möglich ist, steht unter „Vollbild und Kachelgröße" |
 | Optische Transparenz der Overlay-Schicht | Braucht einen Screenshot des zusammengesetzten Fensters; Bildschirmaufnahme ist in der Entwicklungsumgebung blockiert. Funktional belegt, optisch nicht |
 | ~~Die Ziehprüfung im Smoke-Test flackert~~ **behoben, und die Ursache war dieselbe wie bei den Store-Tests** | Zwei von vier Läufen fielen durch, jedes Mal an einer *anderen* Zone — was nach Produktfehler aussieht und eine Stoppuhr war: nach dem Mausdruck wartete die Prüfung fest 600 ms darauf, dass die Zonen über `overlay:presented` zurückkommen, und weitere 350 ms darauf, dass die Overlay-Schicht die Hervorhebung zeichnet. Auf einer belasteten Maschine reicht keins von beidem. Jetzt wird auf den **Zustand** gewartet (`waitFor`), nicht auf die Uhr — und der letzte Messwert wird zurückgegeben statt zu werfen, damit die Zusicherung des Aufrufers die Fehlermeldung bleibt. Fünf Läufe hintereinander grün, 440 Prüfungen |
 | ~~Tab-Gruppen überleben keinen Neustart~~ **behoben** | Die Sitzungswiederherstellung rekonziliert sie. Die damals genannte Gefahr — fremde neue Tabs in alten Gruppen — ist der Grund für die Reihenfolge in `session-restore/apply.ts`: jede wiederhergestellte Id muss existieren, *bevor* `retainTabs` läuft, und `retainTabs` läuft **einmal** mit der Vereinigung aller Fenster. Pro Fenster gerufen würde das zweite die Gruppen des ersten leerräumen |
