@@ -1,6 +1,6 @@
 {
   "name": "tessera",
-  "version": "0.8.0-ALPHA",
+  "version": "0.9.0-ALPHA",
   "description": "Privacy-first desktop browser with first-class split view",
   "private": true,
   "//type": "Deliberately NOT \"module\". Electron's built-in `electron` module is CommonJS and the npm package publishes no `electron/main` subpath, so named ESM imports from it fail to link at runtime. Sources stay ESM; only the emitted main/preload bundles are CommonJS.",
