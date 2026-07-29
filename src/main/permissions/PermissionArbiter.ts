@@ -187,9 +187,15 @@ export class PermissionArbiter {
    * A prompt left the screen without being answered. Wired to `onOverlayVacancy`.
    *
    * Refusing is the only safe reading: the dialogue is gone, so whatever the user was about to
-   * choose was not chosen. Spec 4 is explicit that an unanswered prompt counts as denied, and this
-   * is where "unanswered" actually happens — far more often than through the Escape key, because a
-   * window resize and a focus change both take the layer down.
+   * choose was not chosen. Spec 4 is explicit that an unanswered prompt counts as denied.
+   *
+   * It used to say that this is where "unanswered" mostly happens, because a resize and a focus
+   * change both took the layer down. Neither does any more: `DISMISSED_ON_INTERRUPTION` in
+   * `window-events.ts` leaves every surface somebody is waiting on standing, precisely so that a
+   * notification stealing focus stops answering "Blockieren" for a user who never read the question.
+   * A prompt now leaves unanswered only through Escape, a stronger surface displacing it, or the
+   * window closing — so this path is rarer than it was, and each of those three is a real departure
+   * rather than an interruption. The safe reading is unchanged; only the frequency is.
    */
   overlayVacated(presentation: OverlayPresentation, reason: OverlayVacancyReason): void {
     if (presentation.kind !== 'permission-request') return
