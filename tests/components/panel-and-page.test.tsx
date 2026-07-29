@@ -418,6 +418,11 @@ describe('the settings surface, which is now only a page', () => {
       The chain under test is the real one. `useInternalI18n` hears the change and re-reads the
       catalogue, `t` gets a new identity, the memoised host does too, and the view's describe effect —
       keyed on the host — runs again. Nothing here reaches past the seam to force it.
+
+      The event is `locale:changed` rather than `settings:changed`, and that is the point of it: the
+      core resolves `'system'` against the operating system and sends the language it landed on, so a
+      page never has to hold the whole settings snapshot to notice one. Every internal page is granted
+      this channel; `settings:changed` stays with this page alone, for the values it displays.
     */
     const internal = fakeCore()
     define('tesseraInternal', internal.bridge)
@@ -425,10 +430,7 @@ describe('the settings surface, which is now only a page', () => {
     await waitFor(() => expect(screen.getByLabelText(BLOCKER)).toBeTruthy())
     const before = internal.channels().filter((channel) => channel === 'settings:describe').length
 
-    internal.emit('settings:changed', {
-      changed: { 'appearance.uiLanguage': 'de' },
-      snapshot: { ...STORED }
-    })
+    internal.emit('locale:changed', { locale: 'de' })
 
     await waitFor(() => {
       const after = internal.channels().filter((channel) => channel === 'settings:describe').length
