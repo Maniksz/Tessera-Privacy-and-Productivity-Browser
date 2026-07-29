@@ -4,7 +4,14 @@ Vollständige Durchsicht aller angemerkten Punkte: was gebaut ist, wie es belegt
 offen ist. Gepflegt bei jedem Durchgang; die Reihenfolge folgt der Reihenfolge, in der die Punkte
 gemeldet wurden.
 
-**Legende** — ✅ gebaut und belegt · 🟡 teilweise · ⬜ offen · ❓ braucht eine Entscheidung
+**Legende** — ✅ gebaut und belegt · 🟡 teilweise · ⬜ offen · ❓ braucht eine Entscheidung · ⛔ verworfen
+
+> **Zuletzt gegen den Code geprüft:** 29.07.2026. Jeder ✅ in den Tabellen unten wurde in diesem Durchgang
+> an einer Datei nachgesehen, nicht aus einem früheren Eintrag übernommen. Sieben Punkte standen als offen
+> und waren erledigt, einer stand als erledigt und war halb — die Aufstellung dazu steht unter
+> „Der Befund dieser Runde". Wer diesen Kasten liest und das Datum alt findet, sollte den Tabellen nicht
+> glauben, sondern nachsehen: **dieses Dokument hat sich jetzt dreimal selbst widerlegt** — die Tabelle
+> „Noch zu bauen", die Prämisse des Tresor-Abschnitts, und diese Runde.
 
 ---
 
@@ -14,26 +21,26 @@ gemeldet wurden.
 |---|---|---|---|
 | 1 | Drag & Drop in den Split mit Anzeige, wohin geteilt wird | ✅ | Smoke-Test mit echten Mausereignissen: 5 Zonen bei Einzelansicht, Markierung folgt dem Zeiger, linke Hälfte `left: 0, width: 716/1440`, Ablegen erzeugt den Split |
 | 2a | Suchleiste bei „home" leer | ✅ | Smoke: `address bar is empty at home -> ""` |
-| 2b | Startseite „geht nicht wirklich" | ⬜ | Noch nicht angefasst — siehe Gruppe 4 |
-| 3 | Verlauf existiert nicht | ⬜ | Nur der Protokollname `tessera://history` ist reserviert |
+| 2b | Startseite „geht nicht wirklich" | ✅ | `StartPage.tsx` mit `QuickLinkTile`, `QuickLinkDialog`, eigenem Kanalsatz. Bildkette und Kachelmaß siehe 11 und 13 |
+| 3 | Verlauf existiert nicht | ✅ | `HistoryPage.tsx` + `history.html`; Ende zu Ende belegt (aufgezeichnet, gefunden, gelöscht), `history:open` statt `nav:navigate` |
 | 4 | Layout-Tasten alle oben rechts | ✅ | Ein Knopf mit Dropdown; Smoke prüft 1 Knopf, 5 Einträge, genau 1 aktiv |
-| 5 | Kein Settings-Knopf | 🟡 | Knopf da und funktionsfähig, aber noch ein Overlay statt eines Tabs |
-| 6 | Kein Extension-Knopf | 🟡 | Dito |
-| 7 | Tabs werden in der Multi-View nicht zur Tab-Gruppe | ⬜ | — |
-| 8 | In der Multi-View nur „main page" zurück; Wischen; Leiste am oberen Rand | 🟡 | **Ursache behoben**: ein Klick in eine Kachel setzte die aktive Kachel nicht, `split:setActiveTile` hatte keinen Aufrufer. Smoke: `clicking into a tile makes its tab the active one -> true`. Hover-Leiste und Wischen fehlen |
+| 5 | Kein Settings-Knopf | ✅ | `SettingsPage.tsx` (Tab) und `SettingsPanel.tsx` (Overlay) rendern beide `renderer/shared/SettingsView.tsx` — eine Oberfläche, zwei Eingänge |
+| 6 | Kein Extension-Knopf | ✅ | Dito über `ExtensionsView.tsx`; `extensions.html` ist ein eigener Tab |
+| 7 | Tabs werden in der Multi-View nicht zur Tab-Gruppe | 🟡 | **Nicht beim Teilen, sondern beim Wegräumen.** `groupToHoldArrangement` legt eine (unbenannte) Gruppe an, wenn ein neuer Tab die Kacheln verdrängt — das war der Bedarf hinter dem Punkt. Eine Multi-View *als solche* erzeugt weiterhin keine Gruppe. Ob sie das soll, ist nie entschieden worden |
+| 8 | In der Multi-View nur „main page" zurück; Wischen; Leiste am oberen Rand | ✅ | Drei Teile, alle drei da: aktive Kachel folgt dem Klick (`split:setActiveTile`), Hover-Leiste als `overlay/TileBarSurface.tsx`, Wischen über `decideNavigationGesture` in `TileInputController` — nach Zeiger geroutet, nicht nach Fokus |
 | 9 | Icons oben links zu klein | ✅ | 32×32 Knopf mit 20 px SVG |
 | 10 | Kein Home-Knopf | ✅ | Smoke: 4 Navigationsknöpfe |
-| 11 | Kachel-Icons der Startseite: Favicon oder Screenshot lokal | 🟡 | Entschieden: **Screenshot mit Favicon als Rückfall**, nie im privaten Modus, über „Daten löschen" entfernbar. Der Favicon-Cache ist in Arbeit; die Screenshots folgen |
+| 11 | Kachel-Icons der Startseite: Favicon oder Screenshot lokal | ✅ | Screenshot mit Favicon als Rückfall, die Kette liegt in `shared/quicklinks/cards.ts` (`cardImageSequence`), damit Renderer und CSS nicht auseinanderlaufen können. Privater Modus fotografiert nichts: `discardingThumbnailCapturer` hält weder Store noch Verzeichnis noch Kamera |
 | 12 | Der Browser braucht einen Namen | ❓ | **Vorarbeit fertig**: `src/shared/product.ts` ist die eine Quelle für Name, Schema und appId; drei Fitness-Funktionen halten das fest, samt namentlicher Schuldenliste, die nur schrumpfen kann. Die Umbenennung ist damit eine Zeile plus zwei Paketdateien. Der Name selbst braucht deine Entscheidung |
-| 13 | Kachel-Icons der Startseite größer | ⬜ | Teil von Gruppe 4 |
+| 13 | Kachel-Icons der Startseite größer | ✅ | `.tile__icon` ist volle Kartenbreite bei `aspect-ratio: 8/5` — dasselbe Maß wie `THUMBNAIL_TARGET` (480×300), also wird nichts zweimal beschnitten. Zwei Bildregeln statt einer, weil `object-fit` auch *hoch*skaliert und ein 32-px-Favicon auf Kartenhöhe ein Schmierer wäre; der Rückfall bleibt bei 48 px |
 | 14 | Nicht alle Tabs schließbar; „new tab" bleibt übrig | ✅ | Smoke: 1 Tab übrig nach dem Schließen aller |
-| 15 | Was ich noch finde | 🟡 | Laufend gemeldet; dieses Dokument ist die Liste |
+| 15 | Was ich noch finde | 🟡 | Laufend gemeldet; dieses Dokument ist die Liste — und war zweimal die falsche. Siehe „Der Befund dieser Runde" |
 
 ## Die vier Punkte danach
 
 | Punkt | Stand | Anmerkung |
 |---|---|---|
-| Settings als eigener Tab mit eigener View | ⬜ | Entwurf steht: **pro-Seite-Rechtemodell** statt der globalen Interna-Liste, plus **Sperre für von Webinhalten ausgelöste Navigation** zu `tessera://`. Der bestehende Test schreibt fest, dass keine interne Seite `settings:set` erreichen darf — deshalb ist das globale Modell nicht erweiterbar, sondern muss ersetzt werden |
+| Settings als eigener Tab mit eigener View | 🟡 | **Seite und Rechtemodell fertig, die Navigationssperre nicht.** `INTERNAL_PAGE_INVOKE_CHANNELS` und `INTERNAL_PAGE_EVENT_CHANNELS` sind pro Seite geschlüsselt, `mayInternalPageInvoke(page, channel)` fragt die Seite und nicht mehr eine gemeinsame Liste. Was aus dem Entwurf **fehlt**: die Sperre für von Webinhalten ausgelöste Navigation zu `tessera://`. `setWindowOpenHandler` lässt nur `https?:` durch, also ist `window.open` gedeckt — aber es gibt **keinen `will-navigate`-Handler**, also führt ein `location.href = 'tessera://settings'` oder ein angeklickter Link im selben Tab dorthin. Siehe „Der Befund dieser Runde" |
 | Drag & Drop wie der Windows-Anker, mit exakter Anzeige | ✅ | Jede Kachel ist an ihren Rändern weiter teilbar; erreichbar sind 2, 3 und 4 Kacheln |
 | Extensions: AdGuard, uBlock Origin, Video-Download | ⛔ | **Als Erweiterungen nicht möglich.** Siehe unten |
 | Layout-Knopf klappt nicht auf | ✅ | Ursache war die Fensterschichtung, nicht das Menü — siehe `docs/solutions/ui-issues/chrome-popups-behind-content-views.md` |
@@ -59,7 +66,7 @@ ohne Dashboard und ohne Symbol nicht konfigurierbar. Entschieden: **nativ bauen.
 | Tab schließen soll die Kachel entfernen | ✅ Erst wird ein geladener, ausgeblendeter Tab hineingezogen; nur wenn nichts übrig ist, verschwindet die Kachel |
 | Rein ziehen auf 3 oder 4 Kacheln geht nicht | ✅ Randzonen gab es nur für die Einzelansicht; jetzt für jede teilbare Kachel |
 | Neuer Tab in der Multi-View ersetzt den ersten | ✅ Eine leere Kachel gewinnt immer gegen eine belegte |
-| DOM-Elemente selbst blocken wie uBO | ⬜ Teil des nativen Inhaltsblockers |
+| DOM-Elemente selbst blocken wie uBO | ✅ Der Element-Picker schreibt über `cosmeticRuleFor` in den `UserRuleStore`, `onChange` ruft `filterSubscription.reloadUserRules()`, `FilterEngine` liest sie als eigenen Listenkörper. Zwei Grenzen sind Absicht: `describeUserRule` verweigert jede Regel, die eine *Netzanfrage* blocken würde (eine selbstgeschriebene Netzregel kann eine Seite unreparierbar machen), und ohne Host gibt es keine Regel — eine generische hätte den Selektor überall versteckt. Ein privates Fenster bekommt über `editorFor` seinen eigenen Editor |
 
 ## Später gemeldete Fehler und Wünsche
 
@@ -99,6 +106,12 @@ also genau die Seite, auf die eine Website am plausibelsten verlinkt.
 Der Verlauf bekommt `history:open` statt `nav:navigate`, weil der Kern das Ziel aus dem Absender
 auflöst — die Seite steuert sich selbst und nichts anderes. Abonnements sind ebenfalls eine
 Berechtigung: die Startseite darf `settings:changed` nicht hören.
+
+**Nachgeprüft und halb.** `mayInternalPageInvoke(page, channel)` und `mayInternalPageListen(page, channel)`
+fragen wirklich die Seite, `INTERNAL_PAGE_INVOKE_CHANNELS` ist pro Seite geschlüsselt — der Schlussstein
+liegt. Aber der Halbsatz oben („genau die Seite, auf die eine Website am plausibelsten verlinkt") beschreibt
+einen Angreifer, der eine interne Seite *öffnet*, und **dagegen gibt es nichts**. Siehe „Der Befund dieser
+Runde".
 
 ## Noch zu bauen, aus der Ursprungs-Spezifikation
 
@@ -165,8 +178,12 @@ Durchsicht hier. Ein selbstgeschriebener Readability-Ersatz kann sich höchstens
 
 Bewusst *nicht* mitgewachsen, während der Hauptprozess auf 320 kB gehoben wurde. Der Hauptprozess wird einmal
 pro Start geparst, der Preload einmal pro Seite in jedem Tab — ein Kilobyte dort kostet das Hundertfache. Das
-Autofill hat ihn auf 27 kB gebracht; die Antwort ist, die *Oberflächen*-Hälften von Element-Picker und Autofill
+Autofill hat ihn auf 27 kB gebracht; die Antwort war, die *Oberflächen*-Hälften von Element-Picker und Autofill
 bei Bedarf nachzuladen, nicht das eine Budget zu weiten, das am meisten zählt.
+
+**Die Entscheidung steht, die Antwort war falsch.** Aktuell **26 kB**. Das Nachladen hat keinen Mechanismus
+(`sandbox: true` plus `inlineDynamicImports`), und die Oberflächen-Hälften geben nur 2–2,5 kB her statt der
+nötigen 4. Der Weg ist der **Rollen-Split** — siehe „Was am Tresor offen bleibt".
 
 ## Gemeldet, noch offen
 
@@ -178,7 +195,7 @@ Code auf sie verweist.
 |---|---|
 | ~~**Kachelleiste nur im Kachelmodus**~~ **erledigt** | `tileBarStep` gibt bei `rects.length <= 1` jetzt `hide` zurück. Die Entscheidung liegt dort und nicht in der Oberfläche, weil ein Renderer, der eine vom Kern gebaute und eingemessene Darstellung nicht zeichnet, die Schicht mit einer unsichtbaren Fläche zurücklässt, die Zeigerereignisse schluckt |
 | ~~**Leiste früher ausfahren**~~ **erledigt** | `TILE_BAR_REVEAL_WITHIN` von 6 auf **16 px**. Die Invariante ist im Kommentar festgehalten: strikt unter `TILE_BAR_HEIGHT`, das strikt unter `TILE_BAR_POINTER_AWAY` liegt — treffen sich die beiden Schwellen, beantworten Ausfahren und Einfahren dieselbe Position auf aufeinanderfolgenden Messungen verschieden, und genau das Flackern soll das Paar verhindern. Ein Test heftet die Reihenfolge fest |
-| **Neuer Tab soll ein neuer Tab sein** | Widerspricht dem aktuellen Verhalten: `TileOccupancyController` füllt leere Kacheln absichtlich, weil drei Kacheln mit „zieh einen Tab hierher" eine Anweisung statt eines Browsers waren. Der Wunsch ist aber klar — ein neuer Tab gehört ins **volle** Layout, nicht in eine Kachel. Betrifft auch Gruppen-Tabs. Das ist eine bewusste Umkehr einer früheren Entscheidung und braucht: neuer Tab → Layout `1x1`, und die Kachelfüllung nur noch beim ausdrücklichen Layoutwechsel. **Erste Hälfte gebaut** (`claimTileForNewTab` legt die Kacheln weg) |
+| ~~**Neuer Tab soll ein neuer Tab sein**~~ **erledigt, beide Hälften** | Widersprach dem damaligen Verhalten: `TileOccupancyController` füllte leere Kacheln absichtlich, weil drei Kacheln mit „zieh einen Tab hierher" eine Anweisung statt eines Browsers waren. Umgekehrt wie gewünscht — `claimTileForNewTab` legt die Kacheln weg und gibt die eine zurück, die bleibt. Die zweite Hälfte ist die Zeile darunter: ohne Aufnahme der Anordnung wäre die Umkehr ein Verlust gewesen |
 | **…aber die Anordnung darf dabei nicht verloren gehen** | Nachtrag des Benutzers: „er soll die layout gruppe der anderen tabs nicht auflösen, daher brauchen wir ja die tab gruppen." Die weggelegten Kacheln blieben geladen und im Streifen, aber *welches Layout* und *welche Kachel je Tab* war weg — es gab keinen Weg zurück. Die Anordnung gehört damit auf die **Tab-Gruppe**: beim Wegräumen aufnehmen (bestehende Gruppe wiederverwenden, sonst eine anlegen), beim Zurückkehren auf einen Gruppen-Tab wiederherstellen. Ohne die zweite Hälfte ist es eine Erinnerung, die niemand lesen kann. **Gebaut und in der echten App belegt** — `TabGroup.layout` trägt Layout-Id und einen Eintrag je Kachel, `keepArrangement` nimmt beim Wegräumen auf, `takeArrangementFor` gibt beim Anklicken zurück und *verbraucht* die Aufnahme dabei (eine zweite Aktivierung würde sonst spätere Arbeit des Benutzers stillschweigend zurücknehmen). Der Smoke-Test fährt die Schleife, die ein Benutzer fährt: zurück zur verdrängten Seite → Anordnung ist da; ein Tab **ohne** Aufnahme → weiterhin ganzes Fenster; zweite Verdrängung → Anordnung kommt wieder |
 | ~~**Ziehen auf die mittlere Kachel geht nicht**~~ **erledigt** | Der Verdacht traf zu und war zweiteilig. Geometrie: eine Lücke gehört *einer* Spalte, eine mittlere Spalte kann also nicht von beiden Seiten gleichzeitig beschnitten werden — beide Bänder der Mittelspalte waren Duplikate und nahmen zusammen 60 % der Fläche, sodass nur 40 % einen einfachen Ablegevorgang annahmen. Verhalten: `applyDrop` macht den Layoutwechsel jetzt mit `rehome: false`, weil das Nachrücken die neu entstandene Kachel mit dem erstbesten geladenen Tab füllte und die verdrängte Seite damit vom Schirm nahm. Geprüft über `LAYOUT_IDS` erschöpfend, plus benannte Tests für die Mittelkachel von `1x3` und beide von `1x4`. Und weil die Meldung aus der Benutzung kam, auch dort: `runEveryDragCheck` in `scripts/smoke.mjs` zieht in der echten App mit synthetischer Maus **jede** Zone **jedes** Layouts an, gezielt auf die Mitte ihrer eigenen Trefferfläche — und prüft zwei Dinge, von denen das zweite das interessante ist: dass die Seite dort landet, wo der Indikator es versprach, *und* dass keine bereits sichtbare Seite dabei verschwindet. Achtzehn der vierundzwanzig Teilungszonen fielen bei der zweiten Prüfung durch, beide Zonen der Mittelspalte darunter |
 
@@ -189,7 +206,8 @@ Arbeit liegt jeweils auf der Platte; was fehlt, steht hier.
 
 ### Der Baum
 
-`pnpm typecheck` **0** über vier Projekte, `pnpm lint` sauber, `pnpm test` **119 Dateien / 3358 grün**.
+`pnpm typecheck` **0** über vier Projekte, `pnpm lint` sauber, `pnpm test` **119 Dateien / 3358 grün** —
+*Momentaufnahme jenes Durchgangs; der aktuelle Stand steht unter „Qualitätsstand".*
 Erledigt seit dem letzten Eintrag:
 
 - `tests/features/steps/content-blocker.steps.ts` geschrieben — die sechs Szenarien liefen gegen eine echte
@@ -335,10 +353,9 @@ allgemeinere: eine Zusicherung über die Oberfläche prüft, was gezeichnet wird
 | **Eine Gruppe einzuklappen nimmt nichts auf** | Einklappen gibt die Kacheln der Mitglieder frei, und *diese* Verdrängung wird nicht aufgenommen — Ausklappen verliert die Anordnung also weiterhin. `keepArrangement` aus `setCollapsed` zu rufen ist der naheliegende nächste Schritt; die Grenze steht im Kommentar von `setCollapsed`, damit die zwei Pfade nicht verwechselt werden |
 | **`#rehomeHiddenTabs` hängt nicht an `adaptLayoutToTabs`, `fillEmptyTiles` schon** | Bei ausgeschalteter Anpassung öffnet ein Layoutwechsel keine neuen Füllseiten, setzt aber weiterhin geladene versteckte Tabs in die neuen Panels. Verteidigbar — wer ausdrücklich vier Panels wählt, will vermutlich Seiten darin — aber nirgends aufgeschrieben, und der Kommentar zwei Zeilen darüber sagt „off means panes stay as they are". Verhalten nicht geändert, weil danach nicht gefragt wurde |
 | **Gemischte Herkunft nimmt nichts auf** | Wenn die Kacheln teils Mitglieder einer Benutzergruppe und teils lose Tabs halten, wird die Anordnung *nicht* aufgenommen. Absicht: `addGroup` nimmt Mitglieder ihrer alten Gruppe weg, eine Aufnahme würde also die selbstgebaute Gruppe des Benutzers verkleinern oder auflösen. Eine vergessene Anordnung kostet einen Ziehvorgang; eine stillschweigend umgebaute Gruppe hat kein Zurück |
-| **Drei Module fehlen in der Stryker-Erlaubnisliste** | `TabGroupStore.ts`, `tabgroups/strip.ts`, `tabgroups/schema.ts`. Vorbestehend. `alternative-accelerators.ts` ist eingetragen, und neu prüft eine Fitness-Funktion, dass **jeder Eintrag der Liste überhaupt eine Datei trifft** — der Konfig-Kommentar warnt selbst vor „einem Glob, der nichts trifft", geprüft wurde das nie. Gegenprobe gemacht: ein umbenannter Pfad lässt sie fallen |
-| **`coverage/` steht nicht in `.gitignore`** | `pnpm test:coverage` hinterlässt ein unverfolgtes Verzeichnis |
+| **Zwei Module fehlen in der Stryker-Erlaubnisliste** | `tabgroups/strip.ts` und `tabgroups/schema.ts`. `TabGroupStore.ts` ist inzwischen eingetragen, ebenso `crypto/**`, `passwords/**` und `alternative-accelerators.ts`. Eine Fitness-Funktion prüft, dass **jeder Eintrag der Liste überhaupt eine Datei trifft** — der Konfig-Kommentar warnt selbst vor „einem Glob, der nichts trifft", geprüft wurde das nie. Sie kann eine *Auslassung* aber nicht finden: eine Erlaubnisliste weiß nicht, was ihr fehlt |
 
-### Noch offen aus demselben Fund: zwölf tote Tasten — nachgezählt
+### Zwölf tote Tasten — erledigt, nachgezählt, und die Erlaubnisliste mit
 
 **Korrektur einer früheren Zählung in diesem Dokument.** Die Erlaubnisliste `withoutMenuItem` in
 `tests/architecture.test.ts` nennt vierzehn Aktionen als „absichtlich ohne Menüeintrag", und daraus war
@@ -347,6 +364,13 @@ geschlossen worden, alle vierzehn seien tot. Nachgeprüft, Aktion für Aktion, s
 sehr wohl Menüeinträge, und `splitLayout1`–`4` bekommen ihren über `accel(shortcut)` mit *variablem* Argument in
 der `LAYOUT_IDS`-Schleife — weshalb eine Suche nach dem Literal `accel('splitLayout1')` sie übersah. Die
 Ausnahmeliste ist also zu weit gefasst, nicht die Verdrahtung zu dünn.
+
+**Auch das ist inzwischen nachgezogen:** `withoutMenuItem` nennt heute **sechs** Aktionen statt vierzehn — nur
+noch `escape`, `stop` und `splitLayout1`–`4`, jede mit ihrer eigenen Begründung im Test statt einer gemeinsamen.
+`lastTab` wurde bewusst *aus* der Liste geholt und in `appMenu.ts` als Literal `accel('lastTab')` aufgelöst,
+damit der Scan es findet — anstatt es in dieselbe Schleife zu legen, die die acht Positionstasten registriert
+und die für jeden Test unsichtbar bleibt. Eine Ausnahmeliste, die man erweitert, wenn ein Test unbequem wird,
+ist genau der Weg, auf dem die vierzehn entstanden sind.
 
 Wirklich nirgends registriert sind:
 
@@ -456,7 +480,7 @@ reiner Chrome-/Intern-Einstieg 3 882 B. Zusammen mit den Oberflächen-Hälften l
 Aufgabe an dieser Stelle — und ausdrücklich **nicht** `new Function` über Quelltext aus dem Kern, was Eval im
 Preload wäre.
 
-### Der Tresor, ursprüngliche Liste (erledigt außer 6)
+### Der Tresor, ursprüngliche Liste (erledigt außer 6 — nachgeprüft)
 
 1. **Die Passworteingabe auf der Overlay-Schicht** — eine sechste Präsentationsart. Entschieden und nicht
    verhandelbar: das Master-Passwort verlässt den Hauptprozess nie, kein Kanal nimmt eines an, der Renderer
@@ -467,14 +491,15 @@ Preload wäre.
 2. **`resetVault` legt die verschlüsselte Datei auf Wunsch beiseite**, bevor sie verworfen wird, mit der
    Erklärung im selben Atemzug, dass die Kopie ohne das Passwort unlesbar ist.
 3. Kanäle und Vertrag für `requestUnlock`, `lock`, `beginSetMasterPassword`, `resetVault`, `import`.
-4. **44 i18n-Schlüssel** in beiden Sprachen. `passwords.protectionNotice` und `passwords.unencryptedNotice` sind
-   jetzt Waisen im Katalog und gehören weg.
-5. **`installAutofill()` wird nie aufgerufen** und kein `AutofillService` wird je gebaut — Autofill läuft
-   überhaupt nicht.
-6. **Preload auf unter 22 kB** (aktuell 27). Das Budget wird bewusst nicht gehoben: der Preload wird einmal pro
-   Seite in jedem Tab geparst. Die Oberflächen-Hälften von Autofill und Element-Picker sollen bei Bedarf
-   nachgeladen werden; für den Picker ist das Muster schon da (`picker-chrome.ts` schickt Stil und Wortlaut aus
-   dem Kern).
+4. **44 i18n-Schlüssel** in beiden Sprachen. ~~`passwords.protectionNotice` und
+   `passwords.unencryptedNotice` sind jetzt Waisen und gehören weg.~~ **Entfernt** — im Katalog steht nur
+   noch der Kommentar, der erklärt, was sie ersetzte.
+5. ~~**`installAutofill()` wird nie aufgerufen**~~ **Verdrahtet.** `src/main/index.ts:394` baut den
+   `AutofillService`, `:406` ruft `installAutofill(autofill)`, die Preload-Hälfte hängt an
+   `src/preload/index.ts:254`. Und die Lücke ist jetzt bewacht: `tests/architecture.test.ts:580` ist
+   namentlich „der Test, der `installAutofill()` gefangen hätte".
+6. **Preload auf unter 22 kB** — der einzige offene Punkt. Aktuell **26 kB**. Der Weg ist nicht mehr das
+   Nachladen der Oberflächen-Hälften, sondern der Rollen-Split; siehe den Abschnitt darüber.
 
 ### Danach — alles Offene an einer Stelle
 
@@ -484,27 +509,52 @@ Von den Benutzungsmeldungen sind alle vier abgearbeitet (siehe „Gemeldet, noch
 
 | Offen | Warum es zuerst kommt |
 |---|---|
-| **Der Tresor**, sechs Schritte oben | Zieht als Einziges die Coverage unter die Schwelle (`crypto/**` bei ~37 %) und hält den Preload über seinem Budget. Autofill läuft überhaupt nicht: `installAutofill()` wird nie gerufen |
-| **Erster Lauf des neuen Harness** | Bis dahin ist nichts seit dem letzten grünen Lauf in der echten App belegt. Sechs unzugeordnete Fehlschläge warten auf Einordnung; drei Verdachtsmomente stehen in der Reihenfolge, in der sie auszuschließen sind |
+| **Navigationssperre zu `tessera://`** | Die einzige *Sicherheits*lücke auf dieser Liste, und sie ist der unfertige Rest des Settings-Entwurfs. Das pro-Seite-Rechtemodell hält, was eine interne Seite *rufen* darf; es hält nicht, wer eine interne Seite **öffnen** darf. Es gibt keinen `will-navigate`-Handler, also erreicht ein Webinhalt `tessera://settings` im eigenen Tab. Dort läuft dann Code mit der Settings-Rolle — genau das Szenario, für das das Rechtemodell gebaut wurde |
+| **Preload-Budget**, Punkt 6 des Tresors | 26 kB gegen 22. Der Rest des Tresors ist gebaut *und* getestet; das ist die letzte Schuld daran. Der Weg ist der Rollen-Split, nicht das Nachladen |
+| **Erster Lauf des neuen Harness** | Bis dahin ist nichts seit dem letzten grünen Lauf in der echten App belegt. Sechs unzugeordnete Fehlschläge warten auf Einordnung; drei Verdachtsmomente stehen in der Reihenfolge, in der sie auszuschließen sind. **Läuft nur der Benutzer** — siehe die Vorgabe unten |
 
 **Entscheidungen, die beim Benutzer liegen**
 
 | Frage | Was daran hängt |
 |---|---|
-| **Zwölf tote Tasten** | `Escape`, `stop`, `Strg+9`, `Strg+1`–`8`. Die neun unkritischen brauchen nur Menüeinträge; `escape`/`stop` dürfen **nicht** über das Menü und brauchen `before-input-event` |
+| **Der Name** | Punkt 12. Die Vorarbeit ist fertig, die Umbenennung ist eine Zeile in `product.ts` plus zwei Paketdateien. Daran hängt auch das echte App-Symbol — das aktuelle ist ein bewusster Platzhalter |
+| **`electron-builder.yml` Zeile 3 und 106** | Steht weiterhin „tessera contributors" (`copyright` und `NSHumanReadableCopyright`). Welcher Name dort hingehört, ist nicht meine Entscheidung. *Korrektur: hier stand Zeile 95, die zweite Stelle ist 106* |
+| **Apple Developer-ID** | Ohne sie bleibt die Mac-App unsigniert und kann sich **nicht selbst aktualisieren**. Zwei Override-Zeilen entfernen ist die ganze Änderung, sobald das Zertifikat existiert |
+| **Soll eine Multi-View eine Tab-Gruppe sein?** | Punkt 7. Heute entsteht eine Gruppe nur beim *Wegräumen* der Kacheln, nicht beim Teilen. Beides ist verteidigbar; entschieden ist es nicht |
 | **Zoom: pro Domain oder pro Kachel?** | Heute pro Domain (Spezifikation 1), zwei Kacheln mit derselben Seite zoomen also gemeinsam |
 | **Eingeklappte Gruppe nimmt keine Anordnung auf** | Ausklappen verliert die Kachelaufteilung weiterhin. `keepArrangement` aus `setCollapsed` zu rufen ist der naheliegende Schritt |
 | **`#rehomeHiddenTabs` hängt nicht an `adaptLayoutToTabs`** | `fillEmptyTiles` schon. Verteidigbar, aber nirgends aufgeschrieben, und der Kommentar daneben sagt das Gegenteil |
-| **`electron-builder.yml` Zeile 3 und 95** | Steht weiterhin „tessera contributors". Welcher Name dort hingehört, ist nicht meine Entscheidung |
 | **Netz-Sync des Tresors** | KDBX/Vaultwarden, ausdrücklich später — aber die Naht dafür sollte jetzt definiert werden, solange der Tresor offen ist |
+
+**Features, die nie gebaut wurden**
+
+| Offen | Anmerkung |
+|---|---|
+| **Der native Inhaltsblocker als Ganzes** | Netzregeln, Kosmetikfilter und die eigenen Element-Regeln des Benutzers laufen. Was aus der Erweiterungs-Absage übrig ist: ein *Dashboard* für den Blocker — die Stelle, an der uBO seine Listen, Ausnahmen und Zähler zeigt. Heute gibt es das Blocker-Menü und die Settings-Seite, keine Übersicht |
+| **Video-Download als Feature** | Die Medien-Erkennung und `MediaDownloader` sind da, samt benannten Verweigerungsgründen. Ob das die Absage von „Video-Download-Erweiterung" vollständig einlöst, ist nie gegen die ursprüngliche Erwartung geprüft worden |
 
 **Handwerk, ohne Entscheidungsbedarf**
 
-- **Drei Module fehlen in der Stryker-Erlaubnisliste**: `TabGroupStore.ts`, `tabgroups/strip.ts`, `tabgroups/schema.ts`. Neuer Mutationslauf steht ohnehin aus; der letzte ergab 84,88 % über 7999 Mutanten.
-- **Sechs Dateien über der Zeilenmarke**, `catalog.ts` (1152) und `contract.ts` (1022) voran. Für `BrowserWindowController` ist der nächste Schritt schon benannt (`#wireWindowEvents` nach `window-events.ts`).
-- **Zwei Fitness-Funktionen, die Agenten vorgeschlagen haben und die ich nicht geschrieben habe:** jede gespiegelte `z.object`-Form braucht eine Zusicherung in **beide** Richtungen (eine einseitige lässt ein Feld still von der Leitung fallen), und keine Schaltfläche mit Kürzel darf eine Aktion aus einer Liste toter Tasten nennen.
-- **`docs/QA.md`** braucht eine Zeile: mit In-Prozess-Eingaben kann das Anfassen der Maschine während eines Laufs eine Zone scheitern lassen, was genau wie ein Produktfehler aussieht.
+- **Zwei Module fehlen in der Stryker-Erlaubnisliste**: `tabgroups/strip.ts`, `tabgroups/schema.ts`. Neuer Mutationslauf steht ohnehin aus; der letzte ergab 84,88 % über 7999 Mutanten und ist älter als der Tresor, der Element-Picker-Regeln und die Update-Module.
+- **Sechs Dateien über der Zeilenmarke** — dieselbe Zahl wie zuvor, aber **nicht dieselben Dateien und alle größer**: `catalog.ts` 1152 → **1219**, `BrowserWindowController.ts` 918 → **1009**, `main/index.ts` 861 → **950**. Für `BrowserWindowController` ist der nächste Schritt schon benannt (`#wireWindowEvents` nach `window-events.ts`).
+- **Eine Fitness-Funktion fehlt noch**: keine Schaltfläche mit Kürzel darf eine Aktion aus einer Liste toter Tasten nennen. Die zweite — jede gespiegelte Form braucht ihre Zusicherung in **beide** Richtungen — ist geschrieben (`tests/architecture.test.ts:655`), samt der Ausnahme für Verengungen fremder Typen, wo eine Rückrichtung falsch wäre.
+- **`TileInputController` hat weiterhin keine eigene Testdatei.** Die reinen Entscheidungen sind abgedeckt (`tile-bar.test.ts`, `gestures/`), die Naht nicht.
 - **TypeScript 7** — gemessen null Typfehler, absichtlich verschoben; Blocker ist `@typescript-eslint/parser` (`<6.1.0`).
+
+### Erledigt, hier aber weiter als offen geführt
+
+Nachgeprüft in dieser Runde, Datei für Datei. Jeder Eintrag stand als Schuld in diesem Dokument und war
+bezahlt:
+
+| Stand hier | Wirklichkeit |
+|---|---|
+| „`coverage/` steht nicht in `.gitignore`" | Steht drin, `.gitignore:5-7`, mit Begründung im Kommentar |
+| „`installAutofill()` wird nie aufgerufen" | `src/main/index.ts:406`; ein Test trägt die Lücke namentlich |
+| „Zwei i18n-Waisen gehören weg" | Entfernt; nur der erklärende Kommentar blieb |
+| „`TabGroupStore.ts` fehlt bei Stryker" | Eingetragen, `stryker.config.json:112` |
+| „`docs/QA.md` braucht eine Zeile" | Sie steht da, `docs/QA.md:192` — mit beiden Ursachen, nicht nur der einen |
+| „Zwölf tote Tasten" | Alle verdrahtet, und die Erlaubnisliste `withoutMenuItem` ist von vierzehn auf **sechs** geschrumpft: nur noch `escape`, `stop` und `splitLayout1`–`4`, jede mit ihrem Grund im Test |
+| „Tab-Gruppen überleben keinen Neustart" | Die Sitzungswiederherstellung rekonziliert sie: `retainTabs` einmal mit der Vereinigung aller Fenster, nach dem Öffnen |
 
 ## Der Smoke-Test darf nicht mehr über CDP laufen
 
@@ -657,34 +707,67 @@ Zertifikat existiert.
 | `setFullScreenable(false)` als Mechanismus für Kachel-Vollbild ist **nur auf macOS geprüft** | Windows und Linux, besonders Wayland-Compositor, sind das größte Unbekannte. Erster Punkt in `docs/QA.md` |
 | Optische Transparenz der Overlay-Schicht | Braucht einen Screenshot des zusammengesetzten Fensters; Bildschirmaufnahme ist in der Entwicklungsumgebung blockiert. Funktional belegt, optisch nicht |
 | ~~Die Ziehprüfung im Smoke-Test flackert~~ **behoben, und die Ursache war dieselbe wie bei den Store-Tests** | Zwei von vier Läufen fielen durch, jedes Mal an einer *anderen* Zone — was nach Produktfehler aussieht und eine Stoppuhr war: nach dem Mausdruck wartete die Prüfung fest 600 ms darauf, dass die Zonen über `overlay:presented` zurückkommen, und weitere 350 ms darauf, dass die Overlay-Schicht die Hervorhebung zeichnet. Auf einer belasteten Maschine reicht keins von beidem. Jetzt wird auf den **Zustand** gewartet (`waitFor`), nicht auf die Uhr — und der letzte Messwert wird zurückgegeben statt zu werfen, damit die Zusicherung des Aufrufers die Fehlermeldung bleibt. Fünf Läufe hintereinander grün, 440 Prüfungen |
-| Tab-Gruppen überleben keinen Neustart | Nicht ein Fehler, sondern die fehlende Sitzungswiederherstellung. Die Alternative wäre schlimmer: fremde neue Tabs in alten Gruppen |
+| ~~Tab-Gruppen überleben keinen Neustart~~ **behoben** | Die Sitzungswiederherstellung rekonziliert sie. Die damals genannte Gefahr — fremde neue Tabs in alten Gruppen — ist der Grund für die Reihenfolge in `session-restore/apply.ts`: jede wiederhergestellte Id muss existieren, *bevor* `retainTabs` läuft, und `retainTabs` läuft **einmal** mit der Vereinigung aller Fenster. Pro Fenster gerufen würde das zweite die Gruppen des ersten leerräumen |
+| Von Webinhalten erreichbare interne Seiten | **Neu in dieser Runde gefunden.** Kein `will-navigate`-Handler, also kann eine Seite im eigenen Tab nach `tessera://settings` navigieren. Siehe „Der Befund dieser Runde" |
 | Drei Größenbudgets angehoben | Preload 16→22 kB, Hauptprozess 200→250→320 kB, größte Datei 750→780 Zeilen. Jede mit Begründung *und* mit dem nächsten Schritt im Kommentar — was eine weitere Anhebung rechtfertigen würde und was nicht |
-| **Fünf Budgets stehen darüber, absichtlich nicht angehoben** | Hauptprozess **359 kB** (Grenze 320), Preload **29 kB** (22), Renderer-JavaScript **331 kB** (320), größte Datei **1152 Zeilen** (780), ungetestete Renderer-Zeilen **4436** (2800). Die Kommentare nennen ihren nächsten Schritt selbst, und keiner davon ist „höher setzen": beim Hauptprozess das Laden der Manifest-Auswertung des Medien-Downloaders auf Abruf, beim Preload das Herausziehen der **Oberflächen**-Hälften von Element-Picker und Autofill. Die 320 wurden bereits *für* dieses Funktionsbündel angehoben; eine dritte Anhebung dafür wäre keine Begründung mehr, sondern eine Gewohnheit |
-| **Die Zeilen-Marke maß nur die schlimmste Datei** | Ein Fund aus dieser Runde, und er war schlimmer als er aussah. Die Marke gilt *pro Datei*, gemessen wurde aber nur das Maximum — sobald eine Datei darüber stand, konnte jede weitere lautlos vorbeiziehen. Genau das war passiert: `shared/tabgroups/model.ts` erreichte 873 Zeilen, vierzig Zeilen davon entfernt, überhaupt gemeldet zu werden, während die Zahl auf dem Schirm weiter `catalog.ts` nannte. Neue Prüfung `files over the per-file line bar` — und die Antwort ist **sechs**: `catalog.ts` (1152), `contract.ts` (1022), `BrowserWindowController.ts` (918), `tabgroups/model.ts` (873), `main/index.ts` (861), `PasswordsPage.tsx` (788) |
-| Kein Mutationslauf über die neuen Module | Die Stryker-Liste ist eine **Erlaubnisliste**: eine Auslassung ist unsichtbar. Die neuen Verzeichnisse fehlen noch darin |
+| **Sechs Budgets stehen darüber, absichtlich nicht angehoben** | Frisch gemessen: Hauptprozess **375 kB** (Grenze 320), Renderer-JavaScript **339 kB** (320), Preload **26 kB** (22), größte Datei **1219 Zeilen** (780), Dateien über der Marke **6** (1), ungetestete Renderer-Zeilen **3900** (2800). Die Richtung ist gemischt und das ist der interessante Teil: der Preload ist von 29 auf 26 kB gefallen und die ungetesteten Renderer-Zeilen von 4436 auf 3900 — beides ohne dass jemand daran gearbeitet hätte. Hauptprozess (359→375), Renderer-JS (331→339) und die größte Datei (1152→1219) sind weiter gestiegen. Die Kommentare nennen ihren nächsten Schritt selbst, und keiner davon ist „höher setzen": beim Hauptprozess das Laden der Manifest-Auswertung des Medien-Downloaders auf Abruf, beim Preload der Rollen-Split. Die 320 wurden bereits *für* dieses Funktionsbündel angehoben; eine dritte Anhebung dafür wäre keine Begründung mehr, sondern eine Gewohnheit |
+| **Die Zeilen-Marke maß nur die schlimmste Datei** | Ein Fund aus einer früheren Runde, und er war schlimmer als er aussah. Die Marke gilt *pro Datei*, gemessen wurde aber nur das Maximum — sobald eine Datei darüber stand, konnte jede weitere lautlos vorbeiziehen. Genau das war passiert: `shared/tabgroups/model.ts` erreichte 873 Zeilen, vierzig Zeilen davon entfernt, überhaupt gemeldet zu werden, während die Zahl auf dem Schirm weiter `catalog.ts` nannte. Neue Prüfung `files over the per-file line bar` — und die Antwort ist weiterhin **sechs**, aber alle drei größten sind seit der letzten Messung gewachsen: `catalog.ts` (1219), `contract.ts` (1022), `BrowserWindowController.ts` (1009), `main/index.ts` (950), `tabgroups/model.ts` (873), `PasswordsPage.tsx` (788) |
+| Mutationslauf ist älter als drei Funktionsbündel | Die Stryker-Liste ist eine **Erlaubnisliste**: eine Auslassung ist unsichtbar, und die Fitness-Funktion, die jeden Eintrag gegen eine echte Datei prüft, kann das Fehlen eines Eintrags nicht sehen. `crypto/**`, `passwords/**` und die Update-Module sind inzwischen eingetragen; `tabgroups/strip.ts` und `tabgroups/schema.ts` fehlen. Der letzte Lauf (84,88 %) liegt vor dem Tresor |
 
 ## Qualitätsstand
 
-Zuletzt gemessen bei diesem Durchgang:
+Neu gemessen, nicht übernommen. Alles außer Stryker und dem Smoke-Test ist in diesem Durchgang gelaufen.
 
-| Prüfung | Ergebnis |
-|---|---|
-| Tests | 3955 grün, 2 bedingt übersprungen (135 Dateien) |
-| Zeilen-Coverage | 95,3 % (Schwelle 90 %) |
-| Branch-Coverage | 94,5 % (Schwelle 85 %) |
-| Statements / Functions | 95,0 % / 93,2 % (Schwelle 90 %) |
-| Mutations-Score | 85 % (Schwelle 70 %) — Lauf steht aus, der Tresor ist neu in der Liste |
-| Metriken | **8 von 14** — sechs überschritten, alle benannt, keine davon angehoben |
-| Smoke-Test in echter App | **nicht gelaufen** (Vorgabe); letzter vollständiger Lauf: 440 Prüfungen grün, vor dem Harness-Umbau |
-
-Die Coverage stand bei 84,8 % und ist ohne eine gesenkte Schwelle zurück: der Tresor hat seine Tests bekommen
-(`crypto/**` von ~37 % auf 100 %), und die letzte reißende Bereichsschwelle lag an **meinem eigenen**
-`gestures/zoom.ts` — zwei `?? 100`-Rückfälle auf ein nicht-leeres Literal, also Zweige, die kein Test
-erreichen kann, während der Kommentar daneben selbst schrieb, dass sie nicht durchfallen können. Entfernt statt
-die Schwelle zu senken; die Enden der Zoom-Leiter hält jetzt eine Zusicherung.
-| Smoke-Test in echter App | **440 Prüfungen, alle grün** |
-| typecheck | vier Projekte sauber: node, web, preload, components |
-| lint | sauber (`--max-warnings 0`) |
+| Prüfung | Ergebnis | Vorher |
+|---|---|---|
+| typecheck | vier Projekte sauber: node, web, preload, components | gleich |
+| lint | sauber (`--max-warnings 0`) | gleich |
+| Tests | **4027 grün**, 2 bedingt übersprungen (**138 Dateien**) | 3955 / 135 |
+| Zeilen-Coverage | **95,73 %** (Schwelle 90 %) | 95,3 % |
+| Branch-Coverage | **94,78 %** (Schwelle 85 %) | 94,5 % |
+| Statements / Functions | **95,32 % / 93,67 %** (Schwelle 90 %) | 95,0 / 93,2 |
+| Metriken | **9 von 15** — sechs über der Marke, alle benannt, keine angehoben | 8 von 14 |
+| Mutations-Score | 85 % (Schwelle 70 %) — **Lauf steht weiterhin aus** und ist älter als Tresor, Element-Regeln und Update-Module | gleich |
+| Smoke-Test in echter App | **nicht gelaufen** (Vorgabe des Benutzers); letzter vollständiger Lauf: 440 Prüfungen grün, vor dem Harness-Umbau | gleich |
 
 Die beiden übersprungenen Tests laufen gegen die **echten** heruntergeladenen Filterlisten und
 überspringen sich selbst, wenn kein Korpus vorliegt — `describe.skipIf(corpus.length === 0)`.
+
+Zur Coverage-Geschichte, weil die Zahl allein sie nicht erzählt: sie stand bei 84,8 % und ist ohne eine
+gesenkte Schwelle zurück. Der Tresor hat seine Tests bekommen (`crypto/**` von ~37 % auf 100 %), und die letzte
+reißende Bereichsschwelle lag an **meinem eigenen** `gestures/zoom.ts` — zwei `?? 100`-Rückfälle auf ein
+nicht-leeres Literal, also Zweige, die kein Test erreichen kann, während der Kommentar daneben selbst schrieb,
+dass sie nicht durchfallen können. Entfernt statt die Schwelle zu senken; die Enden der Zoom-Leiter hält jetzt
+eine Zusicherung.
+
+**Und diese Tabelle war selbst kaputt.** Unter dem Absatz standen drei weitere Zeilen im Tabellenformat —
+darunter ein zweites „Smoke-Test in echter App | **440 Prüfungen, alle grün**", das der Zeile oben („nicht
+gelaufen") direkt widersprach. Von Markdown als Fließtext gerendert, also unsichtbar, solange niemand die
+Quelldatei liest. Die Ursache ist banal und lehrreich: ein Absatz wurde *in* eine Tabelle geschrieben, und ab
+da war der Rest keine Tabelle mehr. Ein Statusdokument mit zwei verschiedenen Antworten auf dieselbe Zeile ist
+schlimmer als eines mit einer falschen.
+
+## Der Befund dieser Runde
+
+Zwei Dinge, und beide sind Aussagen über dieses Dokument, nicht über den Code.
+
+**Erstens: sieben Einträge führten Erledigtes als offen.** Nicht ungefähr erledigt — verdrahtet, getestet und
+mit Zeilennummer belegbar. Der Abschnitt „Erledigt, hier aber weiter als offen geführt" zählt sie auf. Zwei
+Muster stecken dahinter. Punkte wurden **oben** in einer Tabelle eingetragen und **unten** in einer anderen
+erledigt, ohne dass die obere nachgezogen wurde — Verlauf, Settings-als-Tab und die Sitzungswiederherstellung
+standen gleichzeitig als ⬜ und als ✅ im selben Dokument. Und Behauptungen über *anderes* wurden nie erneut
+geprüft: „`installAutofill()` wird nie gerufen" war richtig, als es geschrieben wurde, und blieb dreimal
+stehen, nachdem der Aufruf existierte und ein Test danach benannt war.
+
+**Zweitens: der eine wirklich offene Fund war keiner der aufgeschriebenen.** Beim Nachprüfen des
+pro-Seite-Rechtemodells — das hält, und zwar sauber pro Seite geschlüsselt — zeigte sich, dass die *zweite
+Hälfte* desselben Entwurfs fehlt. Der ursprüngliche Eintrag nannte sie ausdrücklich: „plus **Sperre für von
+Webinhalten ausgelöste Navigation** zu `tessera://`". Gebaut wurde die erste Hälfte, der Eintrag danach
+abgehakt, und die Sperre ist nie entstanden. `setWindowOpenHandler` filtert auf `https?:` und deckt deshalb
+`window.open`; für eine Navigation im *selben* Tab gibt es in `src/main/` **keinen einzigen**
+`will-navigate`-Handler.
+
+Das ist genau die Klasse Lücke, gegen die das Rechtemodell gebaut wurde. Sein Argument war: gäbe es eine
+gemeinsame Kanalliste, könnte die *Startseite* jede Einstellung umschreiben — „also genau die Seite, auf die
+eine Website am plausibelsten verlinkt". Der Halbsatz beschreibt einen Angreifer, der eine interne Seite
+**öffnet**. Die Kanäle sind jetzt pro Seite geschlossen, das Öffnen ist es nicht.
