@@ -30,7 +30,7 @@ import { TAB_GROUP_COLORS, type TabGroupColor } from './palette.js'
  * And `layout`, below — which is a *recording* of tiles the group's tabs have left, not
  * a claim on tiles they hold. Even there the rule is spec 2's — *detach, never close*.
  *
- * ## Why the group is where a displaced arrangement lives
+ * ## Why a multi-view is a group
  *
  * Asking for a new tab puts the grid away: the new tab gets the whole window and the
  * pages that were in the panes stay loaded and stay in the strip
@@ -40,9 +40,16 @@ import { TAB_GROUP_COLORS, type TabGroupColor } from './palette.js'
  *
  * A group is the one thing in this design that already means "these tabs belong
  * together", survives being written down, and has a place in the strip the user can
- * click. So the arrangement is recorded on it, and activating a member puts it back.
- * The alternative — a nameless stack of previous layouts kept by the window — would be
+ * click. So the arrangement lives on it, and activating a member puts it back. The
+ * alternative — a nameless stack of previous layouts kept by the window — would be
  * invisible, unclickable and would not survive the window closing.
+ *
+ * The arrangement is **maintained, not recorded once**: every settle with at least
+ * `MIN_ARRANGED_TILES` seated tabs puts it on exactly one group (`groupToHoldArrangement`
+ * picks which, `arrangementIsCurrent` says when there is nothing to do). That is the
+ * user's decision of 29.07.2026 that a multi-view *is* a group, and it is what makes the
+ * way back safe: a recording that is always current cannot describe a state the user has
+ * moved on from, so a restore replays it as often as it is asked instead of spending it.
  *
  * ## Why membership lives on the group
  *
@@ -96,12 +103,12 @@ export const MAX_TAB_GROUPS = 50
 export const MIN_ARRANGED_TILES = 2
 
 /**
- * Where the group's tabs sat, the last time the browser took their tiles away.
+ * The multi-view this group is: which layout, and who sits in which pane.
  *
- * A recording of one displacement, not a preference and not a live assignment. `tiles`
- * is one entry per tile of `id`, in tile order, naming the member that was in it or
- * `null` for a tile that was empty — so restoring is "apply this layout, put these tabs
- * back where they were" and nothing has to be guessed.
+ * Kept up to date rather than captured once — see the header. `tiles` is one entry per
+ * tile of `id`, in tile order, naming the member that was in it or `null` for a tile
+ * that was empty, so restoring is "apply this layout, put these tabs back where they
+ * were" and nothing has to be guessed.
  *
  * Positional rather than a list of tab ids, because the position *is* the information: a
  * member that has closed since must leave its tile empty rather than let the others
@@ -135,11 +142,13 @@ export interface TabGroup {
   tabIds: string[]
   createdAt: number
   /**
-   * The arrangement these tabs were displaced from, while there is one to go back to.
+   * The arrangement these tabs share, while they have one.
    *
-   * Absent is the normal state: a group the user made by hand has never been displaced,
-   * and a group whose arrangement has been restored has handed it back. Every invariant
-   * it has to obey is enforced in one place — see `sanitisedLayout`.
+   * Absent is the normal state for a group the user made by hand out of tabs that have
+   * never shared a split. A group that *has* been a multi-view keeps its arrangement for
+   * good: a restore reads it and leaves it standing, and the next settle overwrites it
+   * with whatever the panes then hold. It goes only when it stops describing the group —
+   * see `sanitisedLayout`, which is where every invariant it has to obey is enforced.
    *
    * Declared `| undefined` rather than plain optional because the wire and storage
    * schemas express it with zod's `.optional()`, whose output type carries `undefined`;
@@ -354,32 +363,40 @@ export type ArrangementHolder =
   { kind: 'reuse'; groupId: string } | { kind: 'create' } | { kind: 'none' }
 
 /**
- * The whole decision behind "which group keeps this arrangement", in one function.
+ * The whole decision behind "which group holds this arrangement", in one function.
  *
- * Here rather than in `TileOccupancyController` because it is the part with the
- * interesting cases, and a condition buried in a controller can only be tested through a
- * window's worth of state. Three answers, and the third is the one that is easy to miss:
+ * Here rather than in a controller because it is the part with the interesting cases, and a
+ * condition buried in a controller can only be tested through a window's worth of state. Four
+ * answers, and the last two are the ones that were argued over:
  *
- *   - **Every seated tab is already in one and the same group** — record it there. This
- *     is what stops the feature from being group spam: a window collapsed, restored and
- *     collapsed again reuses the group it made the first time, keeping its colour and
- *     whatever name the user has since given it, instead of leaving a trail of
- *     one-per-displacement chips down the strip.
- *   - **No seated tab is in any group** — the ordinary case, and the only one that may
- *     create. The new group is over exactly the seated tabs.
- *   - **Anything else** — some seated tabs grouped and some not, or spread over two
- *     groups — and nothing is kept. Creating a group here would be destructive:
- *     `addGroup` takes its members away from whatever held them, so remembering a layout
- *     would shrink the user's own "Steuererklärung 2026" and dissolve it outright if the
- *     arrangement held all of it. Adding the loose tabs to the group instead is no
- *     better — it hands them a colour and a bracket the user did not ask for, and
- *     reorders the strip to make the run contiguous. Forgetting a layout is recoverable
- *     in one drag; silently editing a group the user built is not, and the browser must
- *     not do the second in order to achieve the first. The stated cost: after dropping an
- *     ungrouped tab into a restored arrangement, the next displacement is not recorded.
+ *   - **Every seated tab is already in one and the same group** — it goes there. This is what
+ *     stops the feature from being group spam: a window split, collapsed and split again reuses
+ *     the group it made the first time, keeping its colour and whatever name the user has since
+ *     given it, instead of leaving a trail of one-chip-per-settle down the strip.
+ *   - **No seated tab is in any group** — the ordinary case, and the only one that may create.
+ *     The new group is over exactly the seated tabs.
+ *   - **Some seated tabs in one group, the rest loose** — that group, and the loose tabs join
+ *     it. **This reverses an earlier refusal, on the user's own instruction of 29.07.2026:
+ *     "immer die bestehende Gruppe nehmen."** The refusal was not wrong about anything and is
+ *     kept here rather than deleted: `addGroup` takes its members away from whatever held them,
+ *     so building a group here would shrink the user's own "Steuererklärung 2026" and dissolve
+ *     it outright if the arrangement held all of it. What overrides it is the decision that a
+ *     multi-view **is** a group — the tabs sharing the panes *are* the group, so a run that has
+ *     picked up a loose tab is the membership catching up, not an edit to something the user
+ *     built. The join goes through `addTabToGroup`, never `addGroup`, so the destructive half of
+ *     the old argument does not apply at all. The half that survives is the cost the user
+ *     accepted, and it is stated rather than glossed: a named group gains members they did not
+ *     add by hand, and the strip reorders to keep the run contiguous.
+ *   - **Two or more distinct groups among the seated tabs** — nothing is kept. Deliberately a
+ *     *narrower* exception than the rule it replaced, and outside what was decided: the question
+ *     the user answered was about group members mixed with **loose** tabs. Honouring this one
+ *     would merge two groups they built, and the loser is gone — name, colour and identity —
+ *     with nothing to undo it. Forgetting an arrangement costs one drag; that does not.
  *
- * Also the place `MIN_ARRANGED_TILES` is applied, so "is this worth keeping at all" and
- * "where would it go" cannot answer differently.
+ * Also the place `MIN_ARRANGED_TILES` is applied, so "is this worth keeping at all" and "where
+ * would it go" cannot answer differently — and it is the line that makes a displacement work. A
+ * new tab collapses the window to a single seated tab, this answers `none`, and the group keeps
+ * the arrangement it had a moment ago instead of being told the window is now a single view.
  */
 export function groupToHoldArrangement(
   groups: readonly TabGroup[],
@@ -388,14 +405,13 @@ export function groupToHoldArrangement(
   const seated = arrangedTabs(layout)
   if (seated.length < MIN_ARRANGED_TILES) return { kind: 'none' }
 
+  // The distinct groups among the seated tabs, with the `undefined` that stands for "ungrouped"
+  // dropped rather than counted. A loose tab no longer votes on the answer: it is what joins it.
   const owners = new Set(seated.map((tabId) => groupOfTab(groups, tabId)?.id))
-  if (owners.size !== 1) return { kind: 'none' }
-
-  // Exactly one owner, so the single entry is either a group id or the `undefined` that
-  // stands for "ungrouped". Destructured rather than indexed: there is no third case to
-  // guard against and a guard for one would be a branch no test can reach.
-  const [only] = [...owners]
-  if (only !== undefined) return { kind: 'reuse', groupId: only }
+  const held = [...owners].filter((id): id is string => id !== undefined)
+  if (held.length > 1) return { kind: 'none' }
+  const [existing] = held
+  if (existing !== undefined) return { kind: 'reuse', groupId: existing }
 
   /*
     The cap, checked here rather than walked into.
@@ -407,6 +423,68 @@ export function groupToHoldArrangement(
     user can dissolve.
   */
   return groups.length >= MAX_TAB_GROUPS ? { kind: 'none' } : { kind: 'create' }
+}
+
+/**
+ * True when the group that would hold this arrangement is already holding exactly it.
+ *
+ * The idempotence gate, and the reason the maintenance pass can run on every broadcast round at
+ * all. Two failures it exists to prevent, and neither is theoretical. **A write storm:** the pass
+ * runs from the same coalesced round that publishes tab state, which fires on every title change
+ * and every navigation event, so an unconditional write would debounce a document to disk for the
+ * rest of the session. **A round that schedules the next one:** a write publishes, and the pass
+ * runs *inside* a publish, so without a "nothing changed" answer the two feed each other for ever.
+ *
+ * Membership counts as part of "already holding it": a `reuse` whose loose tabs have not joined
+ * yet is not current even when the tiles already match, or the absorb case would never happen.
+ * `create` is never current, because there is no group to compare against, and `none` is not
+ * asked — a caller told to keep nothing has nothing to compare.
+ */
+export function arrangementIsCurrent(
+  groups: readonly TabGroup[],
+  layout: TabGroupLayout
+): boolean {
+  const holder = groupToHoldArrangement(groups, layout)
+  if (holder.kind !== 'reuse') return false
+
+  /*
+    Asked of the whole list rather than looked up by id, and that is not a style choice.
+
+    `holder.groupId` came out of `groupOfTab` over this same array, so a lookup by it can never
+    miss — and the `group === undefined` guard that a lookup needs is therefore a branch no test can
+    reach. That is how a coverage floor gets quietly lowered to make room for code that cannot run;
+    the rule here is to delete the impossible state rather than to guard it. Phrased as "is there a
+    group that is the holder and is already holding exactly this", every branch is one the tests
+    take, including the one where an unrelated group is looked at first and passed over.
+  */
+  return groups.some((group) => {
+    if (group.id !== holder.groupId) return false
+    if (!arrangedTabs(layout).every((tabId) => group.tabIds.includes(tabId))) return false
+
+    const held = group.layout
+    if (held?.id !== layout.id) return false
+    // Element by element, because `tiles` is positional: the same members in swapped panes is a
+    // different arrangement, and comparing them as sets would leave a drag between two tiles unseen.
+    return (
+      held.tiles.length === layout.tiles.length &&
+      held.tiles.every((tabId, index) => tabId === layout.tiles[index])
+    )
+  })
+}
+
+/**
+ * The seated tabs that are not yet members of the group about to hold their arrangement.
+ *
+ * The absorb case's other half, next to the decision that produces it. Only ever loose tabs:
+ * `reuse` is answered only where there is at most one group among the seated tabs, so anything
+ * not in `groupId` is in no group at all and joining takes nothing from anybody.
+ */
+export function tabsToAbsorb(
+  groups: readonly TabGroup[],
+  groupId: string,
+  layout: TabGroupLayout
+): string[] {
+  return arrangedTabs(layout).filter((tabId) => groupOfTab(groups, tabId)?.id !== groupId)
 }
 
 // --- writes ------------------------------------------------------------------
@@ -504,11 +582,14 @@ export function setGroupCollapsed(
 }
 
 /**
- * Records an arrangement on a group, or takes the one it carries away.
+ * Writes the arrangement a group holds, or takes the one it carries away.
  *
- * `null` is not a failure but the *other* half of the feature: a restore consumes the
- * recording it used. See `TabGroupController.takeArrangementFor` for why replaying one
- * twice would fight the user.
+ * `null` used to be the other half of the feature — a restore spent the recording it used — and
+ * is not any more: the arrangement is maintained on every settle, so `takeArrangementFor` leaves
+ * it standing. The primitive is kept although nothing now passes `null`, because clearing the
+ * field has to have exactly one gate for the day something does; deleting it would mean the next
+ * caller inventing a second way to write it, which is the drift `withLayout` and `sanitisedLayout`
+ * exist to prevent.
  *
  * An arrangement that does not describe this group — the wrong number of tiles for its
  * layout, a tab the group does not have, one tab in two tiles — is dropped rather than

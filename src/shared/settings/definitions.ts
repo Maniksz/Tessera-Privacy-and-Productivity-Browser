@@ -51,6 +51,16 @@ export const settingDefinitions = {
   'appearance.theme': def(z.enum(['system', 'light', 'dark']), 'system', 'appearance'),
   'appearance.uiLanguage': def(z.enum(['system', 'de', 'en']), 'system', 'appearance'),
   'appearance.showBookmarksBar': def(z.boolean(), false, 'appearance'),
+  /**
+   * The zoom a pane shows at until somebody zooms it.
+   *
+   * Live (spec 5), and *which* panes it reaches is the part worth knowing. Since zoom became per
+   * view (29.07.2026, reversing spec 1), a pane the user zoomed holds its own percentage and this
+   * setting no longer touches it, while every pane still at "never zoomed" moves the moment this
+   * changes — and Reset Zoom is what puts a pane back into that group. That is what the `null`
+   * sentinel in `PaneZoom` buys: without it the choice would have been to stomp deliberate zooms
+   * or to stop reaching open panes at all.
+   */
   'appearance.defaultZoom': def(percentage, 100, 'appearance'),
   'appearance.tabBarPosition': def(z.enum(['top', 'bottom']), 'top', 'appearance'),
 
@@ -69,15 +79,21 @@ export const settingDefinitions = {
   'splitView.restoreLayoutOnStart': def(z.boolean(), true, 'splitView'),
   'splitView.showTileHeaders': def(z.boolean(), true, 'splitView'),
   /**
-   * Keep the number of tiles matched to the tabs in them.
+   * Keep the tiles matched to the tabs in them.
    *
-   * Growing the layout gives every empty tile a start-page tab, and closing a tab takes its
-   * tile away again. One switch for both directions because they are the same idea: a layout
-   * with empty panes is an instruction rather than a browser, and a pane left behind by a closed
-   * tab is the same thing.
+   * An empty tile is given something to show — a tab that is already loaded but hidden if there
+   * is one, a fresh start page if there is not — and a tile whose tab closed is taken away again.
+   * One switch for all of it because it is one idea: a layout with empty panes is an instruction
+   * rather than a browser, and a pane left behind by a closed tab is the same thing.
    *
-   * On by default. It is a setting rather than a rule because each filler is a renderer process,
-   * which is real memory on a modest machine.
+   * Off means off, in every direction. A tile the user creates stays empty until they put
+   * something in it, a tile whose tab they close stays empty and stays there, and no page moves
+   * between tiles that they did not move themselves. That is what the switch is for: the
+   * arrangement belongs to whoever turned it off. Clearing a pane, or emptying one, is then done
+   * from inside the tile — the tile bar's Home and Close buttons exist for that.
+   *
+   * On by default. It is a setting rather than a rule because each start page opened for an empty
+   * tile is a renderer process, which is real memory on a modest machine.
    */
   'splitView.adaptLayoutToTabs': def(z.boolean(), true, 'splitView'),
   /**

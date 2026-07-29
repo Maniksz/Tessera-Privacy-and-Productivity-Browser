@@ -271,6 +271,37 @@ export default defineConfig({
           functions: 100,
           branches: 100,
           statements: 100
+        },
+        /*
+          The other half of the boundary above: who may *open* an internal page.
+
+          `sender-policy.ts` decides what an internal page may call once it is open, and was held
+          here at all of it for that reason. It said nothing about how a page comes to be open at
+          all, and for a long time nothing did — a web page could reach `tessera://settings` in its
+          own tab and inherit that page's channels. A refusal that is only sometimes exercised is
+          the failure mode this whole table exists for.
+        */
+        'src/main/browser/navigation-policy.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
+          Held at all of it because it was carved out of a file that is excluded.
+
+          These nine handlers lived in `BrowserWindowController.ts`, which is on the exclude list
+          above as Electron-bound — so they were never measured and never could be. Moving them
+          behind an injected seam is what made them measurable at all, and the global 90 % would let
+          them drift most of the way back to unmeasured while still reporting green. A floor is the
+          only thing that keeps the extraction from being reversible by neglect rather than by a
+          decision someone has to write down.
+        */
+        'src/main/browser/window-events.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
         }
       }
     }

@@ -111,7 +111,8 @@ function live(tabId: string, overrides: Partial<CapturedWindow> = {}): CapturedW
         pendingInput: null,
         title: 'Example',
         pinned: false,
-        tileIndex: 0
+        tileIndex: 0,
+        zoomPercent: 150
       }
     ],
     ...overrides
@@ -129,7 +130,8 @@ const SAVED_TAB = {
   pendingUrl: null,
   title: 'Saved',
   pinned: true,
-  tileIndex: 1
+  tileIndex: 1,
+  zoomPercent: 200
 }
 
 const SAVED_WINDOW = {
@@ -160,6 +162,24 @@ describe('SessionStore basics', () => {
     expect(document.windows[0]?.id).toBe('slot1')
     expect(document.windows[0]?.tabs[0]?.url).toBe('https://example.com/tab-1')
     expect(document.windows[0]?.activeTile).toBe(1)
+    // The pane's zoom reaches the disk. Nothing else in this browser remembers it, so a slot that
+    // dropped it would lose it for good at the next launch.
+    expect(document.windows[0]?.tabs[0]?.zoomPercent).toBe(150)
+  })
+
+  it('brings a pane back at the zoom it was left at', async () => {
+    /*
+      The whole round trip in one test, because each half of it looks fine on its own: the live
+      window reports a zoom, the file holds it, the schema accepts it, and the plan hands it to the
+      tab that is about to be created. The failure this pins is the quiet one — a field written and
+      never read, so every launch opens at 100 % and nothing anywhere is wrong.
+    */
+    const seeded = savedFile([{ ...SAVED_WINDOW, tabs: [{ ...SAVED_TAB, zoomPercent: 175 }] }])
+    const { store } = await openStore({ seed: seeded, settleMs: 60_000 })
+    const plan = await store.beginRun(RESTORE)
+    store.seal()
+    if (plan.kind !== 'restore') throw new Error('expected a restore')
+    expect(plan.windows[0]?.tabs[0]?.zoomPercent).toBe(175)
   })
 
   it('binds a recorder to one slot for its lifetime', async () => {
@@ -248,7 +268,8 @@ describe('a private window', () => {
             pendingInput: 'https://also-secret.example/',
             title: 'Secret',
             pinned: false,
-            tileIndex: 0
+            tileIndex: 0,
+            zoomPercent: null
           }
         ]
       })
@@ -426,7 +447,13 @@ describe('a file this build did not write', () => {
             unknownFutureField: { anything: true },
             tabs: [
               { id: 'tab-2', url: 'https://kept.example/' },
-              { id: 'tab-5', url: 'https://also.example/', tileIndex: 7, title: 42 }
+              {
+                id: 'tab-5',
+                url: 'https://also.example/',
+                tileIndex: 7,
+                title: 42,
+                zoomPercent: 'large'
+              }
             ]
           }
         ]
@@ -453,6 +480,13 @@ describe('a file this build did not write', () => {
     // first one takes tile 0 because a window showing nothing is indistinguishable from a
     // restore that failed.
     expect(window?.tabs.map((tab) => tab.tileIndex)).toEqual([0, null])
+    /*
+      A file with no zoom in it at all, and one with a zoom that is not a number, both heal to
+      "never zoomed" — which is the true answer rather than a convenient one: every tab written
+      before the field existed *was* following `appearance.defaultZoom`, so `null` restores them to
+      exactly the state they were in.
+    */
+    expect(window?.tabs.map((tab) => tab.zoomPercent)).toEqual([null, null])
   })
 
   it('heals divider positions it cannot use', async () => {

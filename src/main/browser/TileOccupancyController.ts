@@ -24,9 +24,11 @@ import type { SplitController } from './SplitController.js'
  * window rather than a pane, so it can do neither.
  *
  * Taking the window away from an arrangement is the one thing here that loses something a user cared
- * about, so it is also the one thing here that is *recorded*: `keepArrangement` hands the arrangement to
- * a tab group on the way out and `restoreArrangement` puts it back. The tabs never needed saving — they
- * stay loaded either way — but which layout they were in and who sat where did.
+ * about, so it is also the one thing here that reports what it is about to destroy: `keepArrangement`
+ * hands the arrangement to a tab group on the way out and `restoreArrangement` puts it back. The tabs
+ * never needed saving — they stay loaded either way — but which layout they were in and who sat where
+ * did. The window keeps that up to date on every settle now (`BrowserWindowController`); the call here
+ * is the one write that cannot wait for a settle, because the settle it would wait for is the collapse.
  *
  * Behind the host seam it is testable without a window, which matters because the rules interact:
  * shrinking a layout can close a tab, closing a tab can shrink a layout, and getting that wrong
@@ -46,18 +48,34 @@ import type { SplitController } from './SplitController.js'
 export interface LayoutChangeOptions {
   /** Give a tile that is still empty a start page of its own. */
   fill: boolean
-  /** Move loaded-but-hidden tabs into the tiles that have nothing in them. */
+  /**
+   * Move loaded-but-hidden tabs into the tiles that have nothing in them.
+   *
+   * Necessary and not sufficient. Both flags say what the *caller* is doing; whether the user wants
+   * either of them at all is `adaptEnabled`, and the two are checked together at the call site.
+   */
   rehome: boolean
 }
 
 export interface TileOccupancyHost {
   split: SplitController
-  /** Whether the user wants the layout to follow the tabs. Off means panes stay as they are. */
+  /**
+   * Whether the user wants the layout to follow the tabs. Off means panes stay as they are: no tile
+   * is filled, no loaded tab slides into one, and no tile goes away.
+   */
   adaptEnabled(): boolean
   /** Tab-bar order, which is independent of tile assignment. */
   tabOrder(): readonly string[]
   /** True for a tab the browser opened to fill a tile and the user never navigated. */
   isEphemeral(tabId: string): boolean
+  /**
+   * True for a tab whose group is folded away, and therefore not one to put back into a tile.
+   *
+   * Named for the cause rather than for the effect, because this file already has a private
+   * `#firstHiddenTab` that means something else entirely — "loaded but in no tile". See it for what
+   * went wrong while both were called hidden.
+   */
+  isHiddenByCollapse(tabId: string): boolean
   /** Take a tab out of the grid without closing it (spec 2). */
   unassign(tabId: string): void
   assignTabToTile(tabId: string, tileIndex: number): void
@@ -73,6 +91,13 @@ export interface TileOccupancyHost {
    * Deliberately "here is what is about to be lost" rather than "make a group": this controller owns
    * tiles, not groups, and whether the arrangement is worth keeping and where it goes is a decision
    * about groups. See `TabGroupController.keepArrangement`.
+   *
+   * Kept on the seam although the window now maintains the arrangement on every settle, which would
+   * make this a second write of a value that is already current. It is not removed, because the
+   * settle is *scheduled* — one `setImmediate` per burst — and two IPC messages delivered in the same
+   * turn of the loop ("split this window", then "new tab") would reach the collapse before the round
+   * that would have written anything down. This is the only moment the arrangement still exists, and
+   * in every other case the write is refused as already-current and costs a comparison.
    */
   keepArrangement(layout: TabGroupLayout): void
 }
@@ -105,7 +130,22 @@ export class TileOccupancyController {
       this.host.closeTab(tabId)
     }
 
-    if (options.rehome) this.#rehomeHiddenTabs()
+    /*
+      Two questions, and rehoming needs both answered yes.
+
+      `options.rehome` is the caller's: is this an arrangement the user asked for, or one the browser
+      is passing through on the way somewhere else. `adaptEnabled` is the user's own standing answer,
+      given once in the settings — and it used to be asked of `fillEmptyTiles` and not of this, which
+      made "off" mean "off, unless something happens to be loaded". Filling an empty tile with a start
+      page and moving a hidden page into it are the same act with a different source; a user cannot
+      see which one they are about to get, so they cannot predict a switch that governs only one.
+
+      Rejected: treating a chosen layout as consent enough and leaving this to `options.rehome` alone.
+      That is what shipped, and it is defensible right until someone picks a four-tile layout with
+      adaptation off and gets three pages they did not choose — "die Seiten muss man dann eben öffnen"
+      is the answer to exactly that.
+    */
+    if (options.rehome && this.host.adaptEnabled()) this.#rehomeHiddenTabs()
     if (options.fill) this.fillEmptyTiles()
   }
 
@@ -115,9 +155,30 @@ export class TileOccupancyController {
    * First choice is a tab that is loaded but not currently shown: moving it in keeps the layout
    * the user chose. Only when there is nothing left to show does the tile itself go, which is
    * what "close" means for the pane you were looking at.
+   *
+   * ## With adaptation off, none of it happens
+   *
+   * One guard at the top rather than the two further down it replaces, because both halves answer the
+   * same question — what should this pane hold now that its tab has left it — and with the switch off
+   * the answer is "whatever the user put there, which is nothing". The shrink already stopped here;
+   * the pull-in did not, so the browser went on choosing which page appeared in the pane the user had
+   * just cleared while refusing to remove the pane. Of the three possible behaviours that is the one
+   * nobody could have predicted from the setting's label, and it is the one that shipped.
+   *
+   * The cost is real and is stated rather than hidden: the pane stays, and stays empty. Nothing
+   * shrinks and nothing slides in, so putting a page back means dragging one into it. That is the
+   * other half of this change — the tile bar now carries Close and Home, so emptying a pane is
+   * something the user does deliberately from the tile they are looking at, and Home is what to press
+   * when what they wanted was this pane *cleared* rather than gone.
+   *
+   * Rejected: guarding the shrink only and letting the pull-in stand, on the grounds that it changes
+   * no layout and the setting is named for layouts. It moves a page between tiles unasked, which is
+   * the act `#rehomeHiddenTabs` performs, one tile at a time; two identical moves obeying different
+   * switches is a distinction no user can see, let alone predict.
    */
   afterTabClosed(vacatedTile: number | null): void {
     if (vacatedTile === null) return
+    if (!this.host.adaptEnabled()) return
 
     const candidate = this.#firstHiddenTab()
     if (candidate !== undefined) {
@@ -125,7 +186,6 @@ export class TileOccupancyController {
       return
     }
 
-    if (!this.host.adaptEnabled()) return
     const smaller = shrunkLayout(this.host.split.layout)
     // `fill: false` is load-bearing: filling here would immediately open a replacement for the
     // tab that was just closed, and the pane would never go away. `rehome` costs nothing either
@@ -178,7 +238,7 @@ export class TileOccupancyController {
    * Also the answer for a tab that is being *opened* rather than created — clicking one that has no
    * tile, which is every member of a group that was folded away. Same question, same answer.
    *
-   * ## The arrangement is recorded before it goes
+   * ## The arrangement is handed over before it goes
    *
    * "The pages stay loaded and choosing a layout again brings them back" was true and not enough: it
    * brought them back in the strip's order, into whatever layout was chosen next, so *which*
@@ -186,9 +246,13 @@ export class TileOccupancyController {
    * handed to `keepArrangement` first — the one moment it still exists — and a group keeps it. See
    * `restoreArrangement` for the way back.
    *
+   * Ordinarily the group already has it: the window writes it whenever the tiling settles, and by the
+   * time a new tab is asked for the last settle has been and gone. This call is the belt-and-braces
+   * one, for the burst where it has not — see `TileOccupancyHost.keepArrangement`.
+   *
    * Reported, not decided, here. Whether the arrangement is worth keeping and which group takes it are
    * questions about groups; this controller does not know what a group is. Both branches that skip the
-   * collapse skip the recording with it, and correctly: `adaptLayoutToTabs` off never displaces
+   * collapse skip the handover with it, and correctly: `adaptLayoutToTabs` off never displaces
    * anything, and a window whose tiles are all empty has no arrangement to lose.
    */
   claimTileForNewTab(): number {
@@ -266,8 +330,22 @@ export class TileOccupancyController {
 
     this.host.assignTabToTile(tabId, zone.tileIndex)
     if (displaced !== null && displaced !== tabId) this.#reseat(displaced, zone, vacated)
-    // Anything still empty takes a loaded tab if there is one, exactly as a layout change does.
-    this.#rehomeHiddenTabs()
+    /*
+      Anything still empty takes a loaded tab if there is one, exactly as a layout change does — which
+      now includes being governed by the switch, because a layout change is.
+
+      `#reseat` above is the line between the two, and it is not a fine one. The page the drop displaced
+      is moved unconditionally: the user aimed at an occupied tile, so both pages are part of the gesture
+      and the browser owes them somewhere to be. This is a different thing wearing the same shape. It
+      seats tabs that had nothing to do with the drag, in tiles nobody aimed at, which is the setting's
+      subject exactly.
+
+      Rejected: leaving it unguarded on the grounds that a drop is an explicit user action and everything
+      following from it is therefore asked for. What was asked for is where *this* page goes. Under that
+      reading, dragging one page into a `2x2` with adaptation off would seat three, two of them the
+      browser's choice — and the drop would be the one way left to make the setting appear not to work.
+    */
+    if (this.host.adaptEnabled()) this.#rehomeHiddenTabs()
     // The window's own method, so the drop lands with focus, audio and layout settled — the
     // same path a user clicking into the tile would take.
     this.host.setActiveTile(zone.tileIndex)
@@ -330,11 +408,35 @@ export class TileOccupancyController {
     return ids
   }
 
+  /**
+   * The first loaded tab that is off the grid and may be put back on it.
+   *
+   * Two different senses of "hidden" meet here, and conflating them was a bug. This method means
+   * *off-screen*: loaded, running, in the strip, but in no tile. `isHiddenByCollapse` means
+   * *folded away*: in a collapsed group, deliberately absent from the strip. A collapsed member is
+   * off the grid too — `setCollapsed` unassigns its tile on purpose — so a plain "has no tile" test
+   * finds it and seats it, which recreates exactly the state that method exists to prevent: a page
+   * on screen with nothing in the strip to close it, mute it or switch away from it.
+   *
+   * Filtering here rather than in the two callers because both want the same thing and neither is
+   * the place that knows about groups. Filtering in `tabOrder()` instead was rejected: that seam is
+   * the strip's order and is also read by `#ephemeral`, where a collapsed filler still counts.
+   */
   #firstHiddenTab(): string | undefined {
-    return this.host.tabOrder().find((id) => this.host.split.tileOfTab(id) === null)
+    return this.host
+      .tabOrder()
+      .find((id) => this.host.split.tileOfTab(id) === null && !this.host.isHiddenByCollapse(id))
   }
 
-  /** Moves loaded-but-hidden tabs into tiles that have nothing in them. */
+  /**
+   * Moves loaded-but-hidden tabs into tiles that have nothing in them.
+   *
+   * No `adaptEnabled` check of its own, unlike `fillEmptyTiles`, and the asymmetry is deliberate.
+   * `fillEmptyTiles` is public and called from the window, so it has to be safe alone; both callers of
+   * this one are a few lines away and each had a different reason to obey the switch. A guard in here
+   * would be one sentence standing in for two arguments, and the one `applyDrop` makes is the one a
+   * reader of `applyDrop` has to be able to see without opening a private method.
+   */
   #rehomeHiddenTabs(): void {
     for (let index = 0; index < this.host.split.tileCount; index++) {
       if (this.host.split.tabIdAt(index) !== null) continue

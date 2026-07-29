@@ -29,6 +29,8 @@ interface Harness {
   fillers: number[]
   activated: number[]
   adapt: boolean
+  /** Tabs whose group is folded away. The controller must leave these off the grid. */
+  collapsed: Set<string>
   /**
    * Arrangements handed over on the way out, newest last.
    *
@@ -50,6 +52,7 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     fillers: [],
     activated: [],
     adapt: true,
+    collapsed: new Set<string>(),
     kept: []
   }
 
@@ -60,6 +63,7 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     adaptEnabled: () => state.adapt!,
     tabOrder: () => state.order!,
     isEphemeral: (tabId) => state.ephemeral!.has(tabId),
+    isHiddenByCollapse: (tabId) => state.collapsed!.has(tabId),
     unassign: (tabId) => {
       state.unassigned!.push(tabId)
     },
@@ -156,6 +160,22 @@ describe('after the layout changed', () => {
     expect(h.split.tabIdAt(1)).toBe('tab-hidden')
   })
 
+  it('opens a new tab rather than unfolding a collapsed one into the empty tile', () => {
+    /*
+      The same conflation as in "after a tab closed", from the other direction, and here it
+      compounds: once a folded-away tab sits in a pane beside a loose one, the next settle sees one
+      named group among the seated tabs and pulls the loose tab into it — so a second page leaves
+      the strip while staying on screen. A fresh start page is the honest answer; the collapsed
+      group stays folded until the user unfolds it.
+    */
+    const h = harness('1x2', ['tab-1', 'tab-folded'])
+    h.split.assignTab('tab-1', 0)
+    h.collapsed.add('tab-folded')
+    h.occupancy.afterLayoutChange([], { fill: true, rehome: true })
+    expect(h.split.tileOfTab('tab-folded')).toBeNull()
+    expect(h.fillers).toEqual([1])
+  })
+
   it('prefers a hidden tab over opening a new one', () => {
     // Reusing what is already loaded costs nothing; a new tab costs a renderer process.
     const h = harness('1x2', ['tab-1', 'tab-hidden'])
@@ -180,6 +200,36 @@ describe('after the layout changed', () => {
     expect(h.fillers).toEqual([])
     expect(h.split.tabIdAt(1)).toBeNull()
   })
+
+  it('moves no hidden tab in when the user turned adaptation off', () => {
+    /*
+      The gap this closes. `fillEmptyTiles` consulted the switch and rehoming did not, so choosing a
+      four-tile layout with adaptation off opened no start pages — and then seated three loaded tabs
+      anyway. "Off" meant "off, unless something happens to be loaded", which is not a rule a user can
+      hold in their head, and the two acts are indistinguishable once the pane is on screen.
+    */
+    const h = harness('2x2', ['tab-1', 'tab-hidden'])
+    h.split.assignTab('tab-1', 0)
+    h.adapt = false
+
+    h.occupancy.afterLayoutChange([], { fill: true, rehome: true })
+
+    expect(h.split.toState().tileTabIds).toEqual(['tab-1', null, null, null])
+    expect(h.fillers).toEqual([])
+  })
+
+  it('still takes away the tile of a tab that lost it when adaptation is off', () => {
+    // The guard is on filling panes, not on the bookkeeping. A tab whose tile no longer exists is
+    // unassigned either way — leaving it pointing at a tile the layout does not have is a broken
+    // window, not a preference.
+    const h = harness('2x2', ['tab-1', 'tab-2'])
+    seed(h, ['tab-1', 'tab-2'])
+    h.adapt = false
+
+    h.occupancy.afterLayoutChange(['tab-2'], { fill: true, rehome: true })
+
+    expect(h.unassigned).toEqual(['tab-2'])
+  })
 })
 
 describe('after a tab closed', () => {
@@ -197,6 +247,26 @@ describe('after a tab closed', () => {
     const h = harness('1x2', ['tab-2'])
     h.split.assignTab('tab-2', 1)
     h.occupancy.afterTabClosed(0)
+    expect(h.split.layout).toBe('1x1')
+  })
+
+  it('leaves a folded-away tab folded away rather than seating it in the freed pane', () => {
+    /*
+      Two senses of "hidden" met in `#firstHiddenTab` and the wrong one won.
+
+      A collapsed group's members have no tile — `setCollapsed` unassigns them on purpose, because a
+      collapsed tab that kept its pane would be a page on screen with nothing in the strip to close
+      it, mute it or switch away from it. "Has no tile" was also the whole test for "may be pulled
+      into a free pane", so closing a neighbour re-seated exactly the tab that had just been folded
+      away, and undid the collapse one pane at a time.
+
+      It shrinks instead, which is what happens when there is genuinely nothing to show.
+    */
+    const h = harness('1x2', ['tab-2', 'tab-folded'])
+    h.split.assignTab('tab-2', 1)
+    h.collapsed.add('tab-folded')
+    h.occupancy.afterTabClosed(0)
+    expect(h.split.tileOfTab('tab-folded')).toBeNull()
     expect(h.split.layout).toBe('1x1')
   })
 
@@ -238,6 +308,27 @@ describe('after a tab closed', () => {
     h.adapt = false
     h.occupancy.afterTabClosed(0)
     expect(h.split.layout).toBe('1x2')
+  })
+
+  it('leaves the pane empty rather than sliding a hidden tab in when adaptation is off', () => {
+    /*
+      The third path, and the one that made "off means off" unreachable by guarding the layout change
+      alone. The shrink already stopped for this switch; the pull-in did not, so the browser kept the
+      pane *and* chose what appeared in it — a page the user had not asked for, in the pane they had
+      just cleared, with no way to predict either from the setting.
+
+      The cost is the hole in the layout, and it is the intended state: the pages stay loaded and in
+      the strip, and putting one back is a drag into the pane.
+    */
+    const h = harness('1x2', ['tab-2', 'tab-hidden'])
+    h.split.assignTab('tab-2', 1)
+    h.adapt = false
+
+    h.occupancy.afterTabClosed(0)
+
+    expect(h.split.tabIdAt(0)).toBeNull()
+    expect(h.split.layout).toBe('1x2')
+    expect(h.order).toContain('tab-hidden')
   })
 
   it('does nothing for a tab that was not in a tile', () => {
@@ -318,6 +409,15 @@ describe('where a new tab goes', () => {
   })
 })
 
+/**
+ * The arrangement a new tab displaces.
+ *
+ * The window now keeps this up to date on every settle, so by the time a new tab is asked for the group
+ * usually has it already. The handover here is kept as the belt-and-braces write, and it is the reason
+ * these checks stay: the settle is *scheduled*, one `setImmediate` per burst, so two messages arriving in
+ * the same turn of the loop — split this window, then open a tab — reach the collapse before any round
+ * could have written anything down. This is the last moment the arrangement exists.
+ */
 describe('the arrangement a new tab displaces', () => {
   it('is handed over before the panes go, layout and seating together', () => {
     /*
@@ -588,6 +688,25 @@ describe('applying a drop', () => {
 
     expect(h.split.toState().tileTabIds).toEqual(['a', 'b', 'dragged', 'd'])
     expect(h.closed).toEqual([])
+  })
+
+  it('seats the page it displaced but no others when adaptation is off', () => {
+    /*
+      Where the line falls inside `applyDrop`, with both sides of it in one drop.
+
+      `a` moves regardless of the switch: the user aimed at the tile it was in, so both pages are part
+      of the gesture and the browser owes the displaced one somewhere to be. The two hidden tabs do
+      not: tiles 2 and 3 are panes nobody aimed at, and seating a tab that had nothing to do with the
+      drag is the adaptation that was turned off. With the switch on they would both be on screen.
+    */
+    const h = harness('2x2', ['a', 'hidden-1', 'hidden-2', 'dragged'])
+    seed(h, ['a'])
+    h.adapt = false
+    const firstTile = dropZonesFor('2x2', CONTENT).find((zone) => zone.id === '0-centre')!
+
+    h.occupancy.applyDrop('dragged', firstTile)
+
+    expect(h.split.toState().tileTabIds).toEqual(['dragged', 'a', null, null])
   })
 
   it('survives a zone the layout has since outgrown', () => {

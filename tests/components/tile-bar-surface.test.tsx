@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TileBarSurface } from '../../src/renderer/overlay/TileBarSurface.js'
 import type { TileBarPresentation } from '@shared/overlay/surface.js'
 import { TILE_BAR_HEIGHT, TILE_BAR_POINTER_AWAY } from '@shared/split/tile-bar.js'
+import { HOME_URL } from '@shared/url/omnibox.js'
 
 /**
  * One tile's navigation bar, rendered.
@@ -10,7 +11,9 @@ import { TILE_BAR_HEIGHT, TILE_BAR_POINTER_AWAY } from '@shared/split/tile-bar.j
  * Two things can only be checked here. The first is the one the whole feature turns on: each
  * button has to carry *its own* tile's tab id. Without it the call is identical in every visible
  * respect and acts on the active tile — so the bar in tile 2 would send tile 1 back, which is the
- * complaint the feature exists to answer. Nothing but reading the payload can see that.
+ * complaint the feature exists to answer. Nothing but reading the payload can see that. Close is
+ * the case with no way back — a misdirected one shuts a page the user is reading in another pane —
+ * so it is asserted the same way as the four that only cost a back-press.
  *
  * The second is the keyboard route. A hover-revealed bar is a mouse-only control and fails spec 7,
  * so the same bar can be asked for by key: focus starts in the address field, Tab stays inside the
@@ -96,6 +99,28 @@ describe('the bar acts on its own tile', () => {
 
     screen.getByRole('button', { name: /stop/i }).click()
     expect(calls).toEqual([{ channel: 'nav:stop', payload: { tabId: 't2' } }])
+  })
+
+  it('sends its own tab home, not the active one', () => {
+    // The main toolbar's home button omits `tabId` on purpose — one active tab, no ambiguity. Copying
+    // it here would send whichever tile happens to be active to the start page while the tile the
+    // pointer is over stayed put, and both would look like the button worked.
+    const calls = installBridge()
+    render(<TileBarSurface presentation={presentation({ tabId: 't2' })} />)
+
+    screen.getByRole('button', { name: /home/i }).click()
+    expect(calls).toEqual([{ channel: 'nav:navigate', payload: { input: HOME_URL, tabId: 't2' } }])
+  })
+
+  it('closes its own tab, not the active one', () => {
+    // The one action in this bar with no way back, so this is the assertion that matters most in the
+    // file: a close that reached the active tile would shut a page the user is looking at in a
+    // different pane, and there is no back button for that.
+    const calls = installBridge()
+    render(<TileBarSurface presentation={presentation({ tabId: 't2' })} />)
+
+    screen.getByRole('button', { name: /close/i }).click()
+    expect(calls).toEqual([{ channel: 'tabs:close', payload: { tabId: 't2' } }])
   })
 
   it('navigates its own tab from the address field', () => {
@@ -193,24 +218,41 @@ describe('the keyboard route', () => {
     installBridge()
     render(<TileBarSurface presentation={presentation({ invokedBy: 'keyboard' })} />)
     const field = screen.getByRole<HTMLInputElement>('textbox')
+    const close = screen.getByRole('button', { name: /close/i })
 
+    // Close sits after the field, so it is the next stop forward and the last control in the bar.
     fireEvent.keyDown(field, { key: 'Tab' })
+    expect(document.activeElement).toBe(close)
+
+    // The wrap, which is what "trapped" means: past the last control focus comes back to the first
+    // rather than leaving for a transparent layer with nothing on it.
+    fireEvent.keyDown(close, { key: 'Tab' })
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /back/i }))
 
     fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(field)
+    expect(document.activeElement).toBe(close)
   })
 
   it('skips a button it would be pointless to reach', () => {
-    // A disabled back button is not a focus stop, so Shift+Tab from the address field lands on
-    // reload rather than on a control that cannot be pressed.
+    /*
+      A disabled back button is not a focus stop, so the wrap goes to reload rather than to a control
+      that cannot be pressed.
+
+      Checked from the far end of the bar rather than backwards out of the address field, which is
+      where it used to be checked. Home now sits between reload and the field, so Shift+Tab from the
+      field lands on home whether the disabled pair is filtered out or not — the assertion would have
+      stayed green while proving nothing.
+    */
     installBridge()
     render(
       <TileBarSurface
         presentation={presentation({ invokedBy: 'keyboard', canGoBack: false, canGoForward: false })}
       />
     )
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Tab', shiftKey: true })
+    const close = screen.getByRole('button', { name: /close/i })
+    close.focus()
+
+    fireEvent.keyDown(close, { key: 'Tab' })
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /reload/i }))
   })
 

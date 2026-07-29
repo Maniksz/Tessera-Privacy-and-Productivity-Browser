@@ -201,15 +201,17 @@ describe('TabGroupStore basics', () => {
     expect(await storedGroups(filePath)).toEqual([])
   })
 
-  it('writes down the arrangement a group was displaced from, and takes it back', async () => {
+  it('writes down the arrangement a group is in, and can clear it again', async () => {
     /*
-      The displaced arrangement has to reach the disk, because that is the difference between "remembered
-      until you quit" and remembered. It is also the only field whose value is a pair of facts that have to
-      agree — the layout and one entry per its tiles — so a store that flattened or reordered it would
-      restore the panes in the wrong places rather than fail.
+      The arrangement has to reach the disk, because that is the difference between "remembered until you
+      quit" and remembered. It is also the only field whose value is a pair of facts that have to agree —
+      the layout and one entry per its tiles — so a store that flattened or reordered it would restore the
+      panes in the wrong places rather than fail.
 
-      Both directions, because `null` is not an error path but the other half of the feature: a restore
-      spends the recording it used.
+      Both directions, although only one has a caller now. `null` used to be the other half of the feature
+      — a restore spent the recording it used — and stopped being that when the arrangement became
+      something maintained on every settle. It is still the single gate for clearing the field, so it is
+      still asserted to reach the disk as an *absent* key rather than a present `undefined` one.
     */
     const { store, filePath } = await openStore()
     store.create({ tabIds: ['tab-1', 'tab-2'] })

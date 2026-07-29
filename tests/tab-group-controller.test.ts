@@ -29,6 +29,16 @@ interface Harness {
   unassigned: () => string[]
   broadcasts: () => number
   /**
+   * How many times the store was handed a document.
+   *
+   * Counted through the store's own `onChange`, which fires once per `update` whether or not the
+   * result differs — so this is a count of *writes attempted*, which is exactly what the idempotence
+   * rule is about. The arrangement is now maintained on every settle, and a settle happens inside the
+   * window's coalesced broadcast round: a pass that wrote unconditionally would debounce a file to
+   * disk on every navigation event and schedule the next round from inside the current one.
+   */
+  writes: () => number
+  /**
    * Replaces the set of tabs the window still holds.
    *
    * Separate from the strip's order on purpose, because in a real window they are two different
@@ -51,6 +61,10 @@ async function harness(initialOrder: string[]): Promise<Harness> {
   let liveTabs = [...initialOrder]
   const unassigned: string[] = []
   let broadcasts = 0
+  let writes = 0
+  store.onChange(() => {
+    writes += 1
+  })
 
   const host: TabGroupHost = {
     book: store,
@@ -71,6 +85,7 @@ async function harness(initialOrder: string[]): Promise<Harness> {
     order: () => order,
     unassigned: () => unassigned,
     broadcasts: () => broadcasts,
+    writes: () => writes,
     setLiveTabs: (ids) => {
       liveTabs = [...ids]
     },
@@ -354,14 +369,16 @@ describe('adding a tab to an existing group', () => {
 })
 
 /**
- * Keeping and spending a displaced arrangement.
+ * The arrangement a multi-view is, kept up to date.
  *
- * The user's request in one sentence: opening a new tab may take the window, but it must not dissolve the
- * arrangement the other tabs were in. `keepArrangement` is called at the one moment that arrangement still
- * exists — the collapse — and `takeArrangementFor` is the way back. Tested against the real store, because
- * what matters is that the recording survives the store's own rules rather than that a fake accepted it.
+ * The user's request in one sentence: a window showing several pages at once is a tab group, so opening a
+ * new tab may take the window and still leave a way back to what was on screen. `keepArrangement` is run
+ * every time the tiling settles — from the window's coalesced broadcast round, and once more by
+ * `TileOccupancyController.claimTileForNewTab` for the burst that collapses before a round can happen —
+ * and `takeArrangementFor` is the way back. Tested against the real store, because what matters is that
+ * the arrangement survives the store's own rules rather than that a fake accepted it.
  */
-describe('keeping the arrangement a new tab displaced', () => {
+describe('keeping the arrangement a multi-view is in', () => {
   const pair = (tiles: Array<string | null>): TabGroupLayout => ({ id: '1x2', tiles })
   const quad = (tiles: Array<string | null>): TabGroupLayout => ({ id: '2x2', tiles })
 
@@ -391,11 +408,12 @@ describe('keeping the arrangement a new tab displaced', () => {
     await h.cleanup()
   })
 
-  it('records a second displacement on the group it made the first time', async () => {
+  it('writes a later arrangement onto the group it made the first time', async () => {
     /*
-      What keeps this from being group spam. Collapse, restore, collapse again is an ordinary afternoon, and
-      a new chip each time would march down the strip in a different colour every round — with the user's own
-      name on none of them.
+      What keeps this from being group spam. Split, collapse, split again is an ordinary afternoon, and a
+      new chip each time would march down the strip in a different colour every round — with the user's own
+      name on none of them. Now that every settle writes, this is the rule doing the most work: reuse is
+      what stops one chip per settle.
     */
     const h = await harness(['t1', 't2', 't3'])
     h.controller.keepArrangement(pair(['t1', 't2']))
@@ -413,14 +431,20 @@ describe('keeping the arrangement a new tab displaced', () => {
     await h.cleanup()
   })
 
-  it('refuses to edit a group the user made in order to remember a layout', async () => {
+  it('lets a loose tab dropped into the panes join the group that is already there', async () => {
     /*
-      The destructive case, refused. `create` takes its members away from whatever held them, so recording
-      an arrangement of "two tabs from Work plus one loose tab" would shrink Work — and dissolve it outright
-      if the arrangement held all of it. Opening a new tab is not consent to that.
+      The absorb case, and it reverses what this file used to pin. The old behaviour was to keep nothing
+      here, because `create` takes its members away from whatever held them and would have shrunk
+      "Steuererklärung 2026" — or dissolved it outright if the arrangement held all of it.
 
-      The stated cost is in the same breath: this arrangement is not remembered. One drag to rebuild, against
-      a group the user built that cannot be got back.
+      The user decided otherwise on 29.07.2026: "immer die bestehende Gruppe nehmen". It is not a
+      weakening of the old refusal, because the destructive act it refused is not the one performed here.
+      The loose tab joins through `addTab`, which takes nothing from anybody; the group keeps its id, its
+      name and its colour, and the arrangement is written on it rather than on a rival group over the
+      same tabs.
+
+      What the user accepted, asserted rather than glossed: `t3` is now a member of a group they named,
+      and they did not put it there.
     */
     const h = await harness(['t1', 't2', 't3'])
     const work = h.controller.create({ tabIds: ['t1', 't2'], name: 'Steuererklärung 2026' })
@@ -430,8 +454,30 @@ describe('keeping the arrangement a new tab displaced', () => {
     const groups = h.controller.groups()
     expect(groups).toHaveLength(1)
     expect(groups[0]?.id).toBe(work.id)
-    expect(groups[0]?.tabIds).toEqual(['t1', 't2'])
-    expect(groups[0]?.layout).toBeUndefined()
+    expect(groups[0]?.name).toBe('Steuererklärung 2026')
+    expect(groups[0]?.tabIds).toEqual(['t1', 't2', 't3'])
+    expect(groups[0]?.layout).toEqual(quad(['t1', 't2', 't3', null]))
+    await h.cleanup()
+  })
+
+  it('still refuses when the panes hold members of two different groups', async () => {
+    /*
+      The one case still answered `none`, and deliberately a narrower exception than the rule above
+      replaced. What the user decided was about group members mixed with *loose* tabs; merging two groups
+      they built loses one of them — `addTabToGroup` dissolves a source group it empties, so a name, a
+      colour and an identity go with no way back.
+    */
+    const h = await harness(['t1', 't2', 't3'])
+    const work = h.controller.create({ tabIds: ['t1'], name: 'Work' })
+    const reading = h.controller.create({ tabIds: ['t2'], name: 'Reading' })
+
+    h.controller.keepArrangement(quad(['t1', 't2', 't3', null]))
+
+    const groups = h.controller.groups()
+    expect(groups).toHaveLength(2)
+    expect(h.controller.groups().find((g) => g.id === work.id)?.tabIds).toEqual(['t1'])
+    expect(h.controller.groups().find((g) => g.id === reading.id)?.tabIds).toEqual(['t2'])
+    for (const group of groups) expect(group.layout).toBeUndefined()
     await h.cleanup()
   })
 
@@ -440,6 +486,53 @@ describe('keeping the arrangement a new tab displaced', () => {
     const h = await harness(['t1', 't2'])
     h.controller.keepArrangement(pair(['t1', null]))
     expect(h.controller.groups()).toEqual([])
+    await h.cleanup()
+  })
+
+  it('leaves a recorded arrangement standing when the window drops below two panes', async () => {
+    /*
+      The rule the whole feature rests on, and the one that would make it erase itself if it were wrong.
+
+      A new tab collapses the window to `1x1` and one seated tab. The very next settle therefore reports
+      a single view — and if that were written down, the group would be told it is a single view at
+      precisely the moment the user is about to click their way back into the multi-view. Below
+      `MIN_ARRANGED_TILES` nothing is written, so the group keeps what it had a moment ago.
+    */
+    const h = await harness(['t1', 't2', 't3'])
+    h.controller.keepArrangement(pair(['t1', 't2']))
+    const before = h.writes()
+
+    h.controller.keepArrangement({ id: '1x1', tiles: ['fresh'] })
+
+    expect(h.controller.groups()[0]?.layout).toEqual(pair(['t1', 't2']))
+    // Not merely "the arrangement survived": nothing was written at all, which is what keeps this off
+    // the disk and out of the broadcast round.
+    expect(h.writes()).toBe(before)
+    await h.cleanup()
+  })
+
+  it('writes nothing and publishes nothing for a settle that changed nothing', async () => {
+    /*
+      Idempotence, and it is load-bearing rather than tidy. This runs from the window's coalesced
+      broadcast round — every title change, every navigation event — so an unconditional write would
+      hand the debounced store a document each time. Worse, a write publishes and the pass runs *inside*
+      a publish: the round would schedule the next round, for ever.
+    */
+    const h = await harness(['t1', 't2', 't3'])
+    h.controller.keepArrangement(pair(['t1', 't2']))
+    const writes = h.writes()
+    const broadcasts = h.broadcasts()
+
+    h.controller.keepArrangement(pair(['t1', 't2']))
+    h.controller.keepArrangement(pair(['t1', 't2']))
+
+    expect(h.writes()).toBe(writes)
+    expect(h.broadcasts()).toBe(broadcasts)
+    // And a settle that *did* change something still gets through, so the silence above cannot be
+    // achieved by never writing at all.
+    h.controller.keepArrangement(pair(['t2', 't1']))
+    expect(h.writes()).toBeGreaterThan(writes)
+    expect(h.controller.groups()[0]?.layout).toEqual(pair(['t2', 't1']))
     await h.cleanup()
   })
 
@@ -474,34 +567,70 @@ describe('taking a displaced arrangement back out', () => {
     await h.cleanup()
   })
 
-  it('spends it, so a second activation does not replay it', async () => {
+  it('replays it, because a maintained recording can never be out of date', async () => {
     /*
-      The decision, and the reason. A recording is of one displacement, not a preference: by the time the
-      user clicks another tab they may have dragged a page into a different pane or chosen another layout,
-      and reapplying would quietly undo what they did after the first restore. Spent once it is a way back;
-      kept, it is a layout that keeps reasserting itself.
+      The inversion of what this file used to pin, and the reason the old assertion was right at the time.
+
+      A restore used to spend the recording, because a recording *of one displacement* goes stale: by the
+      time the user clicked another tab they might have dragged a page into a different pane, and
+      reapplying would have quietly undone that.
+
+      The arrangement is no longer a snapshot of one moment. It is rewritten every time the tiling settles,
+      so the drag into another pane *is* the new arrangement and replaying it replays what the user did
+      last, not what they did before. A recording that cannot be stale never needs to be spent — and
+      spending it was the whole reason a second return to a multi-view did nothing.
     */
     const h = await harness(['t1', 't2'])
     h.controller.keepArrangement(pair(['t1', 't2']))
     h.controller.takeArrangementFor('t1')
-    expect(h.controller.takeArrangementFor('t2')).toBeNull()
+    expect(h.controller.takeArrangementFor('t2')).toEqual(pair(['t1', 't2']))
     await h.cleanup()
   })
 
-  it('leaves the group standing after the arrangement is spent', async () => {
+  it('takes it back three times in a row, which is the point of not spending it', async () => {
     /*
-      The other half of the same decision, and it is the user's request rather than an implementation detail:
-      the tabs that were in the arrangement stay together. Dissolving the group here would also throw away a
-      name they may have given it and force the next displacement to invent a new group in a new colour.
+      The loop a person actually performs, driven three times because the interesting failure is never the
+      first restore. Displace (a new tab collapses the window to one pane, which writes nothing), come
+      back, displace again. A version that spent the recording passes the first round and fails the second.
+
+      The settle after each restore is included, because that is what the window does: it rewrites the same
+      arrangement, and doing so must not disturb it.
+    */
+    const h = await harness(['t1', 't2', 'fresh'])
+    h.controller.keepArrangement(pair(['t1', 't2']))
+
+    for (let round = 0; round < 3; round++) {
+      // A new tab takes the window: one seated tab, so nothing is written and the group keeps what it has.
+      h.controller.keepArrangement({ id: '1x1', tiles: ['fresh'] })
+      expect(h.controller.takeArrangementFor('t1')).toEqual(pair(['t1', 't2']))
+      // And the window settles back into the arrangement it just restored.
+      h.controller.keepArrangement(pair(['t1', 't2']))
+    }
+
+    expect(h.controller.groups()).toHaveLength(1)
+    await h.cleanup()
+  })
+
+  it('leaves the group and its arrangement standing after handing it over', async () => {
+    /*
+      The subject survives the inversion above: the tabs that were in the arrangement stay together, and
+      the group keeps the name the user may have given it rather than being dissolved by the restore that
+      used it. What has changed is the second assertion — the arrangement is still on the group, which is
+      what makes the next return work.
+
+      Nothing is written either, which is the same rule the idempotence test states from the other side:
+      reading a way back is not a change to anything.
     */
     const h = await harness(['t1', 't2'])
     h.controller.keepArrangement(pair(['t1', 't2']))
+    const writes = h.writes()
     h.controller.takeArrangementFor('t1')
 
     const groups = h.controller.groups()
     expect(groups).toHaveLength(1)
     expect(groups[0]?.tabIds).toEqual(['t1', 't2'])
-    expect(groups[0]?.layout).toBeUndefined()
+    expect(groups[0]?.layout).toEqual(pair(['t1', 't2']))
+    expect(h.writes()).toBe(writes)
     await h.cleanup()
   })
 

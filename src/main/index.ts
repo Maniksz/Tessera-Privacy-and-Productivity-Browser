@@ -761,6 +761,9 @@ async function main(): Promise<void> {
               id: tab.id,
               url: tab.url,
               tileIndex: tab.tileIndex,
+              // The pane comes back at the zoom it had, passed at creation rather than set
+              // afterwards: nothing applies zoom before the first paint but `Tab`'s `zoomFactor`.
+              zoomPercent: tab.zoomPercent,
               // Every restored tab opens in the background; the active tile is chosen once, afterwards, by the
               // plan — otherwise each tab would steal focus from the last on its way in.
               background: true,

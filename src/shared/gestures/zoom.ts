@@ -20,8 +20,13 @@
  * Which tab is zoomed. Unlike the navigation gestures — where the event carries no position and the
  * pointer's tile has to be worked out (see `navigation.ts`) — a zoom gesture arrives as an event on the
  * `webContents` that received it, so the tile is already known and cannot be guessed wrong. And where
- * the value is *stored* is not a gesture's business either: zoom is per domain (spec 1), so the same
- * site in two tiles looks the same in both, and this returns a percentage rather than applying one.
+ * the value is *stored* is not a gesture's business either: this returns a percentage rather than
+ * applying one, and the pane it belongs to is what keeps it (`shared/zoom/model.ts`).
+ *
+ * That paragraph used to end "zoom is per domain (spec 1), so the same site in two tiles looks the same
+ * in both". The user reversed that on 29.07.2026 — zoom is per view, and two tiles showing one page no
+ * longer zoom together. Not one line of the ladder changed, which is the whole reason it is here and
+ * not in `Tab`.
  */
 
 export type ZoomDirection = 'in' | 'out'
@@ -29,8 +34,9 @@ export type ZoomDirection = 'in' | 'out'
 /**
  * The stops, ascending.
  *
- * The ends are the clamp `Tab.setZoomPercent` already applies, so the ladder cannot walk out of the
- * range the rest of the browser believes in.
+ * The ends are `MIN_ZOOM_PERCENT` and `MAX_ZOOM_PERCENT`, the clamp every stored zoom goes through, so
+ * the ladder cannot walk out of the range the rest of the browser believes in. Held to them by a test
+ * rather than by an import — see `LOWEST_STOP` below for why this file names its own numbers.
  */
 export const ZOOM_STOPS: readonly number[] = [
   30, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300
@@ -51,10 +57,10 @@ const HIGHEST_STOP = 300
 /**
  * One stop from where it is now, in the direction asked for.
  *
- * `current` is not assumed to be *on* the ladder: the menu spent a long time moving in tens, a stored
- * per-domain value from that period is something like 120, and a page can be at a percentage the user
- * typed. So the answer is the nearest stop *past* the current value in the direction of travel, which
- * makes the first press off-ladder a step rather than a jump backwards.
+ * `current` is not assumed to be *on* the ladder: the menu spent a long time moving in tens, a pane or
+ * a saved session left over from that period sits at something like 120, and `appearance.defaultZoom`
+ * takes any integer in range. So the answer is the nearest stop *past* the current value in the
+ * direction of travel, which makes the first press off-ladder a step rather than a jump backwards.
  *
  * At either end the current value is returned unchanged rather than clamped to the last stop, so a
  * caller can tell "already at the limit" from "moved" without a second comparison.

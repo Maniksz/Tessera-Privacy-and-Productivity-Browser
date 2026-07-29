@@ -135,8 +135,12 @@ export interface TabGroupBook {
   recolor(id: string, color: TabGroupColor): void
   setCollapsed(id: string, collapsed: boolean): void
   /**
-   * Records the arrangement the group's tabs were displaced from, or — with `null` —
-   * takes back the one a restore has just used up.
+   * Writes the arrangement the group's tabs are sitting in, rewriting whatever was there.
+   *
+   * Called on every settle that changes something, which is why the caller checks first
+   * whether anything did: this reaches a debounced file. `null` clears the arrangement and
+   * has no caller in the browser any more — see `setGroupLayout` in the model for why the
+   * primitive stays.
    */
   setLayout(id: string, layout: TabGroupLayout | null): void
   dissolve(id: string): void

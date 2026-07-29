@@ -58,6 +58,15 @@ export interface PlannedTab {
   title: string
   pinned: boolean
   tileIndex: number | null
+  /**
+   * The pane's own zoom, or `null` for one that was never zoomed. See `PaneZoom`.
+   *
+   * Carried through unjudged, unlike the tile beside it, and the difference is the point: a tile
+   * has to be re-claimed because the layout the window comes up in may be smaller than the one the
+   * file describes, whereas a zoom has nothing here it could contradict. `repairSession` has
+   * already held it to the range a pane can be put at.
+   */
+  zoomPercent: number | null
   load: LoadTiming
 }
 
@@ -256,6 +265,7 @@ function planWindow(window: SessionWindow, settings: RestoreSettings): PlannedWi
       title: saved.title,
       pinned: saved.pinned,
       tileIndex,
+      zoomPercent: saved.zoomPercent,
       load: loadTimingFor(tileIndex)
     })
   }

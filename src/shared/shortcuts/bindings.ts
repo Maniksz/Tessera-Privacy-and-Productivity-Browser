@@ -210,6 +210,21 @@ export const DEFAULT_BINDINGS: Readonly<Record<Platform, Table>> = {
  * Combinations the OS is known to intercept before the application sees them
  * (spec 9). The settings page must show the note and the alternative rather
  * than presenting a binding that appears set but never fires.
+ *
+ * Nothing in production reads this table today, and deleting it on that ground would be the
+ * wrong call twice over. The `shortcuts:getBindings` channel that used to translate it fed no
+ * renderer at all and was removed rather than kept warm — but what the table *holds* is not
+ * code, it is knowledge that cannot be rediscovered by reading any of this: that GNOME, KDE
+ * and Xfce all take Ctrl+Alt+Arrow, and what to offer in its place. Two tests hold it to being
+ * true rather than merely present, which is why it can wait without rotting:
+ * `ipc-contract.test.ts` refuses a default binding that sits on an accelerator flagged here,
+ * and `shortcut-format.test.ts` requires every `alternative` to be a key the formatter can
+ * print for a person.
+ *
+ * `messageKey` stays for the same reason. Without it the table would record *that* a binding is
+ * swallowed and nothing about what anyone would be told, and the three `shortcuts.conflict.*`
+ * catalogue entries would be orphaned — this is their only reference, and it is a typed one, so
+ * removing a key here is the only thing that would let those sentences be deleted by accident.
  */
 export interface KnownConflict {
   accelerator: string
@@ -243,10 +258,6 @@ export const KNOWN_CONFLICTS: Readonly<Record<Platform, readonly KnownConflict[]
       alternative: 'Control+Alt+Right'
     }
   ]
-}
-
-export function conflictFor(platform: Platform, accelerator: string): KnownConflict | null {
-  return KNOWN_CONFLICTS[platform].find((c) => c.accelerator === accelerator) ?? null
 }
 
 /** Primary accelerator for an action, after applying user overrides. */

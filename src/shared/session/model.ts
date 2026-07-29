@@ -1,4 +1,5 @@
 import { DEFAULT_FRACTIONS, TILE_COUNT, type LayoutId } from '../split/layout.js'
+import { clampZoomPercent } from '../zoom/model.js'
 
 /**
  * A saved browsing session: which tabs were open, in which windows, in which tiles.
@@ -20,10 +21,18 @@ import { DEFAULT_FRACTIONS, TILE_COUNT, type LayoutId } from '../split/layout.js
  * the window's layout and where its dividers sit.
  *
  * It is not a copy of the browser's state. No navigation history per tab, no scroll
- * position, no form contents, no zoom — each of those would either need Chromium's own
- * session format or would be a plausible-looking half-restoration, and a back button
- * that goes somewhere unexpected is worse than one that is greyed out. No favicon
- * either: the icon cache already has it, keyed by site.
+ * position, no form contents — each of those would either need Chromium's own session
+ * format or would be a plausible-looking half-restoration, and a back button that goes
+ * somewhere unexpected is worse than one that is greyed out. No favicon either: the icon
+ * cache already has it, keyed by site.
+ *
+ * **Zoom used to be in that list and stopped being on 29.07.2026.** The argument for
+ * leaving it out was that zoom was per domain, which makes it a setting, and a setting has
+ * no business in one window's slot. Per view it is window state — the same kind of fact as
+ * which tile a tab sits in — so it belongs here, and it is the one thing above that a
+ * restart would otherwise lose outright, because nothing else in this browser remembers it.
+ * It is also not a half-restoration of anything: `zoomPercent` is a number this browser
+ * chose and can apply exactly, not a fragment of Chromium's own session.
  *
  * ## Why the ids are stored, and why that is the point
  *
@@ -103,6 +112,16 @@ export interface SessionTab {
   pinned: boolean
   /** The tile that showed this tab, or `null` for a tab that was loaded but not displayed. */
   tileIndex: number | null
+  /**
+   * The pane's own zoom, or `null` for a pane that was never zoomed.
+   *
+   * The sentinel is the field's whole point and is documented once, at `PaneZoom`: `null` means
+   * "follows `appearance.defaultZoom`", which is a different statement from 100 % and is what lets
+   * a change to that setting move the panes nobody touched. Written as `number | null` rather than
+   * through the alias so this interface stays readable as the file's own shape — the zod mirror in
+   * `SessionStore` is checked against it in both directions either way.
+   */
+  zoomPercent: number | null
 }
 
 /**
@@ -168,6 +187,8 @@ export interface CapturedTab {
   title: string
   pinned: boolean
   tileIndex: number | null
+  /** See `SessionTab.zoomPercent`. `TabState` carries the same field with the same sentinel. */
+  zoomPercent: number | null
 }
 
 export interface CapturedWindow {
@@ -236,7 +257,8 @@ export function captureWindow(id: string, input: CapturedWindow): SessionWindow 
       pendingUrl: tab.pendingInput === null ? null : storableAddress(tab.pendingInput),
       title: cleanSessionTitle(tab.title),
       pinned: tab.pinned,
-      tileIndex: tab.tileIndex
+      tileIndex: tab.tileIndex,
+      zoomPercent: tab.zoomPercent
     }))
   }
 }
@@ -332,6 +354,11 @@ export function finishedRestore(document: SessionDocument): SessionDocument {
  *     tile that is not there.
  *   - **Fractions** for dividers this layout has no notion of, and values outside
  *     `(0, 1)`. A divider at 0 or 1 is a tile with no width.
+ *   - **A zoom outside the range this browser applies**, clamped and never dropped. A
+ *     hand-edited 5000 is a pane the user cannot read their way out of, and turning it into
+ *     `null` would be the wrong repair twice over: "never zoomed" is a different statement
+ *     from "zoomed further than the ladder goes", and the pane would silently start
+ *     following a setting it was deliberately taken off.
  *   - **A window with no tabs**, dropped: there is nothing to draw, and a restore would
  *     open an empty window the user then has to close.
  *   - **An over-long title**, and **more windows or tabs than the caps.** All three are
@@ -361,7 +388,8 @@ export function repairSession(document: SessionDocument): SessionDocument {
       tabs.push({
         ...tab,
         title: cleanSessionTitle(tab.title),
-        tileIndex: claimTile(tab.tileIndex, tileCount, takenTiles)
+        tileIndex: claimTile(tab.tileIndex, tileCount, takenTiles),
+        zoomPercent: healZoom(tab.zoomPercent)
       })
     }
 
@@ -431,6 +459,18 @@ export function keepKnownFractions(
     kept[id] = value
   }
   return kept
+}
+
+/**
+ * A stored zoom, held to the range a pane can actually be put at.
+ *
+ * `null` stays `null` — see the repair pass's own note on why that is not a value to heal *to*.
+ * Only the write path reaches this with a value the browser did not choose, which is the point of
+ * doing it in the repair rather than in `captureWindow`: the same call covers a file somebody
+ * edited and a slot this run recorded.
+ */
+function healZoom(percent: number | null): number | null {
+  return percent === null ? null : clampZoomPercent(percent)
 }
 
 /**

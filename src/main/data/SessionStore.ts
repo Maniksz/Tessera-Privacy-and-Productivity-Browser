@@ -49,6 +49,11 @@ import type { BrowsingMode } from './HistoryStore.js'
  *     **fractions** heals to its default. None of them identifies a tab or a window, so
  *     none is worth the whole document, and each of them is a field an older build might
  *     simply not have written.
+ *   - A missing or non-numeric **zoomPercent** heals to `null`, and that is the honest
+ *     answer rather than a convenient one: `null` is "never zoomed, follows
+ *     `appearance.defaultZoom`", which is exactly the state every tab in a file written
+ *     before this field existed was in. See `PaneZoom`. A value out of range is a quantity
+ *     and is clamped by `repairSession`, not rejected here.
  *   - **Title length**, **window count** and **tab count** are quantities and are trimmed
  *     by `repairSession`, never capped here. `.max()` in a schema turns "grew larger than
  *     expected" into "lost the whole session".
@@ -64,7 +69,8 @@ const sessionTabSchema = z.object({
   pendingUrl: z.string().nullable().catch(null),
   title: z.string().catch(''),
   pinned: z.boolean().catch(false),
-  tileIndex: z.number().int().nullable().catch(null)
+  tileIndex: z.number().int().nullable().catch(null),
+  zoomPercent: z.number().int().nullable().catch(null)
 })
 
 const sessionWindowSchema = z.object({

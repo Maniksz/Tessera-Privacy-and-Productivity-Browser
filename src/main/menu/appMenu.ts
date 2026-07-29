@@ -171,7 +171,10 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       {
         label: t('menu.view.zoomReset'),
         accelerator: accel('zoomReset'),
-        click: () => focused()?.activeTab()?.setZoomPercent(settings.get('appearance.defaultZoom'))
+        // `resetZoom` rather than setting the number the setting holds right now: reset puts the
+        // pane back to *following* `appearance.defaultZoom`, which is the state it was in before
+        // anyone zoomed it and the only way back to it. See `PaneZoom`.
+        click: () => focused()?.activeTab()?.resetZoom()
       },
       { type: 'separator' },
       {

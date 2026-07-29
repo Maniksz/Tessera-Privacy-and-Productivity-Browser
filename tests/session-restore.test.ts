@@ -44,6 +44,7 @@ function tab(id: string, overrides: Partial<SessionTab> = {}): SessionTab {
     title: id,
     pinned: false,
     tileIndex: null,
+    zoomPercent: null,
     ...overrides
   }
 }
@@ -210,6 +211,34 @@ describe('reconciling a layout the settings no longer allow', () => {
     expect(planned.layout).toBe('1x1')
     expect(planned.tabs.map((entry) => entry.tileIndex)).toEqual([0, null, null, null])
     expect(planned.tabs.length, 'no tab is lost').toBe(4)
+  })
+
+  it('keeps each pane zoom with its tab when the tiles are dealt out again', () => {
+    /*
+      The mistake this rules out is the one that looks most natural: "per view" written as "per
+      tile". A tile is an index, not an identity — `SplitController.setLayout` throws its maximised
+      and fullscreen tiles away on a layout change for exactly that reason, and a drop walks every
+      page one tile along — so a zoom kept per tile would be handed to whichever page landed in that
+      slot. Here the layout shrinks to `1x1` and three of the four tiles cease to exist; every zoom
+      still arrives with the tab it was set on.
+    */
+    const zoomed = window_({
+      layout: '2x2',
+      tabs: [
+        tab('tab-1', { tileIndex: 0, zoomPercent: 110 }),
+        tab('tab-2', { tileIndex: 1, zoomPercent: 200 }),
+        tab('tab-3', { tileIndex: 2, zoomPercent: null }),
+        tab('tab-4', { tileIndex: 3, zoomPercent: 50 })
+      ]
+    })
+    const planned = firstWindow(documentOf(zoomed), { ...T_SETTINGS, restoreLayout: false })
+    expect(planned.tabs.map((entry) => entry.tileIndex)).toEqual([0, null, null, null])
+    expect(planned.tabs.map((entry) => [entry.id, entry.zoomPercent])).toEqual([
+      ['tab-1', 110],
+      ['tab-2', 200],
+      ['tab-3', null],
+      ['tab-4', 50]
+    ])
   })
 
   it('defers the tabs that lost their tile, so a shrink costs no requests', () => {
@@ -400,7 +429,12 @@ function fakeHost(): { host: Parameters<typeof applySessionRestore>[1]; log: Rec
   const log: Recorded = { calls: [], retained: [] }
   const target = (index: number): RestoreTarget => ({
     openTab: (entry: PlannedTab) =>
-      log.calls.push(`w${index}:tab=${entry.id}@${String(entry.tileIndex)}/${entry.load}`),
+      log.calls.push(
+        // The zoom is in the log line rather than in a test of its own, so every assertion about
+        // what a restore creates has to account for it: a field the plan carries and the caller
+        // silently drops is exactly how a pane comes back at 100 % with nothing looking wrong.
+        `w${index}:tab=${entry.id}@${String(entry.tileIndex)}/${entry.load}/zoom=${String(entry.zoomPercent)}`
+      ),
     setActiveTile: (tile) => log.calls.push(`w${index}:active=${tile}`)
   })
 
@@ -433,6 +467,7 @@ describe('carrying a plan out', () => {
         title: 'A',
         pinned: false,
         tileIndex: 0,
+        zoomPercent: 175,
         load: 'now'
       },
       {
@@ -441,6 +476,7 @@ describe('carrying a plan out', () => {
         title: 'B',
         pinned: false,
         tileIndex: null,
+        zoomPercent: null,
         load: 'on-activation'
       }
     ]
@@ -460,13 +496,13 @@ describe('carrying a plan out', () => {
     expect(log.calls[0]).toBe('w1:open=1x2/{"v":0.4}')
   })
 
-  it('creates the tabs in strip order and hands each its id, tile and load timing', () => {
+  it('creates the tabs in strip order and hands each its id, tile, load timing and zoom', () => {
     const { host, log } = fakeHost()
     applySessionRestore([planned], host)
     expect(log.calls).toEqual([
       'w1:open=1x2/{"v":0.4}',
-      'w1:tab=tab-3@0/now',
-      'w1:tab=tab-7@null/on-activation',
+      'w1:tab=tab-3@0/now/zoom=175',
+      'w1:tab=tab-7@null/on-activation/zoom=null',
       'w1:active=1',
       'retain=tab-3,tab-7'
     ])
@@ -487,6 +523,7 @@ describe('carrying a plan out', () => {
           title: 'C',
           pinned: false,
           tileIndex: 0,
+          zoomPercent: null,
           load: 'now'
         }
       ]

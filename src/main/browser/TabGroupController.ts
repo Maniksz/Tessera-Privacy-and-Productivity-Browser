@@ -1,9 +1,11 @@
 import {
   arrangedTabs,
+  arrangementIsCurrent,
   contiguousOrder,
   groupToHoldArrangement,
   isTabHidden,
   tabsHiddenByCollapse,
+  tabsToAbsorb,
   type TabGroup,
   type TabGroupLayout
 } from '@shared/tabgroups/model.js'
@@ -26,13 +28,19 @@ import type { TabGroupBook } from '../data/TabGroupStore.js'
  * Behind a host seam so both can be tested without a window, which matters because they interact: a
  * collapse changes which tabs are visible, and the visible set is what the order is drawn from.
  *
- * ## The third coupling: a displaced arrangement
+ * ## The third coupling: the arrangement a multi-view is
  *
- * `keepArrangement` and `takeArrangementFor` are the two ends of one feature — opening a new tab must
- * not cost the user the arrangement the other tabs were in. The split controller knows *what* the
- * arrangement was and nothing about groups; the store knows about groups and nothing about tiles. This
- * is where they meet, and the decision itself is a pure function so the interesting cases can be
- * checked without either.
+ * `keepArrangement` and `takeArrangementFor` are the two ends of one feature — a window showing
+ * several pages at once is a tab group, and getting back to it is clicking one of its tabs. The split
+ * controller knows *what* the arrangement is and nothing about groups; the store knows about groups
+ * and nothing about tiles. This is where they meet, and the decisions themselves are pure functions
+ * (`groupToHoldArrangement`, `arrangementIsCurrent`) so the interesting cases can be checked without
+ * either.
+ *
+ * **Nothing here dissolves a group because the tiling shrank, and that is a rule rather than an
+ * omission.** A group outlives the split it came from: it lives until the user dissolves it or its
+ * last member closes. Tying its lifetime to the panes would mean a chip that disappears every time a
+ * new tab takes the window — and taking the way back away at exactly the moment the user needs it.
  */
 
 export interface TabGroupHost {
@@ -131,10 +139,21 @@ export class TabGroupController {
    * what dragging one into a tile is for.
    *
    * Unless the group is carrying an arrangement, in which case it is not a guess and clicking a member
-   * restores it (`takeArrangementFor`). The two are consistent: a recording exists only where the
-   * *browser* took the tiles away, and it is spent the first time it is used. Collapsing deliberately
-   * records nothing — it is the user hiding tabs, not the browser displacing them — so a group folded
-   * from tiles it was holding still comes back unassigned.
+   * restores it (`takeArrangementFor`).
+   *
+   * ## Collapsing writes nothing, and that is now a consequence rather than a boundary
+   *
+   * It used to be a rule with an argument behind it: a recording existed only where the *browser* took
+   * the tiles away, so the user folding tabs away deliberately recorded nothing. The reason has
+   * changed. Under the maintained arrangement the last settle already wrote what the panes held, so
+   * collapsing has nothing left to save — expanding and clicking a member brings the panes back from
+   * a recording made before the fold, not from one made by it.
+   *
+   * There was a commissioned change to call `keepArrangement` from here (docs/STATUS.md, "Einklappen
+   * nimmt die Anordnung auf"). It is **not** made, and not only because it is redundant: `TabGroupHost`
+   * below has no split, no layout id and no tile map, so this method could not build a `TabGroupLayout`
+   * without widening the seam that keeps this controller testable without a window. The seam was not
+   * widened, and nothing was lost by leaving it alone.
    */
   setCollapsed(id: string, collapsed: boolean): void {
     this.host.book.setCollapsed(id, collapsed)
@@ -145,12 +164,22 @@ export class TabGroupController {
   }
 
   /**
-   * Keeps the arrangement the browser is about to put away, on a group.
+   * Brings the group that owns this arrangement up to date with it, making one if there is none.
    *
-   * Called by `TileOccupancyController.claimTileForNewTab` at the moment the panes go, because that is
-   * the only moment the arrangement still exists. Which group — an existing one, a fresh one, or none
-   * at all — is `groupToHoldArrangement`; every reason is written down there rather than here, so the
-   * three cases can be read and tested without a window.
+   * Called every time a window's tiling settles — `BrowserWindowController` runs it from the same
+   * coalesced round that publishes tab state — and once more by
+   * `TileOccupancyController.claimTileForNewTab` at the moment the panes go. Which group takes it, and
+   * why the four answers are what they are, is `groupToHoldArrangement`; whether there is anything to
+   * do at all is `arrangementIsCurrent`. Both live in the model, so the cases can be read and tested
+   * without a window.
+   *
+   * ## Why it may write nothing, and must say so by writing nothing
+   *
+   * Returns without touching the store whenever the holder already carries this exact arrangement and
+   * already has every seated tab. That is not an optimisation. A write publishes, and this runs inside
+   * a publish, so a pass that wrote unconditionally would schedule the next round from inside the
+   * current one and never stop — and it would hand the debounced store a document on every navigation
+   * event. Silence in the steady state is what makes "maintain it on every settle" affordable.
    *
    * A created group is deliberately **unnamed**. An unnamed group is already a first-class state in this
    * model — drawn as a bare colour, labelled `tabgroup.unnamed` for a screen reader — and a name stored
@@ -160,51 +189,67 @@ export class TabGroupController {
    * the sake of a label the user can type themselves.
    */
   keepArrangement(layout: TabGroupLayout): void {
-    const holder = groupToHoldArrangement(this.groups(), layout)
+    const groups = this.groups()
+    const holder = groupToHoldArrangement(groups, layout)
     if (holder.kind === 'none') return
-    if (holder.kind === 'reuse') {
-      this.host.book.setLayout(holder.groupId, layout)
-      this.host.broadcast()
+    if (holder.kind === 'create') {
+      this.host.book.create({ tabIds: arrangedTabs(layout), layout })
+      // A new group gathers its members into one run, exactly as `create` does.
+      this.#settle()
       return
     }
-    this.host.book.create({ tabIds: arrangedTabs(layout), layout })
-    // A new group gathers its members into one run, exactly as `create` does.
+
+    if (arrangementIsCurrent(groups, layout)) return
+    /*
+      The loose tabs join before the arrangement is written, and the order is load-bearing:
+      `setGroupLayout` drops an arrangement naming a tab the group does not have, so writing first
+      would store nothing and leave `arrangementIsCurrent` answering "no" for ever — the write storm
+      this method exists to avoid, arrived at from the other side.
+
+      `addTab` rather than `create`: joining takes nothing from anybody, where creating would take
+      these members away from the group that already holds them. See `groupToHoldArrangement`.
+    */
+    for (const tabId of tabsToAbsorb(groups, holder.groupId, layout)) {
+      this.host.book.addTab(holder.groupId, tabId)
+    }
+    this.host.book.setLayout(holder.groupId, layout)
+    // Absorbing reorders the strip, exactly as `addTab` does; with nothing absorbed this settles an
+    // order that is already settled and costs a comparison.
     this.#settle()
   }
 
   /**
-   * The arrangement to put back for a tab being activated, and the act of spending it.
+   * The arrangement to put back for a tab being activated.
    *
    * `null` unless the tab's group is carrying an arrangement that seats *this* tab. A member added to
-   * the group after the recording is not in it, and restoring for that tab would apply a layout with
-   * nowhere for the tab the user just clicked — they would click a tab and watch a different set of
-   * pages appear.
+   * the group since is not in it, and restoring for that tab would apply a layout with nowhere for the
+   * tab the user just clicked — they would click a tab and watch a different set of pages appear.
    *
-   * ## Why the restore consumes it, and why the group survives it
+   * ## Why the restore no longer spends it
    *
-   * The recording goes and the group stays, and those are two separate decisions.
+   * It used to, and the argument was sound for what the recording then was: a snapshot of one
+   * displacement. Left in place, a second activation would replay it — and by then the user might have
+   * dragged a page into another pane or chosen a different layout, so replaying would quietly undo work
+   * they did after the first restore.
    *
-   * It goes because it is a recording of one displacement, not a preference. Left in place, a second
-   * activation would replay it — and by then the user may have dragged a page into a different pane or
-   * chosen another layout, so replaying would quietly undo work they did after the first restore. Spent
-   * once, it is a way back to where they were; kept, it is a layout that keeps reasserting itself.
+   * What removes the argument is not a change of mind about that risk but a change in the recording.
+   * The arrangement is rewritten every time the tiling settles (`keepArrangement`), so it cannot be
+   * older than the last thing the user did to the panes: the drag into another pane *is* the new
+   * arrangement, and replaying it replays that. A recording that can never be stale never needs to be
+   * spent, and spending it was the reason a second return to a multi-view did nothing until something
+   * displaced it again.
    *
-   * The group stays because it is the thing that answers the request this feature exists for: the tabs
-   * that were in the arrangement stay together. Dissolving it on restore would also throw away a name
-   * the user may have given it in the meantime, and would force the next displacement to create a new
-   * group with a new colour — a fresh chip per new tab, which is exactly the group spam
-   * `groupToHoldArrangement`'s `reuse` case exists to avoid. Emptied of its recording, the group is an
-   * ordinary group: renameable, recolourable, and dissolvable by the user who no longer wants it.
+   * So this reads and hands back, and changes nothing — no write, and nothing to publish. The group
+   * stands either way: it is the thing that answers the request this feature exists for, and its name,
+   * its colour and its way back all survive the trip.
    */
   takeArrangementFor(tabId: string): TabGroupLayout | null {
     const group = this.host.book.groupOfTab(tabId)
     if (group?.layout === undefined) return null
     if (!group.layout.tiles.includes(tabId)) return null
-
-    const layout = group.layout
-    this.host.book.setLayout(group.id, null)
-    this.host.broadcast()
-    return layout
+    // Already a snapshot: `groupOfTab` hands out a deep copy, so the caller cannot reseat the stored
+    // arrangement by writing into the array it applies.
+    return group.layout
   }
 
   dissolve(id: string): void {

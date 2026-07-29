@@ -41,6 +41,7 @@ function tab(id: string, overrides: Partial<SessionTab> = {}): SessionTab {
     title: id,
     pinned: false,
     tileIndex: null,
+    zoomPercent: null,
     ...overrides
   }
 }
@@ -74,10 +75,11 @@ describe('capturing a window', () => {
     pendingInput: null,
     title: 'Example',
     pinned: true,
-    tileIndex: 0
+    tileIndex: 0,
+    zoomPercent: 150
   }
 
-  it('records the address, the title, the pin and the tile', () => {
+  it('records the address, the title, the pin, the tile and the pane zoom', () => {
     const slot = captureWindow('win-1', {
       layout: '1x2',
       fractions: { v: 0.4 },
@@ -98,10 +100,26 @@ describe('capturing a window', () => {
           pendingUrl: null,
           title: 'Example',
           pinned: true,
-          tileIndex: 0
+          tileIndex: 0,
+          zoomPercent: 150
         }
       ]
     })
+  })
+
+  it('keeps "never zoomed" as itself rather than writing the default down', () => {
+    /*
+      The one field where storing the obvious number would be a bug. `null` means the pane follows
+      `appearance.defaultZoom`; a capture that turned it into 100 would pin every restored pane to
+      today's setting, and the user could never change the default for their existing windows again.
+    */
+    const slot = captureWindow('win-1', {
+      layout: '1x1',
+      fractions: {},
+      activeTile: 0,
+      tabs: [{ ...captured, zoomPercent: null }]
+    })
+    expect(slot.tabs[0]?.zoomPercent).toBeNull()
   })
 
   it('keeps both addresses of a tab caught mid-navigation', () => {
@@ -323,6 +341,22 @@ describe('repairing a loaded document', () => {
     expect(tabs.map((entry) => entry.tileIndex)).toEqual([1, null])
   })
 
+  it('clamps a zoom the browser could not apply, rather than dropping it', () => {
+    /*
+      A hand-edited 5000 is a pane the user cannot read their way out of — the menu item that would
+      rescue it is off screen with everything else. Healed to the largest step rather than to
+      `null`, because those are different statements: `null` would quietly put the pane back under
+      `appearance.defaultZoom`, which is precisely the state it was taken out of.
+    */
+    const document = documentOf(window_('a', { tabs: [tab('tab-1', { zoomPercent: 5000 })] }))
+    expect(repairSession(document).windows[0]?.tabs[0]?.zoomPercent).toBe(300)
+  })
+
+  it('leaves "never zoomed" alone, because it is not a value to be healed', () => {
+    const document = documentOf(window_('a', { tabs: [tab('tab-1', { zoomPercent: null })] }))
+    expect(repairSession(document).windows[0]?.tabs[0]?.zoomPercent).toBeNull()
+  })
+
   it('clamps an active tile outside the layout', () => {
     const document = documentOf(window_('a', { layout: '1x2', activeTile: 9 }))
     expect(repairSession(document).windows[0]?.activeTile).toBe(1)
@@ -417,7 +451,8 @@ describe('the recorder a private window is handed', () => {
             pendingInput: null,
             title: 'Secret',
             pinned: false,
-            tileIndex: 0
+            tileIndex: 0,
+            zoomPercent: null
           }
         ]
       })

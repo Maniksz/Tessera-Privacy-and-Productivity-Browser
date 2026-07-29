@@ -170,8 +170,6 @@ export const INVOKE_CHANNELS = [
   'devtools:toggle',
   // i18n
   'i18n:getCatalog',
-  // keyboard shortcuts
-  'shortcuts:getBindings',
   // quick links on the start page
   'quicklinks:list',
   'quicklinks:create',

@@ -59,7 +59,10 @@ function savedTab(row: Record<string, string>, index: number): SessionTab {
     pendingUrl: pending === '' ? null : pending,
     title: (row['title'] ?? '').trim(),
     pinned: (row['pinned'] ?? '').trim() === 'yes',
-    tileIndex: tileOf(row['tile'])
+    tileIndex: tileOf(row['tile']),
+    // No scenario says anything about zoom, and `null` is the state a tab that was never zoomed is
+    // in — so this is the fixture being faithful rather than filling a hole. See `PaneZoom`.
+    zoomPercent: null
   }
 }
 
@@ -122,7 +125,8 @@ function launch(state: unknown, reportsUp: boolean): void {
             pendingInput: null,
             title: tab.title,
             pinned: tab.pinned,
-            tileIndex: tab.tileIndex
+            tileIndex: tab.tileIndex,
+            zoomPercent: tab.zoomPercent
           }))
         })
       )
@@ -198,7 +202,8 @@ Given(
         pendingUrl: null,
         title: `Page ${index}`,
         pinned: false,
-        tileIndex: index < inTiles ? index : null
+        tileIndex: index < inTiles ? index : null,
+        zoomPercent: null
       }))
     }))
   }

@@ -4,7 +4,6 @@ import type { SameShape } from './same-shape.js'
 import {
   chromeInsetsSchema,
   historyEntrySchema,
-  shortcutBindingSchema,
   splitStateSchema,
   tabStateSchema,
   windowStateSchema
@@ -14,6 +13,7 @@ import { SETTINGS_APPLIES, SETTINGS_SECTIONS } from '../settings/sections.js'
 import { SETTING_CONTROL_KINDS } from '../settings/control.js'
 import { LAYOUT_IDS } from '../split/layout.js'
 import { localeSchema } from '../i18n/schema.js'
+import { isInternalScheme } from '../product.js'
 import { quickLinkCardSchema, quickLinkKindSchema, quickLinkSchema } from '../quicklinks/schema.js'
 import { tabGroupColorSchema, tabGroupSchema } from '../tabgroups/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
@@ -238,6 +238,21 @@ const historyVisitSchema = z.object({
 
 /** How many entries a deletion actually removed, so the UI can say so rather than guess. */
 const removedCount = z.object({ removed: z.number().int().nonnegative() })
+
+/**
+ * An address an internal page may ask the core to follow in its own tab.
+ *
+ * The internal scheme is refused, and only it: both openers reach `resolveOmniboxInput`, which already
+ * turns `javascript:` and `data:` into searches and hands ours straight through. So the history page —
+ * one any website may link to — could steer its own tab onto the settings page and come back holding
+ * the settings channels, and the navigation lock in `Tab.ts` cannot see it, because by then it *is* a
+ * core `loadUrl`. The bookmarks page had it worse: it may write the tree, so it could store the target
+ * first. In the schema rather than in the two handlers, so a third opener meets the rule by default.
+ * The cost is a bookmark on an internal page, which is now opened from the address bar.
+ */
+const openableUrl = z
+  .string()
+  .refine((url) => !isInternalScheme(url), 'this address cannot be opened through this channel')
 
 const extensionInfoSchema = z.object({
   id: z.string(),
@@ -557,9 +572,6 @@ export const invokeContract = {
     })
   },
 
-  // --- shortcuts -----------------------------------------------------------
-  'shortcuts:getBindings': { request: nothing, response: z.array(shortcutBindingSchema) },
-
   // --- tab groups ----------------------------------------------------------
   /**
    * Groups the given tabs, in the order given.
@@ -741,11 +753,12 @@ export const invokeContract = {
    * Follows an entry in the tab that asked.
    *
    * Deliberately not `nav:navigate`: the core resolves the target from the sender, so the history
-   * page cannot steer any other tab. Same reasoning as `quicklinks:open`.
+   * page cannot steer any other tab. Same reasoning as `quicklinks:open`. Steering *itself* was enough
+   * to escalate, though, which is what `openableUrl` is for.
    */
   'history:open': {
     request: z.object({
-      url: z.string(),
+      url: openableUrl,
       newTab: z.boolean().optional(),
       background: z.boolean().optional()
     }),
@@ -813,10 +826,11 @@ export const invokeContract = {
    * Follows a bookmark in the tab that asked.
    *
    * Deliberately not `nav:navigate`: the core resolves the target from the sender, so the bookmarks
-   * page cannot steer any other tab. Same reasoning as `quicklinks:open` and `history:open`.
+   * page cannot steer any other tab. Same reasoning as `quicklinks:open` and `history:open`, and the
+   * same `openableUrl` — the channel that needed it most, since this page may also write the tree.
    */
   'bookmarks:open': {
-    request: z.object({ url: z.string() }),
+    request: z.object({ url: openableUrl }),
     response: z.object({ url: z.string() })
   },
   /**

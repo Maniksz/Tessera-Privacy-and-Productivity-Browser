@@ -94,8 +94,8 @@ describe('printing one accelerator on Windows and Linux', () => {
   })
 
   it('resolves CommandOrControl to the key this platform actually uses', () => {
-    // `model.ts` documents an accelerator as looking like `CommandOrControl+Shift+1`, so the spelling
-    // can reach here even though the tables do not use it.
+    // `advanced.customShortcuts` is a free-form `Record<string, string>`, so Electron's portable
+    // spelling can reach here even though the binding tables never use it.
     expect(formatAccelerator('win32', 'CommandOrControl+Shift+1')).toBe('Ctrl+Shift+1')
     expect(formatAccelerator('win32', 'CmdOrCtrl+P')).toBe('Ctrl+P')
   })

@@ -35,8 +35,9 @@ import { mediaResponseObservation } from './observation.js'
  *
  * ## Why the locale is a parameter
  *
- * A refusal has to reach the user as a sentence, and translating it in the core is where
- * `shortcuts:getBindings` already does the same thing for its conflict notes. But the
+ * A refusal has to reach the user as a sentence, and the rule on this boundary is that the
+ * core writes it: an enumeration crosses already translated, because the alternative is a
+ * mapping table in every renderer that renders one — see `shared/media/wire.ts`. But the
  * locale belongs to the settings store, and a media service that read settings would need
  * them injected for the sake of one string — so the caller, which is the IPC layer that
  * has settings anyway, passes it in per call. That also means a language change applies to

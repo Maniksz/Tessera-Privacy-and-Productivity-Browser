@@ -11,6 +11,7 @@ import {
   addGroup,
   addTabToGroup,
   arrangedTabs,
+  arrangementIsCurrent,
   contiguousOrder,
   dissolveGroup,
   emptyTabGroupDocument,
@@ -29,6 +30,7 @@ import {
   setGroupCollapsed,
   setGroupLayout,
   tabsHiddenByCollapse,
+  tabsToAbsorb,
   visibleTabOrder,
   type TabGroup,
   type TabGroupLayout
@@ -603,12 +605,21 @@ describe('the arrangement a group keeps', () => {
     expect(findGroup(groups, 'g')?.layout).toEqual(quad(['a', null, 'b', null]))
   })
 
-  it('is taken away again by the restore that used it', () => {
-    // The other half of the same call: a recording of one displacement, spent once. Replaying it would
-    // undo whatever the user rearranged after the first restore.
+  it('can be cleared again, although nothing in the browser clears it any more', () => {
+    /*
+      The primitive outliving its caller, on purpose. `null` used to be the other half of the feature —
+      a restore spent the recording it used — and `takeArrangementFor` stopped doing that when the
+      arrangement became something maintained on every settle rather than a snapshot of one
+      displacement.
+
+      Kept and tested anyway, because clearing the field has to have exactly one gate. The next caller
+      that wants it — a group told to forget its layout, a recording the schema healed away — must find
+      the rule here instead of writing a second way to set the field, which is what `withLayout` and
+      `sanitisedLayout` exist to prevent.
+    */
     const recorded = setGroupLayout([group('g', ['a', 'b'])], 'g', quad(['a', 'b', null, null]))
-    const spent = setGroupLayout(recorded, 'g', null)
-    expect(Object.hasOwn(spent[0]!, 'layout')).toBe(false)
+    const cleared = setGroupLayout(recorded, 'g', null)
+    expect(Object.hasOwn(cleared[0]!, 'layout')).toBe(false)
   })
 
   it('is refused when it has the wrong number of tiles for its layout', () => {
@@ -717,29 +728,53 @@ describe('deciding which group keeps an arrangement', () => {
     })
   })
 
-  it('keeps nothing when some are grouped and some are not', () => {
+  it('takes the group that is already there when the rest of the panes are loose tabs', () => {
     /*
-      The case that must not be honoured, and the reason is destructive: `addGroup` takes its members away
-      from whatever held them, so recording this arrangement would shrink the user's own group — and
-      dissolve it outright if the arrangement held all of it. Adding the loose tabs to it instead is no
-      better: it hands them a colour and a bracket nobody asked for and reorders the strip.
+      The reversal, and it is the user's decision of 29.07.2026 rather than a refinement:
+      "immer die bestehende Gruppe nehmen." This case used to answer `none`, on the grounds that
+      remembering a layout must not edit a group the user built by hand.
 
-      Forgetting a layout costs one drag. Silently editing a group the user built costs them a thing they
-      made, and there is no undo for it.
+      What changed is what a group *is*. A multi-view is now a group, so the tabs sharing the panes are
+      its membership, and a run that has picked up a loose tab is the group catching up rather than the
+      browser rewriting something. The destructive half of the old argument does not apply either: the
+      loose tabs join through `addTabToGroup`, which takes nothing from anybody, where `addGroup` would
+      have taken these members away from the group that already holds them.
     */
     const groups = [group('work', ['a', 'b'], { name: 'Steuererklärung 2026' })]
     expect(groupToHoldArrangement(groups, quad(['a', 'b', 'loose', null]))).toEqual({
-      kind: 'none'
+      kind: 'reuse',
+      groupId: 'work'
     })
-    // And the group is untouched, which is the point of refusing.
-    expect(findGroup(groups, 'work')?.tabIds).toEqual(['a', 'b'])
+    // And it is the *existing* group rather than a new one over the same tabs, which is what keeps the
+    // name and the colour the user gave it.
+    expect(findGroup(groups, 'work')?.name).toBe('Steuererklärung 2026')
+  })
+
+  it('names the loose tabs that have to join, and only those', () => {
+    // The other half of the absorb case. A member that is already in the group must not be handed to
+    // `addTab` again: with no index that is a no-op, but it is a store write, and a write publishes.
+    const groups = [group('work', ['a', 'b'])]
+    expect(tabsToAbsorb(groups, 'work', quad(['a', 'b', 'loose', null]))).toEqual(['loose'])
+    expect(tabsToAbsorb(groups, 'work', quad(['a', 'b', null, null]))).toEqual([])
   })
 
   it('keeps nothing when the tabs are spread over two groups', () => {
-    // There is no single answer to "whose arrangement is this", and merging the two to invent one would
-    // destroy the group that lost.
+    /*
+      The one case that stays refused, and deliberately a narrower exception than the rule above
+      replaced. What the user decided was about group members mixed with *loose* tabs; this is two
+      groups they built, and honouring it would merge them — `addTabToGroup` dissolves a source group
+      it empties, so the loser's name, colour and identity go with no undo.
+
+      Forgetting an arrangement costs one drag. That does not.
+    */
     const groups = [group('one', ['a']), group('two', ['b'])]
     expect(groupToHoldArrangement(groups, quad(['a', 'b', null, null]))).toEqual({ kind: 'none' })
+    // Including when loose tabs are in the mix as well: one group plus loose absorbs, two groups plus
+    // loose still refuses, because it is the second group that makes it destructive.
+    const withLoose = [group('one', ['a']), group('two', ['b'])]
+    expect(groupToHoldArrangement(withLoose, quad(['a', 'b', 'loose', null]))).toEqual({
+      kind: 'none'
+    })
   })
 
   it('keeps nothing when only one pane held anything', () => {
@@ -764,6 +799,82 @@ describe('deciding which group keeps an arrangement', () => {
       kind: 'reuse',
       groupId: 'holder'
     })
+  })
+})
+
+describe('deciding that there is nothing to write', () => {
+  /*
+    The gate that makes "maintain the arrangement on every settle" affordable.
+
+    The pass runs from the window's coalesced broadcast round, which fires on every title change and
+    every navigation event. Two things go wrong without a "nothing changed" answer, and neither is
+    theoretical: the debounced store is handed a document every time, and — because a write publishes
+    and the pass runs inside a publish — the round schedules the next round for ever.
+  */
+  const quad = (tiles: Array<string | null>): TabGroupLayout => ({ id: '2x2', tiles })
+  const pair = (tiles: Array<string | null>): TabGroupLayout => ({ id: '1x2', tiles })
+
+  it('is current when the holder already carries exactly this arrangement', () => {
+    const layout = quad(['a', 'b', null, null])
+    const groups = [group('g', ['a', 'b'], { layout })]
+    expect(arrangementIsCurrent(groups, layout)).toBe(true)
+  })
+
+  it('is current although a group with nothing to do with the panes is listed first', () => {
+    /*
+      The window a real user has: one group holding the tiled pages, and others further up the strip
+      that are not in any pane. Only groups with a *seated* member can make the decision ambiguous,
+      so an unrelated one must be passed over rather than counted — and it has to be looked at
+      first, because a check that stops at the first group would answer correctly by luck if the
+      holder happened to be at index 0. That is also the pass-over branch that keeps the lookup in
+      `arrangementIsCurrent` honest instead of guarding a group id that cannot go missing.
+    */
+    const layout = quad(['a', 'b', null, null])
+    const groups = [group('elsewhere', ['x', 'y']), group('g', ['a', 'b'], { layout })]
+    expect(arrangementIsCurrent(groups, layout)).toBe(true)
+  })
+
+  it('is not current when the same members sit in different panes', () => {
+    // Element by element, because `tiles` is positional. Compared as a set, dragging one page from the
+    // left pane to the right would leave the recording describing the arrangement before the drag —
+    // and the next click on a member would undo it.
+    const groups = [group('g', ['a', 'b'], { layout: pair(['a', 'b']) })]
+    expect(arrangementIsCurrent(groups, pair(['b', 'a']))).toBe(false)
+  })
+
+  it('is not current when the layout changed under the same seating', () => {
+    // `2x2` and `1x4` both have four tiles, so the id cannot be inferred from the array and the array
+    // cannot stand in for the id.
+    const groups = [group('g', ['a', 'b'], { layout: quad(['a', 'b', null, null]) })]
+    expect(arrangementIsCurrent(groups, { id: '1x4', tiles: ['a', 'b', null, null] })).toBe(false)
+  })
+
+  it('is not current while a loose tab has still to join', () => {
+    // The absorb case would never happen otherwise: the tiles a group already carries can only name
+    // its own members, so a comparison of arrangements alone would answer "nothing to do" for a pane
+    // holding a tab the group has never heard of.
+    const groups = [group('g', ['a', 'b'], { layout: quad(['a', 'b', null, null]) })]
+    expect(arrangementIsCurrent(groups, quad(['a', 'b', 'loose', null]))).toBe(false)
+  })
+
+  it('is not current when the holder is carrying nothing yet', () => {
+    expect(arrangementIsCurrent([group('g', ['a', 'b'])], quad(['a', 'b', null, null]))).toBe(false)
+  })
+
+  it('is never current when a group would have to be made, or when nothing is kept', () => {
+    // Two answers that are not "reuse", and neither has a group to compare against. Asserted so a
+    // future short-circuit cannot make the create path silently stop creating.
+    expect(arrangementIsCurrent([], quad(['a', 'b', null, null]))).toBe(false)
+    const twoGroups = [group('one', ['a']), group('two', ['b'])]
+    expect(arrangementIsCurrent(twoGroups, quad(['a', 'b', null, null]))).toBe(false)
+  })
+
+  it('is not current for an arrangement too small to be one', () => {
+    // Below `MIN_ARRANGED_TILES` the holder is `none`, so the answer is "not current" rather than
+    // "current". The caller must not read it as permission to write: it refuses on `none` first.
+    const groups = [group('g', ['a', 'b'], { layout: quad(['a', 'b', null, null]) })]
+    expect(arrangementIsCurrent(groups, quad(['a', null, null, null]))).toBe(false)
+    expect(groupToHoldArrangement(groups, quad(['a', null, null, null]))).toEqual({ kind: 'none' })
   })
 })
 

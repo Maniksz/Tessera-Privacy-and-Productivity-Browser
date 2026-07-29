@@ -11,10 +11,12 @@ import type { OverlayPresentation, OverlayState } from '@shared/overlay/surface.
 import { Tab, adoptTabId, nextTabId, type TabWiring } from './Tab.js'
 // The seams' *types* only: what each one is, and what it may reach, both live in `window-seams.ts`.
 import { createWindowSeams, type WindowSeams } from './window-seams.js'
+import { wireWindowEvents } from './window-events.js'
 import type { LayoutChangeOptions } from './TileOccupancyController.js'
 import { chromeWindowOptions } from './window-options.js'
 import type { TileBarRequest } from '@shared/split/tile-bar.js'
 import { nextZoomPercent } from '@shared/gestures/zoom.js'
+import type { PaneZoom } from '@shared/zoom/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SessionRecorder } from '@shared/session/model.js'
@@ -190,7 +192,23 @@ export class BrowserWindowController {
 
     this.#seams = seams
 
-    this.#wireWindowEvents()
+    /*
+      What the OS tells this window and what it does about it: nine handlers, in `window-events.ts`, where
+      they can be run by a test rather than only read. Which of them belong there and which stayed — `closed`
+      and `did-finish-load` — is argued in that file and in `#wireLifecycle` below.
+    */
+    wireWindowEvents({
+      on: (event, handler) => this.#on(event, handler),
+      drag: this.#seams.drag,
+      overlay: this.#overlay,
+      split: this.split,
+      fullscreen: this.#seams.fullscreen,
+      tileInput: this.#seams.tileInput,
+      relayout: () => this.relayout(),
+      broadcastWindowState: () => this.#broadcastWindowState(),
+      scheduleBroadcast: () => this.#scheduleBroadcast()
+    })
+    this.#wireLifecycle()
     this.#loadChrome()
     this.#seams.fullscreen.applyPolicy()
   }
@@ -215,6 +233,9 @@ export class BrowserWindowController {
    * shape of the code makes that omission visible. Pairing them here makes it impossible.
    *
    * Same helper and same reason as the one inside `Tab.#wireEvents`.
+   *
+   * Reached from `window-events.ts` as `WindowEventHost.on` rather than copied into it: the disposers are
+   * this window's, and the pairing only means anything where the thing being torn down lives.
    */
   #on(event: string, handler: (...args: unknown[]) => void): void {
     const emitter: NodeJS.EventEmitter = this.window
@@ -224,70 +245,18 @@ export class BrowserWindowController {
     })
   }
 
-  #wireWindowEvents(): void {
-    // Resizing moves the button an anchored surface was placed against, so the surface
-    // goes rather than hanging in the wrong spot.
-    const onResize = (): void => {
-      // A resize moves every drop zone, and the zones were computed at the start of the
-      // drag on purpose. Rather than silently retargeting under the pointer, the drag goes.
-      this.#seams.drag.cancel()
-      this.#overlay.dismiss()
-      this.relayout()
-    }
-    const onWindowState = (): void => this.#broadcastWindowState()
-    const onBlur = (): void => {
-      // Covers the drag that ended somewhere neither renderer could see — a pointer
-      // released outside the window leaves no pointerup behind.
-      this.#seams.drag.cancel()
-      this.#overlay.dismiss()
-      this.#broadcastWindowState()
-    }
-    const onEnterFullscreen = (): void => {
-      this.split.setWindowFullscreen(true)
-      this.relayout()
-      this.#scheduleBroadcast()
-    }
-    const onLeaveFullscreen = (): void => {
-      this.split.setWindowFullscreen(false)
-      /*
-        The confinement comes back here, and this is the only place it can.
-
-        `toggleFullscreen` lifts `fullScreenable` so the *user's* key can take the window — the flag cannot
-        tell a person from a page, so it has to be lifted for the request the person made. Left lifted, a
-        video in one pane could then take the whole window and blank the other three, which is the thing
-        spec 2 is about. Restoring it on the way *in* would trap the user in fullscreen; on the way out is
-        both the earliest safe moment and the one that needs no second flag to remember why.
-      */
-      this.#seams.fullscreen.applyPolicy()
-      this.relayout()
-      this.#scheduleBroadcast()
-    }
-
-    this.#on('resize', onResize)
-    this.#on('maximize', onWindowState)
-    this.#on('unmaximize', onWindowState)
-    this.#on('focus', onWindowState)
-    this.#on('blur', onBlur)
-    this.#on('enter-full-screen', onEnterFullscreen)
-    this.#on('leave-full-screen', onLeaveFullscreen)
-
-    /*
-      Back and forward from hardware that has its own buttons for it.
-
-      `app-command` is the mouse's fourth and fifth buttons on Windows and Linux, `swipe` is the macOS
-      trackpad. Subscribed together so neither platform's half can be added without the other being visible,
-      and both hand the decision to `decideNavigationGesture` — which direction means "back" is a convention
-      that reads backwards from first principles, and one negation would invert every gesture on one platform.
-    */
-    this.#on('app-command', (...args) => {
-      const [, command] = args
-      if (typeof command === 'string') this.#seams.tileInput.navigateByGesture('app-command', command)
-    })
-    this.#on('swipe', (...args) => {
-      const [, direction] = args
-      if (typeof direction === 'string') this.#seams.tileInput.navigateByGesture('swipe', direction)
-    })
-
+  /**
+   * The two events about this window's own existence: it is ready to be seen, and it is gone.
+   *
+   * The nine reactions to the OS moved to `window-events.ts`; these did not, and `closed` is the reason. It
+   * disposes the listeners, destroys the overlay and every tab, closes the session slot and hands the window
+   * back to whoever opened it — private fields, all of them. Passing a module enough to do that means passing
+   * it the whole window, which is the reach that extraction exists to remove.
+   *
+   * `did-finish-load` is the chrome renderer reporting in rather than the OS speaking, and it is the one
+   * subscription here with no disposer: it is on the `webContents`, which die with the window.
+   */
+  #wireLifecycle(): void {
     this.window.webContents.on('did-finish-load', () => {
       this.window.show()
       this.#broadcastWindowState()
@@ -333,6 +302,8 @@ export class BrowserWindowController {
        * exception.
        */
       deferred?: { url: string; title: string }
+      /** Session restore only. At construction, because nothing applies zoom before the first paint. */
+      zoomPercent?: PaneZoom
     } = {}
   ): Tab {
     const tab = new Tab({
@@ -341,6 +312,7 @@ export class BrowserWindowController {
       wiring: this.options.wiring,
       getSettings: this.getSettings,
       ...(options.ephemeral === undefined ? {} : { ephemeral: options.ephemeral }),
+      ...(options.zoomPercent === undefined ? {} : { zoomPercent: options.zoomPercent }),
       callbacks: {
         onStateChanged: () => this.#scheduleBroadcast(),
         onOpenNewTab: (url, { background }) => {
@@ -358,12 +330,13 @@ export class BrowserWindowController {
           this.requestTileBar({ invokedBy: 'pointer', tileIndex, y })
         },
         /*
-          The tab the gesture landed on zooms, whichever tile that is and whether or not it is active.
+          The pane the gesture landed on zooms, whichever tile that is and whether or not it is active —
+          and only that pane, since the user reversed spec 1 on 29.07.2026. `Tab`'s zoom section carries
+          the decision and the consequence: two tiles showing one page no longer zoom together.
 
-          Through `setZoomPercent` rather than the view's own zoom, so the value goes into the
-          per-domain registry spec 1 requires. One consequence worth knowing rather than discovering:
-          two tiles showing the *same* site zoom together, because that is what "zoom is per domain"
-          means. Per tile would be a different specification, not a smaller change.
+          Through `setZoomPercent` rather than the view's own zoom, because the view's factor is
+          Chromium's per-origin state and this one is the pane's. Only this one survives a navigation
+          somewhere else, and only this one reaches the session file.
         */
         onZoomGesture: (source, direction) => {
           source.setZoomPercent(nextZoomPercent(source.zoomPercent, direction))
@@ -462,10 +435,11 @@ export class BrowserWindowController {
         A tab with no tile has two ways back, and which one applies is a question only its group can
         answer.
 
-        If its group is carrying the arrangement these tabs were displaced from, that arrangement comes
-        back: the layout it was, every member in the tile it had. That is the point of recording it — a
-        new tab takes the window, and returning to what you were looking at is one click on any of the
-        tabs that were in it.
+        If its group is carrying an arrangement, that arrangement comes back: the layout it was, every
+        member in the tile it had. That is the point of keeping it — a new tab takes the window, and
+        returning to what you were looking at is one click on any of the tabs that were in it. The
+        group keeps it afterwards, so the fourth return works exactly like the first; the round below
+        rewrites it from whatever the panes then hold.
 
         Otherwise it becomes visible the same way a newly created one does: it gets the window. It used
         to take over the active tile, which is the complaint one step removed — opening a tab out of a
@@ -907,7 +881,9 @@ export class BrowserWindowController {
       this.#seams.audio.apply()
     }
     if ('appearance.defaultZoom' in changed) {
-      for (const tab of this.#tabs.values()) tab.applyZoomForCurrentDomain()
+      // Every pane, and only the untouched ones move: `applyZoom` falls back to the setting for a pane
+      // still at `null` and leaves a deliberate one where it is. What the sentinel buys — see `PaneZoom`.
+      for (const tab of this.#tabs.values()) tab.applyZoom()
     }
     this.relayout()
     this.#scheduleBroadcast()
@@ -956,6 +932,52 @@ export class BrowserWindowController {
   }
 
   /**
+   * A multi-view is a tab group, kept true on every settle rather than at one moment.
+   *
+   * ## Why here
+   *
+   * The arrangement used to be written at exactly one point — the collapse a new tab causes
+   * (`TileOccupancyController.claimTileForNewTab`) — so a split made by dragging a tab into an edge,
+   * one chosen from the layout menu and one brought back by session restore were all multi-views no
+   * group knew about. Every one of them settles *here*, in the round that already exists for
+   * "something about this window changed"; `refreshTileBar` below is in it for the same reason.
+   * Hooking each cause instead would mean finding all of them, and that list has grown twice already.
+   *
+   * Writing it every time is also what makes the way back safe: a recording that is always current
+   * cannot describe a state the user has moved on from, so `takeArrangementFor` no longer spends it
+   * and the third return to a multi-view works like the first.
+   *
+   * ## The two rules that keep it from eating itself
+   *
+   * **Below `MIN_ARRANGED_TILES` seated tabs nothing is written** — `groupToHoldArrangement`'s own
+   * floor, not a second copy of it here. That is exactly what makes displacement work: a new tab
+   * collapses the window to one seated tab, this pass finds nothing worth holding, and the group
+   * keeps the arrangement the user is about to click their way back to. A pass that wrote "the window
+   * is now a single view" would erase the feature on the way into it.
+   *
+   * **An arrangement that has not changed is not written** — `arrangementIsCurrent`. Without it every
+   * navigation event hands the debounced store a document.
+   *
+   * ## Re-entrancy
+   *
+   * `keepArrangement` publishes when it changes something, and it is being called from inside a
+   * publish. So the flag is held down across the call: a request arriving during the round is a
+   * request for the message this round is about to send, which is what the flag is *for* rather than
+   * a suppression. Restored afterwards, so a change made later in the round still schedules the next.
+   */
+  #maintainArrangement(): void {
+    this.#broadcastScheduled = true
+    try {
+      this.#seams.groups.keepArrangement({
+        id: this.split.layout,
+        tiles: this.split.toState().tileTabIds
+      })
+    } finally {
+      this.#broadcastScheduled = false
+    }
+  }
+
+  /**
    * Coalesces bursts of state changes into one message per tick. A single
    * navigation fires half a dozen webContents events, and pushing each one
    * separately would make the tab bar flicker.
@@ -966,6 +988,9 @@ export class BrowserWindowController {
     setImmediate(() => {
       this.#broadcastScheduled = false
       if (this.window.isDestroyed()) return
+      // Before the strip is read, not after: absorbing a loose tab reorders `#tabOrder`, and a
+      // maintenance pass that ran afterwards would publish the order it had just made wrong.
+      this.#maintainArrangement()
       /*
         Sent in group order, with every group as one run of tabs.
 

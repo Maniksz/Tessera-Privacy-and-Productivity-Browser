@@ -21,7 +21,6 @@ import {
   TAB_BY_INDEX_ACCELERATORS,
   acceleratorFor,
   allAcceleratorsFor,
-  conflictFor,
   findBindingConflicts
 } from '@shared/shortcuts/bindings.js'
 import { DEFAULT_LOCALE, catalogs, isLocale, resolveLocale, translate } from '@shared/i18n/catalog.js'
@@ -266,10 +265,6 @@ describe('shortcuts: overrides and conflicts', () => {
 
   it('lists every default alternative when not overridden', () => {
     expect(allAcceleratorsFor('win32', 'reload')).toEqual(['F5', 'Control+R'])
-  })
-
-  it('reports no conflict for an unbound accelerator', () => {
-    expect(conflictFor('linux', 'Control+Alt+Q')).toBeNull()
   })
 
   it('detects a duplicate introduced by an override', () => {

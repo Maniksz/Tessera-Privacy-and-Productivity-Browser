@@ -2,7 +2,6 @@ import { WebContentsView, type Session } from 'electron'
 import type { SecurityState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Rect } from '@shared/split/layout.js'
-import { registrableDomain } from '@shared/url/domain.js'
 import { isHomeUrl } from '@shared/url/omnibox.js'
 import type { HistoryRecorder } from '@shared/history/model.js'
 import { type FaviconCache, faviconDomainOf, faviconUrl } from '@shared/favicons/model.js'
@@ -10,11 +9,17 @@ import type { ThumbnailCapturer } from '@shared/thumbnails/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import { mouseMoveY } from '@shared/gestures/pointer.js'
 import type { ZoomDirection } from '@shared/gestures/zoom.js'
+import { clampZoomPercent, effectiveZoomPercent, type PaneZoom } from '@shared/zoom/model.js'
 import { sequenceOfTabId, tabIdForSequence } from '@shared/session/tab-ids.js'
 import { INTERNAL_SCHEME } from '@shared/product.js'
 import { applyWebRtcPolicy } from '../session/hardening.js'
 import { preloadFile, preloadRoleArgument } from '../paths.js'
 import { pageKeystrokeOf, type PageKeystroke } from './page-keys.js'
+import {
+  decideTabNavigation,
+  pendingNavigationOf,
+  type NavigationSource
+} from './navigation-policy.js'
 
 /**
  * One tab: a full `WebContentsView` with its own renderer process.
@@ -127,6 +132,11 @@ export interface TabOptions {
    * see `shared/split/tile-fill.ts`.
    */
   ephemeral?: boolean
+  /**
+   * The zoom this pane comes back at, for session restore. Absent and `null` both mean a pane
+   * nobody has zoomed, which is every pane the browser opens by itself — see `PaneZoom`.
+   */
+  zoomPercent?: PaneZoom
 }
 
 let sequence = 0
@@ -168,6 +178,13 @@ export class Tab {
   #faviconUrls: string[] = []
 
   /**
+   * This pane's zoom, or `null` while it still follows `appearance.defaultZoom`. Held rather than
+   * read back off the view: `getZoomFactor()` reports Chromium's per-origin state, so the ladder's
+   * starting point would otherwise depend on what some other pane is showing.
+   */
+  #zoomPercent: PaneZoom
+
+  /**
    * The `tessera://favicon` address to show, and which site it belongs to.
    *
    * The site is kept alongside so a navigation can decide whether the icon still applies. Held
@@ -207,6 +224,7 @@ export class Tab {
     this.getSettings = options.getSettings
     this.callbacks = options.callbacks
     this.#ephemeral = options.ephemeral ?? false
+    this.#zoomPercent = options.zoomPercent ?? null
     this.wiring = options.wiring
 
     const settings = options.getSettings()
@@ -244,6 +262,16 @@ export class Tab {
          * switches in `runtime-flags.ts` cover the process-level equivalent.
          */
         backgroundThrottling: settings['splitView.throttleInactiveTiles'],
+        /**
+         * The zoom, ahead of the first paint — the only apply point there is before a document has
+         * committed, because `setZoomFactor` acts on the origin a view is on and a view that has
+         * loaded nothing has none. Without it, a session restored at 200 % and every pane on a
+         * profile whose `appearance.defaultZoom` is not 100 would paint wrong and snap, on every
+         * launch. A default only: Chromium's per-origin level wins once one exists, which is why
+         * `did-navigate` re-asserts.
+         */
+        zoomFactor:
+          effectiveZoomPercent(this.#zoomPercent, settings['appearance.defaultZoom']) / 100,
         spellcheck: settings['advanced.spellcheck'],
         autoplayPolicy:
           settings['splitView.autoplayInTiles'] === 'allow'
@@ -383,7 +411,11 @@ export class Tab {
       if (this.#favicon !== null && faviconDomainOf(wc.getURL()) !== this.#favicon.site) {
         this.#favicon = null
       }
-      this.applyZoomForCurrentDomain()
+      // The pane's zoom, put back after every commit — not a leftover from the per-domain register
+      // this line used to read, and worth saying so before somebody deletes it as one. Chromium's
+      // zoom is same-origin per session, so re-asserting is what keeps the value the pane's rather
+      // than whatever another pane last left this origin at.
+      this.applyZoom()
       notify()
     })
     on('did-navigate-in-page', notify)
@@ -429,6 +461,35 @@ export class Tab {
       this.#certificateError = true
       notify()
     })
+
+    /*
+      Navigation to an internal address that this browser did not start.
+
+      The decision is in `navigation-policy.ts` rather than here, and for the reason `page-keys.ts` was
+      split off one subscription up: this file cannot run outside a browser process and is excluded from
+      coverage, so a security rule written here would be a rule no test can put a question to.
+
+      Two events, judged differently — `will-frame-navigate` for the main frame and every subframe,
+      `will-redirect` for a `Location:` header, which is also how this browser's own HTTPS-only
+      interstitial arrives. That module argues all of it, including why nothing the core itself
+      navigates ever reaches this handler.
+    */
+    const guardNavigation =
+      (source: NavigationSource) =>
+      (...args: unknown[]): void => {
+        const pending = pendingNavigationOf(args[0], source)
+        if (pending === null) return
+        const decision = decideTabNavigation(pending)
+        if (decision.allowed) return
+        pending.prevent()
+        // Silent to the page on purpose — a site must not learn what this browser serves — but never
+        // silent to a developer. The rule `decideAccess` set: a refusal that says nothing is a refusal
+        // nobody can tell from a bug.
+        console.warn(`[navigation] refused: ${decision.reason}`)
+      }
+
+    on('will-frame-navigate', guardNavigation('frame'))
+    on('will-redirect', guardNavigation('redirect'))
 
     // window.open and target=_blank become tabs, never popups we do not control.
     wc.setWindowOpenHandler(({ url, disposition }) => {
@@ -514,32 +575,36 @@ export class Tab {
   // --- zoom ----------------------------------------------------------------
 
   /**
-   * Zoom is per domain, not per tab (spec 1): the same site opened twice must
-   * look the same in both tabs.
+   * Zoom belongs to the pane, not to the site. Spec 1 said the opposite — "the same page open twice
+   * must look the same in both tabs" — and this was a `Map` from registrable domain to percentage.
+   * **The user reversed it on 29.07.2026**, and the consequence belongs in the same breath as the
+   * decision: *two tiles showing the same page no longer zoom together*, and a pane left at 200 %
+   * stays there for whatever is opened in it. `shared/zoom/model.ts` has the rest — what was
+   * rejected on the way, and the one part of this Chromium will not give us.
    */
-  applyZoomForCurrentDomain(): void {
-    const percent = zoomRegistry.get(this.domain(), this.getSettings()['appearance.defaultZoom'])
-    this.view.webContents.setZoomFactor(percent / 100)
+  applyZoom(): void {
+    this.view.webContents.setZoomFactor(this.zoomPercent / 100)
   }
 
   setZoomPercent(percent: number): void {
-    const clamped = Math.min(300, Math.max(30, Math.round(percent)))
-    zoomRegistry.set(this.domain(), clamped)
-    this.view.webContents.setZoomFactor(clamped / 100)
+    this.#zoomPercent = clampZoomPercent(percent)
+    this.applyZoom()
     this.callbacks.onStateChanged(this)
   }
 
-  get zoomPercent(): number {
-    return Math.round(this.view.webContents.getZoomFactor() * 100)
+  /**
+   * Back to "never zoomed", which is not back to 100 %: a pane that follows `appearance.defaultZoom`
+   * keeps following it, and this is the only way into that state once a pane has been zoomed.
+   */
+  resetZoom(): void {
+    this.#zoomPercent = null
+    this.applyZoom()
+    this.callbacks.onStateChanged(this)
   }
 
-  domain(): string {
-    try {
-      const { hostname } = new URL(this.view.webContents.getURL())
-      return hostname === '' ? '' : registrableDomain(hostname)
-    } catch {
-      return ''
-    }
+  /** What this pane is showing at, with the setting standing in for a pane never zoomed. */
+  get zoomPercent(): number {
+    return effectiveZoomPercent(this.#zoomPercent, this.getSettings()['appearance.defaultZoom'])
   }
 
   // --- bookkeeping ---------------------------------------------------------
@@ -691,7 +756,10 @@ export class Tab {
       audible: destroyed ? false : wc.isCurrentlyAudible(),
       security: destroyed ? 'internal' : this.#securityState(),
       blockedRequests: this.#blockedRequests,
-      zoomPercent: destroyed ? 100 : this.zoomPercent,
+      // The stored value, not the effective one: the session slot is filled from this and the file
+      // has to be able to say "never zoomed". The number is ours rather than something read back
+      // off Chromium, so a destroyed view no longer comes into it. See `PaneZoom`.
+      zoomPercent: this.#zoomPercent,
       tileIndex: this.#tileIndex,
       unloaded: this.#deferred !== null
     }
@@ -707,24 +775,3 @@ export class Tab {
     }
   }
 }
-
-/**
- * Per-domain zoom levels.
- *
- * In memory for now; belongs in the encrypted local store alongside history and
- * bookmarks (spec 3) so it survives a restart as spec 1 requires.
- */
-class ZoomRegistry {
-  readonly #levels = new Map<string, number>()
-
-  get(domain: string, fallback: number): number {
-    return this.#levels.get(domain) ?? fallback
-  }
-
-  set(domain: string, percent: number): void {
-    if (domain === '') return
-    this.#levels.set(domain, percent)
-  }
-}
-
-export const zoomRegistry = new ZoomRegistry()

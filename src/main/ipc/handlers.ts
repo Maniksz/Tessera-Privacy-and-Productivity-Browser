@@ -10,15 +10,8 @@ import { findService } from '../find/service.js'
 import { readerOutcomeFor } from '../reader/reader-mode.js'
 import { assertAllChannelsRegistered, configureSenderPolicy, handle, OK } from './router.js'
 import { catalogs, resolveLocale, type Locale } from '@shared/i18n/catalog.js'
-import {
-  DEFAULT_BINDINGS,
-  SHORTCUT_ACTIONS,
-  acceleratorFor,
-  conflictFor
-} from '@shared/shortcuts/bindings.js'
+import { DEFAULT_BINDINGS } from '@shared/shortcuts/bindings.js'
 import { translate } from '@shared/i18n/catalog.js'
-import { currentPlatform } from '../paths.js'
-import type { ShortcutBinding } from '@shared/model.js'
 import type { HistoryStore } from '../data/HistoryStore.js'
 import { buildTabContextMenu } from '../menu/tabContextMenu.js'
 import { registerPermissionHandlers } from './permission-handlers.js'
@@ -537,30 +530,6 @@ export function registerIpcHandlers(deps: {
   handle('i18n:getCatalog', () => {
     const locale = activeLocale(settings.get('appearance.uiLanguage'))
     return { locale, messages: { ...catalogs[locale] } }
-  })
-
-  // --- shortcuts -----------------------------------------------------------
-  handle('shortcuts:getBindings', () => {
-    const platform = currentPlatform()
-    const overrides = settings.get('advanced.customShortcuts')
-    const locale = activeLocale(settings.get('appearance.uiLanguage'))
-
-    return SHORTCUT_ACTIONS.map((action): ShortcutBinding => {
-      const accelerator = acceleratorFor(platform, action, overrides)
-      const conflict = conflictFor(platform, accelerator)
-      return {
-        action,
-        accelerator,
-        knownConflict: conflict !== null,
-        // Spec 9: when a combination never reaches the application, say so and
-        // suggest an alternative rather than showing a binding that does
-        // nothing.
-        conflictNote:
-          conflict === null
-            ? null
-            : translate(locale, conflict.messageKey, { alternative: conflict.alternative })
-      }
-    })
   })
 
   // --- quick links (start page, spec 1) ------------------------------------

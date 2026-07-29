@@ -11,8 +11,10 @@ import { ZOOM_STOPS, nextZoomPercent } from '@shared/gestures/zoom.js'
  * where it started, which is a thing people feel and never report.
  *
  * The awkward case is a value that is not on the ladder at all, and it is not hypothetical: the menu
- * moved in tens for as long as this browser has existed, so a stored per-domain zoom of 120 is
- * ordinary. Landing that on the wrong side is a first press that appears to go backwards.
+ * moved in tens for as long as this browser has existed, so a pane sitting at 120 % — left there by
+ * that period and brought back out of the session file — is ordinary, and so is any
+ * `appearance.defaultZoom` the user typed. Landing that on the wrong side is a first press that
+ * appears to go backwards.
  */
 
 describe('the ladder itself', () => {
@@ -31,8 +33,9 @@ describe('the ladder itself', () => {
   })
 
   it('stays inside the range the rest of the browser clamps to', () => {
-    // `Tab.setZoomPercent` clamps to 30–300. A stop outside that would be a step the ladder offers
-    // and the tab silently refuses, which reads as a stuck gesture.
+    // `clampZoomPercent` holds every stored zoom to 30–300. A stop outside that would be a step the
+    // ladder offers and the pane silently refuses, which reads as a stuck gesture. Cross-checked
+    // against the clamp's own constants in `view-zoom.test.ts`.
     for (const stop of ZOOM_STOPS) {
       expect(stop).toBeGreaterThanOrEqual(30)
       expect(stop).toBeLessThanOrEqual(300)
@@ -56,7 +59,7 @@ describe('one step', () => {
 
   it('steps forward from a value that is not on the ladder', () => {
     /*
-      120 % is what years of `± 10` left behind in the per-domain registry. Zooming in from there has
+      120 % is what years of `± 10` left behind in panes and in saved sessions. Zooming in from there has
       to reach 125, not 110: the nearest stop is *below*, so an implementation that snapped to the
       nearest would make the first press after an upgrade go the wrong way.
     */

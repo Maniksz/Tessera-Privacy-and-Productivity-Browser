@@ -49,6 +49,22 @@
   background: var(--bg-input);
 }
 
+/*
+  The one button here that cannot be undone says so before it is pressed.
+
+  Colour only under the pointer, and nothing at rest: a permanently red control would pull the eye to
+  the destructive one every time the bar appeared, which is the opposite of what a warning is for. On
+  hover it is the last thing the user gets before the page is gone — there is no dialogue after this —
+  and it says the same thing the ringed cross says, in the one moment it can still be acted on.
+
+  No layout rule for the position: the address form is the only `flex: 1 1 auto` in the bar, so this
+  is pushed to the right edge by the field growing rather than by a margin that would have to be kept
+  in agreement with it.
+*/
+.tilebar__button--close:hover {
+  color: var(--danger);
+}
+
 /* Dimmed, not hidden: a missing button would make the bar's shape change as history grows. */
 .tilebar__button:disabled {
   color: var(--fg-dim);

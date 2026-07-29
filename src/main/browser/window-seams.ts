@@ -140,8 +140,10 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
   /*
     Before `occupancy`, and that is the second ordering constraint in this file.
 
-    Putting the grid away for a new tab loses the arrangement the other tabs were in, and a tab group is
-    what keeps it — so the occupancy controller hands `groups` the arrangement on the way out. The
+    A window showing several pages at once is a tab group, and the group is what carries which layout
+    and who sits in which pane — so the occupancy controller hands `groups` the arrangement on the way
+    out, at the one moment a collapse would otherwise destroy it. It asks a second question too:
+    whether a tab is folded away, which decides whether it may be pulled back into a pane. The
     dependency runs one way, and unlike `drag`/`occupancy` the construction order can satisfy it
     directly: nothing here needs the occupancy controller.
   */
@@ -159,6 +161,7 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     adaptEnabled: () => internals.getSettings()['splitView.adaptLayoutToTabs'],
     tabOrder: () => internals.tabOrder(),
     isEphemeral: (tabId) => internals.tab(tabId)?.ephemeral === true,
+    isHiddenByCollapse: (tabId) => groups.isHidden(tabId),
     unassign: (tabId) => internals.tab(tabId)?.setTileIndex(null),
     assignTabToTile: (tabId, tileIndex) => internals.assignTabToTile(tabId, tileIndex),
     closeTab: (tabId) => internals.closeTab(tabId),

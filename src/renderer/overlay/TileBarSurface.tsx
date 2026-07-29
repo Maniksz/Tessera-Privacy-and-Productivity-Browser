@@ -1,19 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TileBarPresentation } from '@shared/overlay/surface.js'
 import { TILE_BAR_POINTER_AWAY } from '@shared/split/tile-bar.js'
+import { HOME_URL } from '@shared/url/omnibox.js'
 import { invoke } from '@renderer/bridge.js'
 import { useI18n } from '@renderer/i18n.js'
 import './tile-bar.css'
 
 /**
- * One tile's navigation bar: back, forward, reload and that tile's address (spec 2).
+ * One tile's navigation bar: back, forward, reload, home, that tile's address, and close (spec 2).
+ *
+ * ## The order the controls are in, which is a decision and not an accident
+ *
+ * Back, forward, reload, home is the main toolbar's order, kept here so the muscle memory transfers
+ * — a user who has learned that home is the fourth thing on the left does not have to learn it twice.
+ * Close is on the far side of the address field, as far from those four as the bar allows, because it
+ * is the only action here that cannot be undone: a close that lands one button off shuts a page the
+ * user is currently reading, while every other misfire in this bar costs a back-press. Both new
+ * buttons exist because the alternative is hunting for the right tab in the strip above, which is the
+ * thing this bar exists to make unnecessary.
  *
  * ## What must be true of this component, and would look true if it were not
  *
  * - **Every control names the tab.** `nav:goBack` without a `tabId` acts on the *active* tile,
  *   which in a split layout is routinely not this one. A bar whose buttons omitted the id would
  *   look and feel complete, and would navigate the neighbour — the exact complaint this feature
- *   exists to answer, reintroduced by an omission of four characters.
+ *   exists to answer, reintroduced by an omission of four characters. Close is the one where that
+ *   omission is not recoverable, and `tabs:close` makes `tabId` required rather than optional, so
+ *   there is no shape of the call that quietly means "the active one".
  * - **The pointer's departure is reported, not inferred.** The bar covers the strip the core
  *   watches for pointer moves, so once it is up the core cannot see the pointer leave; it can only
  *   be told. Nothing else takes the bar down when the mouse simply moves away.
@@ -157,6 +170,26 @@ export function TileBarSurface({
         )}
       </button>
 
+      {/*
+        `HOME_URL` rather than a literal, and the `tabId` the main toolbar's copy does not send.
+
+        The toolbar's home button omits it deliberately — there is one active tab and it is the one
+        the user means. Here the bar under the pointer is routinely not the active tile, so the same
+        omission would send a neighbouring page to the start page while this one sat unchanged.
+      */}
+      <button
+        type="button"
+        className="tilebar__button"
+        aria-label={t('toolbar.home')}
+        title={t('toolbar.home')}
+        onClick={() => void invoke('nav:navigate', { input: HOME_URL, tabId })}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M3.5 9.2 10 4l6.5 5.2" />
+          <path d="M5.4 8.6V16h9.2V8.6" />
+        </svg>
+      </button>
+
       <form
         className="tilebar__address"
         onSubmit={(event) => {
@@ -180,6 +213,32 @@ export function TileBarSurface({
           onChange={(event) => setDraft(event.target.value)}
         />
       </form>
+
+      {/*
+        A ring around the cross, and the ring is the whole reason for drawing it by hand.
+
+        The bare cross is taken. `M5.5 5.5l9 9M14.5 5.5l-9 9` is the reload button's stop state, so a
+        close drawn the plain way — which is what the tab strip's own `×` is, and the obvious thing to
+        copy — would put two identical crosses in one forty-pixel bar meaning "cancel this load" and
+        "destroy this page", side by side for the whole of every load. That the strip gets away with
+        the plain glyph is not an argument for using it here; the strip has no stop button beside it.
+
+        `r=6.5` is where the stop cross's arms end, so the two cover the same optical area and the row
+        keeps its rhythm at 1.6 stroke — the close reads as heavier only because it is a closed shape,
+        which is the distinction being drawn.
+      */}
+      <button
+        type="button"
+        className="tilebar__button tilebar__button--close"
+        aria-label={t('tab.close')}
+        title={t('tab.close')}
+        onClick={() => void invoke('tabs:close', { tabId })}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="6.5" />
+          <path d="M7.5 7.5l5 5M12.5 7.5l-5 5" />
+        </svg>
+      </button>
     </div>
   )
 }

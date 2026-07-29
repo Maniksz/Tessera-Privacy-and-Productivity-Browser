@@ -9,6 +9,7 @@ import {
   anyInternalInvokeChannels,
   mayInternalPageInvoke
 } from '@shared/ipc/channels.js'
+import { invokeContract } from '@shared/ipc/contract.js'
 import {
   DEFAULT_BINDINGS,
   SHORTCUT_ACTIONS,
@@ -212,6 +213,39 @@ describe('layer boundaries', () => {
       }
     }
   })
+
+  it('keeps the window-event handlers free of Electron', () => {
+    /*
+      `window-events.ts` is nine OS reactions lifted out of `BrowserWindowController`, and the *only* reason
+      they can be tested at all is that none of them names an Electron type: the window arrives as
+      `WindowEventHost`, whose members are declared as the smallest shape that satisfies them, so a test
+      writes `{ cancel() {} }` where the controller passes a `TabDragController`. The controller itself is
+      on the coverage exclude list because it needs a browser process — that is the cost the extraction was
+      paying down.
+
+      One `import { BrowserWindow } from 'electron'` puts the file straight back on the wrong side of that
+      line, and it would look like a convenience rather than a reversal. Nothing else notices: the module
+      still compiles, the nine handlers still run, and the tests that drive them with a literal quietly
+      become the last ones anybody can write here.
+
+      Same instrument as the preload rule above, aimed at a different boundary — and extended to the two
+      identifiers, because `import type { BrowserWindow }` erases at runtime while still being the coupling
+      this refuses.
+    */
+    const path = join(ROOT, 'src/main/browser/window-events.ts')
+    expect(existsSync(path), 'window-events.ts moved; this rule moved with it or died with it').toBe(true)
+    const text = readFileSync(path, 'utf8')
+
+    expect(valueImportsOf(text), 'window-events.ts imports Electron').not.toContain('electron')
+    expect(importsOf(text), 'even a type import couples these handlers to Electron').not.toContain(
+      'electron'
+    )
+    // Code only: the docblock names `BrowserWindowController` and would otherwise fail this itself, which
+    // is how a rule gets reworded until it means nothing.
+    const code = codeOnly(text)
+    expect(code, 'a window-event handler reaches for a BrowserWindow').not.toMatch(/BrowserWindow/)
+    expect(code, 'a window-event handler reaches for webContents').not.toMatch(/webContents/i)
+  })
 })
 
 describe('bundle weight', () => {
@@ -341,6 +375,31 @@ describe('sandbox rules', () => {
     expect(tab).toMatch(/nodeIntegration:\s*false/)
     expect(tab).toMatch(/nodeIntegrationInSubFrames:\s*false/)
     expect(tab).toMatch(/webSecurity:\s*true/)
+  })
+
+  it('refuses a navigation to an internal address that the core did not start', () => {
+    /*
+      The one security hole this project shipped with, and it was an absence rather than a mistake.
+
+      The per-page privilege table decides what an internal page may *call* from the page's own
+      address. Nothing decided who may *open* one. There was no `will-navigate` handler anywhere in
+      the repository — zero occurrences — so `location.href = <the settings address>` on any visited
+      site put that site's tab on the settings page, and the document that came back held the settings
+      channels. `setWindowOpenHandler` denied every `window.open`, which is exactly why nobody looked
+      further: the obvious route was closed and three others were not.
+
+      Asserted structurally because the subscription is in a file no unit test can construct — `Tab.ts`
+      needs a browser process. What the subscriptions *decide* is `navigation-policy.ts`, which
+      `tests/navigation-policy.test.ts` covers case by case. This half only asserts that the two events
+      are still wired to it and that the answer is still acted on.
+    */
+    const tab = withoutComments(readFileSync(join(ROOT, 'src/main/browser/Tab.ts'), 'utf8'))
+    // `will-frame-navigate` is the documented superset of `will-navigate`: main frame and subframes.
+    expect(tab, 'no will-frame-navigate subscription').toMatch(/on\('will-frame-navigate'/)
+    // A remote server answering `Location:` with an internal address arrives here instead.
+    expect(tab, 'no will-redirect subscription').toMatch(/on\('will-redirect'/)
+    expect(tab, 'the decision must come from navigation-policy.ts').toMatch(/decideTabNavigation\(/)
+    expect(tab, 'the refusal never reaches preventDefault').toMatch(/\.prevent\(\)/)
   })
 
   it('creates the chrome window sandboxed too', () => {
@@ -504,6 +563,189 @@ describe('IPC discipline', () => {
   /** Narrows a name scraped out of the menu source to the union the binding table is keyed by. */
   const isShortcutAction = (name: string): name is ShortcutAction =>
     (SHORTCUT_ACTIONS as readonly string[]).includes(name)
+
+  it('shows no key on a control for an action nothing registers', async () => {
+    /*
+      `docs/STATUS.md` asked for the mirror image of this rule, and the mirror image is not true.
+
+      The request was "no button carrying a shortcut may name an action from a list of dead keys", and the
+      list it meant is `withoutMenuItem` above. That is not a list of dead keys, and its own comments say
+      so: `escape` and `stop` fire through `before-input-event` in `page-keys.ts`, and `splitLayout1`–`4`
+      are registered by the `LAYOUT_IDS` loop in `appMenu.ts` through a *variable*, which is the only
+      reason the literal scan above cannot see them. All twelve keys work. Written as asked, this test
+      would have gone red on its first run against `LayoutMenuSurface.tsx` — which names those four keys
+      deliberately, and `tests/components/layout-menu-keys.test.tsx` exists to hold that menu as the one
+      place they are shown — and the repair would have been an exception carved out for behaviour that was
+      never wrong.
+
+      The inverse is the property worth having, because its violation is a lie told to the user: a tooltip
+      naming a key that does nothing. They press it, nothing happens, and nothing distinguishes a dead
+      shortcut from a slow browser.
+
+      **The registered set is computed, and that is the whole design.** `withoutMenuItem` is why. It named
+      fourteen actions as deliberately unregistered, eight of which had menu items all along, so for eight
+      actions the test above asked nothing at all — and an allowlist that is wrong does not fail, it stops
+      looking, while the green tick goes on meaning what it used to mean. So each of the three mechanisms
+      that can register a key is read out of the source, and read in a form that *stops yielding* when the
+      mechanism goes: the `accel('…')` literals, the values of `LAYOUT_SHORTCUTS` while the loop that
+      consumes them is still written, and the actions `PageKeyAction` names while something still
+      subscribes to the event that reaches it.
+    */
+
+    /** The quoted values of an exported table in `src/shared`, narrowed to the actions among them. */
+    const shared = await collect('src/shared')
+    const tableActions = (name: string): ShortcutAction[] => {
+      const declaration = new RegExp(`export const ${name}[^=]*=\\s*\\{([\\s\\S]*?)\\n\\}`)
+      for (const file of shared) {
+        const body = declaration.exec(withoutComments(file.text))?.[1]
+        if (body === undefined) continue
+        return [...body.matchAll(/'([A-Za-z0-9]+)'/g)]
+          .map((match) => match[1] ?? '')
+          .filter(isShortcutAction)
+      }
+      return []
+    }
+
+    // 1. A literal `accel('…')` anywhere in the menus. The directory rather than `appMenu.ts`, because the
+    //    item templates already live in their own modules and a menu built in one of them registers just
+    //    as well.
+    const menus = (await collect('src/main/menu')).map((file) => withoutComments(file.text)).join('\n')
+    const registered = new Set<string>(
+      [...menus.matchAll(/accel\('([A-Za-z0-9]+)'\)/g)].map((match) => match[1] ?? '')
+    )
+
+    // 2. The `LAYOUT_IDS` loop, which writes `accel(shortcut)` with whatever `LAYOUT_SHORTCUTS` holds. The
+    //    table is read rather than its four current values written down — and only while the loop is still
+    //    there to turn it into accelerators, so deleting the loop takes the four out of the set.
+    const layoutActions = tableActions('LAYOUT_SHORTCUTS')
+    expect(layoutActions.length, 'LAYOUT_SHORTCUTS no longer reads as a table of actions').toBeGreaterThan(
+      0
+    )
+    const appMenu = withoutComments(readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8'))
+    if (/LAYOUT_SHORTCUTS\[[\s\S]{0,400}?accel\(shortcut\)/.test(appMenu)) {
+      for (const action of layoutActions) registered.add(action)
+    }
+
+    // 3. `before-input-event` on the focused view, which is how the two actions that must *not* claim a key
+    //    globally are reached. Their names come out of `PageKeyAction` — the union of everything that path
+    //    can do — rather than from a pair of literals here, and they count only while the subscription and
+    //    the call that resolves it both exist.
+    const pageKeys = withoutComments(readFileSync(join(ROOT, 'src/main/browser/page-keys.ts'), 'utf8'))
+    const pageKeyActions = [
+      ...(/export type PageKeyAction =([^\n]*)/.exec(pageKeys)?.[1] ?? '').matchAll(/'([a-z-]+)'/g)
+    ]
+      .flatMap((match) => (match[1] ?? '').split('-'))
+      .filter(isShortcutAction)
+    expect(pageKeyActions.length, 'PageKeyAction names no shortcut action any more').toBeGreaterThan(1)
+
+    const wiring = (await collect('src/main/browser'))
+      // Its own declarations would otherwise stand in for a caller, and a mechanism nobody calls is
+      // exactly what this half is meant to notice.
+      .filter((file) => file.relative !== 'src/main/browser/page-keys.ts')
+      .map((file) => withoutComments(file.text))
+    /*
+      Both halves of the tab route, and the first is asked of one file at a time on purpose.
+      `OverlayLayer` subscribes to `before-input-event` too, for the master password — a different
+      mechanism reaching a different place. Asked of the concatenation, its subscription would keep this
+      answering "wired" after the tab's had gone.
+    */
+    const subscribed =
+      wiring.some(
+        (text) => /on\(\s*'before-input-event'/.test(text) && text.includes('pageKeystrokeOf(')
+      ) && wiring.some((text) => text.includes('pageKeyAction('))
+    if (subscribed) for (const action of pageKeyActions) registered.add(action)
+
+    /*
+      What the renderer *claims*, taken from the same two helpers every control goes through:
+      `titleWithShortcut(label, action)` and `shortcutKey(platform, action, overrides)`. The action is the
+      second argument of both.
+    */
+    const calls = /\b(?:titleWithShortcut|shortcutKey)\s*\(((?:[^()]|\([^()]*\))*)\)/g
+
+    /** Splits an argument list on the commas that are not inside a nested call. */
+    const topLevelArgs = (inner: string): string[] => {
+      const args: string[] = []
+      let depth = 0
+      let current = ''
+      for (const character of inner) {
+        if ('([{'.includes(character)) depth += 1
+        if (')]}'.includes(character)) depth -= 1
+        if (character === ',' && depth === 0) {
+          args.push(current.trim())
+          current = ''
+          continue
+        }
+        current += character
+      }
+      args.push(current.trim())
+      return args
+    }
+
+    /*
+      A non-literal action argument, resolved to every action it can hold.
+
+      **This is the case that matters.** A scanner matching only `'back'` would walk straight past
+      `shortcutKey(platform, action, overrides)` in `LayoutMenuSurface.tsx` and report nothing — the same
+      blindness, in the same subject matter, that hid eight actions from the scan above. Silently skipping
+      an argument it cannot read is the one thing this must not do, so an identifier is resolved by
+      following its assignment to a shared table and reading that table's values, and anything else is
+      reported rather than dropped.
+    */
+    const resolveArgument = (code: string, argument: string): ShortcutAction[] => {
+      if (!/^[A-Za-z_$][\w$]*$/.test(argument)) return []
+      const assignment = new RegExp(`(?:const|let)\\s+${argument}\\s*(?::[^=\\n]*)?=\\s*([^\\n]+)`).exec(
+        code
+      )?.[1]
+      const table = /^([A-Z][A-Z0-9_]*)\s*\[/.exec(assignment?.trim() ?? '')?.[1]
+      return table === undefined ? [] : tableActions(table)
+    }
+
+    const advertised = new Map<string, string[]>()
+    const unresolved: string[] = []
+    let callSites = 0
+    let fromVariables = 0
+
+    for (const file of await collect('src/renderer')) {
+      const code = withoutComments(file.text)
+      for (const call of code.matchAll(calls)) {
+        callSites += 1
+        const argument = topLevelArgs(call[1] ?? '')[1] ?? ''
+        const note = (action: string): void => {
+          advertised.set(action, [...(advertised.get(action) ?? []), file.relative])
+        }
+
+        const literal = /^'([A-Za-z0-9]+)'$/.exec(argument)?.[1]
+        if (literal !== undefined) {
+          note(literal)
+          continue
+        }
+        const resolved = resolveArgument(code, argument)
+        if (resolved.length === 0) {
+          unresolved.push(`${file.relative}: ${argument}`)
+          continue
+        }
+        fromVariables += 1
+        for (const action of resolved) note(action)
+      }
+    }
+
+    expect(
+      unresolved,
+      'an action argument this scan cannot read is an action it is not checking; teach it, do not skip it'
+    ).toEqual([])
+    // Floors, so none of this can pass by matching nothing — the failure the whole test is about.
+    expect(callSites, 'no control in the renderer advertises a shortcut any more').toBeGreaterThan(6)
+    expect(fromVariables, 'no non-literal argument resolved; the blind spot is back').toBeGreaterThan(0)
+    expect(advertised.size, 'the advertised set collapsed').toBeGreaterThan(8)
+    expect(registered.size, 'the registered set collapsed, which would pass everything').toBeGreaterThan(20)
+
+    for (const [action, where] of advertised) {
+      expect(
+        registered.has(action),
+        `${where.join(', ')} shows a key for ${action}, and nothing registers one`
+      ).toBe(true)
+    }
+  })
 
   it('has something read every setting it offers', async () => {
     /*
@@ -999,6 +1241,46 @@ describe('IPC discipline', () => {
     }
   })
 
+  it('lets no opener channel be handed an internal address', () => {
+    /*
+      The same hole as the navigation lock, arriving from the side the lock cannot see.
+
+      `history:open` and `bookmarks:open` both took `url: z.string()` and both routed through
+      `navigateFromInput` → `resolveOmniboxInput`, which rejects `javascript:` and `data:` and hands the
+      internal scheme through untouched. So the history page — a page any website may link to — could
+      ask the core to navigate its own tab to the settings page, and come back with the settings
+      channels. No web content and no exploit involved, and the `will-frame-navigate` handler in
+      `Tab.ts` never sees it, because by then it *is* a core-initiated `loadUrl`. The bookmarks page had
+      it worse: it may write the tree, so it could store its own target first.
+
+      Asked of every `:open` channel rather than of the two by name, so an opener added later inherits
+      the rule instead of quietly reopening the hole. The ones that take an id rather than an address —
+      `quicklinks:open`, `downloads:open` — fail the first parse and are skipped, which is why the count
+      is asserted at the end: a change that made every channel skip would otherwise pass.
+    */
+    const openers = INVOKE_CHANNELS.filter((channel) => channel.endsWith(':open'))
+    let checked = 0
+
+    for (const channel of openers) {
+      const { request } = invokeContract[channel]
+      if (!request.safeParse({ url: 'https://example.com/' }).success) continue
+      checked += 1
+      for (const forbidden of [
+        'tessera://settings',
+        // Upper case, because `URL.protocol` lower-cases and a `startsWith` check would not.
+        'TESSERA://passwords',
+        'tessera://history?q=1'
+      ]) {
+        expect(
+          request.safeParse({ url: forbidden }).success,
+          `${channel} accepts ${forbidden}`
+        ).toBe(false)
+      }
+    }
+
+    expect(checked, 'no opener channel takes an address any more').toBeGreaterThan(1)
+  })
+
   it('calls ipcMain.handle only through the validating router', async () => {
     for (const file of await collect('src/main')) {
       if (file.relative.endsWith('ipc/router.ts')) continue
@@ -1280,6 +1562,35 @@ describe('resource discipline', () => {
     }
   })
 
+  it('leaves the closed handler in the controller that owns what it tears down', () => {
+    /*
+      The one subscription the `window-events.ts` extraction was not allowed to take, named as such in
+      `scripts/metrics.mjs` where the line-count bar that motivated the move is set: "the `closed` handler
+      must stay — it is the window's own teardown, not a reaction to anything."
+
+      It runs every disposer, destroys the overlay and every tab, closes the session slot and hands the
+      window back to whoever opened it. All of that is private state, so a module able to do it would have
+      to be handed the whole window — the exact reach the narrow host exists to refuse. And the pressure to
+      move it is real: it sits one method away from nine handlers that did move, and moving it would take
+      the file another eleven lines under the bar. That is a metric bought by widening the seam that made
+      the file testable, which is the wrong trade and an invisible one.
+
+      Anchored on the registration rather than on a line, because the controller is long and is edited
+      often. Asserted from both ends: still here, and still not there.
+    */
+    const controller = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/BrowserWindowController.ts'), 'utf8')
+    )
+    expect(controller, 'nothing registers the window teardown any more').toMatch(
+      /\.on\(\s*'closed'/
+    )
+
+    const events = withoutComments(readFileSync(join(ROOT, 'src/main/browser/window-events.ts'), 'utf8'))
+    expect(events, 'the teardown moved behind the host, which cannot reach what it disposes').not.toMatch(
+      /'closed'/
+    )
+  })
+
   it('cleans up every renderer subscription', async () => {
     // Only callers, not the module that defines the helper: `bridge.ts` exports
     // `subscribe` and returns the preload's own unsubscribe, so requiring the word
@@ -1361,12 +1672,37 @@ describe('product identity', () => {
     expect([...SCHEME_DEBT]).toEqual(['src/main/privacy/RequestPipeline.ts'])
   })
 
-  it('keeps the product name out of translated sentences', () => {
-    // A literal in prose means the rename has to edit two languages of copy, where a
-    // search-and-replace also hits the word in sentences that were never about the product.
-    // `{app}` is filled by `interpolate`, which always has the name available.
-    const catalog = readFileSync(join(ROOT, 'src/shared/i18n/catalog.ts'), 'utf8')
-    const inMessages = [...catalog.matchAll(/'[^']*tessera[^']*'/g)].map((match) => match[0])
-    expect(inMessages, 'the catalogue still names the product directly').toEqual([])
+  it('keeps the product name out of translated sentences', async () => {
+    /*
+      A literal in prose means the rename has to edit two languages of copy, where a search-and-replace
+      also hits the word in sentences that were never about the product. `{app}` is filled by
+      `interpolate`, which always has the name available.
+
+      **This read `catalog.ts` alone, and `catalog.ts` was split.** The messages moved to `catalog.en.ts`
+      and `catalog.de.ts`; what stayed behind is the machinery over them and not one sentence of copy. So
+      the assertion went on passing over an empty haystack, which is the worst way for a fitness function
+      to fail — it does not go red, it stops looking, and nothing anywhere says so.
+
+      Reading the directory rather than a file is the correction and not merely the fix: the next locale,
+      and the next split, are covered without anybody remembering this test exists.
+    */
+    const catalogues = await collect('src/shared/i18n')
+    expect(catalogues.length, 'the message catalogue left src/shared/i18n').toBeGreaterThan(2)
+
+    const scanned = catalogues.map((file) => file.text).join('\n')
+    // The placeholder the messages use *instead* of the name. Its absence would mean the sentences are
+    // no longer in view, which is precisely the failure above.
+    expect(scanned, 'no message in the scan uses {app}, so the messages are somewhere else again').toContain(
+      '{app}'
+    )
+
+    for (const file of catalogues) {
+      // Comments stripped, string literals kept: a message is a literal, so the literal is the subject —
+      // and a comment explaining this rule must not be the thing that trips it.
+      const inMessages = [...withoutComments(file.text).matchAll(/'[^']*tessera[^']*'/g)].map(
+        (match) => match[0]
+      )
+      expect(inMessages, `${file.relative} names the product directly`).toEqual([])
+    }
   })
 })

@@ -8,10 +8,10 @@ import type { DownloadRefusal, ManifestState, MediaFinding } from './model.js'
  * `MediaFinding` and `ManifestState` travel as they are: they are already plain data
  * and the interface renders them directly. What is added here is the *sentence* — a
  * refusal and a manifest failure both arrive as an enumeration value, and the core is
- * where the locale lives, so the core is what turns them into words. The precedent is
- * `shortcuts:getBindings`, which sends `conflictNote` already translated for exactly
- * this reason: the alternative is every renderer owning a mapping table, and a second
- * table is a second place for a new enumeration value to be forgotten.
+ * where the locale lives, so the core is what turns them into words. That is the rule on
+ * this boundary rather than a choice made here: an enumeration crosses with its sentence
+ * already translated. The alternative is every renderer that renders one owning a mapping
+ * table, and a second table is a second place for a new enumeration value to be forgotten.
  *
  * The machine-readable value is kept alongside the sentence rather than replaced by
  * it. The interface branches on `refusal` — a `cancelled` download is not an error

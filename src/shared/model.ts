@@ -43,8 +43,20 @@ export const tabStateSchema = z.object({
   security: securityStateSchema,
   /** Actual count for this page, not an estimate (spec 1). */
   blockedRequests: z.number().int().nonnegative(),
-  /** Zoom is per domain, not per tab (spec 1); mirrored here for display. */
-  zoomPercent: z.number().int(),
+  /**
+   * This pane's own zoom, or `null` for one that has never been zoomed and so follows
+   * `appearance.defaultZoom`.
+   *
+   * Per view since the user reversed spec 1 on 29.07.2026; the decision and its consequence are in
+   * `Tab`'s zoom section, the sentinel is `PaneZoom`.
+   *
+   * **No renderer reads this**, and the honest reason it is here is not display: the session's
+   * captured tab is a structural subset of this shape, so this is the field the slot is filled
+   * from and the file needs the sentinel. It is broadcast because everything on a `TabState` is.
+   * A zoom indicator, if one is ever built, would resolve the `null` against the setting the
+   * renderer already has — there is no indicator today, and nothing here implies one.
+   */
+  zoomPercent: z.number().int().nullable(),
   /** Which split tile shows this tab, or null when unassigned but still loaded. */
   tileIndex: z.number().int().nullable(),
   /** True while the tab is discarded to save memory. Never true for tiled tabs. */
@@ -125,15 +137,3 @@ export const historyEntrySchema = z.object({
   offset: z.number().int()
 })
 export type HistoryEntry = z.output<typeof historyEntrySchema>
-
-/** A resolved shortcut binding for the current platform. */
-export const shortcutBindingSchema = z.object({
-  action: z.string(),
-  /** Electron accelerator string, e.g. `CommandOrControl+Shift+1`. */
-  accelerator: z.string(),
-  /** True when the OS is known to swallow this combination (spec 9). */
-  knownConflict: z.boolean(),
-  /** Localised hint plus alternative when `knownConflict` is true. */
-  conflictNote: z.string().nullable()
-})
-export type ShortcutBinding = z.output<typeof shortcutBindingSchema>
