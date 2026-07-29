@@ -16,6 +16,7 @@ import type { HistoryStore } from '../data/HistoryStore.js'
 import { buildTabContextMenu } from '../menu/tabContextMenu.js'
 import { registerPermissionHandlers } from './permission-handlers.js'
 import { registerMediaHandlers } from './media-handlers.js'
+import { registerUpdateHandlers } from './update-handlers.js'
 import { registerDownloadHandlers } from './download-handlers.js'
 import { registerPasswordHandlers } from './password-handlers.js'
 import { buildBlockerMenu } from '../menu/blockerMenu.js'
@@ -59,6 +60,17 @@ export function registerIpcHandlers(deps: {
   picker: ElementPicker
   /** The user's own rules. */
   userRules: UserRuleStore
+  /**
+   * Runs an update check the user asked for, and resolves when it is finished.
+   *
+   * A closure rather than the `UpdateService` itself, and that is not a taste question: the service
+   * is constructed *after* this function is called — see `index.ts`, where the handlers go up before
+   * anything schedules a network job — so there is no object to pass at this point. Handing over a
+   * function also keeps the one operation a page may reach separate from the three it may not
+   * (`download`, `installAndRestart`, `start`), which a reference to the service would put one dot
+   * away from a future handler.
+   */
+  checkForUpdates: () => Promise<void>
 }): void {
   const { settings, windows, quickLinks, extensions, history, bookmarks, passwords } = deps
 
@@ -96,7 +108,20 @@ export function registerIpcHandlers(deps: {
     return settings.snapshot()
   })
 
-  handle('settings:describe', () => describeSettings())
+  /*
+    Resolved per call rather than once at registration, and through the same `activeLocale` that
+    `i18n:getCatalog` uses.
+
+    Per call because the answer changes: the descriptors now carry the labels and descriptions the
+    settings screen renders, so a describe made before a language change and one made after must
+    differ. Captured once, the settings page would switch language everywhere except in the
+    seventy-six sentences this channel is for.
+  */
+  handle('settings:describe', () =>
+    describeSettings(activeLocale(settings.get('appearance.uiLanguage')))
+  )
+
+  registerUpdateHandlers({ handle, checkForUpdates: deps.checkForUpdates, ok: OK })
 
   // --- window --------------------------------------------------------------
   handle('window:getState', (_payload, event) => {
@@ -211,7 +236,7 @@ export function registerIpcHandlers(deps: {
     media: deps.media,
     windows,
     // Read per call, so a language change reaches the next refusal rather than the next restart.
-    locale: () => resolveLocale(settings.get('appearance.uiLanguage'))
+    locale: () => activeLocale(settings.get('appearance.uiLanguage'))
   })
   registerDownloadHandlers({ handle, downloads: deps.downloads, windows })
   /*
@@ -301,7 +326,7 @@ export function registerIpcHandlers(deps: {
     if (window === undefined || tab === undefined) return OK
     const state = tab.toState()
     buildBlockerMenu({
-      locale: resolveLocale(settings.get('appearance.uiLanguage')),
+      locale: activeLocale(settings.get('appearance.uiLanguage')),
       blockedOnPage: state.blockedRequests,
       userRuleCount: deps.userRules.rules().length,
       blockerEnabled: settings.get('privacy.blockerEnabled'),
@@ -737,6 +762,13 @@ export function registerIpcHandlers(deps: {
   assertAllChannelsRegistered()
 }
 
+/**
+ * The setting turned into a language, for every handler in this file.
+ *
+ * `resolveLocale` alone is not that, and the difference is the default: it has never heard of
+ * `'system'`, so handing it the raw setting answered English for everybody who had not picked a
+ * language by hand — a German desktop with a German menu bar and an English "camera blocked" notice.
+ */
 function activeLocale(preference: 'system' | 'de' | 'en'): Locale {
   if (preference !== 'system') return preference
   return resolveLocale(app.getLocale())

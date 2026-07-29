@@ -6,8 +6,12 @@ import { useI18n } from '../i18n.js'
 /**
  * The extensions panel: the in-window entry point.
  *
- * An adapter over `ExtensionsView`, which the `tessera://extensions` page renders as well. See
- * `SettingsPanel` for why there is one component and two hosts.
+ * An adapter over `ExtensionsView`, which the `tessera://extensions` page renders as well: one
+ * implementation, two entry points, because two implementations of one screen drift within a month.
+ *
+ * This is now the only panel of the pair. `SettingsPanel` was deleted when settings became a page —
+ * the user asked for a real tab and not a surface drawn over the window — so `ExtensionsView` is the
+ * only remaining reason the `.overlay` and `.panel` rules exist in the chrome stylesheet.
  */
 export function ExtensionsPanel({ onClose }: { onClose: () => void }): React.ReactNode {
   const { t } = useI18n()

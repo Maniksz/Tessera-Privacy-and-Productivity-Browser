@@ -213,10 +213,15 @@ describe('channel guards', () => {
   })
 
   it("does not let a page hear another page's events", () => {
-    // Subscriptions are a permission too: the start page hearing every settings change would
-    // learn what the user configures, which is none of its business.
-    expect(mayInternalPageListen('start', 'settings:changed')).toBe(false)
+    // Subscriptions are a permission too: the settings page hearing what a person downloaded, or the
+    // start page hearing it, would be that page learning something about them that is none of its
+    // business. The one channel every page holds is `locale:changed`, which carries a language and
+    // nothing else — the snapshot stays with the page that displays it.
+    expect(mayInternalPageListen('start', 'downloads:changed')).toBe(false)
+    expect(mayInternalPageListen('settings', 'downloads:changed')).toBe(false)
     expect(mayInternalPageListen('settings', 'quicklinks:changed')).toBe(false)
+    expect(mayInternalPageListen('start', 'settings:changed')).toBe(false)
+    expect(mayInternalPageListen('reader', 'settings:changed')).toBe(false)
   })
 
   it('refuses a chrome-only event channel to every internal page', () => {

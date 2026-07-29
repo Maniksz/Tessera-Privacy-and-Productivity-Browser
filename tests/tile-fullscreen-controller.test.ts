@@ -101,6 +101,31 @@ describe('applyPolicy', () => {
     h.controller.applyPolicy()
     expect(h.fullScreenable).toEqual([true])
   })
+
+  it('leaves a fullscreen window alone, or the way out is silence', () => {
+    /*
+      Marking a window un-fullscreenable *while it is fullscreen* is what `window-events.ts` calls
+      trapping the user: `setFullScreen(false)` on such a window is silence, so the second `Escape`
+      — the one that is meant to leave the window's fullscreen — would do nothing at all.
+
+      The case only exists because `escape()` now takes the innermost rung first: leaving a tile's
+      fullscreen and un-maximising a tile both call this while the window is still fullscreen.
+    */
+    const h = harness('2x2')
+    h.split.setWindowFullscreen(true)
+    h.controller.applyPolicy()
+    expect(h.fullScreenable).toEqual([])
+  })
+
+  it('puts the confinement back the moment the window is no longer fullscreen', () => {
+    // The other half: nothing is lost by waiting, because `leave-full-screen` runs this again.
+    const h = harness('2x2')
+    h.split.setWindowFullscreen(true)
+    h.controller.applyPolicy()
+    h.split.setWindowFullscreen(false)
+    h.controller.applyPolicy()
+    expect(h.fullScreenable).toEqual([false])
+  })
 })
 
 describe('a page asking for fullscreen', () => {
@@ -231,5 +256,58 @@ describe('escape', () => {
     h.controller.escape()
     expect(h.split.fullscreenTile).toBeNull()
     expect(h.exitedWindowFullscreen).toBe(0)
+  })
+
+  it('does not drop the window out of fullscreen to shrink a video', () => {
+    /*
+      The report, through the controller rather than the state machine: "wenn f11 gedrückt und ich
+      mache ein video klein, schließt sich f11".
+
+      Making the video small is an `Escape` press, and it arrives here through `Tab`'s
+      `before-input-event` while it is also arriving at the page. If this took the window's
+      fullscreen, one press would have two effects and the user would see only the second.
+    */
+    const h = harness('1x1')
+    h.split.assignTab('tab-a', 0)
+    h.split.setWindowFullscreen(true)
+    h.controller.onPageEnter('tab-a')
+
+    h.controller.escape()
+
+    expect(h.askedPages).toEqual(['tab-a'])
+    expect(h.exitedWindowFullscreen, 'the window left fullscreen on the same press').toBe(0)
+  })
+
+  it('leaves the window on the next press, with the flag still lifted', () => {
+    // The second half of the same gesture, and the reason `applyPolicy` steps aside while the
+    // window is fullscreen: an un-fullscreenable window cannot be asked to leave fullscreen.
+    const h = harness('2x2')
+    h.split.assignTab('tab-a', 0)
+    h.split.setWindowFullscreen(true)
+    h.controller.onPageEnter('tab-a')
+
+    h.controller.escape()
+    h.controller.escape()
+
+    expect(h.exitedWindowFullscreen).toBe(1)
+    expect(h.fullScreenable, 'the confinement came back while the window was still fullscreen').toEqual(
+      []
+    )
+  })
+
+  it('gives up a fullscreen page before it un-maximises the tile it is in', () => {
+    // Same reasoning one rung down: `Escape` reaches the player too, so the press that shrinks the
+    // video must not also collapse the maximised tile behind it.
+    const h = harness('2x2')
+    h.split.assignTab('tab-a', 0)
+    h.controller.onPageEnter('tab-a')
+    h.split.toggleTileMaximized(0)
+
+    h.controller.escape()
+    expect(h.split.fullscreenTile).toBeNull()
+    expect(h.split.maximizedTile).toBe(0)
+
+    h.controller.escape()
+    expect(h.split.maximizedTile).toBeNull()
   })
 })

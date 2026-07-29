@@ -11,16 +11,39 @@
   an invisible focus ring makes it unusable (spec 7).
 */
 
+/*
+  Light and dark values share one declaration through `light-dark()` rather than a media query
+  duplicating every property: the function picks its first argument when the used `color-scheme`
+  is `light` and its second when `dark`, and `color-scheme` on `:root` below is `light dark` —
+  "either, and the OS decides" — until `appearance.theme` says otherwise. That is what makes the
+  override two lines instead of a second whole palette: `[data-theme]` only ever has to set
+  `color-scheme`, never restate a colour, so there is exactly one place per token that can drift.
+
+  `[data-theme]` is written by `App.tsx`'s theme effect (`system` removes the attribute, `light`
+  and `dark` set it), which is why nothing here reads `prefers-color-scheme` directly any more —
+  the attribute and `color-scheme: light dark` together already cover the `system` case.
+
+  Values carried over from `internal/start.css`, the only surface that used to have a light
+  palette at all — this is that palette's move, not a new one. The border pair gets the fix D3
+  gave the dark value applied to the light value too: the light border had the identical
+  under-3:1 defect and no reason to keep it once it lived here instead.
+*/
 :root {
-  --bg: #17171a;
-  --bg-elevated: #202024;
-  --bg-input: #2a2a30;
-  --fg: #e6e6ea;
-  --fg-dim: #8b8b96;
-  --border: #35353d;
-  --accent: #6da8ff;
+  --bg: light-dark(#f7f7f9, #17171a);
+  --bg-elevated: light-dark(#ffffff, #202024);
+  --bg-input: light-dark(#ffffff, #2a2a30);
+  --fg: light-dark(#1b1b1f, #e6e6ea);
+  --fg-dim: light-dark(#63636e, #8b8b96);
+  /*
+    #35353d measured ~1.47:1 against `--bg` and ~1.34:1 against `--bg-elevated` — well under the
+    3:1 WCAG 1.4.11 floor for a UI-component boundary, on every unfocused input and panel edge in
+    the app. The dark value clears 3:1 against both (and against the private-mode overrides
+    further down); the light value clears 3:1 against its own pair the same way.
+  */
+  --border: light-dark(#86868d, #70707a);
+  --accent: light-dark(#2563eb, #6da8ff);
   --accent-private: #c58bff;
-  --danger: #ff8b6b;
+  --danger: light-dark(#b3401f, #ff8b6b);
   /*
     The tab-group palette: eight fixed slots, named in `shared/tabgroups/palette.ts`.
 
@@ -32,6 +55,10 @@
     Chosen to stay apart at a 14 px chip on this background, including for the two most common forms
     of colour blindness: the pairs most at risk (green/red, blue/cyan) differ in lightness as well as
     in hue, so a group is still distinguishable when the hue is not.
+
+    Not `light-dark()`: chosen against the dark background only (see above), and a light chrome is
+    new enough here that inventing eight more colours nobody asked to review is out of scope rather
+    than an oversight.
   */
   --tab-group-blue: #5b8dd9;
   --tab-group-cyan: #3fb2c4;
@@ -45,6 +72,19 @@
   --toolbar-height: 44px;
   --font-ui:
     13px/1.4 system-ui, -apple-system, 'Segoe UI', Ubuntu, sans-serif;
+  color-scheme: light dark;
+}
+
+/*
+  The explicit half of `appearance.theme`. `system` leaves `color-scheme` at `light dark` above,
+  so every `light-dark()` token keeps following the OS; picking a side here is the one override
+  that has to fight that default, and `color-scheme` is the only property it needs to touch.
+*/
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
   color-scheme: dark;
 }
 

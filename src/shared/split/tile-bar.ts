@@ -307,7 +307,7 @@ export function tileBarStep(input: {
   if (!tileBarAllows(input.mode, input.request.invokedBy)) return { do: 'nothing' }
 
   /*
-    One tile, no bar.
+    One tile on screen, no bar.
 
     The bar exists because in a split layout the toolbar acts on one tile and the others had no way
     to go back or to edit their address. With a single tile the toolbar *is* that tile's bar, so a
@@ -318,8 +318,16 @@ export function tileBarStep(input: {
     number of tiles is already in hand, and the alternative — a renderer declining to draw a
     presentation the core built and sized the layer for — would leave the layer holding an invisible
     surface and swallowing the pointer events inside it.
+
+    **Counted, not measured by the array's length, and that distinction was a bug.** `tileRects`
+    keeps one entry per tile of the *layout* and sets the collapsed ones to `null`, so a maximised
+    tile in a `1x2` still arrives here as a two-element array. The length said "two tiles" while the
+    screen showed one, and the bar appeared over a maximised tile — where the toolbar is once again
+    that tile's bar, which is the very case this rule was written for. It also put the tile bar's
+    maximise button into the one state where it restores instead, under a tooltip still reading
+    "Maximize tile". Counting what is actually on screen removes the state rather than labelling it.
   */
-  if (input.rects.length <= 1) return { do: 'hide' }
+  if (input.rects.filter((rect) => rect !== null).length <= 1) return { do: 'hide' }
 
   const target =
     input.request.invokedBy === 'keyboard'

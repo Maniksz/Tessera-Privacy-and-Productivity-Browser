@@ -6,7 +6,7 @@ import {
   type Locale,
   type MessageKey
 } from '@shared/i18n/catalog.js'
-import { bridgeAvailable, invoke } from './bridge.js'
+import { bridgeAvailable, invoke, subscribe } from './bridge.js'
 
 /**
  * Translation for an internal page.
@@ -52,18 +52,37 @@ export function useInternalI18n(): InternalI18n {
       }
     }
 
-    void invoke('i18n:getCatalog')
-      .then((catalog) => {
-        if (cancelled) return
-        setLocale(catalog.locale)
-        setMessages(catalog.messages)
-      })
-      .finally(() => {
-        if (!cancelled) setReady(true)
-      })
+    const load = (): void => {
+      void invoke('i18n:getCatalog')
+        .then((catalog) => {
+          if (cancelled) return
+          setLocale(catalog.locale)
+          setMessages(catalog.messages)
+        })
+        .finally(() => {
+          if (!cancelled) setReady(true)
+        })
+    }
+
+    load()
+
+    /*
+      Re-read when the language changes, which the chrome UI's `I18nProvider` has always done and
+      these pages never did — so changing the language switched every window's chrome immediately and
+      left every open internal tab in the old language until it was reloaded.
+
+      `locale:changed` rather than `settings:changed`, and every internal page is granted it: the
+      event carries the resolved locale alone, so a page can follow the language without being handed
+      the user's configuration. The core decides when it moved, which is why this reloads
+      unconditionally instead of comparing against the locale it already holds.
+    */
+    const unsubscribe = subscribe('locale:changed', () => {
+      load()
+    })
 
     return () => {
       cancelled = true
+      unsubscribe()
     }
   }, [])
 

@@ -425,6 +425,30 @@ describe('the step the core takes', () => {
     it('presents again as soon as there is a second tile', () => {
       expect(step(null, { invokedBy: 'keyboard', tileIndex: 0 }).do).toBe('present')
     })
+
+    it('counts the tiles on screen, not the tiles in the layout', () => {
+      /*
+        A maximised tile is one tile on screen, and this rule is about what is on screen.
+
+        `tileRects` keeps one entry per tile of the *layout* and nulls the collapsed ones, so a
+        maximised tile in a `1x2` arrives here as a two-element array. Read as a length, that says
+        "two tiles" while the user is looking at one — and the bar appeared over a maximised tile,
+        duplicating the toolbar it exists to stand in for. It also handed the bar's own maximise
+        button the one state in which it restores, under a tooltip still reading "Maximize tile".
+
+        Both invocation routes are checked because both can reach that state: the maximised view
+        spans the window so its top edge is under the pointer, and `toggleTileMaximized` makes the
+        maximised tile active, which is the tile the keyboard shortcut asks for.
+      */
+      const maximised: Array<Rect | null> = [{ x: 0, y: 88, width: 1440, height: 812 }, null]
+      const onMaximised = (
+        request: Parameters<typeof tileBarStep>[0]['request']
+      ): ReturnType<typeof tileBarStep> =>
+        tileBarStep({ current: null, mode: 'hover', request, rects: maximised, tabOf })
+
+      expect(onMaximised({ invokedBy: 'pointer', tileIndex: 0, y: 0 }).do).toBe('hide')
+      expect(onMaximised({ invokedBy: 'keyboard', tileIndex: 0 }).do).toBe('hide')
+    })
   })
 })
 

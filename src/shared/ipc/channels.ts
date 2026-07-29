@@ -21,6 +21,20 @@ export const INVOKE_CHANNELS = [
   'settings:reset',
   'settings:resetAll',
   'settings:describe',
+  /**
+   * "Check for updates now."
+   *
+   * The one channel here that reaches the network because a button was pressed, so it is granted to
+   * a single page — see `INTERNAL_PAGE_INVOKE_CHANNELS.settings` and the fitness function
+   * `gives no page but settings an update command`. It is deliberately *not* `updates:download` or
+   * `updates:install`: those two consents are answered in a native dialog the core owns, and a
+   * channel for either would put the decision back inside a document.
+   *
+   * Resolves when the check is over and carries nothing about what it found. The result is the
+   * dialog `install-updates.ts` raises, so a payload would be the same answer told twice — and the
+   * page would be holding a version number and a decline it has no use for.
+   */
+  'updates:checkNow',
   // window
   'window:getState',
   'window:minimize',
@@ -341,13 +355,20 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     link to. `getAll` already serves every read the view performs.
 
     If a "reset everything" button is built later, this is one line and a deliberate decision again.
+
+    `updates:checkNow` is the deliberate decision going the other way, and the only grant in this table
+    that lets a page cause an outbound request. It is here because the user asked for the button and
+    the settings screen is where it belongs; it is here *and nowhere else* because the worry that kept
+    the check channel-less for so long — a page making this browser talk to GitHub — is still right for
+    every page that is not this one. Nothing about the start page or the reader page needs it.
   */
   settings: [
     'i18n:getCatalog',
     'settings:getAll',
     'settings:set',
     'settings:reset',
-    'settings:describe'
+    'settings:describe',
+    'updates:checkNow'
   ],
   extensions: ['i18n:getCatalog', 'extensions:list', 'extensions:load', 'extensions:remove'],
   history: [
@@ -427,29 +448,47 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
   reader: ['i18n:getCatalog', 'reader:get']
 } as const satisfies Record<InternalPage, readonly InvokeChannel[]>
 
-/** Events each internal page may subscribe to. Same reasoning, same shape. */
+/**
+ * Events each internal page may subscribe to. Same reasoning, same shape.
+ *
+ * `locale:changed` is the one channel every page holds. It exists because `useInternalI18n` has to
+ * re-read its catalogue when the language changes: granted to the settings page alone, switching
+ * the language changed every window's chrome at once and left every other open internal tab —
+ * history, bookmarks, downloads, the vault — in the previous language until it was reloaded, which
+ * reads as a language switch that half worked.
+ *
+ * `settings:changed` would have done the same job and is deliberately *not* used for it. It carries
+ * the whole snapshot, so granting it to all eight would hand the user's entire configuration to
+ * every internal page on every change — including the reader page, which renders text harvested
+ * from a website. A language is not a configuration; it gets its own channel, and `settings:changed`
+ * stays with the one page that displays settings. A fitness function holds that line.
+ *
+ * The subject-specific events are still per page — `downloads:changed` names what a person
+ * downloaded, and that stays with the downloads page.
+ */
 export const INTERNAL_PAGE_EVENT_CHANNELS = {
-  start: ['quicklinks:changed'],
-  settings: ['settings:changed'],
-  extensions: [],
-  history: [],
+  start: ['quicklinks:changed', 'locale:changed'],
+  settings: ['settings:changed', 'locale:changed'],
+  extensions: ['locale:changed'],
+  history: ['locale:changed'],
   /*
-    The bookmarks page has none, deliberately.
+    The bookmarks page hears nothing about bookmarks, deliberately.
 
     It refreshes after its own writes, and a bookmark changes because somebody changed it. A
-    download changes on its own, which is why the page below has an event and this one does not.
+    download changes on its own, which is why the page below has an event of its own and this one
+    does not.
   */
-  bookmarks: [],
-  downloads: ['downloads:changed'],
+  bookmarks: ['locale:changed'],
+  downloads: ['downloads:changed', 'locale:changed'],
   /*
-    None here either, and this absence is a privacy decision rather than a shrug.
+    Nothing about the vault here, and that absence is a privacy decision rather than a shrug.
 
     A pushed list would arrive whenever the vault changed — including when autofill noted a
     sign-in — so an open passwords tab would learn that the user had just signed in somewhere.
     The page refreshes after its own writes instead.
   */
-  passwords: [],
-  reader: []
+  passwords: ['locale:changed'],
+  reader: ['locale:changed']
 } as const satisfies Record<InternalPage, readonly EventChannel[]>
 
 /**
@@ -500,6 +539,11 @@ export const EVENT_CHANNELS = [
   'tabs:changed',
   'split:changed',
   'settings:changed',
+  /**
+   * The effective interface language changed. Carries the resolved locale and nothing else, so
+   * every internal page can hold it without holding the user's configuration.
+   */
+  'locale:changed',
   'shortcut:triggered',
   'quicklinks:changed',
   /**

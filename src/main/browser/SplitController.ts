@@ -190,7 +190,15 @@ export class SplitController {
   }
 
   // --- escalation ladder ---------------------------------------------------
-  // tile fullscreen -> tile maximised -> window fullscreen (spec 2).
+  /*
+    Climbing up: tile fullscreen -> tile maximised -> window fullscreen (spec 2). Each rung
+    encloses the one before it, so a page's fullscreen inside a tile is the innermost and the
+    window's own fullscreen is the outermost.
+
+    Two questions get asked of that ladder, and they are answered from opposite ends on purpose:
+    `escalation` reads it from the top, `escape()` from the bottom. Both say why below, because a
+    reader finding the two orders side by side will otherwise assume one of them is a mistake.
+  */
 
   enterTileFullscreen(tileIndex: number): void {
     this.#fullscreenTile = clampIndex(tileIndex, this.tileCount)
@@ -215,6 +223,26 @@ export class SplitController {
     this.#windowFullscreen = fullscreen
   }
 
+  /** Whether the window itself is fullscreen, separate from anything a tile is doing. */
+  get isWindowFullscreen(): boolean {
+    return this.#windowFullscreen
+  }
+
+  /**
+   * How escalated the window is: the **outermost** rung it is standing on.
+   *
+   * Read from the top, and deliberately not in the same order as `escape()` below. The question
+   * this answers is "how much of the window has been given to content", which is a different
+   * question from "what comes off next". `BrowserWindowController.#contentRect` uses it to decide
+   * the chrome is hidden, and `pageKeyAction` uses it to tell that the window is in fullscreen — a
+   * window that is fullscreen *and* has a fullscreen video in one of its tiles has hidden its
+   * chrome, and reporting the tile instead would put the toolbar back over a fullscreen window.
+   *
+   * The consequence is worth stating, because it is the thing that looks like a bug and is not: one
+   * `escape()` need not change this value. Leaving a page's fullscreen inside a maximised tile is a
+   * real rung, and this still reports `tile-maximized` afterwards, because the window is still
+   * giving all of its content area to one tile.
+   */
   get escalation(): EscalationLevel {
     if (this.#windowFullscreen) return 'window-fullscreen'
     if (this.#maximizedTile !== null) return 'tile-maximized'
@@ -223,17 +251,38 @@ export class SplitController {
   }
 
   /**
-   * One rung back down the ladder. Returns the step that was taken so the
-   * caller can carry out the side effect it owns — leaving a page's fullscreen
-   * needs the tab, leaving window fullscreen needs the window.
+   * One rung back down the ladder, from the **inside** out. Returns the step that was taken so the
+   * caller can carry out the side effect it owns — leaving a page's fullscreen needs the tab,
+   * leaving window fullscreen needs the window.
+   *
+   * ## Why the innermost rung comes off first
+   *
+   * This used to read `#windowFullscreen` first. The docblock over `TileFullscreenController.escape`
+   * has described the opposite order all along — **the comment was right and the code was wrong** —
+   * and the report that found it says what that cost: "wenn f11 gedrückt und ich mache ein video
+   * klein, schließt sich f11". Press F11, then make a fullscreen video small again, and the window
+   * drops out of fullscreen too.
+   *
+   * Making a video small **is** an `Escape` press, and that press reaches this browser through
+   * `Tab`'s `before-input-event` at the same moment it reaches the page. The page's own handling
+   * takes the video out of fullscreen; taking the *outermost* rung alongside it spends a press the
+   * user has already spent on something else, and they see only the second effect. Read from the
+   * inside out, the rung this press consumes is the one the page has just given up, so the two
+   * agree instead of stacking and the window's fullscreen is still there for the next press.
+   *
+   * The same reasoning applies one rung down and is why `restore-tile` did not simply move to the
+   * front: a fullscreen video inside a maximised tile must give up the video first, or one press
+   * un-maximises the tile *and* shrinks the video.
+   *
+   * `escalation` above reads from the other end. That is not a disagreement; see there.
    */
-  escape(): 'exit-window-fullscreen' | 'restore-tile' | 'exit-tile-fullscreen' | 'none' {
-    if (this.#windowFullscreen) return 'exit-window-fullscreen'
+  escape(): 'exit-tile-fullscreen' | 'restore-tile' | 'exit-window-fullscreen' | 'none' {
+    if (this.#fullscreenTile !== null) return 'exit-tile-fullscreen'
     if (this.#maximizedTile !== null) {
       this.#maximizedTile = null
       return 'restore-tile'
     }
-    if (this.#fullscreenTile !== null) return 'exit-tile-fullscreen'
+    if (this.#windowFullscreen) return 'exit-window-fullscreen'
     return 'none'
   }
 

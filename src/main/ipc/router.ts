@@ -1,4 +1,4 @@
-import { ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { INVOKE_CHANNELS, type InvokeChannel } from '@shared/ipc/channels.js'
 import { invokeContract, type InvokeHandlerArg, type InvokeResponse } from '@shared/ipc/contract.js'
 import { decideAccess } from './sender-policy.js'
@@ -72,8 +72,11 @@ export function handle<C extends InvokeChannel>(channel: C, handler: InvokeHandl
 
     // Response validation in development only: it catches a handler drifting
     // from the contract during work, without paying the cost on every call in
-    // a shipped build.
-    if (process.env['NODE_ENV'] !== 'production') {
+    // a shipped build. `app.isPackaged` rather than `NODE_ENV` — nothing in this
+    // repository ever sets that variable, so the check would otherwise run in
+    // every build, packaged or not, and an env var is not something a shipped
+    // build should be able to be talked out of validating against anyway.
+    if (!app.isPackaged) {
       const parsedResponse = definition.response.safeParse(result)
       if (!parsedResponse.success) {
         const detail = parsedResponse.error.issues

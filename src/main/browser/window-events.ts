@@ -1,4 +1,5 @@
 import type { GestureSource } from '@shared/gestures/navigation.js'
+import { OVERLAY_AWAITS_ANSWER, OVERLAY_KINDS, type OverlayKind } from '@shared/overlay/surface.js'
 
 /**
  * What the outside tells a window, and what the window does about it.
@@ -65,8 +66,11 @@ export interface WindowEventHost {
 
   /** The tab drag in progress, if any. Nothing here starts one; a window event can only end one. */
   drag: { cancel(): void }
-  /** The layer above the tab views. Only taking it down is a window event's business. */
-  overlay: { dismiss(): void }
+  /**
+   * The layer above the tab views. Only taking it down is a window event's business — and only by
+   * kind, never wholesale; see `DISMISSED_ON_INTERRUPTION`.
+   */
+  overlay: { dismissKind(kind: OverlayKind): boolean }
   /** The split layout's own record of whether the window is fullscreen, which changes what it may draw. */
   split: { setWindowFullscreen(fullscreen: boolean): void }
   /** Re-derives whether the window may be taken fullscreen at all; see `TileFullscreenController`. */
@@ -83,6 +87,33 @@ export interface WindowEventHost {
 }
 
 /**
+ * What an interruption may take off the overlay layer.
+ *
+ * ## The defect this replaces
+ *
+ * Both handlers below used to call `dismiss()`, which takes down whatever happens to be up. Two of the
+ * six surfaces have somebody waiting on them, and a departure is settled the safe way: a permission
+ * prompt becomes `block`, a master-password prompt becomes `cancelled` (see `permissions/vacancy.ts`).
+ * So a system notification stealing focus, a glance at another window or dragging the window wider
+ * **answered the dialogue on the user's behalf** — "Blockieren" from somebody who never read the
+ * question, or twenty typed characters gone with nothing on screen to say why.
+ *
+ * For the other four the old rule is the right one. A menu or a drop indicator the user has looked away
+ * from should go, and losing one costs a redraw; a tile bar and a find bar have to go on a resize in any
+ * case, because both carry the rectangle of a tile that has just moved.
+ *
+ * ## Why it is derived rather than written out
+ *
+ * `OVERLAY_AWAITS_ANSWER` already answers "does this surface's departure strand somebody", which is
+ * exactly the question being asked here — a second list would be a second opinion, and the way it fails
+ * is silent: a seventh kind left off it is a consent dialogue answered by a lost focus. Derived, a new
+ * kind is classified by the same act that adds it.
+ */
+const DISMISSED_ON_INTERRUPTION: readonly OverlayKind[] = OVERLAY_KINDS.filter(
+  (kind) => !OVERLAY_AWAITS_ANSWER[kind]
+)
+
+/**
  * Subscribes the window to the nine events it reacts to.
  *
  * Returns nothing on purpose. Every subscription goes through `host.on`, which is already the pairing of a
@@ -90,13 +121,22 @@ export interface WindowEventHost {
  * and two of those is how one of them ends up not being called.
  */
 export function wireWindowEvents(host: WindowEventHost): void {
+  /*
+    Named by kind, one call each. The layer shows one surface at a time, so at most one of these takes
+    anything down and the rest are refusals — which is the point: whichever of the two protected
+    surfaces is up keeps the layer, because neither a wider window nor a glance elsewhere is an answer.
+  */
+  const dismissInterrupted = (): void => {
+    for (const kind of DISMISSED_ON_INTERRUPTION) host.overlay.dismissKind(kind)
+  }
+
   // Resizing moves the button an anchored surface was placed against, so the surface
   // goes rather than hanging in the wrong spot.
   const onResize = (): void => {
     // A resize moves every drop zone, and the zones were computed at the start of the
     // drag on purpose. Rather than silently retargeting under the pointer, the drag goes.
     host.drag.cancel()
-    host.overlay.dismiss()
+    dismissInterrupted()
     host.relayout()
   }
   const onWindowState = (): void => host.broadcastWindowState()
@@ -104,7 +144,7 @@ export function wireWindowEvents(host: WindowEventHost): void {
     // Covers the drag that ended somewhere neither renderer could see — a pointer
     // released outside the window leaves no pointerup behind.
     host.drag.cancel()
-    host.overlay.dismiss()
+    dismissInterrupted()
     host.broadcastWindowState()
   }
   const onEnterFullscreen = (): void => {

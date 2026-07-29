@@ -85,6 +85,34 @@ describe('internal page privileges', () => {
     expect(grantedTo('downloads')).toEqual(invokesMentioned(internalCalls, 'downloads'))
   })
 
+  it('grants the settings page exactly the channels it calls', () => {
+    /*
+      The same claim as the two above, and it matters more here than on either of them.
+
+      This page's row is the only one in the table that reaches outside the machine:
+      `updates:checkNow` makes the browser ask GitHub for the release list. A grant nobody exercises
+      is a grant nobody notices going wrong, and this is the grant where "going wrong" means an
+      outbound request somebody can trigger. So it is held to being *called* — remove the button and
+      leave the channel, and this fails.
+
+      Read from the adapter rather than from the view: `SettingsPage.tsx` is the only file that names
+      a channel, because `SettingsView` is given four functions and no channel union. Comments are
+      stripped first, for the reason `codeOf` explains — this file's own docblocks discuss the very
+      names being counted.
+
+      The architecture test `gives no page but settings an update command` holds the other direction:
+      that no *other* page has it. Both are needed. This one would still pass if every page were
+      granted the channel; that one would still pass if this page were granted it and never used it.
+    */
+    const settingsPage = codeOf('src/renderer/internal/SettingsPage.tsx')
+    expect(grantedTo('settings')).toEqual(
+      [
+        ...invokesMentioned(settingsPage, 'settings'),
+        ...invokesMentioned(settingsPage, 'updates')
+      ].sort()
+    )
+  })
+
   /*
     What the page is granted, named rather than derived, and that is the whole point of this list.
 
@@ -155,13 +183,41 @@ describe('internal page privileges', () => {
     expect(hearers).toEqual(['downloads'])
   })
 
-  it('gives the passwords page no subscription at all', () => {
+  it('tells the passwords page nothing about the vault', () => {
     /*
       Deliberate, and a privacy decision rather than an omission: a pushed vault list would arrive
       whenever the vault changed, including when autofill noted a sign-in — so an open passwords tab
       would learn that the user had just signed in somewhere.
+
+      `locale:changed` is all it hears, and only because every internal page has to notice a language
+      change; it carries one locale and nothing that names a credential or an event in the vault.
     */
-    expect(INTERNAL_PAGE_EVENT_CHANNELS.passwords).toEqual([])
+    expect(INTERNAL_PAGE_EVENT_CHANNELS.passwords).toEqual(['locale:changed'])
+  })
+
+  it('lets every internal page notice a language change', () => {
+    // The half of the live language switch that lives in the table: `useInternalI18n` re-reads the
+    // catalogue on this event, so a page without the grant stays in the previous language until it is
+    // reloaded.
+    for (const [page, channels] of Object.entries(INTERNAL_PAGE_EVENT_CHANNELS)) {
+      expect(channels as readonly string[], page).toContain('locale:changed')
+    }
+  })
+
+  it('keeps the settings snapshot out of every page but the one that displays it', () => {
+    /*
+      The line `locale:changed` exists to hold.
+
+      `settings:changed` carries the whole snapshot, so granting it to all eight pages — the obvious
+      way to make the live language switch work — would hand the user's entire configuration to every
+      internal page on every change, the reader page included, and that one renders text harvested
+      from a website. A language is not a configuration: it gets its own channel, and this stays with
+      the single page whose job is to show settings.
+    */
+    const hearers = Object.entries(INTERNAL_PAGE_EVENT_CHANNELS)
+      .filter(([, channels]) => (channels as readonly string[]).includes('settings:changed'))
+      .map(([page]) => page)
+    expect(hearers).toEqual(['settings'])
   })
 })
 

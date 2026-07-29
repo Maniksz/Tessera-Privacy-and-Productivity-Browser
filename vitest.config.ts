@@ -273,6 +273,33 @@ export default defineConfig({
           statements: 100
         },
         /*
+          The escape ladder and the keys that drive it.
+
+          These two answer "what comes off next" and "what did the user just press", and both were
+          wrong in a way no test could see until this round: the ladder descended from the outermost
+          rung, so shrinking a fullscreen video also dropped the window out of fullscreen. Every
+          branch in both is now reachable from a unit test with no window, which is the only reason
+          a floor is honest here.
+
+          `TileFullscreenController.ts` is deliberately absent. It sits at 85.7 % branches on one
+          unreachable null-guard — `escape()` reads `fullscreenTile` after the verdict that already
+          proves it non-null — and pinning it at that number would ratify the guard instead of
+          removing it. Removing it means letting `SplitController.escape()` hand back the tile with
+          the verdict, which is a change to an API this round has already moved once.
+        */
+        'src/main/browser/page-keys.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/browser/SplitController.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           The other half of the boundary above: who may *open* an internal page.
 
           `sender-policy.ts` decides what an internal page may call once it is open, and was held

@@ -598,53 +598,27 @@ body {
   margin-top: 14px;
 }
 
-/* --- one settings row ------------------------------------------------------ */
+/*
+  --- a labelled control -----------------------------------------------------
 
-.field {
-  display: grid;
-  grid-template-columns: 1fr auto 28px;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-}
+  What is left here after the settings panel was deleted, and why it is only two rules.
 
-.field__text-block {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
+  The whole `.field*` block used to live here because `SettingsView` was hosted by the chrome UI. It
+  is not any more: settings is `tessera://settings` and nothing else, so the rows that make up a
+  settings page moved to `internal/panel-page.css`, which is the stylesheet of the surface that
+  renders them. That file imports this one, so the page still gets everything it had.
+
+  These two did **not** move, and it is worth saying which and why rather than leaving the next
+  reader to wonder whether the split was sloppy: `MediaPanel` — a chrome component, still a panel —
+  reuses `.field__label` and `.field__select` for the output-device picker. They are shared, so they
+  belong in the shared sheet. Everything else was settings-only.
+*/
 
 .field__label {
   font-size: 13px;
 }
 
-.field__key {
-  color: var(--fg-dim);
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 10.5px;
-}
-
-.field__note {
-  color: var(--fg-dim);
-  font-size: 11px;
-}
-
-.field__control {
-  display: flex;
-  align-items: center;
-}
-
-.field__toggle {
-  width: 34px;
-  height: 20px;
-  accent-color: var(--accent);
-}
-
-.field__select,
-.field__number,
-.field__text {
+.field__select {
   height: 28px;
   padding: 0 8px;
   border: 1px solid var(--border);
@@ -654,51 +628,6 @@ body {
   font: inherit;
   font-size: 12px;
   user-select: text;
-}
-
-.field__number {
-  width: 92px;
-}
-
-.field__text {
-  width: 220px;
-}
-
-.field__list {
-  width: 260px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-input);
-  color: var(--fg);
-  font: inherit;
-  font-size: 12px;
-  resize: vertical;
-  user-select: text;
-}
-
-.field__readonly {
-  max-width: 260px;
-  color: var(--fg-dim);
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.field__reset {
-  width: 24px;
-  height: 24px;
-  border: 0;
-  border-radius: 5px;
-  background: none;
-  color: var(--fg-dim);
-  font-size: 13px;
-  cursor: default;
-}
-
-.field__reset:hover {
-  background: var(--bg-input);
-  color: var(--fg);
 }
 
 /* --- extension list -------------------------------------------------------- */
@@ -760,9 +689,18 @@ body {
 .content {
   position: absolute;
   inset: 0 0 0 0;
+  color: var(--fg-dim);
+}
+
+/*
+  One of these per empty tile, absolutely positioned at that tile's own rect (see `useTileRects`) —
+  not a single centred message for the whole area, which is what `.content` used to centre before a
+  window could have more than one tile.
+*/
+.content__tile {
+  position: absolute;
   display: grid;
   place-items: center;
-  color: var(--fg-dim);
 }
 
 .content__empty {
@@ -798,4 +736,21 @@ body {
 
 .divider--horizontal {
   cursor: row-resize;
+}
+
+/*
+  U1: which of several tiles the toolbar, Ctrl+L, back/forward and the layout button act on.
+  `SplitDividers` only renders this when there is more than one tile — a `1x1` or a maximised tile
+  has no ambiguity to resolve, so there is nothing drawn here in either case.
+
+  An inset shadow rather than a border: a border would grow the box outward by its own width,
+  landing partway into the gutter or the neighbouring tile depending on rounding; `inset` keeps the
+  ring exactly on the edges `computeTileRects` already placed. Same weight and colour as the
+  keyboard focus ring in `tokens.css`, which is the accent's other job — "the thing that currently
+  has your input" — so the two read as one visual language instead of two.
+*/
+.active-tile {
+  position: absolute;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 2px;
 }

@@ -356,18 +356,54 @@ describe('escalation ladder', () => {
     expect(split.escalation).toBe('tile-maximized')
   })
 
-  it('steps back one rung per escape', () => {
+  it('steps back one rung per escape, innermost first', () => {
+    /*
+      The order, asserted from the top of the ladder down. It used to run the other way — window
+      fullscreen off first — and that is the defect behind "wenn f11 gedrückt und ich mache ein
+      video klein, schließt sich f11": the same `Escape` that takes a video out of fullscreen
+      reaches this browser, and taking the outermost rung with it spends a press the user has
+      already spent.
+    */
     const split = new SplitController({ layout: '2x2' })
     split.enterTileFullscreen(0)
     split.toggleTileMaximized(0)
     split.setWindowFullscreen(true)
 
-    expect(split.escape()).toBe('exit-window-fullscreen')
-    split.setWindowFullscreen(false)
-    expect(split.escape()).toBe('restore-tile')
     expect(split.escape()).toBe('exit-tile-fullscreen')
     split.leaveTileFullscreen()
+    expect(split.escape()).toBe('restore-tile')
+    expect(split.escape()).toBe('exit-window-fullscreen')
+    split.setWindowFullscreen(false)
     expect(split.escape()).toBe('none')
+  })
+
+  it('keeps the window in fullscreen while an inner rung is still there', () => {
+    // The report, as one assertion. A fullscreen page inside a fullscreen window: the press that
+    // shrinks the page must not also drop the window, so the window's own state is untouched.
+    const split = new SplitController({ layout: '1x1' })
+    split.setWindowFullscreen(true)
+    split.enterTileFullscreen(0)
+
+    expect(split.escape()).toBe('exit-tile-fullscreen')
+    expect(split.isWindowFullscreen).toBe(true)
+    expect(split.escalation).toBe('window-fullscreen')
+  })
+
+  it('reports the outermost rung while escape takes the innermost', () => {
+    /*
+      The two orders disagreeing is the design, not a bug, and this is the case that shows why.
+      `escalation` answers "how much of the window has been given to content" — the chrome is hidden
+      because a tile is maximised, and it stays hidden after the page's fullscreen comes off. A
+      version that reported the innermost rung would put the toolbar back over a maximised tile.
+    */
+    const split = new SplitController({ layout: '2x2' })
+    split.enterTileFullscreen(0)
+    split.toggleTileMaximized(0)
+
+    expect(split.escalation).toBe('tile-maximized')
+    expect(split.escape()).toBe('exit-tile-fullscreen')
+    split.leaveTileFullscreen()
+    expect(split.escalation).toBe('tile-maximized')
   })
 
   it('toggles maximise off when applied twice to the same tile', () => {

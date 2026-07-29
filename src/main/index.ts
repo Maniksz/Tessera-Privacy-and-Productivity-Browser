@@ -78,6 +78,7 @@ import { AutofillService } from './passwords/AutofillService.js'
 import { installAutofill } from './passwords/install-autofill.js'
 import { MasterPasswordPrompt } from './passwords/MasterPasswordPrompt.js'
 import { installUpdateChecks } from './updates/install-updates.js'
+import type { UpdateService } from './updates/UpdateService.js'
 
 /**
  * Application entry point.
@@ -399,7 +400,7 @@ async function main(): Promise<void> {
       return controller.privateMode ? 'private' : 'normal'
     },
     // Read per call, so a language change reaches the next sign-in form rather than the next restart.
-    locale: () => resolveLocale(settings?.get('appearance.uiLanguage')),
+    locale: () => uiLocale(settings),
     now: () => Date.now()
   })
   passwordVault.onLock(() => autofill.dropPendingSaves())
@@ -439,9 +440,9 @@ async function main(): Promise<void> {
       that sentence would be a false promise of recovery.
     */
     askAboutVaultCopy: async () => {
-      // `resolveLocale` over the raw setting rather than `uiLocale`, which needs a non-null store: this
-      // closure runs long after startup. Same answer, without a non-null assertion — as the picker does.
-      const locale = resolveLocale(settings?.get('appearance.uiLanguage'))
+      // Through `uiLocale`, which takes the store's absence as "ask the desktop": this closure runs long
+      // after startup, and the raw setting is `'system'` until somebody picks a language by hand.
+      const locale = uiLocale(settings)
       const target = windows?.focused() ?? windows?.controllers[0]
       const parent = target?.window
       /*
@@ -500,9 +501,9 @@ async function main(): Promise<void> {
     slip past a tunnel the user turned on — one request every five days, to a third party, outside the
     protection the user configured.
 
-    Started before the first window but not awaited past the disk read: `start()` compiles whatever is
-    cached and kicks off the refresh in the background. A browser that waited for a download before
-    opening would look slow on a slow connection and broken offline.
+    Built here and *started* further down, after the first window exists. Constructing it is what closes
+    the gate top-level navigations wait at, so the two cannot be reordered into a window that loads
+    before the blocker has an opinion.
   */
   /*
     The user's own rules, kept apart from the downloaded lists.
@@ -529,7 +530,6 @@ async function main(): Promise<void> {
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
     userRules: () => userRules?.enabledText() ?? ''
   })
-  await filterSubscription.start()
   // A rule added or switched off has to apply without a restart, and only the user's own half is
   // recompiled — the downloaded lists are left alone.
   userRules.onChange(() => filterSubscription.reloadUserRules())
@@ -557,9 +557,9 @@ async function main(): Promise<void> {
     a request, because hiding a banner and cutting a site off must not sit behind one click.
   */
   elementPicker = new ElementPicker({
-    // `resolveLocale` over the raw setting, because `uiLocale` needs a non-null store and this closure
-    // runs long after startup. Same answer, without a non-null assertion.
-    chrome: () => pickerChromeFor(resolveLocale(settings?.get('appearance.uiLanguage'))),
+    // Read per call and through `uiLocale`, so the picker's own labels follow the language the rest of
+    // the interface is in — including the `'system'` default, which the raw setting does not answer.
+    chrome: () => pickerChromeFor(uiLocale(settings)),
     editorFor: (webContentsId) => {
       const controller = windows?.controllerForWebContents(webContentsId)
       if (controller === undefined) return null
@@ -620,6 +620,9 @@ async function main(): Promise<void> {
 
   windows = new WindowRegistry({
     settings,
+    // The same resolver the menus use, so an internal tab and the menu bar can never disagree about
+    // which language is in force.
+    uiLocale: () => uiLocale(settings),
     quickLinks,
     history,
     favicons,
@@ -640,7 +643,7 @@ async function main(): Promise<void> {
     onPageContextMenu: (controller, tab, target) => {
       const snapshot = settings?.snapshot() ?? defaultSettings()
       buildPageContextMenu({
-        locale: resolveLocale(settings?.get('appearance.uiLanguage')),
+        locale: uiLocale(settings),
         target,
         canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
         canGoForward: tab.view.webContents.navigationHistory.canGoForward(),
@@ -669,6 +672,24 @@ async function main(): Promise<void> {
       }).popup({ window: controller.window })
     }
   })
+
+  /*
+    The update service, declared here and built forty lines further down.
+
+    The two calls are in this order on purpose and reordering them to avoid this variable would be a
+    real loss: `registerIpcHandlers` is what calls `configureSenderPolicy`, so until it has run the
+    router classifies *every* sender as untrusted. Building the update service first would start a
+    three-second timer towards GitHub before the boundary it lives behind was configured. The
+    handlers go up first; the network job comes after.
+
+    So the dependency travels as a closure, exactly as `getSettings` and `parentWindow` do below and
+    for a related reason — a value read at call time rather than captured at wiring time. A null
+    check rather than a non-null assertion, and it throws rather than resolving quietly: an invoke
+    that answered "fine" without checking anything is the failure the button exists to avoid. It is
+    unreachable in practice, because the first window is created after both of these lines.
+  */
+  let updates: UpdateService | null = null
+
   registerIpcHandlers({
     settings,
     windows,
@@ -682,7 +703,11 @@ async function main(): Promise<void> {
     permissions: permissionArbiter,
     media: mediaSessions,
     picker: elementPicker,
-    userRules
+    userRules,
+    checkForUpdates: async () => {
+      if (updates === null) throw new Error('The update checker has not started yet')
+      await updates.checkOnDemand()
+    }
   })
 
   /*
@@ -699,9 +724,9 @@ async function main(): Promise<void> {
     whichever window the person is looking at when it appears — which may be a window that did not
     exist when this line ran, or none at all on macOS.
   */
-  const updates = installUpdateChecks({
+  updates = installUpdateChecks({
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
-    locale: () => resolveLocale(settings?.get('appearance.uiLanguage')),
+    locale: () => uiLocale(settings),
     parentWindow: () => (windows?.focused() ?? windows?.controllers[0])?.window ?? null
   })
 
@@ -779,6 +804,23 @@ async function main(): Promise<void> {
   }
 
   /*
+    The lists, compiled after the window rather than before it.
+
+    This used to be awaited two hundred lines up, where it put the whole compile — six hundred to
+    fifteen hundred milliseconds of parsing on the main process's own thread — in front of the first
+    thing the user sees. The engine is valid empty, so nothing here needed the wait; what did need it
+    was the first *page*, and that is held in the pipeline for as long as the compile takes, to a hard
+    ceiling. See `holdMainFrameRequests`.
+
+    Not awaited, so a failure is caught here rather than falling out of `main()`. A blocker that could
+    not read its cache is a browser without a blocker for one launch; exiting over it, with windows
+    already on screen, would be the worse answer by a wide margin.
+  */
+  void filterSubscription.start().catch((error: unknown) => {
+    console.warn('[filters] lists could not be compiled:', String(error))
+  })
+
+  /*
     Development only: the application drives its own checks and exits with the verdict.
 
     Started here because the window that has just been opened is what the checks drive. From
@@ -801,15 +843,6 @@ async function main(): Promise<void> {
   // macOS: links from other applications, and the Dock's "new window".
   app.on('open-url', (event, url) => {
     event.preventDefault()
-
-  /*
-    No more session writes from here on.
-
-    The flush below records every window while they are all still open; the windows then close and would each
-    drop their slot, turning "three windows were open" into "one window, closed" on the way out — and whether
-    that landed would depend on whether the process outlived a debounce timer.
-  */
-  sessionStore?.seal()
     const target = windows?.focused() ?? windows?.controllers[0]
     if (target) target.createTab({ url })
     else windows?.createWindow({ privateMode: false }).createTab({ url })
@@ -882,8 +915,20 @@ async function runOwnChecks(modulePath: string): Promise<void> {
   }
 }
 
-function uiLocale(store: SettingsStore): Locale {
-  const preference = store.get('appearance.uiLanguage')
+/**
+ * The language the interface is in.
+ *
+ * The one answer to that question in this process, and it takes a possibly-missing store on purpose:
+ * every closure below runs long after startup, and the alternative each of them had reached for —
+ * `resolveLocale(settings?.get('appearance.uiLanguage'))` — is not the same answer. `resolveLocale`
+ * has never heard of `'system'`, which is the *default* value, so it fell through to English for
+ * everybody who had not picked a language by hand. A German desktop got a German menu bar and an
+ * English save-password bar.
+ *
+ * No store at all means the same thing as `'system'`: ask the desktop.
+ */
+function uiLocale(store: SettingsStore | null): Locale {
+  const preference = store?.get('appearance.uiLanguage') ?? 'system'
   return preference === 'system' ? resolveLocale(app.getLocale()) : preference
 }
 
@@ -901,6 +946,19 @@ app.on('before-quit', (event) => {
   const store = settings
   if (shutdownComplete || store === null) return
   event.preventDefault()
+
+  /*
+    No more session writes from here on.
+
+    The flush below records every window while they are all still open; the windows then close and would each
+    drop their slot, turning "three windows were open" into "one window, closed" on the way out — and whether
+    that landed would depend on whether the process outlived a debounce timer.
+
+    It used to sit in the `open-url` handler, where it did the opposite of what it says: a quit never sealed
+    anything, and one link opened from another application silenced the session recording for the rest of the
+    run. Sealing belongs to the shutdown, next to the flush the comment is about.
+  */
+  sessionStore?.seal()
 
   void (async () => {
     try {

@@ -104,7 +104,16 @@ const windowsTable = {
   focusAddressBar: ['Control+L', 'Alt+D', 'F6'],
   findInPage: ['Control+F'],
   findNext: ['F3'],
-  zoomIn: ['Control+Plus', 'Control+numadd'],
+  /*
+    `=` as well as `Plus`, and it is the one that actually gets pressed.
+
+    `Plus` is the *shifted* key on every layout this ships to, so `Control+Plus` means Ctrl+Shift+=.
+    Zoom out kept working because `-` is unshifted, and that asymmetry is what the bug report looked
+    like: minus zooms, plus does nothing. Chrome and Firefox both bind the unshifted key for exactly
+    this reason. `Plus` stays first because `accel()` hands the first binding to the menu, and the
+    menu should print what the keycap says.
+  */
+  zoomIn: ['Control+Plus', 'Control+=', 'Control+numadd'],
   zoomOut: ['Control+-', 'Control+numsub'],
   zoomReset: ['Control+0'],
   windowFullscreen: ['F11'],
@@ -164,7 +173,8 @@ const macTable = {
   focusAddressBar: ['Command+L'],
   findInPage: ['Command+F'],
   findNext: ['Command+G'],
-  zoomIn: ['Command+Plus'],
+  // See the PC table: `Command+Plus` is ⌘⇧=, and ⌘= is what a Mac user presses.
+  zoomIn: ['Command+Plus', 'Command+='],
   zoomOut: ['Command+-'],
   zoomReset: ['Command+0'],
   /*

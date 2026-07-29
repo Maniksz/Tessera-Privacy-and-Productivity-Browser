@@ -103,6 +103,12 @@ When('I maximise tile {int}', (state: unknown, tile: number) => {
   splitController(state).toggleTileMaximized(tile)
 })
 
+// The user's own fullscreen key, which is the outermost rung and the one the reordered ladder
+// leaves alone until every inner rung is off.
+When('the window goes fullscreen', (state: unknown) => {
+  splitController(state).setWindowFullscreen(true)
+})
+
 When('I mute tile {int}', (state: unknown, tile: number) => {
   splitController(state).setTileMuted(tile, true)
 })
@@ -216,6 +222,16 @@ Then('the escalation level is {string}', (state: unknown, level: string) => {
 
 Then('the window is not in fullscreen', (state: unknown) => {
   expect(splitController(state).escalation).not.toBe('window-fullscreen')
+})
+
+/*
+  Asked of the tile rather than of the escalation level, because those two now answer different
+  questions. `escalation` reports the *outermost* rung, so a page giving up its fullscreen inside a
+  maximised tile does not change it — and a scenario written against it could not see the rung come
+  off at all. See `SplitController.escape`.
+*/
+Then('no tile is in fullscreen', (state: unknown) => {
+  expect(splitController(state).fullscreenTile).toBeNull()
 })
 
 Then('tile {int} is still visible', (state: unknown, tile: number) => {

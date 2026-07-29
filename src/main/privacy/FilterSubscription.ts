@@ -1,5 +1,6 @@
 import { FilterEngine } from './FilterEngine.js'
 import { FilterListStore, type RefreshOutcome } from './FilterListStore.js'
+import { holdMainFrameRequests } from './RequestPipeline.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 // The wire type, derived from the schema the contract validates against — so what this returns and
 // what crosses the boundary cannot drift apart.
@@ -11,9 +12,12 @@ import type { FilterStatus } from '@shared/filters/status.js'
  * The engine and the on-disk cache each existed and were tested; nothing joined them to the setting
  * that says which lists to use. This does, and it is the piece with the interesting failure modes:
  *
- *   - **Startup must not wait for the network.** The browser opens with whatever is cached, then
- *     replaces the rules once a refresh finishes. Awaiting a download before the first window would
- *     make a slow connection look like a slow browser, and an offline start look like a broken one.
+ *   - **Startup waits for neither the network nor the disk.** The first window opens while the cached
+ *     lists are still being compiled, and the rules are replaced again once a refresh finishes.
+ *     Awaiting a download before the first window would make a slow connection look like a slow
+ *     browser and an offline start look like a broken one; awaiting the compile spent the better part
+ *     of a second on a blank screen at every launch. What must not slip through in the meantime is the
+ *     first *page*, and that is held in the pipeline — see `holdMainFrameRequests`.
  *   - **A failed download must never leave the blocker empty.** `FilterListStore.refresh` keeps the
  *     previous copy on disk when a fetch fails, and this only ever calls `replaceLists` with what
  *     `load` actually returned — so the worst case is stale rules, never none.
@@ -69,6 +73,15 @@ export class FilterSubscription {
    */
   #inFlight: Promise<unknown> = Promise.resolve()
 
+  /**
+   * Given back after the first compile, and taken here rather than in `start()`.
+   *
+   * The pipeline holds top-level navigations until it arrives, so the moment the hold is taken has to
+   * be the moment there is a subscription that intends to compile — not a tick later, by which time
+   * the first window may already have asked for a page. See `holdMainFrameRequests`.
+   */
+  #releaseHold: (() => void) | null = holdMainFrameRequests()
+
   constructor(options: FilterSubscriptionOptions) {
     this.#getSettings = options.getSettings
     this.#userRules = options.userRules ?? ((): string => '')
@@ -98,9 +111,9 @@ export class FilterSubscription {
   /**
    * Compiles whatever is cached, then refreshes in the background.
    *
-   * The two halves are deliberately not awaited together. `load` is a disk read and finishes before
-   * the first window paints; the refresh may take seconds or never finish at all, and the browser
-   * must not be waiting for it.
+   * The two halves are deliberately not awaited together, and the caller awaits neither: `load` is a
+   * disk read of a few hundred milliseconds, the refresh may take seconds or never finish at all, and
+   * the first window must not be behind either of them.
    */
   async start(): Promise<void> {
     await this.#compileFromCache()
@@ -195,12 +208,24 @@ export class FilterSubscription {
   }
 
   async #compileFromCache(): Promise<void> {
-    const urls = this.#configuredLists()
-    const cached = await this.#store.load(urls)
-    this.#loadedCount = cached.length
-    this.#engine.replaceLists(cached.map((list) => list.text))
-    // The user's rules are compiled separately and are not touched by a list reload, but the engine
-    // was rebuilt from scratch here, so they have to be put back.
-    this.#engine.replaceUserRules(this.#userRules())
+    try {
+      const urls = this.#configuredLists()
+      const cached = await this.#store.load(urls)
+      this.#loadedCount = cached.length
+      this.#engine.replaceLists(cached.map((list) => list.text))
+      // The user's rules are compiled separately and are not touched by a list reload, but the engine
+      // was rebuilt from scratch here, so they have to be put back.
+      this.#engine.replaceUserRules(this.#userRules())
+    } finally {
+      /*
+        The held navigations go on their way on the first *attempt*, not the first success.
+
+        A cache that cannot be read is a browser without a blocker for one launch; a hold that is never
+        released would be a browser that adds three quarters of a second to every page it ever opens.
+        `replaceLists` is a plain assignment, so nothing can observe half an index either way.
+      */
+      this.#releaseHold?.()
+      this.#releaseHold = null
+    }
   }
 }

@@ -178,6 +178,18 @@ export class Tab {
   #faviconUrls: string[] = []
 
   /**
+   * Where the last commit left this view.
+   *
+   * Held rather than read back off Chromium, and it is one caller that makes the difference. Every
+   * request the blocker refuses is attributed to a tab by comparing document addresses
+   * (`WindowRegistry.#noteBlockedRequest`), and that comparison used to go through `toState()` — a
+   * sixteen-field snapshot built from eight synchronous calls into the browser process, to read one
+   * string. On an advert-heavy page in a 2x2 that is several thousand of them per page load, for a
+   * badge count.
+   */
+  #currentUrl = ''
+
+  /**
    * This pane's zoom, or `null` while it still follows `appearance.defaultZoom`. Held rather than
    * read back off the view: `getZoomFactor()` reports Chromium's per-origin state, so the ladder's
    * starting point would otherwise depend on what some other pane is showing.
@@ -392,13 +404,16 @@ export class Tab {
       notify()
     })
     on('did-navigate', () => {
+      // Read once and kept. Three of the lines below want it, and the blocker wants it once per
+      // refused request until the next commit — see `#currentUrl`.
+      this.#currentUrl = wc.getURL()
       // Navigating anywhere real makes this a tab the user is using, so it stops being
       // disposable. Checked against the home address rather than a counter: a filler that
       // was reloaded is still a filler.
-      if (this.#ephemeral && !isHomeUrl(wc.getURL())) this.#ephemeral = false
+      if (this.#ephemeral && !isHomeUrl(this.#currentUrl)) this.#ephemeral = false
       // The store decides what is worth keeping — internal pages, `data:` addresses and the rest
       // are refused there, so this stays a plain report rather than a second policy.
-      this.wiring.history.recordVisit({ url: wc.getURL(), title: wc.getTitle() })
+      this.wiring.history.recordVisit({ url: this.#currentUrl, title: wc.getTitle() })
       this.#faviconUrls = []
       /*
         The icon survives a navigation within the same site, and only that.
@@ -408,7 +423,7 @@ export class Tab {
         unconditionally would show the previous site's icon next to the new site's title, which is
         worse than showing none: at a glance the tab claims to be somewhere it is not.
       */
-      if (this.#favicon !== null && faviconDomainOf(wc.getURL()) !== this.#favicon.site) {
+      if (this.#favicon !== null && faviconDomainOf(this.#currentUrl) !== this.#favicon.site) {
         this.#favicon = null
       }
       // The pane's zoom, put back after every commit — not a leftover from the per-domain register
@@ -418,7 +433,15 @@ export class Tab {
       this.applyZoom()
       notify()
     })
-    on('did-navigate-in-page', notify)
+    /*
+      A client-side route change commits a new address without a new document, so `did-navigate`
+      never fires for it. The blocker attributes a refused request by address, and a single-page
+      application that moved route would otherwise credit every advert it then fetched to nobody.
+    */
+    on('did-navigate-in-page', () => {
+      this.#currentUrl = wc.getURL()
+      notify()
+    })
     on('page-favicon-updated', (...args: unknown[]) => {
       const favicons = args[1]
       this.#faviconUrls = Array.isArray(favicons) ? favicons.filter((url): url is string => typeof url === 'string') : []
@@ -506,11 +529,23 @@ export class Tab {
 
   // --- geometry ------------------------------------------------------------
 
+  /*
+    Both guarded, and until now neither was — the only two methods of this class that reached for the
+    view without first asking whether it is still there.
+
+    `relayout()` walks every tab on every layout change, and a tab whose renderer has gone is still in
+    the window's map for as long as it takes the window to notice: a crash, a `window.close()` racing
+    the teardown, and — once tabs can be unloaded to reclaim their memory — a discard. Touching a
+    destroyed view is at best wasted work and at worst an exception out of the middle of that loop,
+    which would leave every tab after it where the *previous* layout put it.
+  */
   setBounds(rect: Rect): void {
+    if (this.view.webContents.isDestroyed()) return
     this.view.setBounds(rect)
   }
 
   setVisible(visible: boolean): void {
+    if (this.view.webContents.isDestroyed()) return
     this.view.setVisible(visible)
   }
 
@@ -553,6 +588,17 @@ export class Tab {
   get loading(): boolean {
     const wc = this.view.webContents
     return !wc.isDestroyed() && wc.isLoading()
+  }
+
+  /**
+   * Where this tab is, answered without asking Chromium and without building a state object.
+   *
+   * Deliberately *not* `toState().url`, which is what the blocker used to compare against: this is the
+   * committed address and nothing else, so it is safe to ask for once per refused request. See
+   * `#currentUrl` for what that cost before.
+   */
+  get currentUrl(): string {
+    return this.#currentUrl
   }
 
   toggleDevTools(): void {

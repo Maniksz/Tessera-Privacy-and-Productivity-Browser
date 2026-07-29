@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { wireWindowEvents, type WindowEventHost } from '@main/browser/window-events.js'
+import { OVERLAY_AWAITS_ANSWER, OVERLAY_KINDS } from '@shared/overlay/surface.js'
 
 /**
  * What the OS tells a window, and what the window does about it.
@@ -44,7 +45,14 @@ function harness(): Harness {
       else existing.push(handler)
     },
     drag: { cancel: () => calls.push('drag.cancel') },
-    overlay: { dismiss: () => calls.push('overlay.dismiss') },
+    overlay: {
+      dismissKind: (kind) => {
+        calls.push(`overlay.dismissKind(${kind})`)
+        // The layer answers "it was not that one" for every kind but the one it is showing. Nothing
+        // here reads the answer, so a constant false is the honest stand-in for an empty layer.
+        return false
+      }
+    },
     split: {
       setWindowFullscreen: (fullscreen) => calls.push(`setWindowFullscreen(${fullscreen})`)
     },
@@ -92,14 +100,71 @@ describe('window event wiring', () => {
     // alive for one moment with zones that no longer describe the window.
     const window = harness()
     window.emit('resize')
-    expect(window.calls).toEqual(['drag.cancel', 'overlay.dismiss', 'relayout'])
+    expect(window.calls).toEqual([
+      'drag.cancel',
+      'overlay.dismissKind(layout-menu)',
+      'overlay.dismissKind(tab-drop)',
+      'overlay.dismissKind(tile-bar)',
+      'overlay.dismissKind(find-bar)',
+      'relayout'
+    ])
   })
 
   it('cancels the drag on blur, because a pointer released outside leaves no pointerup', () => {
     // Deliberately no relayout: nothing moved, the window merely stopped being the focused one.
     const window = harness()
     window.emit('blur')
-    expect(window.calls).toEqual(['drag.cancel', 'overlay.dismiss', 'broadcastWindowState'])
+    expect(window.calls).toEqual([
+      'drag.cancel',
+      'overlay.dismissKind(layout-menu)',
+      'overlay.dismissKind(tab-drop)',
+      'overlay.dismissKind(tile-bar)',
+      'overlay.dismissKind(find-bar)',
+      'broadcastWindowState'
+    ])
+  })
+
+  it('never answers a dialogue somebody is waiting on, on either interruption', () => {
+    /*
+      The defect, stated as the thing that must not happen rather than as the code that avoids it.
+
+      A wholesale `dismiss()` here took down whatever was up, and a departure of these two is settled
+      the safe way: `PermissionArbiter.overlayVacated` refuses the page's request, and
+      `MasterPasswordPrompt.overlayVacated` throws away what has been typed. So a system notification
+      taking focus for a moment, or the user dragging the window wider, replied "Blockieren" to a
+      consent dialogue nobody had read — and lost a half-typed master password without a word.
+
+      Derived from `OVERLAY_AWAITS_ANSWER` rather than naming the two kinds, so a seventh surface that
+      somebody waits on is protected by the act of declaring it rather than by somebody remembering
+      this test exists.
+    */
+    const waiting = OVERLAY_KINDS.filter((kind) => OVERLAY_AWAITS_ANSWER[kind])
+    expect(waiting.length, 'no surface awaits an answer; this test has nothing to guard').toBe(2)
+
+    for (const event of ['resize', 'blur']) {
+      const window = harness()
+      window.emit(event)
+      for (const kind of waiting) {
+        expect(window.calls, `${event} dismissed ${kind}`).not.toContain(
+          `overlay.dismissKind(${kind})`
+        )
+      }
+    }
+  })
+
+  it('still takes down every surface nobody is waiting on', () => {
+    /*
+      The other half, and the reason the fix is a filter rather than an exemption for two kinds: the
+      protection must not spread. A menu left hanging over a window the user has resized is the
+      original complaint, and both tile surfaces carry the rectangle of a tile that a resize has just
+      moved — kept, they would sit over a neighbour's page.
+    */
+    const window = harness()
+    window.emit('resize')
+    const dismissed = window.calls
+      .filter((call) => call.startsWith('overlay.dismissKind('))
+      .map((call) => call.slice('overlay.dismissKind('.length, -1))
+    expect(dismissed).toEqual(['layout-menu', 'tab-drop', 'tile-bar', 'find-bar'])
   })
 
   it('tells the chrome UI about maximise, unmaximise and focus, and nothing else', () => {

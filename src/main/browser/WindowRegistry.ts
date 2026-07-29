@@ -10,6 +10,7 @@ import type { SessionStore } from '../data/SessionStore.js'
 import type { SplitSnapshotForPersistence } from './SplitController.js'
 import type { FilterSubscription } from '../privacy/FilterSubscription.js'
 import type { FilterStatus } from '@shared/filters/status.js'
+import type { Locale } from '@shared/i18n/catalog.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import type { Tab } from './Tab.js'
 import { quickLinkCards, type QuickLinkCard } from '@shared/quicklinks/cards.js'
@@ -50,6 +51,14 @@ export interface DownloadSubscriber {
 
 export interface WindowRegistryDeps {
   settings: SettingsStore
+  /**
+   * The interface language in force, already resolved.
+   *
+   * Injected rather than derived from `settings`, because `'system'` is answered with
+   * `app.getLocale()` and this class has no business asking Electron what the operating system
+   * prefers. The caller owns that question and already has to answer it for the menus.
+   */
+  uiLocale: () => Locale
   quickLinks: QuickLinkStore
   history: HistoryStore
   favicons: FaviconStore
@@ -90,9 +99,12 @@ export class WindowRegistry {
   #privateSessionCounter = 0
 
   readonly #deps: WindowRegistryDeps
+  /** What the internal pages were last told, so `locale:changed` fires on a change and not on a save. */
+  #locale: Locale
 
   constructor(deps: WindowRegistryDeps) {
     this.#deps = deps
+    this.#locale = deps.uiLocale()
     // Settings that take effect live reach every open window (spec 5).
     this.#deps.settings.onChange(({ changed, snapshot }) => {
       // The blocker first: a window told about a list change before the rules were recompiled would
@@ -101,6 +113,20 @@ export class WindowRegistry {
       for (const controller of this.#controllers) {
         controller.onSettingsChanged(changed)
         controller.emit('settings:changed', { changed, snapshot })
+      }
+      /*
+        Internal tabs hear about the language separately, and only when it actually moved.
+
+        Keyed on the resolved locale rather than on `'appearance.uiLanguage' in changed`, because the
+        two disagree in both directions: switching from `'system'` to the language the OS already uses
+        changes the preference and nothing a page would render, and nothing here fires when the OS
+        itself changes. Comparing what pages were last told is the question they care about.
+      */
+      const locale = this.#deps.uiLocale()
+      if (locale === this.#locale) return
+      this.#locale = locale
+      for (const controller of this.#controllers) {
+        controller.emitToInternalPages('locale:changed', { locale })
       }
     })
 
@@ -278,18 +304,32 @@ export class WindowRegistry {
     })
   }
 
-  /** Attributes a blocked request to the tab that made it, for the badge count. */
+  /**
+   * Attributes a blocked request to the tab that made it, for the badge count.
+   *
+   * ## Every tab, not only the ones in tiles
+   *
+   * This used to walk `split.tileCount` and ask the layout which tab sat in each, so a tab that was
+   * loaded but off screen — a link opened in the background, a folded group's member, anything the
+   * grid does not currently show — was never a candidate and its badge stayed at zero however much
+   * its page fetched. A hidden tab keeps running and keeps making requests (spec 2), so the count has
+   * to follow the tab rather than the tile.
+   *
+   * ## Against `currentUrl` rather than `toState().url`
+   *
+   * The comparison runs once per refused request, which on an advert-heavy page is hundreds of times
+   * per load and multiplied by every open tab this loop walks before it finds the right one.
+   * `toState()` builds a sixteen-field object out of eight synchronous calls into Chromium — the
+   * address, the title, the loading flag, both history questions, both audio questions — to answer a
+   * string comparison. `Tab.currentUrl` is a field the navigation events already maintain.
+   */
   #noteBlockedRequest(documentUrl: string | null): void {
     if (documentUrl === null) return
     for (const controller of this.#controllers) {
-      for (let tile = 0; tile < controller.split.tileCount; tile++) {
-        const tabId = controller.split.tabIdAt(tile)
-        if (tabId === null) continue
-        const tab = controller.tab(tabId)
-        if (tab?.toState().url === documentUrl) {
-          tab.noteBlockedRequest()
-          return
-        }
+      for (const tab of controller.tabs) {
+        if (tab.currentUrl !== documentUrl) continue
+        tab.noteBlockedRequest()
+        return
       }
     }
   }

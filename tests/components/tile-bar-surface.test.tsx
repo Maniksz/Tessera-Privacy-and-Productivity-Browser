@@ -13,7 +13,9 @@ import { HOME_URL } from '@shared/url/omnibox.js'
  * respect and acts on the active tile — so the bar in tile 2 would send tile 1 back, which is the
  * complaint the feature exists to answer. Nothing but reading the payload can see that. Close is
  * the case with no way back — a misdirected one shuts a page the user is reading in another pane —
- * so it is asserted the same way as the four that only cost a back-press.
+ * so it is asserted the same way as the four that only cost a back-press. Maximise is the same
+ * assertion about a different name: it is addressed by `tileIndex`, because it moves a rectangle
+ * rather than a page, and an omitted index means the active tile exactly as an omitted tab id does.
  *
  * The second is the keyboard route. A hover-revealed bar is a mouse-only control and fails spec 7,
  * so the same bar can be asked for by key: focus starts in the address field, Tab stays inside the
@@ -110,6 +112,23 @@ describe('the bar acts on its own tile', () => {
 
     screen.getByRole('button', { name: /home/i }).click()
     expect(calls).toEqual([{ channel: 'nav:navigate', payload: { input: HOME_URL, tabId: 't2' } }])
+  })
+
+  it('maximises its own tile by index, not the active one, and not by tab id', () => {
+    /*
+      The one payload in this bar that is not a `tabId`, which is the whole reason it is asserted.
+
+      `split:toggleTileMaximized` makes `tileIndex` *optional*, so the mistake this catches is not a
+      type error: `{}` compiles, is what the main toolbar sends, and means the active tile — which
+      under the pointer is routinely not this one. A `tabId` here would be the other plausible slip,
+      copied from the six controls around it, and the channel would reject it. `toEqual` on the whole
+      payload is what pins both: the exact keys, not merely the presence of an index.
+    */
+    const calls = installBridge()
+    render(<TileBarSurface presentation={presentation({ tileIndex: 1, tabId: 't2' })} />)
+
+    screen.getByRole('button', { name: /maximize/i }).click()
+    expect(calls).toEqual([{ channel: 'split:toggleTileMaximized', payload: { tileIndex: 1 } }])
   })
 
   it('closes its own tab, not the active one', () => {
@@ -231,6 +250,23 @@ describe('the keyboard route', () => {
 
     fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(close)
+
+    /*
+      The middle of the ring, which the three assertions above cannot see.
+
+      They pin the first stop and the last one, and a seventh control leaves both green wherever it
+      landed — after close, or wedged among the four that mirror the toolbar. Maximise belongs between
+      home and the address field, and that is a claim about order rather than about membership, so it
+      needs the walk. Added rather than substituted: the wrap and the reverse step are still asserted
+      exactly as they were, and this only says more about what lies between them.
+    */
+    screen.getByRole('button', { name: /back/i }).focus()
+    for (const name of [/forward/i, /reload/i, /home/i, /maximize/i]) {
+      fireEvent.keyDown(document.activeElement!, { key: 'Tab' })
+      expect(document.activeElement).toBe(screen.getByRole('button', { name }))
+    }
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' })
+    expect(document.activeElement).toBe(field)
   })
 
   it('skips a button it would be pointless to reach', () => {
@@ -241,7 +277,9 @@ describe('the keyboard route', () => {
       Checked from the far end of the bar rather than backwards out of the address field, which is
       where it used to be checked. Home now sits between reload and the field, so Shift+Tab from the
       field lands on home whether the disabled pair is filtered out or not — the assertion would have
-      stayed green while proving nothing.
+      stayed green while proving nothing. Maximise, added between home and the field, puts a second
+      control in the way and makes the old form emptier still; the wrap forward from close is the only
+      route to the filtered pair that stays direct however many controls the middle of the bar grows.
     */
     installBridge()
     render(

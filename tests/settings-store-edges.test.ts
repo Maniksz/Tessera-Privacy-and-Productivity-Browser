@@ -180,10 +180,24 @@ describe('reset paths', () => {
 })
 
 describe('snapshot isolation', () => {
-  it('hands out a copy rather than its own state', async () => {
+  // `snapshot()` used to hand out a fresh copy on every call — a mutation on it was harmless because
+  // nothing else held that particular object. It now hands out one frozen, shared reference instead,
+  // so every caller sees the same instance; isolation is enforced by refusing the write outright
+  // rather than by discarding a throwaway copy.
+  it('refuses to be mutated, and leaves the store unaffected', async () => {
     const store = await SettingsStore.open(await tempFile())
     const snapshot = store.snapshot() as Record<string, unknown>
-    snapshot['appearance.theme'] = 'tampered'
+    expect(() => {
+      snapshot['appearance.theme'] = 'tampered'
+    }).toThrow(TypeError)
     expect(store.get('appearance.theme')).not.toBe('tampered')
+  })
+
+  it('hands the same reference to every caller until a value actually changes', async () => {
+    const store = await SettingsStore.open(await tempFile())
+    expect(store.snapshot()).toBe(store.snapshot())
+    const before = store.snapshot()
+    store.set('appearance.theme', 'dark')
+    expect(store.snapshot()).not.toBe(before)
   })
 })

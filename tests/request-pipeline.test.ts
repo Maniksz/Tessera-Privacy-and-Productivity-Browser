@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   STAGE_ORDER,
   evaluateStages,
+  holdMainFrameRequests,
+  installRequestPipeline,
   type FilterListEngine,
   type RequestContext
 } from '@main/privacy/RequestPipeline.js'
@@ -372,5 +374,104 @@ describe('stage precedence', () => {
     expect(outcome.action).toBe('redirect')
     if (outcome.action !== 'redirect') return
     expect(outcome.reason).toBe('tracking-params')
+  })
+})
+
+/**
+ * The wait a page pays so it is not the one page that loads unfiltered.
+ *
+ * Startup does not await the filter compile any more — the window opens while the lists are still
+ * being read — and `session.restoreAfterCrash` is on by default, so a restored session puts real
+ * navigations on the wire in that gap. These pin both halves of the answer: a top-level navigation
+ * waits, and it waits for a bounded time.
+ */
+describe('holding navigations until the lists compile', () => {
+  let release: (() => void) | null = null
+
+  afterEach(() => {
+    // The hold is process-wide, so a test that left one on would hang the next one.
+    release?.()
+    release = null
+    vi.useRealTimers()
+  })
+
+  function listenerOnHeldPipeline(): (details: unknown, callback: (r: unknown) => void) => void {
+    const registrations: Array<(details: unknown, callback: (r: unknown) => void) => void> = []
+    const session = {
+      webRequest: {
+        onBeforeRequest(listener: unknown) {
+          if (listener !== null) {
+            registrations.push(
+              listener as (details: unknown, callback: (r: unknown) => void) => void
+            )
+          }
+        }
+      }
+    }
+    release = holdMainFrameRequests()
+    installRequestPipeline({
+      session: session as never,
+      getSettings: () => defaultSettings(),
+      filterEngine: null
+    })
+    const listener = registrations[0]
+    if (listener === undefined) throw new Error('no listener registered')
+    return listener
+  }
+
+  it('holds a top-level navigation until the first compile', async () => {
+    const listener = listenerOnHeldPipeline()
+    const answer = vi.fn()
+    listener({ url: 'https://example.com/', resourceType: 'mainFrame', method: 'GET' }, answer)
+
+    // A microtask turn is all a request that was *not* held would need.
+    await Promise.resolve()
+    expect(answer).not.toHaveBeenCalled()
+
+    release?.()
+    release = null
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith({})
+    })
+  })
+
+  it('does not hold a subresource', () => {
+    /*
+      And answers it synchronously, which is the point rather than an implementation detail: a
+      subresource is fetched because a document asked for it, so the navigation it belongs to has
+      already paid the wait. Holding it as well would be a second delay for nothing.
+    */
+    const listener = listenerOnHeldPipeline()
+    const answer = vi.fn()
+    listener({ url: 'https://example.com/app.js', resourceType: 'script', method: 'GET' }, answer)
+    expect(answer).toHaveBeenCalledWith({})
+  })
+
+  it('lets the navigation through after 750ms even if nothing ever compiles', async () => {
+    vi.useFakeTimers()
+    const listener = listenerOnHeldPipeline()
+    const answer = vi.fn()
+    listener({ url: 'https://example.com/', resourceType: 'mainFrame', method: 'GET' }, answer)
+
+    await vi.advanceTimersByTimeAsync(749)
+    expect(answer).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(answer).toHaveBeenCalledWith({})
+  })
+
+  it('still applies the stages to a request it held', async () => {
+    // The wait must not turn into a bypass: the request is judged when it resumes, not waved through.
+    const listener = listenerOnHeldPipeline()
+    const answer = vi.fn()
+    listener(
+      { url: 'https://example.com/a?utm_source=x', resourceType: 'mainFrame', method: 'GET' },
+      answer
+    )
+    release?.()
+    release = null
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith({ redirectURL: 'https://example.com/a' })
+    })
   })
 })

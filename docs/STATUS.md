@@ -6,11 +6,12 @@ gemeldet wurden.
 
 **Legende** — ✅ gebaut und belegt · 🟡 teilweise · ⬜ offen · ❓ braucht eine Entscheidung · ⛔ verworfen
 
-> **Zuletzt gegen den Code geprüft:** 29.07.2026 (zweiter Durchgang desselben Tages). Jeder Punkt, der in
+> **Zuletzt gegen den Code geprüft:** 29.07.2026 (dritter Durchgang desselben Tages). Jeder Punkt, der in
 > diesem Durchgang angefasst wurde, ist vor der Arbeit gegen die Datei geprüft worden — und in vier Fällen
 > stimmte der Eintrag nicht mehr. Wer diesen Kasten liest und das Datum alt findet, sollte den Tabellen
-> nicht glauben, sondern nachsehen: **dieses Dokument hat sich jetzt viermal selbst widerlegt** — die
-> Tabelle „Noch zu bauen", die Prämisse des Tresor-Abschnitts, der Durchgang davor, und dieser hier.
+> nicht glauben, sondern nachsehen: **dieses Dokument hat sich jetzt fünfmal selbst widerlegt** — die
+> Tabelle „Noch zu bauen", die Prämisse des Tresor-Abschnitts, zwei Durchgänge davor, und der dritte
+> Durchgang, der das Settings-Panel seit jeher ein „Overlay" nannte, das es nie war.
 >
 > Der vierte Fall ist der teuerste bisher, weil er Arbeit ausgelöst hätte, die es nicht gibt: **der
 > Rollen-Split des Preloads stand als „nächste Aufgabe" und war seit dem Init-Commit gebaut**, samt
@@ -29,7 +30,7 @@ gemeldet wurden.
 | 2b | Startseite „geht nicht wirklich" | ✅ | `StartPage.tsx` mit `QuickLinkTile`, `QuickLinkDialog`, eigenem Kanalsatz. Bildkette und Kachelmaß siehe 11 und 13 |
 | 3 | Verlauf existiert nicht | ✅ | `HistoryPage.tsx` + `history.html`; Ende zu Ende belegt (aufgezeichnet, gefunden, gelöscht), `history:open` statt `nav:navigate` |
 | 4 | Layout-Tasten alle oben rechts | ✅ | Ein Knopf mit Dropdown; Smoke prüft 1 Knopf, 5 Einträge, genau 1 aktiv |
-| 5 | Kein Settings-Knopf | ✅ | `SettingsPage.tsx` (Tab) und `SettingsPanel.tsx` (Overlay) rendern beide `renderer/shared/SettingsView.tsx` — eine Oberfläche, zwei Eingänge |
+| 5 | Kein Settings-Knopf | ✅ | Der Knopf ist da und öffnet seit dem dritten Durchgang **den Tab** `tessera://settings`. Das Panel daneben ist gelöscht: eine Oberfläche, ein Eingang. Der frühere Eintrag hier nannte es ein „Overlay" — das war es nie, siehe „Einstellungen: eine Seite statt eines Panels" |
 | 6 | Kein Extension-Knopf | ✅ | Dito über `ExtensionsView.tsx`; `extensions.html` ist ein eigener Tab |
 | 7 | Tabs werden in der Multi-View nicht zur Tab-Gruppe | ✅ | **Gebaut.** Die Anordnung wird jetzt bei *jedem* Settle geschrieben statt einmal beim Verdrängen, und genau das macht den Rest möglich: eine Aufnahme, die nie veraltet, muss auch nie verbraucht werden. Details und die drei Entscheidungen unter „Multi-View ist eine Tab-Gruppe" |
 | 8 | In der Multi-View nur „main page" zurück; Wischen; Leiste am oberen Rand | ✅ | Drei Teile, alle drei da: aktive Kachel folgt dem Klick (`split:setActiveTile`), Hover-Leiste als `overlay/TileBarSurface.tsx`, Wischen über `decideNavigationGesture` in `TileInputController` — nach Zeiger geroutet, nicht nach Fokus |
@@ -126,7 +127,7 @@ Statusdokument, das Erledigtes als offen führt, ist so irreführend wie eines, 
 
 | Bereich | Stand | Beleg bzw. was fehlt |
 |---|---|---|
-| Settings und Erweiterungen als eigene Tabs | ✅ | `SettingsPanel.tsx` und `SettingsPage.tsx` rendern beide `renderer/shared/SettingsView.tsx`, wie zugesagt eine Komponente |
+| Settings und Erweiterungen als eigene Tabs | ✅ | Settings ist jetzt **nur noch** ein Tab (`SettingsPage.tsx` über `renderer/shared/SettingsView.tsx`); das Panel ist entfernt. Erweiterungen haben weiterhin beides |
 | Pro-Kachel-Navigationsleiste | ✅ | `overlay/TileBarSurface.tsx`; der Tastaturweg ist da (`focusTileBar` hat einen Menüeintrag mit Beschleuniger), also kein Maus-Only-Feature |
 | Sitzungswiederherstellung | ✅ | `session-restore/apply.ts`. Der Blocker für Tab-Gruppen ist gelöst und nicht umgangen: `adoptTabId` hebt den Zähler über jede wiederhergestellte ID, `retainTabs` wird **einmal** mit der Vereinigung aller Fenster gerufen |
 | Lesezeichen, Downloads, Passwörter | ✅ | Alle drei Seiten existieren. Beim Tresor fehlt die *Verdrahtung*, nicht die Seite — siehe „Der Tresor, als Nächstes" |
@@ -258,6 +259,10 @@ setzen*. Angewandt wird er über `webPreferences.zoomFactor` im Konstruktor, wei
 Zeitpunkt vor dem ersten Zeichnen ist: `setZoomFactor` wirkt auf den Ursprung, auf dem die Ansicht steht,
 und eine Ansicht ohne geladene Seite hat keinen.
 
+**Und eine zweite Grenze, die erst die Benutzung zeigte:** die Zoom-*Geste* auf dem Trackpad erreicht
+diesen Code überhaupt nicht — `zoom-changed` ist laut Electrons Typdatei ein Mausrad-Ereignis. Siehe
+„Zoom klappte nicht" im dritten Durchgang. Alles unten gilt für Tastatur, Menü und Strg+Rad.
+
 **Die Grenze, die niemand vorhergesehen hat und die du kennen musst:** Chromiums Zoomkarte ist pro
 Ursprung und pro Sitzung. Zwei Kacheln auf **demselben Host** teilen sich deshalb weiterhin den *lebenden*
 Faktor — der zuletzt gezoomte gewinnt —, obwohl die gespeicherten Werte getrennt bleiben und sich bei der
@@ -342,6 +347,196 @@ den Kasten oben und „Preload-Budget".
 `<<HIER EINSETZEN>>` und wurde nie ausgefüllt. Ohne einen konkreten Player ist die Änderung genau das,
 wovor der Abschnitt unten warnt: eine Heuristik, die in der Theorie funktioniert und im Wohnzimmer
 flackert.
+
+## Aus der Benutzung gemeldet (29.07.2026, dritter Durchgang)
+
+Sieben Punkte, alle aus dem Betrieb der echten App. Vier davon waren Fehler, die kein Test sah, und
+zwei davon lagen an einer Stelle, an der ein Kommentar recht hatte und der Code nicht.
+
+### Zoom klappte nicht — zwei Ursachen, und nur eine ist behebbar
+
+**Ursache A, behoben: „hinein" war nie belegt.** `zoomIn` hing an `Control+Plus` / `Command+Plus`,
+und `Plus` ist die **umgeschaltete** Taste — die Akkorde waren also Strg+Umschalt+= und ⌘⇧=.
+Herauszoomen funktionierte weiter, weil `-` unverschoben ist. Diese Asymmetrie ist genau das, wonach
+der Fehlerbericht aussieht: Minus zoomt, Plus tut nichts. `=` ist jetzt zusätzlich gebunden, auf
+beiden Plattformen, wie Chrome und Firefox es tun. `Plus` bleibt an erster Stelle, weil `accel()`
+die erste Belegung ans Menü gibt und das Menü zeigen soll, was auf der Taste steht.
+
+**Ursache B, nicht behebbar wie gebaut: der Trackpad-Pinch erreicht uns nie.** Electrons eigene
+Typdatei sagt zu `zoom-changed`: *„Emitted when the user is requesting to change the zoom level
+**using the mouse wheel**."* Die ganze Geste hängt an diesem Ereignis, und Chromium behandelt einen
+Pinch als eigene Seitenskalierung, die diesen Weg nicht nimmt. Die Geste war ausdrücklich für
+Laptops gewünscht („so wie z. B. back guesture per tile") und stand hier als gebaut — **belegt war
+sie nie**, und dieses Dokument sagt an anderer Stelle selbst, dass sie nie in der App geprüft wurde.
+
+Ein Hebel existiert und ist nicht gezogen: `Tab.ts` hört bereits auf `input-event`, und Electrons
+`InputEvent.type` kennt `gesturePinchBegin/Update/End`. Aber die typisierte Nutzlast trägt nur `type`
+und `modifiers`, **keinen Skalierungsfaktor** — die Richtung müsste aus einem Feld gelesen werden,
+das die Typdatei nicht zusagt. Das ist eine Vermutung über eine fremde Laufzeitform, und sie ist von
+hier aus nicht prüfbar. Offen, siehe „Offene Fragen".
+
+### Escape stieg die Leiter von der falschen Seite herunter
+
+Gemeldet: „wenn f11 gedrückt und ich mache ein video klein, schließt sich f11."
+
+Ein Video kleiner zu machen **ist** ein Escape-Druck. Der erreicht über `before-input-event` den
+Hauptprozess, `pageKeyAction` antwortet `escape-ladder`, und `SplitController.escape()` prüfte
+`#windowFullscreen` **zuerst** — also verließ der erste Druck das Fenster-Vollbild. Ein Tastendruck,
+zwei Wirkungen, und der Benutzer sieht nur die zweite.
+
+**Der Kommentar hatte die ganze Zeit recht.** `TileFullscreenController.escape()` versprach in
+seinem Docblock „from a page's fullscreen inside a tile, out of the tile's fullscreen, then out of a
+maximised tile, then out of the window's own fullscreen" — also von innen nach außen. Die Reihenfolge
+ist jetzt die versprochene.
+
+**Und die Umstellung hatte eine Falle, die mitbehoben werden musste.** Vorher gab `escape()` in einem
+Vollbildfenster immer `exit-window-fullscreen` zurück, `applyPolicy()` lief also nie auf einem
+Fenster, das im Vollbild *bleibt*. Jetzt kommen die zwei inneren Sprossen **innerhalb** des Vollbilds
+ab, und beide riefen `applyPolicy()` — was `setFullScreenable(false)` auf einem Vollbildfenster
+gesetzt hätte, und `window-events.ts` schreibt selbst auf, was das bedeutet: der zweite Escape, der
+das Vollbild verlassen soll, wäre Stille gewesen. Ein Fehler gegen einen schlimmeren getauscht.
+`applyPolicy` steigt jetzt früh aus, solange das Fenster im Vollbild ist; `leave-full-screen` setzt
+die Sperre ohnehin wieder.
+
+**`escalation` und `escape()` laufen bewusst in entgegengesetzte Richtungen**, und beide sagen das
+jetzt in ihrem eigenen Docblock: `escalation` beantwortet „wie viel Fenster hat der Inhalt bekommen"
+(das Äußerste gewinnt, es steuert, ob die Chrome-Leisten weg sind), `escape()` beantwortet „was kommt
+als Nächstes ab" (das Innerste). Sichtbare Folge, die wie ein Fehler aussieht und keiner ist: **ein
+`escape()` muss `escalation` nicht ändern.**
+
+**Nicht behoben, mit Absicht:** wer das Video über den *Knopf des Players* verkleinert, löst keinen
+Tastendruck aus. Dafür gibt es einen plausiblen Weg durch Electrons eigene Buchhaltung, der C++ im
+vorkompilierten Binary ist. Blind dagegen zu bauen hätte die Beweislage zerstört — jetzt, da der
+Tastaturweg sauber ist, isoliert ein Fortbestehen des Symptoms genau diesen zweiten Weg.
+
+### Cmd+W im Vollbild — ein Ersatzweg, der bewusst zu wenig schließt
+
+Gemeldet als „strg+w"; vom Benutzer bestätigt als **⌘W auf macOS**, funktioniert normal, tot im
+Vollbild. Auf unserer Seite wurde alles ausgeschlossen: eine Belegung pro Plattform, der Menüeintrag
+wird unbedingt gebaut, `Menu.setApplicationMenu` ist prozessweit, und **nichts in diesem Projekt
+versteckt, ersetzt oder leert das Menü im Vollbild** — kein `setMenuBarVisibility`, kein
+`setAutoHideMenuBar`, kein `globalShortcut`. Bleibt Electrons Weiterreichen einer unbehandelten Taste
+aus einer `WebContentsView` an die Menü-Tabelle, das von hier weder zu ändern noch zu prüfen ist.
+
+Also ein zweiter Weg über `before-input-event`, **nur** bei `escalation === 'window-fullscreen'`,
+ohne `preventDefault` (die Regel, dass die Seite die Taste immer behält, gilt weiter und wird von
+einem Test gehalten). Der Doppelschluss ist unmöglich gemacht, und die gewählte Form ist eine
+**Abbestellung**, keine Unterdrückung: der Tastendruck *scharfschaltet* ein Schließen, und jedes
+Schließen aus jedem Weg bläst es ab. Eine Abbestellung kann nur eine Anfrage verwerfen, die der
+andere Weg schon bedient hat; eine Unterdrückung nur eine, die niemand bedient hat.
+
+**Der Preis steht im Code:** zwei Drücke unter 150 ms schließen im Vollbild einen Tab statt zweier.
+Der Grund ist nicht die Tastenwiederholung — die filtert `keyMeaning` längst — sondern dass eine
+Abbestellung nicht zuzuordnen ist: ein Menüklick und ein Tastenäquivalent sind derselbe Rückruf mit
+denselben Argumenten. Bei zwei ausstehenden Schließungen müsste geraten werden, und das falsche Raten
+schließt eine Seite, die gerade gelesen wird. Der Fehler liegt damit auf der erholbaren Seite.
+
+### Kachelleiste: Maximieren — und die Regel zählte das Falsche
+
+Der Knopf sendet `split:toggleTileMaximized` mit **`{ tileIndex }`**, nicht mit `{ tabId }` — das
+erste Bedienelement dieser Leiste, das über die Position adressiert, weil der Kanal ein Rechteck
+bewegt und eine Tab-Id kein Rechteck benennt. Kein neuer Kanal, keine neue Berechtigung, kein neuer
+i18n-Schlüssel (`split.maximize` gab es schon). Zeichen sind vier Eckwinkel — die Mitte bleibt leer,
+und genau dort liegen die beiden Zeichen, mit denen es zu verwechseln wäre: das Stopp-Kreuz und das
+Schließen-Kreuz im Ring.
+
+**Dabei fiel eine Behauptung, die ich selbst aufgestellt hatte.** Ich hatte vorgegeben, die
+Kachelleiste könne über einer maximierten Kachel nie erscheinen. Das war falsch, und der Agent hat es
+geprüft statt geglaubt: `tileBarStep` versteckte bei `rects.length <= 1`, aber `tileRects` behält
+**einen Eintrag je Kachel des Layouts** und setzt nur die eingeklappten auf `null` — eine maximierte
+Kachel in einem `1x2` zählte also als zwei. Die Leiste erschien über einer maximierten Kachel und
+verdoppelte damit genau die Toolbar, für die sie einspringt; nebenbei geriet der neue Knopf in den
+einen Zustand, in dem er *wiederherstellt*, während sein Tooltip „Kachel maximieren" sagt. Die Regel
+zählt jetzt die Rechtecke, die es gibt. Der Zustand ist damit weg statt beschriftet.
+
+### Einstellungen: eine Seite statt eines Panels, und Text aus dem Hauptprozess
+
+Der Toolbar-Knopf und `Strg+,` öffneten ein Panel im Chrome-Renderer; nur `Extras ▸ Einstellungen im
+Tab` öffnete die Seite. **Dieses Dokument nannte das Panel ein „Overlay", was in der eigenen
+Vokabular dieses Projekts falsch ist** — `settings` steht nicht in `OVERLAY_KINDS`, die Schicht
+zeichnet es nicht, es lag nie im Overlay-Bündel. Es *sah* so aus, weil `window:setOverlay` die
+Inhaltsansichten aussetzt.
+
+Jetzt öffnen alle Wege den Tab, das Panel ist gelöscht, und der doppelte Menüeintrag ist weg.
+
+**Und der größere Teil von „richtige Beschreibungen" war nicht die fehlende Beschreibung, sondern die
+fehlende Übersetzung.** Die Beschriftungen wurden aus dem Schlüsselnamen erzeugt (`humanise`), ein
+deutscher Benutzer las „Block third party cookies" — eine lebende Verletzung von Spezifikation 7 über
+alle 76 Einstellungen, dazu rohe Enum-Werte wie `disable_non_proxied_udp` in jeder Auswahlliste.
+
+**Der Text kommt aus dem Hauptprozess, nicht aus dem Sprachkatalog**, und das ist eine
+Budget-Entscheidung mit einem zweiten, besseren Grund. Der Katalog-Chunk stand bei **45 810 von
+46 000 Bytes**, von einer Fitness-Funktion erzwungen — 152 Beschreibungen hätten ihn auf ~66 kB
+gebracht. Wichtiger: der Katalog wird von *jeder* internen Seite vor dem ersten Zeichnen geholt, also
+hätten Startseite, Verlauf, Downloads und Tresor Prosa bezahlt, die nur die Einstellungen zeigen.
+Jetzt liegen die Tabellen in `src/main/settings/`, reisen über `settings:describe` mit und kosten den
+Renderer **null Bytes**. 76 Beschriftungen, 58 Beschreibungen, 23 Auswahltabellen.
+
+Die Regel für eine Beschreibung: wenn die Beschriftung nicht sagen kann, was sich ändert; wenn es
+Kosten oder eine Reichweite gibt, die der Name verschweigt; wenn etwas an Dritte geht; **wenn die
+Einstellung erklärt und noch nicht eingelöst ist**; oder wenn zwei Einstellungen dasselbe tun. Der
+vierte und fünfte Fall sind der Grund für die hohe Zahl — und der fünfte hat unterwegs zwei echte
+Doppelungen gefunden (`splitView.onlyActiveTileAudible` / `muteAllButActive` sind ein `if (a || b)`,
+und `session.restoreOnStart` dupliziert `startupBehaviour: 'restore'`, was der Kern in seinem eigenen
+Docblock als Defekt führt). Beide sagen es jetzt.
+
+Zwei Katalog-Schlüssel wurden dadurch zu Waisen und sind entfernt: `menu.tools.settingsTab` und
+`settings.close`.
+
+### „Scan now" in den Einstellungen — und die Fitness-Funktion, die genau danach benannt war
+
+Der Wunsch war durch einen Test gesperrt, und der Test nannte ihn wörtlich.
+`tests/architecture.test.ts` verbot **jeden** `updates:*`-Kanal, mit dieser Begründung: *„the pressure
+to add one is real and reasonable-sounding — a settings page wanting a 'check now' button — and the
+cost is that any page in any tab can then make the browser talk to GitHub on demand."*
+
+**Der Test wurde nicht gelöscht, sondern verengt**, weil sich seit seiner Entstehung zwei Dinge
+geändert haben und eines nicht. Geändert: Kanäle werden heute **pro interner Seite** vergeben, nicht
+an „jede Seite", und `decideAccess` weist Webinhalte vorab ab. Und die Navigationssperre aus dem
+zweiten Durchgang verhindert, dass eine Webseite `tessera://settings` überhaupt öffnet, um sich deren
+Rechte zu borgen — das war der Weg, über den „any page in any tab" wahr gewesen wäre. Nicht geändert:
+die Sorge selbst. Ein Kanal, den mehr als die Settings-Seite erreicht, wäre weiterhin falsch.
+
+Die neue Zusicherung lautet: **keine interne Seite außer `settings` erreicht die Update-Prüfung.** Sie
+hat zwei Arme, weil jeder allein zu umgehen wäre — der eine liest den Kanalnamen aus dem *Rumpf* der
+Handler-Registrierung heraus (wer den Kanal umbenennt, lässt den Test fallen statt ihn zu leeren), der
+andere fegt den ganzen `updates:`-Namensraum, damit ein zweiter Kanal die Regel erbt. Gegengeprobt:
+die Erlaubnis zusätzlich an `start` vergeben macht den Test rot.
+
+Der Knopf steht über der Abschnittsliste, nicht als Zeile darin — eine **Aktion** ist keine
+Einstellung, und als Deskriptor hätte sie einen Zurücksetzen-Knopf bekommen, der nichts zurücksetzt.
+Kein neuer i18n-Schlüssel: `updates.checkNow` gab es schon. Während der Prüfung ist der Knopf
+deaktiviert; das Ergebnis meldet der native Dialog, den `checkOnDemand()` ohnehin zeigt — ein zweiter
+Text auf der Seite hätte dasselbe zweimal gesagt, und einen „prüfe …"-Schlüssel gibt es nicht und darf
+es im Budget auch nicht geben.
+
+**Die Unehrlichkeit, die der Knopf sichtbarer macht, ist nur halb behoben.** `updates.channel`
+steht auf `alpha`, und GitHubs „latest release" schließt Vorabversionen aus — wer auf `stable`
+stellt, bekommt für immer „keine neue Version". Ein Knopf weit oben wird viel öfter gedrückt als ein
+Eintrag im Hilfe-Menü, macht die falsche Antwort also häufiger. Halb behoben: steht der Kanal auf
+`stable`, zeigt der Block neben dem Knopf die **Beschreibung der Einstellung selbst** — der Satz ist
+schon vorhanden, in beiden Sprachen, und erscheint nur in dem Fall, in dem die Antwort falsch ist.
+Nicht behoben: der Dialog sagt weiterhin „Keine neue Version", und das ist gelogen. Der saubere Fix
+braucht eine neue Meldung — rund 240 Bytes gegen ~190 Bytes Katalog-Spielraum, passt also erst nach
+dem faulen Laden des Katalogs. Alternative ohne neuen Schlüssel: `stable` gar nicht erst anbieten,
+solange keine Nicht-Vorabversion existiert. Steht unter „Offene Fragen".
+
+Drei Kommentare waren dadurch falsch geworden und sind nachgezogen: der Abschnitt „Why nothing can
+make a page trigger this" in `UpdateService.ts`, der Satz „There is no IPC channel for it either" am
+Menüeintrag, und die Rückgabebegründung in `install-updates.ts`.
+
+### Update-Prüfung beim Start: 5 Minuten → 3 Sekunden
+
+Die Hälfte der alten Begründung ist überstimmt, die andere gilt weiter, und der Unterschied ist,
+warum es nicht null ist. Überstimmt: dass ein kurz geöffneter Browser gar nicht prüfen soll — auf
+einem Alpha-Build ist ein Neustart genau der Moment, in dem sein Besitzer es wissen will. Weiter
+wahr: der Start ist der belebteste Moment, und eine Netzanfrage im Wettlauf mit dem ersten Zeichnen
+kostet etwas Sichtbares. **Null ist außerdem kein möglicher Wert** — `start()` liest `first > 0` als
+„plane nichts", das ist die Hintertür, auf der jeder Test in dieser Datei beruht.
+
+**Der bestehende Test konnte das nicht halten.** Er prüft gegen die importierte Konstante, bleibt
+also für jeden Wert grün, auch für die fünf Minuten. Ein Test, der nicht fallen kann, macht keine
+Entscheidung dauerhaft — die Zahl tut es. Neu ist eine Zusicherung auf beide Grenzen, gegengeprobt.
 
 ### Vollbild und Kachelgröße — was auf unserer Seite geht und was nicht
 
@@ -615,6 +810,10 @@ Was an ihrer Stelle offen ist, ist neu und stand hier nie:
 | **Zwei Kacheln auf demselben Host teilen den lebenden Zoomfaktor** | Chromiums Zoomkarte ist pro Ursprung und pro Sitzung. Die gespeicherten Werte sind getrennt und setzen sich bei der nächsten Navigation durch, aber solange beide auf demselben Host stehen, gewinnt der zuletzt gezoomte. Trennen ließe sich das nur über Chromiums isolierten Zoom-Modus, den Electron nicht freigibt, oder über `webFrame` aus dem Inhalts-Preload — eine Brücke in einer besuchten Seite, die Spezifikation 6 verbietet. **Zu entscheiden: leben wir damit** |
 | **Gruppen-Chips bei jeder Kachelung** | Folge der Entscheidung „eine Gruppe entsteht, sobald gekachelt ist". Erwartbar sind ein bis drei Chips pro Sitzung, nicht einer pro Teilung — `reuse` fängt die Wiederholung ab. Ob das im Streifen als Ordnung oder als Lärm ankommt, sieht man erst in der Benutzung |
 | **`about` und `https-only` liefern 404** | Beide stehen in `KNOWN_PAGES`, haben aber keine HTML-Datei und keinen Vite-Eintrag. Betrifft den „Über"-Menüeintrag und die **HTTPS-only-Zwischenseite**. Gefunden bei der Navigationssperre, bewusst nicht mitgebaut — es ist eine fehlende Seite, keine Sperre |
+| **Der Trackpad-Pinch zoomt nicht** | `zoom-changed` ist laut Electron ein Mausrad-Ereignis; ein Pinch nimmt diesen Weg nie. Der einzige Hebel ist `input-event` mit `gesturePinchUpdate`, dessen typisierte Nutzlast aber keinen Skalierungsfaktor trägt — die Richtung käme aus einem Feld, das die Typdatei nicht zusagt. **Zu entscheiden: bauen wir auf eine unzugesagte Laufzeitform, mit einem Test, der rot wird, wenn sie verschwindet** |
+| **Vollbild verlassen über den Knopf des Players** | Der Tastaturweg ist behoben. Bleibt das Symptom, wenn man das Video über seinen eigenen Knopf verkleinert, liegt es in Electrons Buchhaltung (C++, nicht prüfbar von hier). Bewusst nicht blind behoben — der Fix hätte die Beweislage zerstört. **Braucht eine Beobachtung aus der echten App** |
+| **`TileFullscreenController` hat einen unerreichbaren Zweig** | 85,7 % Zweige, weil `escape()` `fullscreenTile` liest, nachdem das Urteil es schon als nicht-null bewiesen hat. Deshalb *keine* Untergrenze eingetragen — eine Zahl unter 100 dort würde den Zweig ratifizieren statt ihn zu entfernen. Ihn zu entfernen hieße, `SplitController.escape()` die Kachel mit dem Urteil zurückgeben zu lassen |
+| **`stable` bekommt eine falsche Antwort** | GitHubs „latest release" schließt Vorabversionen aus, und bisher ist jede Freigabe eine. Wer den Kanal auf `stable` stellt, hört für immer „keine neue Version" — und der neue Knopf macht diese Antwort viel sichtbarer. Der Hinweis neben dem Knopf mildert es; der **Dialog** sagt es weiterhin falsch. Sauber wäre eine eigene Meldung (~240 Bytes gegen ~190 freie) oder `stable` gar nicht anzubieten, solange es keine Nicht-Vorabversion gibt |
 | **Die Katalog-Teilung ist noch nicht bezahlt** | Die Quelle ist geteilt, das Bündel nicht: `catalogs` nennt beide Sprachen eifrig. Erst faules Nachladen der zweiten Sprache senkt Renderer-JavaScript, und der Katalog wird vor dem ersten Zeichnen geholt — also mit Risiko |
 
 ### Zwölf tote Tasten — erledigt, nachgezählt, und die Erlaubnisliste mit
@@ -1014,39 +1213,50 @@ Zertifikat existiert.
 
 ## Qualitätsstand
 
-Neu gemessen am Ende dieses Durchgangs. **Eine Ausnahme, und sie ist wichtig:** `pnpm build` konnte nicht
-laufen, also sind die vier Bündelgrößen in `metrics.mjs` die vom 28.07. — sie beschreiben den Stand *vor*
-dieser Arbeit. Alles andere ist frisch.
+Neu gemessen am Ende des dritten Durchgangs. **Eine Ausnahme, unverändert wichtig:** `pnpm build`
+konnte auch diesmal nicht laufen, also sind die vier Bündelgrößen die vom 28.07. — sie beschreiben
+einen Stand vor zwei Durchgängen Arbeit. Alles andere ist frisch.
 
 | Prüfung | Ergebnis | Vorher |
 |---|---|---|
-| typecheck | vier Projekte sauber: node, web, preload, components | gleich |
+| typecheck | vier Projekte sauber | gleich |
 | lint | sauber (`--max-warnings 0`) | gleich |
-| Tests | **4106 grün**, 2 bedingt übersprungen (**142 Dateien**) | 4027 / 138 |
-| Zeilen-Coverage | **95,98 %** (Schwelle 90 %) | 95,73 % |
-| Branch-Coverage | **95,13 %** (Schwelle 85 %) | 94,78 % |
-| Statements / Functions | **95,61 % / 94,01 %** (Schwelle 90 %) | 95,32 / 93,67 |
-| Metriken | **9 von 15** — sechs über der Marke, zwei davon deutlich verbessert, keine angehoben | 9 von 15 |
+| Tests | **4157 grün**, 2 bedingt übersprungen (**142 Dateien**) | 4106 / 142 |
+| Zeilen-Coverage | **95,97 %** (Schwelle 90 %) | 95,98 % |
+| Branch-Coverage | **95,05 %** (Schwelle 85 %) | 95,13 % |
+| Metriken | **9 von 15** — sechs über der Marke, keine angehoben | 9 von 15 |
 | Größenmetriken | **nicht neu gemessen** — `pnpm build` lief nicht | — |
-| Mutations-Score | 85 % (Schwelle 70 %) — **Lauf steht weiterhin aus**, jetzt auch älter als dieser Durchgang | gleich |
+| Mutations-Score | 85 % (Schwelle 70 %) — Lauf steht weiterhin aus | gleich |
 | Smoke-Test in echter App | **nicht gelaufen** (Vorgabe des Benutzers) | gleich |
 
-Die beiden übersprungenen Tests laufen gegen die **echten** heruntergeladenen Filterlisten und
-überspringen sich selbst, wenn kein Korpus vorliegt — `describe.skipIf(corpus.length === 0)`.
+**Eine Metrik ist schlechter geworden, und das gehört hierher und nicht in eine Fußnote.** Die größte
+Datei stand am Ende des zweiten Durchgangs bei **1036** Zeilen und steht jetzt bei **1064**. Beide
+Verursacher sind bestellte Arbeit: `contract.ts` wuchs um die Beschreibungsfelder und den
+Update-Kanal, `BrowserWindowController.ts` um die Verdrahtung des ⌘W-Ersatzwegs.
 
-**Eine Schwelle ist unterwegs gerissen und wurde nicht gesenkt.** Die neue Gruppen-Logik brachte
-`src/shared/tabgroups/**` von 100 % auf 99,5 %, weil `arrangementIsCurrent` eine Gruppen-Id nachschlug,
-die es dort nie nicht geben kann, und den unmöglichen Fall abfing. Ein Zweig, den kein Test erreicht, ist
-genau die Art Code, für die eine Untergrenze sonst gesenkt wird. Er ist stattdessen **entfernt** — die
-Frage lautet jetzt „gibt es eine Gruppe, die der Halter ist und schon genau das hält", womit jeder Zweig
-einer ist, den ein Test nimmt. Dazu ein Test mit einer zweiten, unbeteiligten Gruppe an erster Stelle.
-Dieselbe Antwort wie beim `gestures/zoom.ts`-Fall eine Runde zuvor, und aus demselben Grund.
+Die Hälfte davon ist zurückgeholt, und zwar nicht durch Verschieben von Zeilen, sondern durch eine
+Trennung, die ohnehin richtig ist: das Wire-Schema von `SettingDescriptor` liegt jetzt in
+`shared/settings/schema.ts` statt inline im Vertrag (1079 → 1054), nach demselben Muster wie
+`tabgroups/schema.ts` und aus demselben Grund — `control.ts` ist bewusst zod-frei, weil es der
+Renderer importiert. Ebenso ist der Update-Handler nach `ipc/update-handlers.ts` gegangen, wie es
+`media-handlers.ts` und `download-handlers.ts` vormachen; `handlers.ts` war mit 787 Zeilen über die
+Marke gerutscht und steht wieder bei 772. **Dateien über der Marke sind dadurch bei 5 geblieben und
+nicht auf 6 gestiegen.**
 
-**Zwei neue Untergrenzen** in `vitest.config.ts`, beide bei 100 % in allen vier Maßen:
-`browser/navigation-policy.ts` und `browser/window-events.ts`. Die zweite ist die interessantere — der
-Code kam aus `BrowserWindowController.ts`, das von der Coverage *ausgenommen* ist. Ohne Untergrenze
-dürfte er bis auf die globalen 90 % zurückfallen und wäre damit fast wieder ungemessen, während die
-Zahlen grün blieben.
+Nicht zurückgeholt sind die 28 Zeilen, um die die größte Datei jetzt über ihrem Stand von vorhin
+liegt. `BrowserWindowController.ts` ist wieder die Spitzenreiterin, und für sie ist der nächste
+Schritt benannt — weiter zerlegen, wie `#wireWindowEvents` es vorgemacht hat.
+
+**Und der Vertrag hat jetzt einen benannten nächsten Schritt**, den er im letzten Durchgang noch
+nicht hatte: die verbleibenden Inline-Schemata in Geschwister-`schema.ts`-Module ziehen, wie es für
+`SettingDescriptor` gerade geschehen ist. Damit ist keine der fünf Dateien über der Marke mehr ohne
+Antwort auf „und wie wird sie kleiner".
+
+**Zwei neue Untergrenzen** in `vitest.config.ts`, beide bei 100 %: `browser/page-keys.ts` und
+`browser/SplitController.ts` — die Escape-Leiter und die Tasten, die sie treiben, waren beide falsch,
+ohne dass ein Test es sehen konnte. `TileFullscreenController.ts` steht bewusst **nicht** dort: es
+liegt bei 85,7 % Zweigen auf einem unerreichbaren Null-Wächter, und eine Zahl darunter würde den
+Wächter ratifizieren statt ihn zu entfernen.
 
 ## Der Befund dieser Runde
 

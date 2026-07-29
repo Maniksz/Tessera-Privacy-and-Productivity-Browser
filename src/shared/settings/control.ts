@@ -34,6 +34,27 @@ export interface SettingDescriptor {
   applies: SettingsApplies
   kind: SettingControlKind
   /**
+   * What the setting is called, in the language the core resolved for this request.
+   *
+   * Required, not optional. The renderer used to derive a name from the key with a
+   * `humanise()` helper, which meant a German user read `Block third party cookies` —
+   * seventy-six hard-coded English strings that spec 7 forbids, generated at render time so
+   * that no catalogue check could ever see them. Making this mandatory is what stops that
+   * from being reintroduced by accident: a descriptor without a name does not type.
+   *
+   * The text comes from `main/settings/settings-text.*`, not from the shared catalogue, and
+   * that module's docblock argues why.
+   */
+  label: string
+  /**
+   * What the setting *does*, where the name cannot say it.
+   *
+   * Optional because most settings do not need one: a description repeating the label is
+   * noise, and noise is what makes the sentences that matter — the ones naming a cost, a
+   * limit, or a switch that is not honoured yet — get skipped.
+   */
+  description?: string | undefined
+  /**
    * Present for `choice`: the allowed values, in declaration order.
    *
    * `| undefined` is spelled out because `exactOptionalPropertyTypes` is on and these
@@ -41,6 +62,17 @@ export interface SettingDescriptor {
    * than being absent from the object.
    */
   choices?: string[] | undefined
+  /**
+   * Readable names for the members in `choices`, keyed by member.
+   *
+   * A map rather than a parallel array, so a member gained or reordered in the schema cannot
+   * silently shift every label by one. The renderer falls back to the raw member for anything
+   * missing, which is what keeps a select honest rather than blank when the two disagree.
+   *
+   * Absent where the members are already language-neutral — the split layouts are `1x2`,
+   * `2x2` and so on, and translating those would only invent a difference between locales.
+   */
+  choiceLabels?: Record<string, string> | undefined
   /** Present for `number` when the schema bounds it. */
   min?: number | undefined
   max?: number | undefined

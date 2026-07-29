@@ -27,7 +27,7 @@ import { currentPlatform, preloadFile, preloadRoleArgument } from '../paths.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
 import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
 import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
-import { pageKeyAction, type PageKeystroke } from './page-keys.js'
+import { CloseTabFallback, pageKeyAction, type PageKeystroke } from './page-keys.js'
 
 /**
  * One browser window: its chrome UI, its tabs, its split layout.
@@ -113,6 +113,20 @@ export class BrowserWindowController {
    * constructor and six imports, all of which said the same thing the factory's return type already says.
    */
   readonly #seams: WindowSeams
+  /**
+   * The second route to `closeTab`, for the state in which the menu accelerator stops arriving.
+   *
+   * Every rule about it — why it exists, why it waits instead of guarding, and why a suppression
+   * window was the wrong shape — is in `CloseTabFallback`. Here it is only wired: `arm` from the
+   * keystroke, `cancel` from every close and from teardown.
+   */
+  readonly #closeTabFallback = new CloseTabFallback({
+    closeTab: (tabId) => this.closeTab(tabId),
+    after: (delayMs, run) => {
+      const timer = setTimeout(run, delayMs)
+      return () => clearTimeout(timer)
+    }
+  })
   #broadcastScheduled = false
   #disposers: Array<() => void> = []
 
@@ -246,19 +260,40 @@ export class BrowserWindowController {
   }
 
   /**
-   * The two events about this window's own existence: it is ready to be seen, and it is gone.
+   * The events about this window's own existence: it can be shown, its chrome has loaded, and it is gone.
    *
    * The nine reactions to the OS moved to `window-events.ts`; these did not, and `closed` is the reason. It
    * disposes the listeners, destroys the overlay and every tab, closes the session slot and hands the window
    * back to whoever opened it — private fields, all of them. Passing a module enough to do that means passing
    * it the whole window, which is the reach that extraction exists to remove.
    *
-   * `did-finish-load` is the chrome renderer reporting in rather than the OS speaking, and it is the one
-   * subscription here with no disposer: it is on the `webContents`, which die with the window.
+   * `ready-to-show` and `did-finish-load` are this window reporting on itself rather than the OS speaking,
+   * and neither carries a disposer: the first is a `once` that dies with the window it is registered on, the
+   * second is on the `webContents`, which die with the window too.
    */
   #wireLifecycle(): void {
+    /*
+      The window goes up at the first paint, not at the end of the load.
+
+      Showing on `did-finish-load` meant showing once the chrome bundle had run and React had mounted, so
+      launching the browser produced nothing at all on screen for as long as that took and then popped a
+      finished window into existence. `ready-to-show` is Chromium reporting that the window can be raised
+      without a flash, which is a good deal earlier — and it is only true because `window-options.ts`
+      already sets `backgroundColor` to the chrome's own `--bg`, so the frame the user sees first is an
+      empty window in the right colour rather than a white rectangle.
+
+      Repeated on `did-finish-load` because the two failures do not cost the same: raising a window twice
+      is a no-op behind `isVisible`, while a first paint that never arrives would leave the user with no
+      window at all. `once` on both, so a later reload of the chrome cannot pull a window back in front of
+      whatever the user has since put over it.
+    */
+    const show = (): void => {
+      if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show()
+    }
+    this.window.once('ready-to-show', show)
+    this.window.webContents.once('did-finish-load', show)
+
     this.window.webContents.on('did-finish-load', () => {
-      this.window.show()
       this.#broadcastWindowState()
       this.#scheduleBroadcast()
     })
@@ -266,6 +301,9 @@ export class BrowserWindowController {
     this.window.on('closed', () => {
       for (const dispose of this.#disposers) dispose()
       this.#disposers = []
+      // A timer outliving the window it would act on is the same class of leak the disposers above
+      // exist for, so it goes in the same breath.
+      this.#closeTabFallback.cancel()
       this.#overlay.destroy()
       for (const tab of this.#tabs.values()) tab.destroy()
       this.#tabs.clear()
@@ -382,6 +420,14 @@ export class BrowserWindowController {
   closeTab(tabId: string): void {
     const tab = this.#tabs.get(tabId)
     if (!tab) return
+
+    /*
+      A tab is closing, so a keystroke waiting to close one has been answered — by the menu, by the
+      strip's button, by anything. Below the `!tab` guard on purpose: a request naming a tab that is
+      already gone closed nothing, and calling off a real pending close on the strength of it would
+      turn the fallback back into the thing it is a fallback for.
+    */
+    this.#closeTabFallback.cancel()
 
     const url = tab.toState().url
     if (url !== '' && !this.privateMode) {
@@ -699,15 +745,15 @@ export class BrowserWindowController {
   }
 
   /**
-   * `Escape`, and macOS's `Command+.`, arriving in a page.
+   * `Escape`, macOS's `Command+.`, and the close-tab chord, arriving in a page.
    *
    * Every rule is in `page-keys.ts` — including the one that is not visible here: the keystroke is
    * never taken from the page. Whatever this does, the page's own handler and the caret in its text
    * fields get the key as well.
    *
-   * The tab that received the key is the one whose load is cancelled, rather than the active tile's:
-   * the page the user is looking at is the page that had the focus. The ladder is the window's, so it
-   * goes through the window either way.
+   * The tab that received the key is the one whose load is cancelled and the one the fallback would
+   * close, rather than the active tile's: the page the user is looking at is the page that had the
+   * focus. The ladder is the window's, so it goes through the window either way.
    */
   #handlePageKeystroke(tab: Tab, keystroke: PageKeystroke): void {
     const action = pageKeyAction(keystroke, currentPlatform(), {
@@ -721,6 +767,11 @@ export class BrowserWindowController {
         break
       case 'escape-ladder':
         this.escape()
+        break
+      case 'close-tab':
+        // Armed rather than done: the menu accelerator may still be on its way, and `closeTab` above
+        // calls this off if it arrives. See `CloseTabFallback`.
+        this.#closeTabFallback.arm(tab.id)
         break
       case 'nothing':
         break

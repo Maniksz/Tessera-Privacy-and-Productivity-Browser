@@ -1,4 +1,4 @@
-import { app, type IpcMainEvent, type WebContents } from 'electron'
+import { app, type Event, type InputEvent, type IpcMainEvent, type WebContents } from 'electron'
 import {
   AUTOFILL_FILL_CHANNEL,
   AUTOFILL_OFFER_CHANNEL,
@@ -53,7 +53,11 @@ function frameOf(event: IpcMainEvent): AutofillFrame {
  * The subscription set is the interesting part:
  *
  *   - `input-event` is the *only* source of the gesture the fill rules require. It fires for input
- *     the browser process dispatched, so a page calling `.click()` cannot produce one.
+ *     the browser process dispatched, so a page calling `.click()` cannot produce one. It is also the
+ *     one subscription attached and detached on demand rather than for the life of the view: every
+ *     mouse movement in every tab would otherwise cost a main-process round trip, for tabs that will
+ *     never fill anything. `offerFor` already answers "is there anything to fill here" on every focus
+ *     of a password-related field, so that answer is reused as the gate — see `installAutofill` below.
  *   - `did-start-navigation` drops a pending save that has left its site, and deliberately not one
  *     that is merely following the redirect a sign-in caused — that navigation is the one the save
  *     bar has to survive.
@@ -63,13 +67,36 @@ function frameOf(event: IpcMainEvent): AutofillFrame {
  */
 export function installAutofill(service: AutofillService): void {
   app.on('web-contents-created', (_event, contents: WebContents) => {
-    contents.on('input-event', (_ipcEvent, input) => {
-      service.noteInput(contents.id, input)
-    })
+    /**
+     * Whether `input-event` is currently attached for this view.
+     *
+     * Kept as a plain closure variable rather than a boolean, because the listener itself is what
+     * `removeListener` needs — a fresh arrow function would not match the one `.on()` was given.
+     */
+    let gestureListener: ((event: Event, inputEvent: InputEvent) => void) | null = null
+
+    const trackGestures = (needed: boolean): void => {
+      if (needed) {
+        if (gestureListener !== null) return
+        gestureListener = (_ipcEvent, input) => service.noteInput(contents.id, input)
+        contents.on('input-event', gestureListener)
+        return
+      }
+      if (gestureListener === null) return
+      contents.removeListener('input-event', gestureListener)
+      gestureListener = null
+    }
 
     contents.on('ipc-message-sync', (event, channel, ...args) => {
       if (channel === AUTOFILL_OFFER_CHANNEL) {
-        event.returnValue = service.offerFor(contents, frameOf(event), args[0])
+        const offer = service.offerFor(contents, frameOf(event), args[0])
+        // `offerFor` already refused for every reason gesture-tracking would otherwise be wasted on:
+        // a locked vault, no entry for this site, a frame or form that does not qualify. Its answer
+        // is attached before this call returns, which is ahead of any click the user could make on a
+        // suggestion it just handed the page — so a fill immediately after an offer never finds the
+        // gesture missing.
+        trackGestures(offer !== null)
+        event.returnValue = offer
         return
       }
       if (channel === AUTOFILL_FILL_CHANNEL) {

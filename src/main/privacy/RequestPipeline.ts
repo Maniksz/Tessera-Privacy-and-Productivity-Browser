@@ -1,4 +1,4 @@
-import type { Session } from 'electron'
+import type { CallbackResponse, Session } from 'electron'
 import { registrableDomain, hostMatchesRule, isIpAddress } from '@shared/url/domain.js'
 import { stripTrackingParams } from '@shared/url/tracking-params.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
@@ -319,6 +319,79 @@ export interface PipelineOptions {
   hooks?: Partial<PipelineHooks>
 }
 
+/** What the pipeline needs from Electron's `details`, copied while the request is still live. */
+interface RequestFacts {
+  readonly url: string
+  readonly resourceType: string
+  readonly documentUrl: string | null
+  readonly method: string
+  readonly webContentsId: number | null
+}
+
+/**
+ * The longest a top-level navigation may wait for the blocker's first compile.
+ *
+ * A bound rather than a courtesy. Reading the cached lists off disk takes a few hundred
+ * milliseconds; a compile that fails, or a disk that has gone away, must cost one page its filtering
+ * rather than cost the browser every page it will ever load.
+ */
+const FIRST_COMPILE_GRACE_MS = 750
+
+/*
+  The gate a top-level navigation waits at until the blocker has rules for the first time.
+
+  Startup no longer waits for the lists — the first window opens while they are still being read —
+  and `session.restoreAfterCrash` is on by default, so a restored session can put four real pages on
+  the wire before the engine holds a single rule. Those first pages are the ones a blocker is judged
+  on, and unfiltered is exactly what would be seen.
+
+  Only main frames wait, and that is not a compromise either: a subresource is fetched *because* of a
+  document, so by the time one is dispatched the navigation that asked for it has already waited.
+  Making them wait too would add a second delay for nothing.
+
+  Module-level, because the two ends are not in the same conversation: one process compiles its lists
+  once, while `installRequestPipeline` runs per session — a private window opened an hour later has no
+  promise to be handed and nothing to wait for. `FilterSubscription` is the one caller; it takes the
+  release when it is built and gives it back after its first compile.
+*/
+let firstCompile: { readonly compiled: Promise<void>; readonly release: () => void } | null = null
+
+/**
+ * Holds top-level navigations until the returned function is called.
+ *
+ * Calling the release twice is harmless, and so is calling it after the grace period above has
+ * already let the waiting requests through — it then finds nothing waiting.
+ */
+export function holdMainFrameRequests(): () => void {
+  if (firstCompile === null) {
+    let release = (): void => {}
+    const compiled = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    firstCompile = { compiled, release }
+  }
+  const held = firstCompile
+  return () => {
+    held.release()
+    // Cleared, so a request arriving later takes the synchronous path rather than a resolved promise's
+    // microtask — and so a second subscription (only tests build one) starts from a closed gate again.
+    if (firstCompile === held) firstCompile = null
+  }
+}
+
+/** Resolves on the first compile or on the deadline, whichever comes first. */
+function untilCompiled(compiled: Promise<void>): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const deadline = setTimeout(resolve, FIRST_COMPILE_GRACE_MS)
+    void compiled.then(() => {
+      // Cleared so the wait cannot outlive its reason: an unref-less timer would otherwise keep the
+      // process on its feet for three quarters of a second after the lists were ready.
+      clearTimeout(deadline)
+      resolve()
+    })
+  })
+}
+
 /**
  * Installs the pipeline on a session. Returns a disposer, so a private session
  * can be torn down completely when its window closes.
@@ -345,13 +418,15 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
     )
   }
 
-  session.webRequest.onBeforeRequest((details, callback) => {
+  const decide = (facts: RequestFacts, callback: (response: CallbackResponse) => void): void => {
+    // Read here rather than at interception, so a request that waited for the lists is judged against
+    // the settings as they are now — the same reason every stage takes them per request.
     const settings = getSettings()
     const context: RequestContext = {
-      url: details.url,
-      resourceType: details.resourceType,
-      documentUrl: details.frame?.url ?? null,
-      method: details.method,
+      url: facts.url,
+      resourceType: facts.resourceType,
+      documentUrl: facts.documentUrl,
+      method: facts.method,
       settings
     }
 
@@ -383,9 +458,35 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
       url: context.url,
       resourceType: context.resourceType,
       documentUrl: context.documentUrl,
-      webContentsId: details.webContentsId ?? null
+      webContentsId: facts.webContentsId
     })
     callback({})
+  }
+
+  session.webRequest.onBeforeRequest((details, callback) => {
+    /*
+      Copied before anything is awaited.
+
+      `details.frame` is a live renderer-owned object, and a main frame may well be gone by the time a
+      held request resumes — asking a disposed frame for its URL throws, in a listener every request in
+      the browser passes through.
+    */
+    const facts: RequestFacts = {
+      url: details.url,
+      resourceType: details.resourceType,
+      documentUrl: details.frame?.url ?? null,
+      method: details.method,
+      webContentsId: details.webContentsId ?? null
+    }
+
+    const held = firstCompile
+    if (held !== null && facts.resourceType === 'mainFrame') {
+      void untilCompiled(held.compiled).then(() => {
+        decide(facts, callback)
+      })
+      return
+    }
+    decide(facts, callback)
   })
 
   return () => {

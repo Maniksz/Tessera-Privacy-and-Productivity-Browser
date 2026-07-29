@@ -108,6 +108,17 @@ async function quarantineUnreadable(filePath: string): Promise<string> {
 
 export class SettingsStore {
   #values: Record<string, unknown>
+  /**
+   * A frozen copy of `#values`, handed out by `snapshot()`.
+   *
+   * `snapshot()` used to spread `#values` on every call. That looked free and was not: it runs three
+   * times per network request (`RequestPipeline`, twice from `session/hardening.ts`) and once per
+   * `toState()` from `BrowserWindowController`, each copying every one of ~76 keys. Rebuilding it
+   * only here — the one place `#values` changes — turns all of those calls into handing back the
+   * same reference. `Object.freeze` is what makes that safe to share: nothing that receives it can
+   * mutate the copy every other caller is also holding.
+   */
+  #snapshot: SettingsSnapshot
   readonly #listeners = new Set<SettingsListener>()
   #writeQueue: Promise<void> = Promise.resolve()
   #pendingWrite: NodeJS.Timeout | null = null
@@ -136,6 +147,7 @@ export class SettingsStore {
     values: Record<string, unknown>
   ) {
     this.#values = values
+    this.#snapshot = Object.freeze({ ...values }) as unknown as SettingsSnapshot
   }
 
   static async open(filePath: string, codec: SettingsCodec = plainJsonCodec): Promise<SettingsStore> {
@@ -192,7 +204,7 @@ export class SettingsStore {
   }
 
   snapshot(): SettingsSnapshot {
-    return { ...this.#values } as unknown as SettingsSnapshot
+    return this.#snapshot
   }
 
   /**
@@ -237,8 +249,13 @@ export class SettingsStore {
       changed[key] = value
     }
 
-    const change: SettingsChange = { changed, snapshot: this.snapshot() }
-    if (Object.keys(changed).length > 0) {
+    const hasChanges = Object.keys(changed).length > 0
+    // Rebuilt only when something actually changed, which is what keeps a `get`-only caller's
+    // `snapshot()` a single reference read instead of a fresh 76-key copy.
+    if (hasChanges) this.#snapshot = Object.freeze({ ...this.#values }) as unknown as SettingsSnapshot
+
+    const change: SettingsChange = { changed, snapshot: this.#snapshot }
+    if (hasChanges) {
       this.#scheduleWrite()
       for (const listener of this.#listeners) {
         try {

@@ -141,7 +141,16 @@ describe('the toolbar names the key beside the button', () => {
     expect(titleOf(/^Restore layout$/)).toBe('Restore layout\nCtrl+Shift+Enter')
   })
 
-  it('names the key on Settings, which is the same panel the key opens', () => {
+  it('names the key on Settings, which now opens the same tab the key opens', () => {
+    /*
+      The mapping this file exists to check, and it survived the surface changing underneath it.
+
+      The button used to raise a panel and `Ctrl+,` used to raise the same panel. Settings is a page
+      now — the user asked for a real tab rather than something drawn over the window — so the button
+      asks the core for `tessera://settings` and the menu item that carries this accelerator calls
+      `createTab` with the same address. Same destination, so the tooltip is still telling the truth,
+      which is the only thing that would have made this test wrong.
+    */
     renderToolbar()
     expect(titleOf(/^Settings$/)).toBe('Settings\nCtrl+,')
   })

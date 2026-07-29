@@ -260,6 +260,9 @@ describe('what the formatter is held to across the whole binding table', () => {
       'Y',
       '[',
       ']',
+      // The unshifted zoom-in key. `Plus` is the same physical key with Shift held, which is why
+      // both are bound and why only one of them is what anybody actually presses.
+      '=',
       'numadd',
       'numsub'
     ]

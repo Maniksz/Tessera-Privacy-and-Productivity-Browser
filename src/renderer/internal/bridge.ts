@@ -1,4 +1,4 @@
-import type { InternalInvokeChannel } from '@shared/ipc/channels.js'
+import type { InternalEventChannel, InternalInvokeChannel } from '@shared/ipc/channels.js'
 import type { EventPayload, InvokeRequest, InvokeResponse } from '@shared/ipc/contract.js'
 
 /**
@@ -33,12 +33,30 @@ export function invoke<C extends InternalInvokeChannel>(
   return bridge.invoke(channel, ...args)
 }
 
-export function subscribeQuickLinks(
-  listener: (payload: EventPayload<'quicklinks:changed'>) => void
+/**
+ * Subscribes to an event, if this page is one of the pages granted it.
+ *
+ * The grant is per page — `INTERNAL_PAGE_EVENT_CHANNELS` gives `settings:changed` to the settings
+ * page and to nothing else — so a helper that simply called `on` would work on one page and be
+ * refused by the preload on the rest. That matters because the caller is sometimes shared code:
+ * `useInternalI18n` runs on all seven pages and wants to re-read its catalogue when the language
+ * changes, which only the settings page can be told about.
+ *
+ * So the grant is consulted rather than assumed. The bridge publishes what this page may hear in
+ * `channels.event` — the preload puts the page's own row there — and a channel not in it yields the
+ * same no-op unsubscribe as an absent bridge. The caller writes one subscription and gets nothing on
+ * the pages where nothing is possible, instead of a refusal it would have to catch.
+ *
+ * This is a convenience gate and not the security one. The preload checks again, and the core checks
+ * a third time from the frame URL, because a compromised renderer is exactly the case where this
+ * object's own answer cannot be trusted.
+ */
+export function subscribe<C extends InternalEventChannel>(
+  channel: C,
+  listener: (payload: EventPayload<C>) => void
 ): () => void {
   const bridge = window.tesseraInternal
-  // A no-op unsubscribe keeps callers from having to special-case the absence of
-  // the bridge in their cleanup path.
   if (bridge === undefined) return () => {}
-  return bridge.on('quicklinks:changed', listener)
+  if (!bridge.channels.event.includes(channel)) return () => {}
+  return bridge.on(channel, listener)
 }

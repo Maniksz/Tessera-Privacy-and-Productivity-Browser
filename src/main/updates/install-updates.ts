@@ -73,7 +73,9 @@ export interface InstallUpdatesOptions {
 /**
  * Builds the service, hands it the real ports and starts the recurring check.
  *
- * Returns it, because the Help menu needs `checkNow()`. Starting here rather than leaving it to the
+ * Returns it, because two callers need it: the Help menu takes `checkNow()`, and the settings page's
+ * button reaches `checkOnDemand()` through the `updates:checkNow` handler. Starting here rather than
+ * leaving it to the
  * caller is deliberate: `installAutofill()` was written, tested and never called, and autofill
  * therefore did not run at all. A factory that returns something un-started is the same trap with a
  * different name.

@@ -668,6 +668,41 @@ describe('two checks at once', () => {
     expect(h.prompts.map((prompt) => prompt.kind)).toEqual(['nothing-published'])
   })
 
+  it('answers an impatient second press from the check already running', async () => {
+    /*
+      The property the settings button rests on, asserted for the case the button creates.
+
+      The two tests above cover a timer racing a timer and a person arriving mid-timer. Neither covers
+      two *on-demand* checks, which is what a button in a page invites — a control that looks
+      unresponsive for a second is a control people press again. The view disables it, but that is a
+      courtesy in a renderer; this is the guarantee in the core, and it is the one that decides how
+      many requests reach GitHub.
+
+      A gate rather than a delay, so the second press lands while the first request is genuinely
+      outstanding without depending on how fast anything runs.
+    */
+    let release = (): void => {}
+    const outstanding = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const h = harness({
+      current: '1.0.0',
+      feed: async () => {
+        await outstanding
+        return { kind: 'offer', version: '1.1.0' }
+      }
+    })
+
+    const first = h.service.checkOnDemand()
+    const second = h.service.checkOnDemand()
+    release()
+    const [a, b] = await Promise.all([first, second])
+
+    expect(h.checks, 'a second press sent a second request to GitHub').toBe(1)
+    expect(h.prompts).toHaveLength(1)
+    expect(b).toEqual(a)
+  })
+
   it('forgets that somebody asked once the check is over', async () => {
     /*
       Otherwise the first on-demand check would make every later automatic one talkative, and a
@@ -725,6 +760,25 @@ describe('the timer the check runs on', () => {
       scheduled.mockRestore()
       repeating.mockRestore()
     }
+  })
+
+  it('puts the first check within a few seconds of launch, and not at zero', () => {
+    /*
+      The test above cannot see this, and that is why this one exists.
+
+      It asserts `toHaveBeenCalledWith(..., FIRST_CHECK_DELAY_MS)` — the imported constant — so it
+      stays green for any value at all, including the five minutes the user asked to be rid of
+      ("update scan auch direkt beim starten, nicht erst nach 5 min"). A test that cannot fail is
+      not what makes a decision durable; the number is.
+
+      Both bounds are load-bearing and neither is a style choice. The upper one is the decision.
+      The lower one is a trap: `start()` reads `first > 0` as "schedule nothing", which is the
+      escape hatch every other test in this file uses to avoid a clock — so shortening the wait to
+      zero would not hasten the check, it would silently remove it, and every test here would still
+      pass.
+    */
+    expect(FIRST_CHECK_DELAY_MS).toBeGreaterThan(0)
+    expect(FIRST_CHECK_DELAY_MS).toBeLessThanOrEqual(10_000)
   })
 
   it('runs a real check when it fires, and still says nothing', async () => {

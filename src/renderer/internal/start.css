@@ -1,37 +1,30 @@
 /*
   Start page styling.
 
-  Follows the system colour scheme rather than the browser's theme setting: this
-  page is rendered in a content view that has no access to settings beyond the
-  narrow quick-link allowlist, and inventing a second theme source would be worse
-  than following the OS.
+  Used to carry its own 18-value palette, dark and light, entirely apart from `tokens.css` — the
+  exact drift `tokens.css:5-8` warns about: change `--accent` there and this page kept the old
+  blue. Importing it instead means one edit reaches every surface, this one included.
+
+  This page still follows the system colour scheme rather than the browser's theme setting: it is
+  rendered in a content view with no access to settings beyond the narrow quick-link allowlist, so
+  it never gets a `data-theme` attribute and always takes the `light dark` branch `tokens.css` sets
+  on `:root` — inventing a second theme source here would be worse than following the OS. That
+  following is no longer this file's own concern, though: `tokens.css` now carries it, every
+  surface included, via `light-dark()` rather than a `prefers-color-scheme` block this page used
+  to be the only one to have.
 */
 
-:root {
-  --bg: #17171a;
-  --bg-tile: #202024;
-  --bg-tile-hover: #26262c;
-  --bg-input: #2a2a30;
-  --fg: #e6e6ea;
-  --fg-dim: #8b8b96;
-  --border: #35353d;
-  --accent: #6da8ff;
-  --danger: #ff8b6b;
-  color-scheme: dark light;
-}
+@import '../src/tokens.css';
 
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f7f7f9;
-    --bg-tile: #ffffff;
-    --bg-tile-hover: #eef0f4;
-    --bg-input: #ffffff;
-    --fg: #1b1b1f;
-    --fg-dim: #63636e;
-    --border: #d8d8de;
-    --accent: #2563eb;
-    --danger: #b3401f;
-  }
+:root {
+  /*
+    A hover step the token system has no variable for — every other surface's hover states reuse
+    `--bg-elevated`/`--bg-input` directly (see `styles.css`), but this page's tiles and buttons
+    already sit *on* `--bg-elevated` and need a step lighter still. Derived from the tokens that
+    do exist rather than a nineteenth hard-coded hex, so it moves with them in both colour schemes
+    without a rule of its own for either.
+  */
+  --bg-tile-hover: color-mix(in srgb, var(--bg-elevated) 85%, var(--fg) 15%);
 }
 
 * {
@@ -93,7 +86,7 @@ body {
   border: 0;
   border-radius: 6px;
   padding: 0.3rem 0.6rem;
-  background: var(--bg-tile);
+  background: var(--bg-elevated);
   color: var(--fg);
   font: inherit;
   cursor: pointer;
@@ -170,7 +163,7 @@ body {
   padding: 0.9rem;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg-tile);
+  background: var(--bg-elevated);
   cursor: pointer;
   transition: background 120ms ease;
 }
@@ -197,7 +190,7 @@ body {
 /* Filing a tile into a folder is a different action, so it looks different. */
 .tile--dropInto {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--bg-tile));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
 }
 
 /*
@@ -387,7 +380,7 @@ body {
   padding: 0.45rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: var(--bg-tile);
+  background: var(--bg-elevated);
   color: var(--fg);
   font: inherit;
   font-size: 0.88rem;

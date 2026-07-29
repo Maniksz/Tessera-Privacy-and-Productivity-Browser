@@ -9,8 +9,7 @@ import {
   windowStateSchema
 } from '../model.js'
 import { settingsSnapshotSchema } from '../settings/definitions.js'
-import { SETTINGS_APPLIES, SETTINGS_SECTIONS } from '../settings/sections.js'
-import { SETTING_CONTROL_KINDS } from '../settings/control.js'
+import { settingDescriptorSchema } from '../settings/schema.js'
 import { LAYOUT_IDS } from '../split/layout.js'
 import { localeSchema } from '../i18n/schema.js'
 import { isInternalScheme } from '../product.js'
@@ -347,22 +346,41 @@ export const invokeContract = {
    * The settings UI renders from this rather than from a second hand-written table:
    * `definitions.ts` stays the single source of truth (spec 5), and the renderer
    * never imports zod.
+   *
+   * ## Why the words travel on this channel
+   *
+   * `label` is required and `description` and `choiceLabels` are the prose beside a control.
+   * They are here rather than in the message catalogue every renderer already holds, because
+   * that catalogue is one chunk with both locales in it, is budgeted at 46 kB with about
+   * a hundred and ninety bytes to spare, and is fetched before first paint by six internal
+   * pages that never show a setting. `main/settings/settings-text.ts` argues it in full.
+   *
+   * The consequence for this channel is that the response is **locale-dependent**: the core
+   * resolves the language the same way `i18n:getCatalog` does, so a caller that changes
+   * `appearance.uiLanguage` has to ask again. The settings page does exactly that, on
+   * `settings:changed`.
    */
-  'settings:describe': {
-    request: nothing,
-    response: z.array(
-      z.object({
-        key: z.string(),
-        section: z.enum(SETTINGS_SECTIONS),
-        applies: z.enum(SETTINGS_APPLIES),
-        kind: z.enum(SETTING_CONTROL_KINDS),
-        choices: z.array(z.string()).optional(),
-        min: z.number().optional(),
-        max: z.number().optional(),
-        integer: z.boolean().optional()
-      })
-    )
-  },
+  'settings:describe': { request: nothing, response: z.array(settingDescriptorSchema) },
+
+  /**
+   * A check the user asked for, and the narrowest pair of schemas in this file.
+   *
+   * **Nothing in, and `{ ok: true }` out.** The request is empty because there is no argument a
+   * caller could usefully supply — a channel, a version or a repository in the payload would be a
+   * page choosing what this browser talks to, which is the whole thing the single grant is protecting.
+   *
+   * The response was the real decision. `UpdateService.checkOnDemand` resolves with an `UpdateOutcome`
+   * naming the version found and how the user answered, and returning it here was the obvious shape.
+   * It loses on two counts. The outcome is *already reported*, in a native dialog the core raises
+   * before this promise settles, so a page rendering it too would say the same thing twice — in
+   * different words, because the page has no catalogue entry for any of those cases and may not grow
+   * one. And a payload would hand a document the released version number and the fact that this
+   * person declined it, for no purpose.
+   *
+   * What the caller does get is the *timing*: this resolves when the check is over, which is what lets
+   * a button stay disabled for exactly as long as something is happening.
+   */
+  'updates:checkNow': { request: nothing, response: ok },
 
   // --- window --------------------------------------------------------------
   'window:getState': { request: nothing, response: windowStateSchema },
@@ -1004,6 +1022,19 @@ export const eventContract = {
     changed: z.record(z.string(), z.unknown()),
     snapshot: settingsSnapshotSchema
   }),
+  /*
+    The effective interface language, and nothing else.
+
+    It exists so an open internal tab can re-read its catalogue without being handed
+    `settings:changed`, which carries the whole snapshot. Every internal page needs to know the
+    language; none of them needs to know the user's configuration to find it out, and the reader
+    page renders harvested website text, so the narrow channel is worth its own entry.
+
+    Already resolved, never `'system'`: that preference is answered with `app.getLocale()`, which
+    only the core can ask. A page told `'system'` would have to guess, and `resolveLocale` does not
+    know the value — it would quietly fall back to English.
+  */
+  'locale:changed': z.object({ locale: localeSchema }),
   /**
    * A shortcut the OS delivered to the window but that has no menu item.
    * The renderer decides what to do, which keeps focus-sensitive behaviour

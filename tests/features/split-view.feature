@@ -8,7 +8,8 @@ Feature: Split view
     - website fullscreen inside a split layout stays within its own tile and the
       other tiles keep running
     - the escalation ladder is tile fullscreen, tile maximised, window fullscreen,
-      and Escape steps back exactly one rung
+      and Escape steps back exactly one rung — the innermost one it is standing on,
+      because the same press reaches the page and takes its fullscreen with it
     - a maximised tile does not discard the layout
 
   Background:
@@ -169,7 +170,7 @@ Feature: Split view
     Then the escalation level is "none"
     And the window still has 4 tiles
 
-  Scenario: Escape steps back one rung at a time
+  Scenario: Escape gives up the page's fullscreen before it touches the tile
     Given the "2x2" layout
     And tabs "a"
     When I assign tab "a" to tile 0
@@ -177,7 +178,20 @@ Feature: Split view
     And I maximise tile 0
     Then the escalation level is "tile-maximized"
     When I press Escape
-    Then the escalation level is "tile-fullscreen"
+    Then no tile is in fullscreen
+    And the escalation level is "tile-maximized"
+    When I press Escape
+    Then the escalation level is "none"
+
+  Scenario: Escape does not leave window fullscreen while a page is still fullscreen
+    Given the "1x1" layout
+    And tabs "a"
+    When I assign tab "a" to tile 0
+    And the window goes fullscreen
+    And tab "a" requests fullscreen
+    When I press Escape
+    Then no tile is in fullscreen
+    And the escalation level is "window-fullscreen"
     When I press Escape
     Then the escalation level is "none"
 

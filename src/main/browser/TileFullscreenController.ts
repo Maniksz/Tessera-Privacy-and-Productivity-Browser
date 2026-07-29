@@ -55,8 +55,26 @@ export class TileFullscreenController {
     this.host = host
   }
 
-  /** Re-applies the policy; call after anything that changes layout or the setting. */
+  /**
+   * Re-applies the policy; call after anything that changes layout or the setting.
+   *
+   * ## Why a fullscreen window is left alone
+   *
+   * The confinement is `setFullScreenable(false)`, and `window-events.ts` already says what that
+   * does at the wrong moment: "Restoring it on the way *in* would trap the user in fullscreen."
+   * Every other caller of this runs while the window is not fullscreen, so the guard used to be
+   * unnecessary and there was nothing to write it against. Reordering `escape()` to take the
+   * innermost rung first created the case: leaving a tile's fullscreen, or un-maximising a tile,
+   * now happens *inside* a window that is still fullscreen, and both call this on the way out.
+   * Without the guard the second `Escape` — the one that is supposed to leave the window's
+   * fullscreen — would be asking an un-fullscreenable window to change its fullscreen, which is the
+   * silence this whole file is about.
+   *
+   * Nothing is lost by waiting: `leave-full-screen` re-applies the policy, and that is the moment a
+   * page could take the window and therefore the moment the confinement has to be back.
+   */
   applyPolicy(): void {
+    if (this.host.split.isWindowFullscreen) return
     this.host.setFullScreenable(
       windowFullscreenPermitted(this.host.split.layout, this.host.fullscreenScope())
     )
@@ -115,6 +133,11 @@ export class TileFullscreenController {
    * Exactly one rung per press, which is what makes Escape predictable: from a page's
    * fullscreen inside a tile, out of the tile's fullscreen, then out of a maximised tile,
    * then out of the window's own fullscreen.
+   *
+   * That sentence was here before the code did it. `SplitController.escape` read the ladder from
+   * the other end and took the window's fullscreen first, which is the defect this order fixes —
+   * see the docblock there for the report and the reasoning. Kept as a switch over the *named*
+   * step rather than a second copy of the priority, so there is one place the order can be wrong.
    */
   escape(): void {
     const step = this.host.split.escape()
@@ -126,6 +149,17 @@ export class TileFullscreenController {
         const tile = this.host.split.fullscreenTile
         this.host.split.leaveTileFullscreen()
         if (tile !== null) {
+          /*
+            Now the *first* rung, which is the point — and it is also the rung most likely to be
+            asking a page for something it has already done. The press that got here reached the
+            page too, and a player that handles `Escape` itself has left fullscreen before this
+            runs. `askPageToExitFullscreen` is safe either way: it is a request, `document
+            .exitFullscreen()` on a document that is not fullscreen rejects rather than throwing,
+            and the seam swallows that on purpose (see `window-seams.ts`). Skipping the ask when the
+            page "looks" already out was rejected — the main process cannot see
+            `document.fullscreenElement`, so the check would be a guess, and the case it gets wrong
+            is the player that ignored the key and stays fullscreen with no way back.
+          */
           const tabId = this.host.split.tabIdAt(tile)
           if (tabId !== null) this.host.askPageToExitFullscreen(tabId)
         }

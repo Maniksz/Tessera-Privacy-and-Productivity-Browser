@@ -784,11 +784,13 @@ describe('IPC discipline', () => {
       ['advanced.unloadAfterMinutes', 'same timer, same absence'],
       ['search.suggestFromOpenTabs', 'the omnibox never consults open tabs'],
       /*
-        Seven more, found by this test rather than by review. The first is the one a user would notice
-        soonest: the browser follows the operating system's theme through `prefers-color-scheme` in CSS,
-        so the *setting* is never consulted and choosing "light" or "dark" does nothing at all.
+        Six more, found by this test rather than by review.
+
+        `appearance.theme` was the seventh and the one a user noticed soonest — the browser followed the
+        operating system through `prefers-color-scheme` and the setting was never consulted, so choosing
+        "light" did nothing. It is wired now: the tokens carry both palettes and the chrome writes the
+        chosen one onto the document element. This test is what says so; the entry leaves the list.
       */
-      ['appearance.theme', 'CSS follows the OS; light and dark are never applied'],
       ['appearance.tabBarPosition', 'the strip is always drawn in one place'],
       ['search.suggestFromHistory', 'the omnibox draws no suggestions from history'],
       ['search.suggestFromBookmarks', 'nor from bookmarks'],
@@ -845,19 +847,100 @@ describe('IPC discipline', () => {
     }
   })
 
-  it('gives no channel an update command', () => {
+  it('gives no page but settings an update command', async () => {
     /*
-      The update check has no IPC channel, and that is the property that keeps a *page* from being able to
-      trigger it. The only two callers are a timer and a menu item.
+      ## What this rule was, and why it was right
 
-      Worth a test rather than a comment because the pressure to add one is real and reasonable-sounding —
-      a settings page wanting a "check now" button — and the cost is that any page in any tab can then make
-      the browser talk to GitHub on demand.
+      Until the settings page grew a "check for updates now" button, this test asserted that **no**
+      channel in the contract matched `/^updates?:/` at all. The update check had no IPC channel, the
+      only two callers were a timer and a Help-menu item, and that absence was the property that kept a
+      page from being able to make this browser talk to GitHub. Its comment named this very request as
+      the pressure it expected — "a settings page wanting a 'check now' button" — and gave the cost as
+      "any page in any tab can then make the browser talk to GitHub on demand".
+
+      The user asked for the button. The rule is therefore **narrowed, not dropped**, and it is worth
+      being exact about what has changed since it was written, because two things have and the third
+      has not.
+
+      Changed:
+
+        1. **Channels are granted per internal page** (`INTERNAL_PAGE_INVOKE_CHANNELS`), not to internal
+           pages as a class. "Any page in any tab" is no longer what declaring a channel means — this
+           one sits on a single row of that table, and `decideAccess` in `ipc/sender-policy.ts` refuses
+           web content outright and re-checks the grant in the core from the sending frame's own URL,
+           rather than trusting the preload's copy of it.
+        2. **A navigation lock** (`browser/navigation-policy.ts`, added this round) refuses a navigation
+           to an internal address that the core did not start. That closes the route the old comment's
+           "any page in any tab" actually rested on: a visited site assigning `location.href =
+           'tessera://settings'` to *become* a document the privilege table allows.
+
+      Not changed: the worry underneath. A channel reachable from more than the settings page would
+      still let something else make this browser talk to GitHub on demand, and neither of those two
+      changes would stop it — they bound *who can become the settings page*, not who the channel is
+      granted to. So the invariant is the narrowest surviving form of the old one:
+
+        **no internal page other than `settings` may reach the update check.**
+
+      Two assertions, because either one alone can be walked around. The first derives the channel from
+      the *wiring* — whatever name `handlers.ts` connects to the on-demand check is the update command,
+      whatever it is called — so renaming it out of the `updates:` namespace makes this test fail rather
+      than pass on an empty set. The second sweeps the namespace, so a second update channel added later
+      inherits the rule instead of arriving unguarded.
     */
-    for (const channel of INVOKE_CHANNELS) {
-      expect(channel, 'an update channel makes the check reachable from a page').not.toMatch(
-        /^updates?:/
-      )
+    /*
+      The whole directory, not `handlers.ts` alone — and this test found that out the hard way, which
+      is the argument for it.
+
+      It read one file, and the handler then moved to `ipc/update-handlers.ts` (that file was over the
+      per-file line bar and the registrars split by area, as `media-handlers.ts` and
+      `download-handlers.ts` already had). The test went red rather than quietly passing over a file
+      that no longer contains the thing it is about — the right failure, but only by luck of it being
+      the *first* assertion. Scanning every registrar means a future split moves the code without
+      moving the guard.
+    */
+    const registrars = (await collect('src/main/ipc'))
+      .map((file) => withoutComments(file.text))
+      .join('\n')
+    /*
+      One registration at a time, rather than "a channel name within N characters of the call".
+
+      That first shape matched `handle('settings:resetAll', …)` — four registrations earlier and well
+      inside any window wide enough to be useful — and then asserted a rule about the wrong channel,
+      which is the failure mode a scanning test has to be built against. Each match here ends where
+      the next `handle(` begins, so the name and the body belong to each other.
+    */
+    const wired = [...registrars.matchAll(/handle\(\s*'([^']+)'([\s\S]*?)(?=handle\(|$)/g)].find(
+      (registration) => (registration[2] ?? '').includes('checkForUpdates()')
+    )?.[1]
+    expect(wired, 'nothing wires a channel to the on-demand update check any more').toBeDefined()
+
+    const grantedThat = INTERNAL_PAGES.filter((page) => mayInternalPageInvoke(page, wired ?? ''))
+    expect(grantedThat, 'the update check is reachable from a page that is not settings').toEqual([
+      'settings'
+    ])
+
+    /*
+      And the check it runs is the announcing one.
+
+      `checkAutomatically()` consults `updates.checkAutomaticallyOnGithub` and returns
+      `{ kind: 'not-checked' }` when it is off, so a handler wired to it would give somebody who had
+      switched the timer off a button that did nothing at all and said nothing about it. The two
+      methods are one word apart in the same class.
+    */
+    const entry = withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    expect(entry, 'the button runs a check that can refuse itself').toMatch(/checkOnDemand\(\)/)
+
+    const updateChannels = INVOKE_CHANNELS.filter((channel) => /^updates?:/.test(channel))
+    expect(updateChannels, 'the wired channel left the namespace this rule sweeps').toContain(wired)
+
+    for (const channel of updateChannels) {
+      for (const page of INTERNAL_PAGES) {
+        if (page === 'settings') continue
+        expect(
+          mayInternalPageInvoke(page, channel),
+          `${page} may ${channel}, so it can make the browser talk to GitHub`
+        ).toBe(false)
+      }
     }
   })
 

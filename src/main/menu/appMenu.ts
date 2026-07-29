@@ -128,9 +128,18 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
         : ([
             { type: 'separator' },
             {
+              /*
+                Opens the tab, where this used to raise a panel over the window.
+
+                The user asked for settings to be a page and not something drawn over the window, and
+                chose to drop the panel rather than keep both. So all three routes in — this key, the
+                toolbar button, and what used to be a separate Tools entry — now open the one surface.
+                The accelerator stays written as the literal `accel('settings')` because the fitness
+                test in `tests/architecture.test.ts` scans for exactly that.
+              */
               label: t('menu.edit.settings'),
               accelerator: accel('settings'),
-              click: () => focused()?.emit('shortcut:triggered', { action: 'settings' })
+              click: () => focused()?.createTab({ url: internalUrl('settings') })
             }
           ] satisfies MenuItemConstructorOptions[]))
     ]
@@ -347,17 +356,14 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       },
       { type: 'separator' },
       /*
-        Settings and extensions as tabs, alongside the panels that Ctrl+, and the toolbar open.
+        Extensions as a tab, alongside the panel the toolbar opens.
 
-        Both entry points exist by choice — a panel is one click away, a tab can be zoomed, linked to,
-        and put in a split tile, which a surface drawn over the window never can. They render the same
-        component (`SettingsView`, `ExtensionsView`), so having two ways in costs nothing but these two
-        menu items.
+        There is no settings entry beside it any more, and its absence is the point. It existed because
+        settings had two entry points — a panel over the window and a tab — and this was the only way to
+        the tab. Now the Edit menu's Settings item and the toolbar button both open the tab, so a third
+        item labelled "Settings in a tab" would name a distinction that no longer exists. Extensions
+        still has both, so it still needs this.
       */
-      {
-        label: t('menu.tools.settingsTab'),
-        click: () => focused()?.createTab({ url: internalUrl('settings') })
-      },
       {
         label: t('menu.tools.extensionsTab'),
         click: () => focused()?.createTab({ url: internalUrl('extensions') })
@@ -419,10 +425,13 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
         because an accelerator without one is a key that silently does nothing. An item without a key
         is just a menu item.
 
-        Deliberately not the settings screen and not a button in the chrome: a check is the one update
-        operation that takes no argument and needs no state, and the menu is where every other browser
-        puts it. There is no IPC channel for it either, which is what keeps a web page from being able
-        to make this browser talk to GitHub — see `UpdateService`.
+        The menu is where every other browser puts a check, and it stays here — but it is no longer the
+        only way in. The settings page grew a button on 29.07.2026, so the sentence that used to sit
+        here ("there is no IPC channel for it either, which is what keeps a web page from being able to
+        make this browser talk to GitHub") is now false. What keeps a web page out is the grant: the
+        channel is given to `tessera://settings` alone, web content is refused before any handler runs,
+        and a page cannot navigate itself onto an internal address to borrow the grant. See
+        `UpdateService`. This item needs no channel at all — it holds the controller directly.
       */
       {
         label: t('updates.checkNow'),
@@ -446,9 +455,10 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
         { label: t('menu.help.about'), click: () => focused()?.createTab({ url: internalUrl('about') }) },
         { type: 'separator' },
         {
+          // The macOS home for this item, and the same target as its Windows and Linux twin above.
           label: t('menu.edit.settings'),
           accelerator: accel('settings'),
-          click: () => focused()?.emit('shortcut:triggered', { action: 'settings' })
+          click: () => focused()?.createTab({ url: internalUrl('settings') })
         },
         { type: 'separator' },
         { role: 'services' },

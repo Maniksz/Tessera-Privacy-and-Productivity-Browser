@@ -136,8 +136,11 @@ describe('withAlternativeAccelerators', () => {
       }
     ]
 
+    // All three of `zoomIn`'s bindings, so the nested item is shown to have been reached and to have
+    // received the whole set rather than the first alternative only.
     expect(acceleratorsIn(withAlternativeAccelerators(template, 'win32'))).toEqual([
       'Control+Plus',
+      'Control+=',
       'Control+numadd'
     ])
   })

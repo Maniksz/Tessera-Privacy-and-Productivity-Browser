@@ -2,42 +2,54 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { SETTINGS_SECTIONS, type SettingsSection } from '@shared/settings/sections.js'
 import type { SettingDescriptor } from '@shared/settings/control.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
-import { usePanelDismiss } from './usePanelDismiss.js'
 import { useCoreCall } from './useCoreCall.js'
 
 /**
- * The settings surface, hosted by either the chrome UI or the `tessera://settings` page.
+ * The settings surface, rendered by `tessera://settings` and by nothing else.
  *
- * ## Why one component and two hosts
+ * ## Why there is one host now, where there were two
  *
- * The user asked to keep the in-window panel *and* have a real tab — the tab so settings can be
- * zoomed, linked to and shown in a tile, the panel because it is one click away. Two entry points is a
- * product decision; two implementations would be a mistake, and the second one always drifts. So this
- * holds every decision about what settings look like and how they behave, and each host supplies only
- * the four things it can do that the other cannot.
+ * This used to be shared between the chrome UI's settings panel and the tab, with `onClose` as the
+ * one prop that told them apart: present meant a modal dialogue with a backdrop, a close button and
+ * an Escape handler; absent meant a page. The user asked for settings to be a real page and not
+ * something drawn over the window, and chose to drop the panel rather than keep both — so the fork
+ * has one arm left and the other has been removed rather than left as a prop nobody passes.
  *
- * ## Why the seam is four methods and not a bridge
+ * Nothing about *this* file was the reason for the change. It already rendered correctly as a page;
+ * the panel was the surface that could not be zoomed, could not be linked to and could not sit in a
+ * split tile. What is left here is the page's half, with the dialogue machinery gone.
  *
- * The obvious shape is to pass in an `invoke`. This deliberately does not: the two bridges are typed
- * over *different* channel unions — the chrome one over all of them, the internal one over the seven
- * this page is allowed — and a single generic signature covering both is either a lie or a cast.
- * Naming the four operations instead makes the component's needs explicit, keeps both adapters about
- * ten lines, and means a test can supply them without a bridge at all.
+ * `SettingsHost` survives the deletion of the second host on purpose. It is what lets a test drive
+ * this component without a bridge at all, and it is why the page's adapter is ten lines: the four
+ * operations are named, rather than a generic `invoke` being handed in over a channel union this
+ * component has no business knowing.
  *
- * ## Why an internal page is safe, contrary to what this component's docblock used to say
+ * ## Why an internal page is safe
  *
- * It said settings could not be a page because "an internal page only gets the narrow bridge, which
- * deliberately excludes the settings channels — putting settings on an internal page would mean
- * widening that hole". That was backwards. `INTERNAL_PAGE_INVOKE_CHANNELS.settings` already grants
- * exactly the seven settings channels, and the chrome renderer that hosts the panel has *all* sixty:
- * the page is the strictly less privileged of the two hosts.
+ * A web page can link to `tessera://settings`, and the surface can write every setting the browser
+ * has. That link only navigates: the two documents are cross-origin, so the linking page gets no DOM
+ * access and no scripting handle, and this surface listens to no `postMessage`. What keeps it that
+ * way is the page's CSP (`default-src 'none'`, `script-src 'self'`, no `unsafe-inline`), so injected
+ * script cannot run even if content reached the markup. The page is also the *less* privileged of
+ * the two hosts it once had: its bridge carries exactly the six channels
+ * `INTERNAL_PAGE_INVOKE_CHANNELS.settings` grants, where the chrome renderer has all sixty.
  *
- * The one real difference is reachability — a web page can link to `tessera://settings`, and cannot
- * link to the chrome UI. That is acceptable because the link only navigates: the two documents are
- * cross-origin, so the linking page gets no DOM access and no scripting handle, and this surface
- * listens to no `postMessage`. What keeps it that way is the page's CSP (`default-src 'none'`,
- * `script-src 'self'`, no `unsafe-inline`), so injected script cannot run even if content reached the
- * markup.
+ * The sixth is `updates:checkNow`, which arrived with the button below and is the only grant in that
+ * whole table that lets a page cause an outbound request. It is held to this one page by a fitness
+ * function — `gives no page but settings an update command` — rather than by this paragraph.
+ *
+ * ## Where the words come from
+ *
+ * Not from here. Every label used to be derived from the key by a `humanise()` helper, so a German
+ * user read `Block third party cookies` beside seventy-six switches — spec 7's rule against
+ * hard-coded strings, broken in the one way a catalogue check could never see, because the strings
+ * were generated at render time. Labels, descriptions and readable option names now arrive on the
+ * descriptor from `main/settings/settings-text.*`; that module explains why they are not in the
+ * shared catalogue. The only text this file still resolves itself is its own chrome — the heading,
+ * the search box, the section titles, the update button's label — which is catalogue work and stays
+ * catalogue work. `updates.checkNow` was already there for the Help menu, which is why the button
+ * needed no new key; nothing else about it may grow one, because the catalogue chunk is inside about
+ * two hundred bytes of a budget a fitness test enforces.
  */
 
 const SECTION_LABELS: Readonly<Record<SettingsSection, MessageKey>> = {
@@ -58,7 +70,7 @@ export type Snapshot = Record<string, unknown>
 export type Translate = (key: MessageKey, params?: Record<string, string | number>) => string
 
 /**
- * Everything this surface needs from whichever renderer is hosting it.
+ * Everything this surface needs from the renderer hosting it.
  *
  * Each method maps to exactly one channel, so an adapter cannot accidentally give this component a
  * power it was not meant to have — and the page's adapter physically cannot, because its bridge has
@@ -69,6 +81,17 @@ export interface SettingsHost {
   /** Writes one setting. Must reject on refusal rather than resolving: see `write` below. */
   set(key: string, value: unknown): Promise<void>
   reset(key: string): Promise<void>
+  /**
+   * Asks the core to look for a new version now.
+   *
+   * Resolves when the check is finished, and with nothing: the answer is a native dialog the core
+   * raises. What this promise is for is the *duration* — the button is disabled until it settles.
+   *
+   * Required rather than optional. An optional method would let a host omit it and render a button
+   * that does nothing, which is the exact defect `useCoreCall`'s docblock is about; required means
+   * the compiler asks the question.
+   */
+  checkForUpdates(): Promise<void>
   t: Translate
 }
 
@@ -76,29 +99,14 @@ export interface SettingsViewProps {
   host: SettingsHost
   /** The current values, or `null` before the first snapshot has arrived. */
   settings: Snapshot | null
-  /**
-   * Closing, where closing means something.
-   *
-   * The panel dismisses itself; a tab has nothing to dismiss, so its adapter passes `undefined` and
-   * this drops the close button, the backdrop and the Escape handler. A close button on a tab that did
-   * nothing would be worse than none.
-   */
-  onClose?: (() => void) | undefined
 }
 
-/** Turns `privacy.blockThirdPartyCookies` into `Block third party cookies`. */
-function humanise(key: string): string {
-  const leaf = key.slice(key.indexOf('.') + 1)
-  const spaced = leaf.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[._]/g, ' ')
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
-}
-
-export function SettingsView({ host, settings, onClose }: SettingsViewProps): React.ReactNode {
+export function SettingsView({ host, settings }: SettingsViewProps): React.ReactNode {
   const { t } = host
   const [descriptors, setDescriptors] = useState<SettingDescriptor[]>([])
   const [query, setQuery] = useState('')
+  const [checking, setChecking] = useState(false)
   const { error, run } = useCoreCall()
-  const panelRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -108,8 +116,12 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
 
       It was `void host.describe().then(setDescriptors)`: a rejection went nowhere, and this surface
       renders no empty-state text when it has no descriptors — the `noMatches` message is gated on
-      having some — so a refused `settings:describe` produced a blank panel body. "The core refused"
+      having some — so a refused `settings:describe` produced a blank page body. "The core refused"
       and "this browser has no settings" must not be the same picture.
+
+      Re-runs whenever `host` changes identity, which is now load-bearing rather than incidental: the
+      page rebuilds its host after a language change precisely so this refetches, because the labels
+      and descriptions live on the descriptors and the core resolved them in the old language.
 
       An async body rather than `.then`: a state write attached directly to a promise in an effect body
       has no relationship to the effect's own cleanup, which is what the `react-hooks` rule flags.
@@ -127,17 +139,69 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
     searchRef.current?.focus()
   }, [])
 
-  // Panel-only, and the hook says why. Shared with `ExtensionsView`, which claimed `aria-modal`
-  // without it.
-  usePanelDismiss(panelRef, onClose)
-
   const write = (key: string, value: unknown): Promise<void> => run(() => host.set(key, value))
+
+  /*
+    The check, and the whole of what this surface knows about updates.
+
+    Disabled until the promise settles, and that is the only progress this control reports. There is
+    no "checking…" anywhere in the message catalogue, the catalogue is one chunk with both locales in
+    it and it sits under a budget a fitness test enforces with about two hundred bytes to spare — so
+    a word here would cost a failing test in `architecture.test.ts`. The disabled state is honest
+    about the one thing that matters (something is happening, pressing again will not help) and the
+    result arrives as a native dialog a moment later, which is where the sentences already exist.
+
+    `run` swallows nothing: a refused invoke lands in the same `role="alert"` a refused write does.
+    Re-enabled in `finally`, because a button left disabled by a failure is a button the user cannot
+    retry with.
+  */
+  const checkForUpdates = (): void => {
+    setChecking(true)
+    void run(() => host.checkForUpdates()).finally(() => {
+      setChecking(false)
+    })
+  }
+
+  /*
+    The one case where the button's answer would be a lie, admitted next to the button.
+
+    `updates.channel` defaults to `alpha`; a user who chooses `stable` is told "No new version"
+    forever, because every version this project has published is a prerelease and GitHub's "latest
+    release" excludes those. That was a tolerable footnote while the only way to ask was a Help-menu
+    item nobody finds. A button at the top of the settings page makes a wrong answer far easier to
+    reach, so this surface must not present it without the caveat.
+
+    The sentence is the descriptor's own — the same text the `updates.channel` row renders nine
+    sections further down, resolved by the core in the user's language. Written out here instead, it
+    would be a second wording of the same fact in two locales, a new catalogue key the budget has no
+    room for, and one more place to forget when the first stable release makes it untrue.
+
+    This is a mitigation and not the fix. The dialog still says "No new version" to that user, and
+    correcting *that* needs wording and an outcome this component cannot see; see the report.
+  */
+  const channelCaveat = useMemo(() => {
+    if (settings?.['updates.channel'] !== 'stable') return null
+    return descriptors.find((descriptor) => descriptor.key === 'updates.channel')?.description ?? null
+  }, [descriptors, settings])
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (needle === '') return descriptors
+    /*
+      Key, label *and* description, where it used to be key and a name derived from the key.
+
+      Searching only the key would mean a German user searching for a German word finds nothing at all
+      — every key is English, and the label beside it is the only word on screen they can type. The
+      description is included as well because that is where the searchable nouns are: nothing in
+      `webrtcIpPolicy` or its label contains the word VPN, and the sentence underneath is the reason
+      somebody would be looking. The cost is that a search occasionally matches a row whose title does
+      not obviously contain the term; a search that silently finds nothing is the worse failure.
+    */
     return descriptors.filter(
-      (d) => d.key.toLowerCase().includes(needle) || humanise(d.key).toLowerCase().includes(needle)
+      (descriptor) =>
+        descriptor.key.toLowerCase().includes(needle) ||
+        descriptor.label.toLowerCase().includes(needle) ||
+        (descriptor.description ?? '').toLowerCase().includes(needle)
     )
   }, [descriptors, query])
 
@@ -157,9 +221,12 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
     return null
   }
 
-  const control = (descriptor: SettingDescriptor): React.ReactNode => {
+  const control = (descriptor: SettingDescriptor, describedBy: string | null): React.ReactNode => {
     const value = settings?.[descriptor.key]
     const id = `setting-${descriptor.key}`
+    // Spread rather than passed as `undefined`: an `aria-describedby=""` on a control with nothing to
+    // describe it points a screen reader at a node that is not there.
+    const description = describedBy === null ? {} : { 'aria-describedby': describedBy }
 
     switch (descriptor.kind) {
       case 'toggle':
@@ -169,6 +236,7 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
             className="field__toggle"
             type="checkbox"
             checked={value === true}
+            {...description}
             onChange={(event) => void write(descriptor.key, event.target.checked)}
           />
         )
@@ -179,11 +247,17 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
             id={id}
             className="field__select"
             value={typeof value === 'string' ? value : ''}
+            {...description}
             onChange={(event) => void write(descriptor.key, event.target.value)}
           >
             {(descriptor.choices ?? []).map((choice) => (
               <option key={choice} value={choice}>
-                {choice}
+                {/*
+                  The raw member is the fallback, not the norm. `disable_non_proxied_udp` was being
+                  rendered verbatim as option text. Where the core sends no name the member is shown
+                  as it is, which is right for the layout ids — `1x2` reads the same in any language.
+                */}
+                {descriptor.choiceLabels?.[choice] ?? choice}
               </option>
             ))}
           </select>
@@ -199,6 +273,7 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
             {...(descriptor.min === undefined ? {} : { min: descriptor.min })}
             {...(descriptor.max === undefined ? {} : { max: descriptor.max })}
             step={descriptor.integer === true ? 1 : 'any'}
+            {...description}
             onChange={(event) => {
               const parsed = Number(event.target.value)
               if (Number.isNaN(parsed)) return
@@ -214,6 +289,7 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
             className="field__text"
             type="text"
             value={typeof value === 'string' ? value : ''}
+            {...description}
             onChange={(event) => void write(descriptor.key, event.target.value)}
           />
         )
@@ -225,7 +301,7 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
             className="field__list"
             rows={Math.min(6, Math.max(2, Array.isArray(value) ? value.length + 1 : 2))}
             value={Array.isArray(value) ? value.join('\n') : ''}
-            aria-describedby={`${id}-hint`}
+            {...description}
             onChange={(event) => {
               const lines = event.target.value
                 .split('\n')
@@ -240,22 +316,15 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
       // still something the user should be able to see.
       default:
         return (
-          <output className="field__readonly" id={id}>
+          <output className="field__readonly" id={id} {...description}>
             {JSON.stringify(value)}
           </output>
         )
     }
   }
 
-  const body = (
-    <div
-      className="panel"
-      // A tab is not a dialogue. Claiming `role="dialog" aria-modal` on a whole page tells a screen
-      // reader the rest of the browser is unavailable, which is false and makes it harder to leave.
-      {...(onClose === undefined ? {} : { role: 'dialog', 'aria-modal': true })}
-      aria-labelledby="settings-heading"
-      ref={panelRef}
-    >
+  return (
+    <div className="panel" aria-labelledby="settings-heading">
       <header className="panel__header">
         <h2 className="panel__heading" id="settings-heading">
           {t('settings.title')}
@@ -269,11 +338,6 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
           aria-label={t('settings.searchPlaceholder')}
           onChange={(event) => setQuery(event.target.value)}
         />
-        {onClose !== undefined && (
-          <button type="button" className="iconbutton" aria-label={t('settings.close')} onClick={onClose}>
-            ×
-          </button>
-        )}
       </header>
 
       {error !== null && (
@@ -283,6 +347,34 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
       )}
 
       <div className="panel__body">
+        {/*
+          An action, at the top, in a surface that is otherwise generated entirely from descriptors.
+
+          Every other row here is label + key + control + reset, built from `settings:describe`. This
+          one is deliberately not: a descriptor row is a *value that is stored*, with a current state
+          and a default to go back to, and "check now" has none of those. Adding it as a pseudo-setting
+          would have meant a control kind that ignores its value, a reset button that resets nothing,
+          and a key that names no setting — a lie in four places to avoid one small block of markup.
+
+          It is also why it sits above the section list rather than beside the two update settings. Those
+          are the last two rows of `advanced`, which is the last of ten sections; the user asked for this
+          "recht weit oben", and a button is not a setting anyway. What keeps this from growing into a
+          second settings screen is that it holds one control: anything with a value to store belongs in
+          `definitions.ts`, and anything that needs its own words needs a catalogue key the budget does
+          not have.
+        */}
+        <div className="panel__lead">
+          <button
+            type="button"
+            className="dialog__button"
+            disabled={checking}
+            onClick={checkForUpdates}
+          >
+            {t('updates.checkNow')}
+          </button>
+          {channelCaveat !== null && <p className="panel__notice">{channelCaveat}</p>}
+        </div>
+
         {visible.length === 0 && descriptors.length > 0 && (
           <p className="panel__empty">{t('settings.noMatches', { query })}</p>
         )}
@@ -295,15 +387,37 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
               {(bySection.get(section) ?? []).map((descriptor) => {
                 const note = appliesNote(descriptor.applies)
                 const id = `setting-${descriptor.key}`
+                const isList = descriptor.kind === 'text-list'
+                /*
+                  Every sentence under the label, joined into one `aria-describedby`.
+
+                  A screen reader reads these after the control's name, so a user hears "Kill switch,
+                  checkbox, not implemented — nothing enforces this today" rather than the label alone.
+                  The description is the important half: it is where a cost or an unimplemented switch
+                  is admitted, and admitting it only in ink is admitting it to sighted users only.
+                */
+                const describedBy =
+                  [
+                    descriptor.description === undefined ? null : `${id}-description`,
+                    isList ? `${id}-hint` : null
+                  ]
+                    .filter((part) => part !== null)
+                    .join(' ') || null
+
                 return (
                   <div className="field" key={descriptor.key}>
                     <div className="field__text-block">
                       <label className="field__label" htmlFor={id}>
-                        {humanise(descriptor.key)}
+                        {descriptor.label}
                       </label>
+                      {descriptor.description !== undefined && (
+                        <p className="field__description" id={`${id}-description`}>
+                          {descriptor.description}
+                        </p>
+                      )}
                       <code className="field__key">{descriptor.key}</code>
                       {note !== null && <span className="field__note">{note}</span>}
-                      {descriptor.kind === 'text-list' && (
+                      {isList && (
                         <span className="field__note" id={`${id}-hint`}>
                           {t('settings.listHint')}
                         </span>
@@ -313,12 +427,12 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
                       )}
                     </div>
 
-                    <div className="field__control">{control(descriptor)}</div>
+                    <div className="field__control">{control(descriptor, describedBy)}</div>
 
                     <button
                       type="button"
                       className="field__reset"
-                      aria-label={`${t('settings.reset')}: ${humanise(descriptor.key)}`}
+                      aria-label={`${t('settings.reset')}: ${descriptor.label}`}
                       title={t('settings.reset')}
                       onClick={() => {
                         void run(() => host.reset(descriptor.key))
@@ -333,14 +447,6 @@ export function SettingsView({ host, settings, onClose }: SettingsViewProps): Re
           )
         )}
       </div>
-    </div>
-  )
-
-  // The panel floats over the window and dismisses on a backdrop click; the page is just the page.
-  if (onClose === undefined) return body
-  return (
-    <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      {body}
     </div>
   )
 }

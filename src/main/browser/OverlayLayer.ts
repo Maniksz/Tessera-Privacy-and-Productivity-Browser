@@ -47,13 +47,17 @@ import { notifyOverlayVacancy, type OverlayVacancyReason } from '../permissions/
  *
  * ## Surfaces whose departure is not free
  *
- * A menu that vanishes because the window was resized costs nobody anything, and the window
- * controller dismisses this layer on resize, on blur and on every layout change for exactly
- * that reason. Two surfaces are different. A permission prompt that vanishes leaves the page's
- * promise unsettled, so the site hangs with no error anywhere. A find bar that vanishes leaves its
- * match highlighted on a page, with nothing on screen to say why. So every departure of a surface
- * `departureMatters` names is announced through `permissions/vacancy.ts`, and whoever owns the
- * consequence undoes it. See that module for why the announcement is not a constructor option.
+ * A menu that vanishes because the window was resized costs nobody anything, and a resize, a lost
+ * focus and every layout change take one down for exactly that reason. Not every surface may be
+ * taken that way — a permission prompt and a master-password prompt are dismissed *by kind* and
+ * survive both interruptions, since neither a wider window nor a glance elsewhere is an answer; see
+ * `DISMISSED_ON_INTERRUPTION` in `window-events.ts`. No rule keeps a surface on a layer that is going
+ * away regardless: the window closes, the renderer dies, something with a stronger claim arrives. A
+ * permission prompt that leaves has a page's promise unsettled behind it, so the site hangs with no
+ * error anywhere; a find bar that leaves has its match still highlighted on a page, with nothing on
+ * screen to say why. So every departure of a surface `departureMatters` names is announced through
+ * `permissions/vacancy.ts`, and whoever owns the consequence undoes it. See that module for why the
+ * announcement is not a constructor option.
  *
  * An *update* is not a departure, and telling the two apart is what `surfaceIdentity` is for: this
  * layer is also how a surface's contents change — a prompt re-presented with a new queue count, a

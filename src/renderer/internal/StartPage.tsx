@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { childrenOf, countChildren, findLink, titleFromUrl } from '@shared/quicklinks/model.js'
 import type { QuickLinkCard } from '@shared/quicklinks/cards.js'
 import { classifyOmniboxInput } from '@shared/url/omnibox.js'
-import { bridgeAvailable, invoke, subscribeQuickLinks } from './bridge.js'
+import { bridgeAvailable, invoke, subscribe } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
 import { QuickLinkTile } from './QuickLinkTile.js'
 import { QuickLinkDialog, type DialogState } from './QuickLinkDialog.js'
@@ -75,7 +75,7 @@ export function StartPage(): React.ReactNode {
     })()
 
     // Unsubscribed on unmount, like every other channel (spec 6).
-    const unsubscribe = subscribeQuickLinks(({ links: next }) => setLinks(next))
+    const unsubscribe = subscribe('quicklinks:changed', ({ links: next }) => setLinks(next))
     return () => {
       cancelled = true
       unsubscribe()

@@ -43,11 +43,20 @@ import { isUpgrade, type UpdateChannel } from './version.js'
  * aggregate, how many people run this browser. That cost is written down in `electron-builder.yml`
  * and is not re-argued here.
  *
- * ## Why nothing can make a page trigger this
+ * ## What can make a page trigger this, and what still cannot
  *
- * There is no IPC channel for the update check, deliberately: the only two callers are the timer in
- * `start()` and the Help-menu item, and a web page can reach neither. Adding a channel would be the
- * way that property is lost, so it is stated here rather than left to be noticed.
+ * This used to say there was no IPC channel at all, and that the absence was the property. **There is
+ * one now** — `updates:checkNow`, added on the user's instruction of 29.07.2026 — so the property is
+ * carried by something narrower and has to be named precisely.
+ *
+ * The channel is granted to `tessera://settings` and to no other page, a fitness function holds it
+ * there, `decideAccess` refuses web content outright, and since the same round a `will-frame-navigate`
+ * lock stops a web page from *opening* the settings page to borrow its grants. It reaches
+ * `checkOnDemand()` and nothing further: `download` and `installAndRestart` still have no channel, so
+ * the most a page can cause is a request to GitHub and a dialogue the user answers.
+ *
+ * What would lose the property is a second grant, not a second caller — which is why the test asserts
+ * the grant list rather than counting callers.
  *
  * ## The three consents
  *
@@ -112,8 +121,25 @@ export const UPDATE_REPOSITORY = {
  */
 export const MAC_BUILD_IS_SIGNED = false
 
-/** How long after launch the first automatic check happens. */
-export const FIRST_CHECK_DELAY_MS = 5 * 60_000
+/**
+ * How long after launch the first automatic check happens.
+ *
+ * **Three seconds, down from five minutes, on the user's instruction of 29.07.2026: "update scan
+ * auch direkt beim starten, nicht erst nach 5 min".** Half of the original argument is overruled
+ * and half of it survives, and the difference is why this is not zero.
+ *
+ * Overruled: that a browser opened briefly and closed again should never check at all. That was a
+ * politeness the user does not want — an alpha build that has just been relaunched is exactly when
+ * its owner wants to know there is a newer one.
+ *
+ * Still true: launch is the busiest moment a browser has, and the first window appearing is what
+ * the person is waiting for. A network request racing first paint costs something visible, and the
+ * check is worth nothing three seconds sooner. Zero is also not available as a value — `start()`
+ * reads `first > 0` as "schedule nothing", which is the escape hatch every test in
+ * `update-service.test.ts` relies on, so a literal 0 here would silently disable the feature
+ * rather than hasten it.
+ */
+export const FIRST_CHECK_DELAY_MS = 3_000
 
 /** How often after that. */
 export const CHECK_INTERVAL_MS = 24 * 60 * 60_000
@@ -352,12 +378,17 @@ export class UpdateService {
     const every = this.#options.checkIntervalMs ?? CHECK_INTERVAL_MS
 
     /*
-      Delayed rather than immediate.
+      Briefly delayed rather than immediate, and the brevity is the part that was argued over.
 
       Launch is the busiest moment a browser has, and the first window appearing is what the user is
-      waiting for; a request that can happen five minutes later should. It also means a browser
-      opened to look something up and closed again never checks at all, which is the polite default
-      for a request nobody asked for.
+      waiting for, so the request waits until that is done. It used to wait five minutes, which also
+      meant a browser opened to look something up and closed again never checked at all — that was
+      deliberate politeness, and the user overruled it: on an alpha build, a relaunch is precisely
+      when its owner wants to hear about a newer one. See `FIRST_CHECK_DELAY_MS`, including why the
+      answer is not zero.
+
+      `first > 0` stays a guard rather than a floor: zero means "schedule nothing", which is how
+      every test here avoids a clock. Shortening the wait must not be done by passing 0.
     */
     if (first > 0) {
       const timer = setTimeout(() => {
