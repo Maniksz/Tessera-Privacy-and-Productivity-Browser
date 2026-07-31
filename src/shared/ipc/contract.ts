@@ -18,6 +18,8 @@ import { tabGroupColorSchema, tabGroupSchema } from '../tabgroups/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
+// The bound the store enforces, so the schema and the storage cannot disagree about what is too long.
+import { MAX_USER_RULE_LENGTH } from '../filters/user-rules.js'
 import {
   PERMISSION_ANSWERS,
   PERMISSION_DEVICES,
@@ -580,7 +582,49 @@ export const invokeContract = {
     response: z.object({ started: z.boolean() })
   },
   'picker:stop': { request: z.object({ tabId: z.string().optional() }), response: ok },
-  'userrules:list': { request: nothing, response: z.array(userRuleSchema) },
+  /**
+   * The user's own rules, and the words the editor renders them with.
+   *
+   * Both on one answer, on the precedent `settings:describe` set: the locale is known in the core, the screen
+   * is fetching anyway, and a second channel would be a second round trip at the same moment. Why the prose
+   * is in the core rather than the shared catalogue is argued in `main/settings/user-rules-text.ts` — it
+   * comes down to a measured bundle budget that only one screen should be paying into.
+   *
+   * `kind` per rule, because the two are not the same promise: a declarative rule is a line in a stylesheet
+   * the browser matches, and a procedural one is script re-run on every mutation burst. An editor that
+   * showed them identically would hide the one thing worth knowing about a rule just typed.
+   */
+  'userrules:list': {
+    request: nothing,
+    response: z.object({
+      rules: z.array(
+        userRuleSchema.extend({ kind: z.enum(['declarative', 'procedural']) })
+      ),
+      text: z.record(z.string(), z.string())
+    })
+  },
+  /**
+   * A rule the user typed.
+   *
+   * The writing half, which had no channel at all: `UserRuleEditor.add` existed and the element picker was
+   * the only thing that could reach it, so a person could not write `example.com##.box:has-text(Anzeige)`
+   * anywhere in the browser.
+   *
+   * The outcome is returned rather than thrown, because two of the three answers are not errors: a
+   * duplicate means the rule is already there and the surface should point at it, and `invalid` means the
+   * line is not one this build can honour — which the editor has to say beside the text box rather than as a
+   * failed call. `describeUserRule` decides, and it refuses network syntax and scriptlets whatever the user
+   * types.
+   */
+  'userrules:add': {
+    request: z.object({ text: z.string().min(1).max(MAX_USER_RULE_LENGTH) }),
+    /*
+      The outcome only. The editor re-reads through `userrules:list` afterwards rather than being handed the
+      new list here — the same rule the settings page follows for every write: the store may repair, dedupe or
+      trim, and a screen that displayed what it *sent* would disagree with what was kept.
+    */
+    response: z.object({ outcome: z.enum(['added', 'invalid', 'duplicate']) })
+  },
   /** Keeps the line and stops applying it, which is how a page the user broke gets un-broken. */
   'userrules:setEnabled': {
     request: z.object({ id: z.string(), enabled: z.boolean() }),

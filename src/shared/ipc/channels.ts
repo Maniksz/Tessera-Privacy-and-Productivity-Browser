@@ -147,6 +147,7 @@ export const INVOKE_CHANNELS = [
   'picker:stop',
   /** The user's own rules, for the settings page and the blocker menu. */
   'userrules:list',
+  'userrules:add',
   'userrules:setEnabled',
   'userrules:remove',
   'media:list',
@@ -377,7 +378,24 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'settings:set',
     'settings:reset',
     'settings:describe',
-    'updates:checkNow'
+    'updates:checkNow',
+    /*
+      The user's own filter rules, which this page is the editor for.
+
+      Granted here after being chrome-only, and the comment beside these channels always said "for the
+      settings page and the blocker menu" — the intent was this from the start; only the grant and the screen
+      were missing. So a person could accumulate rules from the element picker and had nowhere to read, write
+      or correct one.
+
+      What makes the grant affordable is `describeUserRule`, which every write goes through: it refuses
+      network syntax and it refuses scriptlets, so the most this page can do is hide or restyle an element on
+      a site it names. That is strictly less than it can already do with `settings:set` — which writes
+      `privacy.blockerLists`, a set of addresses this browser will fetch and compile.
+    */
+    'userrules:list',
+    'userrules:add',
+    'userrules:setEnabled',
+    'userrules:remove'
   ],
   extensions: ['i18n:getCatalog', 'extensions:list', 'extensions:load', 'extensions:remove'],
   history: [

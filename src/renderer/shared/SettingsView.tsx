@@ -3,6 +3,7 @@ import { SETTINGS_SECTIONS, type SettingsSection } from '@shared/settings/sectio
 import type { SettingDescriptor } from '@shared/settings/control.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { useCoreCall } from './useCoreCall.js'
+import { UserRulesEditor, type UserRulesHost } from './UserRulesEditor.js'
 
 /**
  * The settings surface, rendered by `tessera://settings` and by nothing else.
@@ -92,6 +93,14 @@ export interface SettingsHost {
    * the compiler asks the question.
    */
   checkForUpdates(): Promise<void>
+  /**
+   * The user's own filter rules.
+   *
+   * A nested host rather than four more methods here, because the rules are not settings: they have no
+   * default to go back to, no descriptor, and their own vocabulary of outcomes. Grouping them keeps this
+   * interface about the settings table and lets the editor be driven on its own in a test.
+   */
+  userRules: UserRulesHost
   t: Translate
 }
 
@@ -446,6 +455,19 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
             </section>
           )
         )}
+
+        {/*
+          The user's own filter rules, after the generated sections and hidden while a search is running.
+
+          After, because it is the one block here that is not a settings row: the rules have no default to
+          reset to and no descriptor, so putting them among the sections would mean a section the search box
+          cannot filter sitting between nine that it can.
+
+          Hidden during a search for the same reason. The box filters descriptors by label and key; a block
+          it cannot filter would stay put while everything around it disappeared, which reads as the search
+          having failed rather than as the block being exempt.
+        */}
+        {query.trim() === '' && <UserRulesEditor host={host.userRules} />}
       </div>
     </div>
   )

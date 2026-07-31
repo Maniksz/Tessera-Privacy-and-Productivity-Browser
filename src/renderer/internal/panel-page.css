@@ -264,3 +264,78 @@ body {
   background: var(--bg-input);
   color: var(--fg);
 }
+
+/*
+  --- the user's own filter rules --------------------------------------------
+
+  Here rather than in the chrome stylesheet for the reason the settings rows above are: `UserRulesEditor` is
+  hosted by this page and by nothing else, so a chrome window would be parsing rules for a surface it cannot
+  show.
+
+  The list is deliberately plain. Each row is a checkbox, the rule as written, one line of provenance and a
+  delete button — and the rule text is the widest thing in it, because recognising your own rule is the whole
+  job of this screen.
+*/
+
+.userrules__hint {
+  margin: 2px 0 10px;
+  max-width: 46rem;
+  color: var(--fg-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.userrules__add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/*
+  Wider than `.field__text`'s 220px, and it overrides it deliberately: a rule is
+  `host##selector:has-text(word)` and a box that shows a third of it makes a typo impossible to find.
+*/
+.userrules__input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.userrules__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.userrules__rule {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+
+.userrules__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/*
+  Monospaced and wrapping, never truncated. A rule is identified by both of its ends — the host at the front
+  and the selector at the back — so an ellipsis in the middle of a list of rules for one site would leave
+  every entry looking the same. Same argument as `.prompt__site`.
+*/
+.userrules__text {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.userrules__meta {
+  color: var(--fg-dim);
+  font-size: 11px;
+}

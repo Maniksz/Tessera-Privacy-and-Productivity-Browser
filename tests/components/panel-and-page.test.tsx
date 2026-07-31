@@ -186,6 +186,36 @@ function fakeCore(
           return Promise.resolve({ locale: 'en', messages: {} })
         case 'settings:describe':
           return Promise.resolve(DESCRIPTORS)
+        /*
+          The rule editor's own channels.
+
+          Answered here rather than left to fall through to the `default` rejection, because the settings page
+          renders the editor unconditionally: an unhandled channel becomes a visible error on the surface and
+          every assertion in this file about "no alert is shown" would fail for a reason that has nothing to
+          do with what it is testing.
+
+          One rule in the list rather than none, so the privilege sweep below sees the row's controls exist —
+          an empty editor calls `list` and nothing else, which would let a missing grant pass unnoticed.
+        */
+        case 'userrules:list':
+          return Promise.resolve({
+            rules: [
+              {
+                id: 'u1',
+                text: 'example.com##.ad',
+                enabled: true,
+                createdAt: 1,
+                origin: 'manual',
+                kind: 'declarative'
+              }
+            ],
+            text: { heading: 'My filter rules', add: 'Add rule', remove: 'Delete this rule', toggle: 'Apply this rule' }
+          })
+        case 'userrules:add':
+          return Promise.resolve({ outcome: 'added' })
+        case 'userrules:setEnabled':
+        case 'userrules:remove':
+          return Promise.resolve(undefined)
         case 'settings:getAll':
           return Promise.resolve({ ...snapshot })
         case 'settings:set': {

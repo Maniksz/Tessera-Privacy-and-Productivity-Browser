@@ -1,5 +1,6 @@
 import type { DocumentFeatures } from './features.js'
 import type { ScriptletCall } from './scriptlets.js'
+import type { ProceduralSelector } from './procedural.js'
 
 /**
  * How cosmetic rules get from the core into a page.
@@ -45,6 +46,15 @@ export const COSMETIC_GENERIC_CHANNEL = 'tessera:cosmetic-generic'
  * last moment before the page's own scripts, so the answer has to arrive without an await.
  */
 export const SCRIPTLET_CHANNEL = 'tessera:scriptlets'
+
+/**
+ * Asynchronous, once the DOM exists: the selectors no CSS engine can evaluate.
+ *
+ * Asynchronous, unlike the other two, and that is not a compromise — it is what the feature *is*. A
+ * procedural selector matches on the document's text, computed styles and ancestry, none of which exists at
+ * `document-start`. So there is nothing to gain by blocking for the answer and a page-load to lose.
+ */
+export const PROCEDURAL_CHANNEL = 'tessera:procedural'
 
 /**
  * How many distinct feature names one report may carry, per kind.
@@ -147,6 +157,33 @@ export function asScriptletCalls(value: unknown): ScriptletCall[] {
     calls.push({ name, args })
   }
   return calls
+}
+
+/**
+ * Total, for the procedural answer.
+ *
+ * Re-established rather than trusted, for the reason `asScriptletCalls` gives: this crosses IPC from a build
+ * that may differ from the preload's, and each entry drives a `querySelectorAll` and a style write. A
+ * malformed step is dropped rather than repaired — there is no sensible repair for "the core sent a chain
+ * this build cannot read", and evaluating an approximation of one would hide the wrong element.
+ *
+ * Structural and shallow on purpose: the shapes are checked, the *meanings* are not. A `has-text` pattern
+ * that is nonsense matches nothing, which is a rule that does nothing — the safe direction.
+ */
+export function asProceduralSelectors(value: unknown): ProceduralSelector[] {
+  if (!Array.isArray(value)) return []
+  const selectors: ProceduralSelector[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const candidate = entry as Record<string, unknown>
+    if (typeof candidate['css'] !== 'string' || candidate['css'] === '') continue
+    if (!Array.isArray(candidate['steps'])) continue
+    const action = candidate['action']
+    if (typeof action !== 'object' || action === null) continue
+    if (typeof (action as Record<string, unknown>)['kind'] !== 'string') continue
+    selectors.push(entry as ProceduralSelector)
+  }
+  return selectors
 }
 
 /** Total in the other direction: what the core receives may be anything at all. */

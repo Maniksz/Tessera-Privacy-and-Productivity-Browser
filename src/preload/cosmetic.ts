@@ -2,12 +2,16 @@ import { contextBridge, ipcRenderer } from 'electron'
 import {
   COSMETIC_GENERIC_CHANNEL,
   COSMETIC_SPECIFIC_CHANNEL,
+  PROCEDURAL_CHANNEL,
   SCRIPTLET_CHANNEL,
   asCosmeticStyles,
+  asProceduralSelectors,
   asScriptletCalls,
   sameFeatures,
   surveyFeatures
 } from '@shared/filters/injection.js'
+import { applyProceduralRules, type MatchableDocument } from '@shared/filters/procedural-match.js'
+import type { ProceduralSelector } from '@shared/filters/procedural.js'
 import { runScriptlets } from '@shared/filters/scriptlet-runtime.js'
 import type { DocumentFeatures } from '@shared/filters/features.js'
 
@@ -223,7 +227,105 @@ function installScriptlets(): void {
 }
 
 /**
- * Installs all three parts. Called from the content preload only.
+ * The rules no CSS engine can evaluate — `:has-text()`, `:upward()`, `:style()`.
+ *
+ * ## Why this one needs no `executeInMainWorld`
+ *
+ * The scriptlets have to cross into the page's world because they redefine properties the *page's* script
+ * reads. These do not: matching needs the DOM, and the docblock at the top of this file already states the
+ * fact that makes the difference — the DOM is not isolated, both worlds see one document. So the matcher
+ * runs here, in the isolated world, where a page can neither observe it nor patch the methods it uses.
+ *
+ * ## Why it re-runs, and what bounds the cost
+ *
+ * A procedural rule matches on text, computed style and ancestry, so it cannot be evaluated before the DOM
+ * exists and it cannot be evaluated once: the element a rule is about frequently arrives with a later
+ * script. So it runs on `DOMContentLoaded` and again after each mutation burst — the same debounce the
+ * generic-selector survey uses, and for the same reason.
+ *
+ * Three things keep that from being a tax on every page. Nothing is requested until the DOM is ready, so
+ * the load path is untouched. The core answers with nothing at all unless a rule *names this host* — which
+ * is why `parse.ts` refuses a generic procedural rule — so the observer below is only ever installed on
+ * sites the user's or the lists' rules actually mention. And a re-run only re-applies what it finds; the
+ * actions are idempotent (a `display: none` set twice is set once, a removed element is gone).
+ */
+function installProceduralFiltering(): void {
+  let selectors: readonly ProceduralSelector[] = []
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let observing = false
+
+  const apply = (): void => {
+    timer = null
+    if (selectors.length === 0) return
+    try {
+      /*
+        One cast, at the boundary, for the same reason `earlyDocument` above needs one.
+
+        `MatchableDocument` is a deliberately narrow view — it exists so that "what can a procedural rule do
+        to my page" is answerable by reading one type in `procedural-match.ts`. A narrow view is not
+        *assignable from* the real `Document`: `querySelectorAll` returns a `NodeListOf<Element>` whose
+        members carry the whole DOM surface, which is wider than the view and therefore not the same type.
+        Widening the view to satisfy the compiler would give the matcher back everything the view was
+        written to withhold.
+      */
+      applyProceduralRules(selectors, document as unknown as MatchableDocument)
+    } catch {
+      // A document torn down mid-pass. Nothing to fix and nothing to report.
+    }
+  }
+
+  const schedule = (): void => {
+    if (timer !== null) return
+    timer = setTimeout(apply, SURVEY_DEBOUNCE_MS)
+  }
+
+  const observe = (): void => {
+    if (observing) return
+    observing = true
+    apply()
+    const root = earlyDocument.documentElement
+    if (root === null) return
+    try {
+      /*
+        `attributes` is watched as well as the tree, and that is what makes `:matches-css()` and
+        `:has-text()` keep working on a page that changes: a class or a style attribute arriving later is
+        exactly how an advert becomes visible after the first pass. uBO's `:watch-attr()` exists to ask for
+        this explicitly; watching always means that operator costs nothing to leave unimplemented.
+      */
+      new MutationObserver(schedule).observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true
+      })
+    } catch {
+      // The document went between the check and the call. The single pass above still happened.
+    }
+  }
+
+  ipcRenderer.on(PROCEDURAL_CHANNEL, (_event, payload: unknown) => {
+    const answered = asProceduralSelectors(payload)
+    if (answered.length === 0) return
+    selectors = answered
+    observe()
+  })
+
+  const request = (): void => {
+    try {
+      ipcRenderer.send(PROCEDURAL_CHANNEL, documentUrl())
+    } catch {
+      // No responder — an old build, or a view outside a hardened session. Nothing is filtered.
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', request, { once: true })
+  } else {
+    request()
+  }
+}
+
+/**
+ * Installs all four parts. Called from the content preload only.
  *
  * Guarded as a whole as well as in parts: a failure here must cost the page its filtering and nothing
  * else. A preload that throws takes the document with it.
@@ -244,5 +346,14 @@ export function installCosmeticFiltering(): void {
     installGenericStyles()
   } catch (error) {
     console.warn('[cosmetic] filtering could not be installed:', error)
+  }
+  /*
+    Guarded separately again: a page whose declarative rules failed should still get the procedural ones,
+    and the other way round. They are three independent features that happen to share a document.
+  */
+  try {
+    installProceduralFiltering()
+  } catch (error) {
+    console.warn('[cosmetic] procedural filtering could not be installed:', error)
   }
 }

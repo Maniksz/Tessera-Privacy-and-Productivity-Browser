@@ -108,7 +108,20 @@ describe('internal page privileges', () => {
     expect(grantedTo('settings')).toEqual(
       [
         ...invokesMentioned(settingsPage, 'settings'),
-        ...invokesMentioned(settingsPage, 'updates')
+        ...invokesMentioned(settingsPage, 'updates'),
+        /*
+          A third family, and the reason it is here is the reason this test is worth having.
+
+          The `userrules:*` channels existed with handlers and no caller anywhere, and were granted to no
+          page — so the element picker could write a rule and nothing in the browser could show one. Granting
+          them without building the editor would have been the failure this test is named for, and for the
+          two minutes between the grant and the screen, that is exactly what it caught.
+
+          Their write is bounded by `describeUserRule` in the core, which refuses request-blocking syntax and
+          scriptlets whatever this page sends — so the grant adds "hide or restyle an element on a named site"
+          and nothing else.
+        */
+        ...invokesMentioned(settingsPage, 'userrules')
       ].sort()
     )
   })

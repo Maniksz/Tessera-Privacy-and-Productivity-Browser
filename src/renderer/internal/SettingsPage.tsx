@@ -59,6 +59,24 @@ export function SettingsPage(): React.ReactNode {
         setSettings(await invoke('settings:getAll'))
       },
       /*
+        The user's own filter rules, which this page is now the editor for.
+
+        Four channels the page was not granted before, and the comment beside them in `channels.ts` always
+        said "for the settings page and the blocker menu" — the intent was this; the grant and the screen
+        were what was missing. Every write goes through `describeUserRule` in the core, which refuses
+        request-blocking syntax and scriptlets whatever this page sends.
+      */
+      userRules: {
+        list: () => invoke('userrules:list'),
+        add: async (text) => (await invoke('userrules:add', { text })).outcome,
+        setEnabled: async (id, enabled) => {
+          await invoke('userrules:setEnabled', { id, enabled })
+        },
+        remove: async (id) => {
+          await invoke('userrules:remove', { id })
+        }
+      },
+      /*
         The one call here that does not end in a re-read, because nothing it does is stored.
 
         A check reports itself in a native dialog the core raises, so the `{ ok: true }` is discarded

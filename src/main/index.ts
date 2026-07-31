@@ -552,7 +552,8 @@ async function main(): Promise<void> {
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
     stylesFor: (documentUrl) => filterSubscription.engine.cosmeticStylesFor(documentUrl),
     openFeed: (documentUrl) => filterSubscription.engine.openCosmeticFeed(documentUrl),
-    scriptletsFor: (documentUrl) => filterSubscription.engine.scriptletsFor(documentUrl)
+    scriptletsFor: (documentUrl) => filterSubscription.engine.scriptletsFor(documentUrl),
+    proceduralFor: (documentUrl) => filterSubscription.engine.proceduralSelectorsFor(documentUrl)
   }).install()
 
   /*

@@ -103,37 +103,75 @@ describe('a scriptlet line is not a selector', () => {
   })
 })
 
-describe('a procedural selector is not a selector either', () => {
-  const procedural = [
+describe('a procedural selector is not a CSS selector', () => {
+  /**
+   * These asserted that every procedural operator was *refused*, which was right for as long as this
+   * browser could not evaluate one: counted beats written into a stylesheet, where it invalidates the rule
+   * it was joined into.
+   *
+   * There is an engine now (`procedural.ts`, `procedural-match.ts`), so the claim moved rather than
+   * weakened. What still has to hold — and is what this file is about — is that such a selector never
+   * reaches **CSS**. Where it goes instead is `filter-procedural.test.ts`'s subject.
+   */
+  const honoured = [
     'example.com##.box:has-text(Anzeige)',
     'example.com##.item:upward(2)',
     'example.com##div:matches-css(position: fixed)',
     'example.com##.a:min-text-length(20)',
-    'example.com##.b:watch-attr(class)',
-    'example.com##.c:xpath(//div)',
-    'example.com##.d:matches-path(/shop)',
     'example.com##.e:remove()',
-    'example.com##.f:style(height: 0)',
-    // Nested inside a CSS pseudo-class that *is* supported: the operator is still procedural, and a
-    // check that only looked at the outermost pseudo would let this one through.
-    'example.com##.g:has(:has-text(Werbung))'
+    'example.com##.f:style(height: 0)'
   ]
 
-  it('rejects every procedural operator with a reason', () => {
-    for (const line of procedural) {
+  it('becomes a procedural rule rather than a selector', () => {
+    for (const line of honoured) {
       const parsed = parseFilterList(line)
       expect(parsed.cosmetic, line).toEqual([])
-      expect(Object.keys(parsed.diagnostics.unsupportedByReason), line).toContain(
-        'procedural-cosmetic'
-      )
+      expect(parsed.procedural, line).toHaveLength(1)
+      expect(parsed.diagnostics.unsupported, line).toBe(0)
     }
+  })
+
+  it('is still refused, by name, for an operator this browser has no engine for', () => {
+    /*
+      The honest half, and the reason the subset was chosen by counting rather than by taste: each of these
+      appears once or six times across the three default lists, against 537 for `:style()` and 101 for
+      `:has-text()`. Refused with the operator in the key, so the next one worth building is a number
+      somebody can read.
+    */
+    const refused: Array<[string, string]> = [
+      ['example.com##.b:watch-attr(class)', 'procedural-unimplemented:watch-attr'],
+      ['example.com##.c:xpath(//div)', 'procedural-unimplemented:xpath'],
+      ['example.com##.d:matches-path(/shop)', 'procedural-unimplemented:matches-path']
+    ]
+    for (const [line, reason] of refused) {
+      const parsed = parseFilterList(line)
+      expect(parsed.cosmetic, line).toEqual([])
+      expect(parsed.procedural, line).toEqual([])
+      expect(Object.keys(parsed.diagnostics.unsupportedByReason), line).toContain(reason)
+    }
+  })
+
+  it('refuses a procedural operator nested inside a CSS one', () => {
+    /*
+      `:has(:has-text(x))` is uBO's *procedural* `:has`, which evaluates its argument as a chain. The
+      top-level operator here is `:has`, which is ordinary CSS — so this is not a procedural rule by the
+      shape this engine accepts, and it must not become a CSS selector either, because `:has-text` inside
+      the argument is still not something a CSS parser can read.
+
+      Refused by the selector check, which sees the nested operator wherever it sits. That is the belt to
+      the procedural parser's braces: the two look at the same string from opposite ends.
+    */
+    const parsed = parseFilterList('example.com##.g:has(:has-text(Werbung))')
+    expect(parsed.cosmetic).toEqual([])
+    expect(parsed.procedural).toEqual([])
+    expect(Object.keys(parsed.diagnostics.unsupportedByReason)).toContain('procedural-cosmetic')
   })
 
   it('still accepts the standard CSS pseudo-classes the lists really use', () => {
     /*
-      The direction this must not fail in. `:not()`, `:has()` and the `nth-` family are ordinary CSS
-      and EasyList is full of them; rejecting those to be safe would throw away tens of thousands of
-      working rules to avoid a few hundred broken ones.
+      The direction this must not fail in. `:not()`, `:has()` and the `nth-` family are ordinary CSS and
+      EasyList is full of them — 605 uses of `:has()` alone. They must stay on the *declarative* path: it is
+      a line in a stylesheet the browser matches, against script re-run on every mutation burst.
     */
     const supported = [
       'example.com##.ad:not(.keep)',
@@ -149,6 +187,7 @@ describe('a procedural selector is not a selector either', () => {
     for (const line of supported) {
       const parsed = parseFilterList(line)
       expect(parsed.cosmetic, line).toHaveLength(1)
+      expect(parsed.procedural, line).toEqual([])
       expect(parsed.diagnostics.unsupported, line).toBe(0)
     }
   })
@@ -170,21 +209,23 @@ describe('a rule that restyles instead of hiding', () => {
     expect(parsed.diagnostics.unsupportedByReason).toHaveProperty('cosmetic-declaration')
   })
 
-  it('is named separately from a procedural operator that carries a declaration', () => {
+  it('is not confused with a procedural operator that carries a declaration', () => {
     /*
-      `:style(…)` also asks for a restyling, and it is reported as procedural rather than as a
-      declaration because the *reason it cannot be honoured* is different: one is a syntax with no
-      brace, the other is a brace where a selector should end.
+      `:style(…)` also asks for a restyling, and it is now *honoured* — by the procedural engine, where a
+      declaration applied to matched elements is exactly what it means. It never was a
+      `cosmetic-declaration`: the brace is the thing that distinguishes them, and `:style()` has none.
 
-      This ordering is not cosmetic. Checked the other way round — forbidden characters before pseudo
-      names — the semicolons inside `:style(-webkit-user-select: text !important; …)` made 502 lines of
-      uAssets' annoyances list report as "unsupported-selector", which reads as "we have no idea what
-      this is" about the most common procedural operator in the file. Named properly it is 706 lines of
-      `procedural-cosmetic`: one feature, not a mystery.
+      This is the 537-use operator in the three default lists, so getting it onto the working path rather
+      than into a counter is most of what the procedural engine buys.
     */
     const parsed = parseFilterList('lyrics.example##.lyricBody:style(user-select: text !important;)')
     expect(parsed.cosmetic).toEqual([])
-    expect(Object.keys(parsed.diagnostics.unsupportedByReason)).toEqual(['procedural-cosmetic'])
+    expect(parsed.procedural).toHaveLength(1)
+    expect(parsed.procedural[0]?.selector.action).toEqual({
+      kind: 'style',
+      declarations: 'user-select: text !important;'
+    })
+    expect(parsed.diagnostics.unsupportedByReason).not.toHaveProperty('cosmetic-declaration')
   })
 })
 

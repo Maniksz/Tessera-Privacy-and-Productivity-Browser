@@ -2,11 +2,13 @@ import { app, type WebContents } from 'electron'
 import {
   COSMETIC_GENERIC_CHANNEL,
   COSMETIC_SPECIFIC_CHANNEL,
+  PROCEDURAL_CHANNEL,
   SCRIPTLET_CHANNEL,
   asDocumentFeatures,
   injectableDocumentUrl
 } from '@shared/filters/injection.js'
 import type { ScriptletCall } from '@shared/filters/scriptlets.js'
+import type { ProceduralSelector } from '@shared/filters/procedural.js'
 import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { CosmeticFeedHandle } from './FilterEngine.js'
@@ -56,6 +58,14 @@ export interface CosmeticInjectorOptions {
    * of all three.
    */
   readonly scriptletsFor: (documentUrl: string) => readonly ScriptletCall[]
+  /**
+   * Selectors no CSS engine can evaluate, for a document. `FilterEngine.proceduralSelectorsFor`.
+   *
+   * Answered from here for the same reason the scriptlets are: the question "which document is this, and
+   * may it be filtered" has three parts — `injectableDocumentUrl`, the blocker switches, the per-site
+   * exemption — and all three halves of a filter list have to get the same answer.
+   */
+  readonly proceduralFor: (documentUrl: string) => readonly ProceduralSelector[]
 }
 
 /** What one view is currently being served, so a navigation can be noticed. */
@@ -98,6 +108,12 @@ export class CosmeticInjector {
       })
 
       contents.on('ipc-message', (_ipcEvent, channel, ...args) => {
+        if (channel === PROCEDURAL_CHANNEL) {
+          const selectors = this.#procedural(contents, args[0])
+          if (selectors.length === 0 || contents.isDestroyed()) return
+          contents.send(PROCEDURAL_CHANNEL, selectors)
+          return
+        }
         if (channel !== COSMETIC_GENERIC_CHANNEL) return
         const styles = this.#genericStyles(contents, args[0], args[1])
         if (styles === null || contents.isDestroyed()) return
@@ -147,6 +163,20 @@ export class CosmeticInjector {
     const url = injectableDocumentUrl(reportedUrl, contents.getURL())
     if (url === null || this.#exempt(url)) return []
     return this.#options.scriptletsFor(url)
+  }
+
+  /**
+   * The procedural selectors for a document.
+   *
+   * Gated exactly as the stylesheet is — `blockerEnabled`, `cosmeticFiltering` (checked one layer down in
+   * the engine), and the per-site exemption. A rule that hides an element is the same promise to the user
+   * whether a CSS engine or a matcher does the hiding, so the switches must not disagree about it.
+   */
+  #procedural(contents: WebContents, reportedUrl: unknown): readonly ProceduralSelector[] {
+    if (!this.#enabled()) return []
+    const url = injectableDocumentUrl(reportedUrl, contents.getURL())
+    if (url === null || this.#exempt(url)) return []
+    return this.#options.proceduralFor(url)
   }
 
   #genericStyles(contents: WebContents, reportedUrl: unknown, reportedFeatures: unknown): string | null {

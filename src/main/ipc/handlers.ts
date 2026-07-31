@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { app, dialog } from 'electron'
 import type { SettingsStore } from '../settings/SettingsStore.js'
 import { describeSettings } from '../settings/describe.js'
+import { userRulesText } from '../settings/user-rules-text.js'
+import { describeUserRule, type UserRule } from '@shared/filters/user-rules.js'
 import type { WindowRegistry } from '../browser/WindowRegistry.js'
 import type { QuickLinkStore } from '../data/QuickLinkStore.js'
 import type { ExtensionStore } from '../data/ExtensionStore.js'
@@ -390,7 +392,40 @@ export function registerIpcHandlers(deps: {
     return OK
   })
 
-  handle('userrules:list', () => deps.userRules.rules())
+  /*
+    The rules with the editor's prose, resolved for the language in force *now*.
+
+    Per call rather than captured, for the reason `settings:describe` is: a language change has to reach the
+    screen without a restart, and the screen re-fetches when its locale changes.
+
+    `kind` is derived here rather than stored: it follows from the rule's own text through the same parser
+    that decides whether the rule can be applied at all, so the two can never disagree about a line. A rule
+    the parser no longer understands is reported as declarative and is separately dropped by
+    `repairUserRules`; the editor shows it until then, which is better than hiding it.
+  */
+  const userRulesAnswer = (
+    rules: readonly UserRule[]
+  ): { rules: Array<UserRule & { kind: 'declarative' | 'procedural' }>; text: Record<string, string> } => ({
+    rules: rules.map((rule) => ({
+      ...rule,
+      kind: describeUserRule(rule.text)?.kind ?? 'declarative'
+    })),
+    text: userRulesText(activeLocale(settings.get('appearance.uiLanguage')))
+  })
+
+  handle('userrules:list', () => userRulesAnswer(deps.userRules.rules()))
+  /*
+    Through the mode-bound editor like the other two, so a private window's settings page writes nothing
+    into the rules the normal profile keeps.
+
+    The outcome travels back rather than being thrown: `duplicate` means the rule is already there and
+    `invalid` means the line is not one this build can honour, and the editor beside the text box has to be
+    able to say either. A rejected promise would make both look like a failure of the browser.
+  */
+  handle('userrules:add', ({ text }, event) => {
+    const editor = editorFor(event)
+    return { outcome: editor.add({ text, origin: 'manual' }).outcome }
+  })
   handle('userrules:setEnabled', ({ id, enabled }, event) => {
     // Through the mode-bound editor rather than the store, so a private window cannot alter the rules the
     // normal profile keeps — the same reason the picker takes its editor from the sending window.

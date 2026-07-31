@@ -68,30 +68,68 @@ export interface UserRuleDetail {
   readonly selector: string
   /** True for `#@#`: the rule cancels a selector rather than adding one. */
   readonly isException: boolean
+  /**
+   * How the rule will be applied.
+   *
+   * `declarative` is a selector in a stylesheet the browser matches. `procedural` is a chain — `:has-text()`,
+   * `:upward()`, `:style()` — evaluated by script in the page on every mutation burst.
+   *
+   * Carried so a surface can say which it is. The two are not interchangeable to a user writing rules: a
+   * procedural one has to name a host, and it costs work on every page it applies to, so an editor that
+   * showed them identically would be hiding the one thing worth knowing about the rule just typed.
+   */
+  readonly kind: 'declarative' | 'procedural'
 }
 
 /**
  * What the parser makes of a line, or null when it makes nothing of it.
  *
- * The same parser the lists go through, so a rule that stores cleanly is a rule that
- * will be applied — there is no second opinion to disagree with. Network syntax is
- * refused: `||ads.example.com^` is a perfectly good filter line, but it belongs to a
- * blocking list the user chose, and letting an element picker write request-blocking
- * rules would put "hide this box" and "cut this site off" behind the same button.
+ * The same parser the lists go through, so a rule that stores cleanly is a rule that will be applied —
+ * there is no second opinion to disagree with.
+ *
+ * ## What is refused, and why each one
+ *
+ * **Network syntax.** `||ads.example.com^` is a perfectly good filter line, but it belongs to a blocking
+ * list the user chose, and letting an element picker write request-blocking rules would put "hide this box"
+ * and "cut this site off" behind the same button.
+ *
+ * **Scriptlets.** `##+js(…)` names a piece of code to run in the page. A rule the *user* typed reaching
+ * that would be a text box that executes things, which is a different power from hiding an element and is
+ * not one this offers — `parsed.scriptlet` is deliberately not consulted below, so such a line produces
+ * nothing here and is refused.
+ *
+ * ## Why procedural rules are accepted
+ *
+ * They are the reason a person writes a rule by hand at all: *"hide the box that contains this word"* is
+ * not expressible as a CSS selector, and it is exactly what somebody reaches for when the element picker's
+ * selector turns out to be too brittle. uBlock Origin's own filter box accepts them, so a rule copied from
+ * a forum post or from an AdGuard list works here too.
  */
 export function describeUserRule(text: string): UserRuleDetail | null {
   const trimmed = text.trim()
   if (trimmed === '' || trimmed.length > MAX_USER_RULE_LENGTH) return null
   const parsed = parseFilterList(trimmed)
   if (parsed.network.length > 0) return null
-  const detail = parsed.cosmetic.map((rule): UserRuleDetail => ({
-    hosts: rule.includeHosts,
-    selector: rule.selector,
-    isException: rule.isException
-  }))
-  // Exactly one: a line producing none is not a rule, and the parser cannot produce
-  // more than one from a single line — insisting on it here is what makes that stay
-  // true rather than assumed.
+
+  const detail: UserRuleDetail[] = [
+    ...parsed.cosmetic.map((rule): UserRuleDetail => ({
+      hosts: rule.includeHosts,
+      selector: rule.selector,
+      isException: rule.isException,
+      kind: 'declarative'
+    })),
+    ...parsed.procedural.map((rule): UserRuleDetail => ({
+      hosts: rule.includeHosts,
+      // The CSS the chain starts from, which is the part of a procedural rule that reads as a selector.
+      selector: rule.selector.css,
+      // `#@#` never reaches the procedural parser; an exception is declarative by construction.
+      isException: false,
+      kind: 'procedural'
+    }))
+  ]
+
+  // Exactly one: a line producing none is not a rule, and the parser cannot produce more than one from a
+  // single line — insisting on it here is what makes that stay true rather than assumed.
   for (const only of detail.length === 1 ? detail : []) return only
   return null
 }

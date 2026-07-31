@@ -7,6 +7,11 @@ import {
 } from './model.js'
 import { selectorProblem } from './selector-safety.js'
 import { lookupScriptlet, type ScriptletRule } from './scriptlets.js'
+import {
+  isProceduralSelector,
+  parseProceduralSelector,
+  type ProceduralRule
+} from './procedural.js'
 
 /**
  * Adblock Plus filter syntax, parsed into the rule shapes the matcher works on.
@@ -157,6 +162,15 @@ export interface ParsedFilterLists {
    * page are different powers and the settings screen reports them separately.
    */
   readonly scriptlet: readonly ScriptletRule[]
+  /**
+   * Rules whose selector no CSS engine can evaluate — `:has-text()`, `:upward()`, `:style()`.
+   *
+   * A fourth list, and apart from `cosmetic` for a reason that is about cost rather than tidiness: a
+   * declarative rule is one line in a stylesheet the browser matches, while one of these is script running
+   * on every mutation burst. Keeping them in separate lists is what stops a rule that *could* have been
+   * plain CSS from quietly ending up on the expensive path.
+   */
+  readonly procedural: readonly ProceduralRule[]
   readonly diagnostics: FilterListDiagnostics
 }
 
@@ -167,6 +181,7 @@ interface Counters {
   network: number
   cosmetic: number
   scriptlet: number
+  procedural: number
   unsupported: number
   readonly reasons: Map<string, number>
 }
@@ -402,6 +417,55 @@ function parseScriptletRule(
   }
 }
 
+/**
+ * A procedural cosmetic rule, `null` for one that cannot be honoured, and `'not-procedural'` when the
+ * selector is ordinary CSS.
+ *
+ * Three outcomes for the reason `parseScriptletRule` needs three: `null` already means "recognised,
+ * refused and counted", so reusing it for "not mine" would send a *rejected* procedural rule on to the
+ * declarative parser and count the same line twice.
+ *
+ * ## Why an exception is not procedural
+ *
+ * `#@#` cancels a selector by its text, and the declarative index does that by string comparison. A
+ * procedural exception would have to cancel a *chain*, which needs the two to be compared structurally —
+ * a different mechanism for six lines across the three default lists. So `#@#` stays with
+ * `parseCosmeticRule`, where an exception carrying procedural syntax is refused by the selector check and
+ * counted like any other.
+ *
+ * ## Why a generic procedural rule is refused
+ *
+ * uBlock Origin refuses one too, and the reason is cost rather than compatibility: these are evaluated by
+ * script on every matching document and re-evaluated on every mutation burst, so a rule naming no host is
+ * that work on every page for the rest of the session. See `PROCEDURAL_NEEDS_HOST`.
+ */
+function parseProceduralRule(
+  line: string,
+  separator: RegExpExecArray,
+  counters: Counters
+): ProceduralRule | null | 'not-procedural' {
+  const marker = separator[0]
+  // `#?#` is AdGuard's and uBO's explicit "this is extended syntax" marker; `##` carries them too.
+  if (marker !== '##' && marker !== '#?#') return 'not-procedural'
+
+  const payload = line.slice(separator.index + marker.length).trim()
+  if (payload === '' || !isProceduralSelector(payload)) return 'not-procedural'
+
+  const parsed = parseProceduralSelector(payload)
+  if ('problem' in parsed) return reject(counters, parsed.problem)
+
+  const hosts = parseHostList(line.slice(0, separator.index), ',')
+  if (hosts === null) return reject(counters, 'domain-entity')
+  if (hosts.include.length === 0) return reject(counters, 'procedural-generic')
+
+  return {
+    selector: parsed,
+    text: line,
+    includeHosts: hosts.include,
+    excludeHosts: hosts.exclude
+  }
+}
+
 function parseCosmeticRule(
   line: string,
   separator: RegExpExecArray,
@@ -483,6 +547,7 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
   const network: NetworkRule[] = []
   const cosmetic: CosmeticRule[] = []
   const scriptlet: ScriptletRule[] = []
+  const procedural: ProceduralRule[] = []
   const counters: Counters = {
     lines: 0,
     blank: 0,
@@ -490,6 +555,7 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
     network: 0,
     cosmetic: 0,
     scriptlet: 0,
+    procedural: 0,
     unsupported: 0,
     reasons: new Map()
   }
@@ -531,6 +597,23 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
           continue
         }
 
+        /*
+          A procedural selector before a declarative one, for the same reason a scriptlet is checked before
+          both: `##` says nothing about which of the three the payload is.
+
+          Asked *before* `parseCosmeticRule` because that function's selector check refuses these — it has
+          to, since a `:has-text()` written into a stylesheet invalidates the rule it is joined into. So the
+          order here is what turns 718 refusals into 718 working rules.
+        */
+        const asProcedural = parseProceduralRule(line, separator, counters)
+        if (asProcedural !== 'not-procedural') {
+          if (asProcedural !== null) {
+            procedural.push(asProcedural)
+            counters.procedural += 1
+          }
+          continue
+        }
+
         const rule = parseCosmeticRule(line, separator, counters)
         if (rule !== null) {
           cosmetic.push(rule)
@@ -562,6 +645,7 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
     network,
     cosmetic,
     scriptlet,
+    procedural,
     diagnostics: {
       lines: counters.lines,
       blank: counters.blank,
@@ -569,6 +653,7 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
       network: counters.network,
       cosmetic: counters.cosmetic,
       scriptlet: counters.scriptlet,
+      procedural: counters.procedural,
       unsupported: counters.unsupported,
       unsupportedByReason: Object.fromEntries(counters.reasons)
     }

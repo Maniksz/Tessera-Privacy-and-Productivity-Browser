@@ -176,6 +176,15 @@ export interface FilterListDiagnostics {
    * that breaks the invariant it exists to support.
    */
   readonly scriptlet: number
+  /**
+   * Lines that produced a procedural rule — `:has-text()`, `:upward()`, `:style()`.
+   *
+   * Its own counter beside `cosmetic` and `scriptlet`, because the three cost wildly different things: a
+   * declarative selector is a line in a stylesheet, a procedural one is script re-run on every mutation
+   * burst, and a scriptlet runs before the page's own code. One figure covering them would say nothing
+   * about any of them.
+   */
+  readonly procedural: number
   /** Lines recognised as filter syntax that this engine does not implement. */
   readonly unsupported: number
   /**
@@ -194,6 +203,7 @@ export function accountedLines(diagnostics: FilterListDiagnostics): number {
     diagnostics.network +
     diagnostics.cosmetic +
     diagnostics.scriptlet +
+    diagnostics.procedural +
     diagnostics.unsupported
   )
 }

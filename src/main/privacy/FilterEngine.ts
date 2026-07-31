@@ -14,6 +14,8 @@ import {
 } from '@shared/filters/model.js'
 import { matchNetworkRequest } from '@shared/filters/network.js'
 import { scriptletsFor, type ScriptletCall } from '@shared/filters/scriptlets.js'
+import { proceduralSelectorsFor } from '@shared/filters/procedural-index.js'
+import type { ProceduralSelector } from '@shared/filters/procedural.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { FilterListEngine, RequestContext } from './RequestPipeline.js'
 
@@ -107,6 +109,32 @@ export class FilterEngine implements FilterListEngine {
 
   get scriptletRuleCount(): number {
     return this.#filters.scriptlet.ruleCount
+  }
+
+  get proceduralRuleCount(): number {
+    return this.#filters.procedural.ruleCount + this.#userFilters.procedural.ruleCount
+  }
+
+  /**
+   * Procedural selectors for a document — the user's own as well as the lists'.
+   *
+   * Both, and the user's *last*, which is the one ordering decision here: a rule the user wrote is the one
+   * they will be looking for when they ask why a page still shows something, so it runs after the lists
+   * rather than being lost among them.
+   *
+   * Gated on `privacy.cosmeticFiltering` and not on a switch of its own. A procedural rule hides or
+   * restyles an element, which is exactly what that setting is about — it costs more to evaluate, but the
+   * *promise* to the user is the same one, and a second switch would mean somebody who turned cosmetic
+   * filtering off still had script rearranging their pages.
+   */
+  proceduralSelectorsFor(documentUrl: string): ProceduralSelector[] {
+    if (!this.#getSettings()['privacy.cosmeticFiltering']) return []
+    const host = hostnameOfUrl(documentUrl)
+    if (host === null) return []
+    return [
+      ...proceduralSelectorsFor(this.#filters.procedural, host),
+      ...proceduralSelectorsFor(this.#userFilters.procedural, host)
+    ]
   }
 
   /**

@@ -49,6 +49,15 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['tests/**/*.test.ts', 'tests/features/**/*.feature'],
+          /*
+            The DOM project's folder, which this one must not also claim.
+
+            Not needed while every test in there was `.tsx` — the glob above simply missed them. It became
+            necessary the moment a `.ts` test needed a document: without it the same file runs twice, once in
+            node, where `document` does not exist and every assertion fails for a reason that has nothing to
+            do with the code under test.
+          */
+          exclude: ['tests/components/**'],
           // Step definitions must be registered before any feature runs.
           setupFiles: ['tests/features/steps/index.ts'],
           environment: 'node',
@@ -67,7 +76,17 @@ export default defineConfig({
         resolve: { alias },
         test: {
           name: 'components',
-          include: ['tests/components/**/*.test.tsx'],
+          /*
+            `.ts` as well as `.tsx`, because what this project really provides is a **DOM**.
+
+            The name says components and the first tests here were all components, but the procedural filter
+            matcher needs a document too — `:has-text()` asks about text, `:upward()` about ancestry,
+            `:matches-css()` about computed style, and a test that invented a fake tree would be checking its
+            own fake. It cannot go in the unit project: that one loads the Gherkin step definitions as
+            setup files, and quickpickle's transitive `pngjs/browser` import does not resolve under
+            happy-dom — so a `@vitest-environment` docblock there fails on something unrelated to the test.
+          */
+          include: ['tests/components/**/*.test.{ts,tsx}'],
           environment: 'happy-dom',
           testTimeout
         }

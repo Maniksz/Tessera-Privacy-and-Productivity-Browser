@@ -74,6 +74,21 @@ function hostWith(options: {
     calls,
     host: {
       describe: () => Promise.resolve(options.descriptors ?? [descriptor()]),
+      /*
+        The rule editor, stubbed to an empty list.
+
+        This file is about the settings *table* — descriptors in, controls out — and the editor is a block
+        beside it with its own host and its own tests. An empty list is what keeps it from rendering anything
+        these assertions could trip over, while still exercising the wiring: a required member means the
+        compiler asks whoever adds a host to answer for it, which is the same reason `checkForUpdates` is
+        required rather than optional.
+      */
+      userRules: {
+        list: () => Promise.resolve({ rules: [], text: {} }),
+        add: () => Promise.resolve('added' as const),
+        setEnabled: () => Promise.resolve(),
+        remove: () => Promise.resolve()
+      },
       set: (key, value) => {
         calls.set.push({ key, value })
         return options.refuse === undefined

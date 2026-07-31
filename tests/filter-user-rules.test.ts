@@ -66,7 +66,8 @@ describe('describeUserRule', () => {
     expect(describeUserRule('example.com##.ad-slot')).toEqual({
       hosts: ['example.com'],
       selector: '.ad-slot',
-      isException: false
+      isException: false,
+      kind: 'declarative'
     })
   })
 
@@ -96,10 +97,47 @@ describe('describeUserRule', () => {
     expect(describeUserRule(`example.com##.${'a'.repeat(600)}`)).toBeNull()
   })
 
-  it('refuses a syntax the engine recognises but does not implement', () => {
-    // `#?#` needs a procedural selector engine. Storing it would put a rule in the list
-    // that looks active and blocks nothing.
-    expect(describeUserRule('example.com#?#.ad:has-text(Anzeige)')).toBeNull()
+  it('accepts a procedural rule, because that is what people write by hand', () => {
+    /*
+      This used to assert the opposite — `#?#` needed an engine that did not exist, and storing such a line
+      would have put a rule in the list that looked active and hid nothing.
+
+      There is an engine now, and accepting these is the point of it: *"hide the box that contains this
+      word"* cannot be said as a CSS selector, and it is exactly what somebody reaches for when the element
+      picker's selector turns out to be too brittle. `kind` says which path the rule will take, because the
+      two are not interchangeable — a procedural rule must name a host and costs work on every page it
+      applies to.
+    */
+    expect(describeUserRule('example.com#?#.ad:has-text(Anzeige)')).toEqual({
+      hosts: ['example.com'],
+      selector: '.ad',
+      isException: false,
+      kind: 'procedural'
+    })
+    // `##` carries them too, which is how uBO and the lists actually write them.
+    expect(describeUserRule('example.com##.box:upward(2)')?.kind).toBe('procedural')
+  })
+
+  it('still refuses a procedural operator there is no implementation for', () => {
+    // `:xpath()` is real uBO syntax and is not implemented — six uses across the three default lists. A
+    // stored line that cannot be evaluated is a rule that looks active and hides nothing, which is the
+    // defect the old assertion above was guarding and which still has to be guarded.
+    expect(describeUserRule('example.com#?#.ad:xpath(//div)')).toBeNull()
+  })
+
+  it('refuses a scriptlet, which is a different power from hiding an element', () => {
+    /*
+      `##+js(…)` names a piece of code to run in the page. A text box the user types rules into that
+      accepted one would be a text box that executes things — and the element picker writes through this
+      same function, so it would be one click away as well.
+    */
+    expect(describeUserRule('example.com##+js(set-constant, x, true)')).toBeNull()
+  })
+
+  it('refuses a procedural rule that names no host', () => {
+    // uBlock Origin refuses one too. It is evaluated by script on every matching document and re-run on
+    // every mutation burst, so "everywhere" means that work on every page for the rest of the session.
+    expect(describeUserRule('##.ad:has-text(Werbung)')).toBeNull()
   })
 })
 
@@ -198,9 +236,15 @@ describe('the rule list', () => {
 
 describe('repairUserRules', () => {
   it('drops a line this build cannot parse', () => {
-    // A line an older build understood and this one does not would otherwise sit in the
-    // list looking active while blocking nothing.
-    const rules = [ruleOf({ id: 'a' }), ruleOf({ id: 'b', text: 'example.com#?#.ad:upward(2)' })]
+    /*
+      A line an older build understood and this one does not would otherwise sit in the list looking active
+      while hiding nothing.
+
+      The example was `:upward(2)`, which this build now evaluates — so it moved to `:xpath()`, which is
+      real syntax with no implementation here. Worth noting rather than quietly swapping: the *test* is
+      about repair, and it only has something to repair for as long as some syntax is unsupported.
+    */
+    const rules = [ruleOf({ id: 'a' }), ruleOf({ id: 'b', text: 'example.com#?#.ad:xpath(//div)' })]
     expect(repairUserRules(rules).map((rule) => rule.id)).toEqual(['a'])
   })
 
