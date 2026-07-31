@@ -177,6 +177,36 @@ export const en = {
       description:
         'Without this a blocked advert leaves a hole in the layout. With it the page’s own layout is changed, so a false positive hides something real.'
     },
+    scriptletInjection: {
+      label: 'Counter scripts that detect blocking',
+      description:
+        'Filter lists carry small named countermeasures for pages whose own script decides what to show — an anti-adblock wall, an overlay on a timer, a redirect from a click anywhere. This runs them. The list may only name a countermeasure this browser ships and pass it text; no code from a list is ever executed.'
+    },
+    blockerOffForSites: {
+      label: 'Do not filter these sites',
+      description:
+        'One host per line. Added by the “Blocking on this site” switch in the blocker menu, and editable here. Filter lists and element hiding are switched off for these sites; HTTPS-only, cookie blocking, referrer trimming and fingerprint masking stay on.'
+    },
+    pageOpenedTabs: {
+      label: 'Tabs a page opens by itself',
+      description:
+        'A tab the page opened with no click or keypress behind it — a popup on a timer, or one on page load. Something you opened yourself is always allowed, whatever this says: the check is a real input event seen by the browser, which a page cannot fake.',
+      choices: {
+        allow: 'Always open',
+        ask: 'Ask each time',
+        block: 'Never open'
+      }
+    },
+    pageInitiatedRedirects: {
+      label: 'Redirects a page performs by itself',
+      description:
+        'Only redirects that leave the site, and only for the tab itself. A site moving you around within itself, and an embedded frame moving itself, are left alone — prompting for those would mean dialogues on sites doing nothing wrong. A redirect fired from a click has a gesture behind it and is allowed; the countermeasure setting above is what deals with those.',
+      choices: {
+        allow: 'Always follow',
+        ask: 'Ask each time',
+        block: 'Never follow'
+      }
+    },
     blockRedirectTrackers: {
       label: 'Block redirect trackers',
       description:

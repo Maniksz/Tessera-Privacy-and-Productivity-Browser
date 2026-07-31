@@ -212,6 +212,22 @@ const overlayPresentationSchema = z.discriminatedUnion('kind', [
     filled: z.number().int().nonnegative(),
     problem: z.enum(MASTER_PASSWORD_PROBLEMS).nullable(),
     minLength: z.number().int().positive()
+  }),
+  /**
+   * A page tried to open a tab, or to send its tab somewhere else, with nothing the user did behind it.
+   *
+   * `url` is validated as a string and deliberately not as `z.url()`: the address is the thing the user is
+   * being asked about, and a schema that refused an unusual one would take the *question* away rather than
+   * the navigation — the surface would never appear and the caller's fallback would allow or refuse
+   * without anybody being asked. Whether the address is one this browser will follow was already decided
+   * before the prompt was raised.
+   */
+  z.object({
+    kind: z.literal('navigation-request'),
+    requestId: z.string().min(1),
+    navigationKind: z.enum(['popup', 'navigation']),
+    url: z.string().min(1),
+    host: z.string()
   })
 ])
 
@@ -654,6 +670,19 @@ export const invokeContract = {
    */
   'permissions:answer': {
     request: z.object({ requestId: z.string().min(1), answer: z.enum(PERMISSION_ANSWERS) }),
+    response: ok
+  },
+  /**
+   * The answer to a popup or redirect prompt.
+   *
+   * A boolean rather than an enum, because there are two answers and no third: this once or not at all.
+   * There is deliberately no "always allow for this site" — that would be a stored permission with no
+   * screen to review or revoke it on, and the setting is where a blanket answer belongs.
+   *
+   * `requestId` is echoed back so a reply can only ever resolve the question it was shown for.
+   */
+  'navigation:answer': {
+    request: z.object({ requestId: z.string().min(1), permitted: z.boolean() }),
     response: ok
   },
 

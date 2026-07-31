@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { OverlayState } from '@shared/overlay/surface.js'
+import { chromeHiddenAt, chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { internalUrl } from '@shared/product.js'
 import { shortcutTitles } from '@shared/shortcuts/format.js'
 import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
@@ -46,6 +47,32 @@ export function App(): React.ReactNode {
 
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
   const privateMode = state.window?.privateMode ?? false
+  /**
+   * Where the content area begins *as the core sees it*, which is not always where the chrome ends.
+   *
+   * In window fullscreen the core gives the whole window to content and the chrome is off screen, so
+   * everything this renderer draws over the tiles has to start at zero too. It did not: the divider
+   * layer and the empty-tile placeholders both used the measured chrome height unconditionally, which
+   * put every divider handle a chrome height below the gutter it belongs to — and a handle that is not
+   * in a gutter is underneath a tile view, where it receives no pointer events at all. Reported as the
+   * tile resizing being unusable in fullscreen.
+   *
+   * `chromeInsetsFor` is the core's own rule, imported rather than repeated; see that module for why
+   * this is one function and not two agreeing ternaries.
+   */
+  const contentInsets = chromeInsetsFor(state.split?.escalation ?? null, {
+    top: chromeHeight,
+    bottom: 0,
+    left: 0,
+    right: 0
+  })
+  /*
+    The same question the insets answer, asked directly rather than inferred from them.
+
+    `contentInsets.top === 0` would be true for a window whose chrome has not been measured yet, and
+    hiding the toolbar on the first frame of every window is not a trade worth making to save an import.
+  */
+  const chromeHidden = state.split !== null && chromeHiddenAt(state.split.escalation)
   /** `system` leaves the OS in charge of `tokens.css`'s `light-dark()` tokens; `light`/`dark` override it (D2). */
   const theme = state.settings?.['appearance.theme'] ?? 'system'
 
@@ -217,7 +244,26 @@ export function App(): React.ReactNode {
 
   return (
     <div className={`app${privateMode ? ' app--private' : ''}`}>
-      <div className="chrome" ref={chromeRef}>
+      {/*
+        Hidden in window fullscreen, and `visibility` rather than `display` for a specific reason.
+
+        The tiles cover the whole window in fullscreen, so the chrome is behind them and invisible —
+        except in the gutters between tiles, which no native view covers. A vertical gutter runs the
+        full height of the window, so its top 88 pixels showed the tab strip: a sliver of browser
+        interface down the middle of a fullscreen page.
+
+        `display: none` would take the element out of layout, the `ResizeObserver` above would measure
+        zero and report insets of zero to the core — which the core is already assuming in fullscreen,
+        so nothing would break there — and then on the way *out* the chrome would be measured from
+        scratch while the core had already laid the tiles out for a chrome that was still zero pixels
+        tall. `visibility: hidden` keeps the box, so the measurement stays true the whole time and only
+        the pixels go.
+      */}
+      <div
+        className={`chrome${chromeHidden ? ' chrome--hidden' : ''}`}
+        ref={chromeRef}
+        aria-hidden={chromeHidden}
+      >
         {/* Drag region for the frameless window; the OS controls sit outside it. */}
         <TabBar
           tabs={state.tabs}
@@ -243,7 +289,7 @@ export function App(): React.ReactNode {
 
       {panel === 'extensions' && <ExtensionsPanel onClose={() => setPanel('none')} />}
 
-      {state.split !== null && <SplitDividers split={state.split} contentTop={chromeHeight} />}
+      {state.split !== null && <SplitDividers split={state.split} contentTop={contentInsets.top} />}
 
       {/*
         The content area itself is drawn by native views on top of this element. A placeholder only
@@ -253,7 +299,7 @@ export function App(): React.ReactNode {
         `aria-hidden` any more: the text drawn here is the one legitimate thing this container ever
         holds, and hiding it from assistive tech left an empty tile silent.
       */}
-      <div className="content" ref={contentRef} style={{ top: chromeHeight }}>
+      <div className="content" ref={contentRef} style={{ top: contentInsets.top }}>
         {state.split === null
           ? state.tabs.length === 0 && <p className="content__empty">{t('split.emptyTile')}</p>
           : state.split.tileTabIds.map((tabId, index) => {

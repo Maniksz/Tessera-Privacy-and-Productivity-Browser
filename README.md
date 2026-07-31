@@ -32,6 +32,29 @@ pnpm dev
 
 Node ≥ 22 und pnpm werden erwartet.
 
+### Installieren und Deinstallieren unter Windows
+
+Der Installer ist ein NSIS-Setup und installiert **pro Benutzer** (`perMachine: false`), also
+ohne Administratorrechte. Das entscheidet auch, wo alles landet, und das ist der Punkt, an dem
+gemeldet wurde, es gäbe keine Deinstallation:
+
+| Was | Wo |
+|---|---|
+| Anwendung | `%LOCALAPPDATA%\Programs\tessera\` |
+| Deinstallation | `%LOCALAPPDATA%\Programs\tessera\Uninstall tessera.exe` |
+| Startmenü | Eintrag für die Anwendung **und** „Uninstall tessera" |
+| Systemeinstellungen | *Apps & Features* → `tessera` (Eintrag unter `HKCU`) |
+
+Nicht in `C:\Program Files` — dort liegt bei einer Benutzerinstallation nichts, und wer dort
+sucht, findet zu Recht keinen Uninstaller. Der Startmenü-Eintrag existiert, weil die Suche dort
+naheliegt; er wird von `build/installer.nsh` angelegt und beim Deinstallieren wieder entfernt.
+
+Wird bei der Installation ein Zielordner gewählt, in den der angemeldete Benutzer nicht schreiben
+darf — `C:\Program Files` ist der wahrscheinliche Fall, weil `allowToChangeInstallationDirectory`
+das zulässt —, kann die Installation unvollständig bleiben. Dann ist `perMachine: true` in
+`electron-builder.yml` die richtige Einstellung; sie kostet eine UAC-Abfrage und installiert
+systemweit.
+
 ## Warum Electron
 
 Gegen einen eigenen Chromium-Fork und für Electron — nicht aus Bequemlichkeit,

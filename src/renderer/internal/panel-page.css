@@ -17,11 +17,44 @@
 @import '../src/tokens.css';
 @import '../src/styles.css';
 
+/*
+  The document is allowed to grow, and this is the declaration the last attempt at "make settings
+  scrollable" was missing.
+
+  `tokens.css` — imported above, for the palette — ends with the chrome UI's own reset:
+  `html, body { height: 100% }` and `body { overflow: hidden }`. That is right for the chrome, which
+  is one viewport-sized window with its own scrolling regions inside it, and wrong for every internal
+  page, which is a document in a tab. With it in force the body is exactly one viewport tall and
+  clips whatever exceeds it, so nothing below the fold can be reached *however* the panel inside is
+  styled. Undoing `.panel`'s clipping alone therefore changed nothing visible, which is why the
+  defect survived a fix.
+
+  `min-height: 100%` rather than nothing, so a short page still paints its background over the whole
+  tab instead of leaving the viewport's default white below it.
+
+  The other internal pages solve this the same way and each says so in its own sheet — `history.css`,
+  `bookmarks.css`, `downloads.css`, `passwords.css` and `reader.css` all set `overflow-y: auto` on
+  the body. Settings and Extensions were the two that imported the chrome reset without answering it.
+*/
+html,
+body {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
   font: var(--font-ui);
+  /*
+    And the second half of the chrome reset that does not belong on a page: `user-select: none`.
+    A settings page is full of values worth copying into a bug report — a filter-list URL, a proxy
+    address, the key beside each row — and the chrome's reason for forbidding selection (it
+    interferes with tab drags) does not exist here.
+  */
+  user-select: text;
 }
 
 .panelPage {

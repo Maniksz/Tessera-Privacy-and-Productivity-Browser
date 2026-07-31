@@ -7,6 +7,7 @@ import {
   type GenericFeatureIndex
 } from './features.js'
 import type { CosmeticRule } from './model.js'
+import { isSafeSelector } from './selector-safety.js'
 
 /**
  * Cosmetic filtering: which CSS selectors should be hidden on a given host.
@@ -194,10 +195,29 @@ export function cosmeticSelectorsFor(index: CosmeticIndex, hostname: string): Co
  * `!important` because the point is to beat a page's own rule, and `display: none`
  * rather than `visibility` so the element takes no space — a hidden ad slot that
  * still reserves 250 pixels is not much of an improvement.
+ *
+ * ## Why the selectors are checked again here
+ *
+ * One CSS rule, because 28 914 generic selectors written as 28 914 rules is a quarter of a megabyte of
+ * repeated declaration. That economy has a sharp edge: a CSS selector list is **all-or-nothing**, so a
+ * single member the browser's parser cannot read invalidates the whole rule and every good selector in
+ * the batch is discarded with it. The symptom is the worst kind — the rules are computed, sent and
+ * injected, and simply do not apply.
+ *
+ * `parse.ts` already refuses the selectors it cannot vouch for, so in the ordinary path this filters
+ * nothing. It is not redundant, because the parser is not the only way in: user rules, a picked element,
+ * and whatever the next list format turns out to be all arrive by other routes. The guarantee that is
+ * wanted is about what enters a page, and this is the last place that question is asked.
+ *
+ * Refusals are silent here, deliberately. The place to report an unsupported line is where lists are
+ * compiled and counted, and a `console.warn` per document would report the same rule once per page
+ * forever. A selector reaching this point *and* failing means the parser missed something — which the
+ * diagnostics will not show, so `tests/filter-selector-safety.test.ts` asserts the two agree instead.
  */
 export function cosmeticCss(selectors: readonly string[]): string | null {
-  if (selectors.length === 0) return null
-  return `${selectors.join(',\n')} { display: none !important; }`
+  const safe = selectors.filter(isSafeSelector)
+  if (safe.length === 0) return null
+  return `${safe.join(',\n')} { display: none !important; }`
 }
 
 /**

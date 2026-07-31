@@ -6,6 +6,7 @@ import {
   classifyOmniboxInput,
   omniboxDisplayValue
 } from '@shared/url/omnibox.js'
+import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 
@@ -100,6 +101,28 @@ export function Omnibox({
         ? t('omnibox.searchWith', { engine: SEARCH_ENGINES[engine].label })
         : t('omnibox.openUrl', { url: intent.url })
 
+  /*
+    Whether this page is being filtered, and the three states the shield has to tell apart.
+
+    Read from the settings snapshot rather than pushed down as a new field on `TabState`: both inputs are
+    already here, and the alternative would be the core recomputing a boolean per tab on every settings
+    change and broadcasting it.
+
+    `filteringExemptFor` is the same function `RequestPipeline` and `CosmeticInjector` decide with, so
+    the shield cannot claim a site is filtered while the pipeline is skipping it. That agreement is the
+    reason this is an import and not two lines of host comparison here.
+  */
+  const blockerEnabled = settings?.['privacy.blockerEnabled'] ?? true
+  const exemptHere = filteringExemptFor(tab?.url ?? null, settings?.['privacy.blockerOffForSites'] ?? [])
+  const filtering = blockerEnabled && !exemptHere
+  const blockerLabel = !blockerEnabled
+    ? t('omnibox.blockerOff')
+    : exemptHere
+      ? t('omnibox.blockerOffHere')
+      : tab !== undefined && tab.blockedRequests > 0
+        ? t('omnibox.blockedCount', { count: tab.blockedRequests })
+        : t('omnibox.blocker')
+
   const security = tab?.security ?? 'internal'
   const securityLabel = t(
     security === 'secure'
@@ -145,24 +168,41 @@ export function Omnibox({
         onKeyDown={onKeyDown}
       />
 
-      {/* Real count of blocked requests for this page, not an estimate (spec 1). */}
-      {tab !== undefined && tab.blockedRequests > 0 && (
+      {/*
+        The blocker, on every page rather than only where something was blocked.
+
+        ## Why it used to be conditional, and why that was the bug
+
+        This was `tab.blockedRequests > 0 && …`: a badge that appeared when the blocker had done
+        something and was absent otherwise. As a *report* that is right — the count is real, not an
+        estimate (spec 1). As the way into the blocker's menu it is not, and the menu is what is behind
+        it: the element picker, the per-site off switch, the user's own rules. Every one of those is
+        something a person reaches for **because a page looks wrong**, which is exactly the case where
+        nothing has been blocked and the button was not there. Reported as wanting element blocking
+        "mit quick access"; the picker had existed for some time behind a control that hid itself.
+
+        So the button is always present and the count is what is conditional. The icon is a shield, and
+        it is dimmed when this site is not being filtered — which makes the state readable without
+        opening anything, and is the answer to somebody who switched filtering off for a site last week
+        and has forgotten.
+
+        A native menu still, because a DOM one here would drop down behind the page: content is a native
+        view above this renderer's own document.
+      */}
+      {tab !== undefined && (
         <button
           type="button"
-          className="omnibox__badge"
-          title={t('omnibox.blockedCount', { count: tab.blockedRequests })}
-          aria-label={t('omnibox.blockedCount', { count: tab.blockedRequests })}
-          /*
-            Opens the blocker's menu, which the *core* draws.
-
-            A native menu, because a DOM one here would drop down behind the page — page content is a native
-            view above this renderer's own document. The badge used to be a button that did nothing at all;
-            what a person wants when they notice "12 blocked" is to see what happened, hide something the
-            blocker missed, or switch it off because the page is broken.
-          */
+          className={`omnibox__blocker${filtering ? '' : ' omnibox__blocker--off'}`}
+          title={blockerLabel}
+          aria-label={blockerLabel}
           onClick={() => void invoke('blocker:menu')}
         >
-          {tab.blockedRequests}
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M8 1.6l5 1.7v4.2c0 3-2 5.4-5 6.9-3-1.5-5-3.9-5-6.9V3.3z" />
+          </svg>
+          {tab.blockedRequests > 0 && (
+            <span className="omnibox__blockerCount">{tab.blockedRequests}</span>
+          )}
         </button>
       )}
 

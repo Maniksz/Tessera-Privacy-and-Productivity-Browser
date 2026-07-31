@@ -13,6 +13,7 @@ import {
   type FilterListDiagnostics
 } from '@shared/filters/model.js'
 import { matchNetworkRequest } from '@shared/filters/network.js'
+import { scriptletsFor, type ScriptletCall } from '@shared/filters/scriptlets.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { FilterListEngine, RequestContext } from './RequestPipeline.js'
 
@@ -102,6 +103,30 @@ export class FilterEngine implements FilterListEngine {
 
   get userRuleCount(): number {
     return this.#userFilters.cosmetic.ruleCount
+  }
+
+  get scriptletRuleCount(): number {
+    return this.#filters.scriptlet.ruleCount
+  }
+
+  /**
+   * The scriptlets to run in a document, or an empty list.
+   *
+   * Its own switch (`privacy.scriptletInjection`) rather than `privacy.cosmeticFiltering`, because they
+   * are different powers: one hides an element, the other runs code in the page. A user who is willing to
+   * have their layout altered has not thereby agreed to the second, and the settings screen has to be able
+   * to ask about them separately.
+   *
+   * The user's own rules contribute nothing here and cannot. `describeUserRule` refuses anything but a
+   * hiding rule — the element picker must not be able to write a line that executes code — so
+   * `#userFilters` has no scriptlets to add and asking it would be asking a question with one possible
+   * answer.
+   */
+  scriptletsFor(documentUrl: string): ScriptletCall[] {
+    if (!this.#getSettings()['privacy.scriptletInjection']) return []
+    const host = hostnameOfUrl(documentUrl)
+    if (host === null) return []
+    return scriptletsFor(this.#filters.scriptlet, host)
   }
 
   /**

@@ -1,4 +1,5 @@
 import type { DocumentFeatures } from './features.js'
+import type { ScriptletCall } from './scriptlets.js'
 
 /**
  * How cosmetic rules get from the core into a page.
@@ -34,6 +35,16 @@ export const COSMETIC_SPECIFIC_CHANNEL = 'tessera:cosmetic-specific'
 
 /** Asynchronous, after the DOM exists and again as it grows: the generic rules that could match it. */
 export const COSMETIC_GENERIC_CHANNEL = 'tessera:cosmetic-generic'
+
+/**
+ * Synchronous, at `document-start`: the scriptlets to run in this document.
+ *
+ * Synchronous for a stronger reason than the specific stylesheet has. A late stylesheet shows an advert
+ * for a moment; a late scriptlet is useless — `abort-current-script` has to have redefined the property
+ * *before* the inline script that reads it runs, and there is no second chance. `document-start` is the
+ * last moment before the page's own scripts, so the answer has to arrive without an await.
+ */
+export const SCRIPTLET_CHANNEL = 'tessera:scriptlets'
 
 /**
  * How many distinct feature names one report may carry, per kind.
@@ -110,6 +121,32 @@ export type CosmeticStyles = string | null
 /** Total, because the answer crosses a process boundary and an old build may answer anything. */
 export function asCosmeticStyles(value: unknown): CosmeticStyles {
   return typeof value === 'string' && value !== '' ? value : null
+}
+
+/**
+ * Total, for the scriptlet answer.
+ *
+ * The preload receives this over IPC from a build that may be older or newer than it, and hands each call
+ * straight to a function that runs in the page's world. So the shape is re-established here rather than
+ * trusted: a name that is not a string, or arguments that are not strings, would reach `runScriptlets` as
+ * whatever they are and be interpolated into a regular expression or a property path.
+ *
+ * A malformed entry is dropped rather than repaired. There is no sensible repair for "the core sent a
+ * scriptlet call this build cannot read", and running an approximation of one is worse than running none.
+ */
+export function asScriptletCalls(value: unknown): ScriptletCall[] {
+  if (!Array.isArray(value)) return []
+  const calls: ScriptletCall[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const candidate = entry as Record<string, unknown>
+    const { name, args } = candidate
+    if (typeof name !== 'string' || name === '') continue
+    if (!Array.isArray(args)) continue
+    if (!args.every((argument): argument is string => typeof argument === 'string')) continue
+    calls.push({ name, args })
+  }
+  return calls
 }
 
 /** Total in the other direction: what the core receives may be anything at all. */

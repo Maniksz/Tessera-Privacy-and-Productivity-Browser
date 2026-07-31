@@ -5,7 +5,14 @@ import {
   type PageContextMenuDeps,
   type PageContextTarget
 } from '@main/menu/page-context-items.js'
-import { blockerMenuTemplate, type BlockerMenuDeps } from '@main/menu/blocker-menu-items.js'
+import type { MenuItemConstructorOptions } from 'electron'
+import {
+  blockerMenuTemplate,
+  ruleMenuLabel,
+  siteRules,
+  type BlockerMenuDeps
+} from '@main/menu/blocker-menu-items.js'
+import type { UserRule } from '@shared/filters/user-rules.js'
 
 /**
  * What a right-click offers, and what it must not offer.
@@ -286,19 +293,48 @@ describe('what a right-click was probably for', () => {
   })
 })
 
+/**
+ * Three rules, all scoped to the host the fixture menu is opened over.
+ *
+ * Scoped rather than global on purpose: the menu only lists rules that apply to the site in front of the
+ * user, so a fixture of unscoped rules would produce an empty list and every assertion below would pass
+ * for the wrong reason. `createdAt` descends with the array so "newest first" is testable.
+ */
+function userRules(): UserRule[] {
+  return [
+    { id: 'r1', text: 'shop.example##.banner-ad', enabled: true, createdAt: 300, origin: 'picker' },
+    { id: 'r2', text: 'shop.example##.sponsored', enabled: false, createdAt: 200, origin: 'picker' },
+    { id: 'r3', text: 'example.com##.newsletter', enabled: true, createdAt: 100, origin: 'manual' }
+  ]
+}
+
 function blocker(overrides: Partial<BlockerMenuDeps> = {}): BlockerMenuDeps {
   return {
     locale: 'en',
     blockedOnPage: 12,
-    userRuleCount: 3,
+    userRules: userRules(),
     blockerEnabled: true,
-    canPickElement: true,
+    host: 'shop.example',
+    blockerEnabledOnSite: true,
     onBlockElement: vi.fn(),
     onOpenSettings: vi.fn(),
     onRefreshLists: vi.fn(),
     onSetBlockerEnabled: vi.fn(),
+    onSetBlockerEnabledOnSite: vi.fn(),
+    onSetRuleEnabled: vi.fn(),
+    onRemoveRules: vi.fn(),
     ...overrides
   }
+}
+
+/** The submenu behind "My rules", which is where see/disable/delete live. */
+function rulesSubmenu(deps: BlockerMenuDeps = blocker()): MenuItemConstructorOptions[] {
+  const entry = blockerMenuTemplate(deps).find((item) =>
+    typeof item.label === 'string' ? item.label.startsWith('My rules') : false
+  )
+  const submenu = entry?.submenu
+  if (!Array.isArray(submenu)) throw new Error('My rules has no submenu')
+  return submenu
 }
 
 describe('the blocker badge menu', () => {
@@ -328,19 +364,25 @@ describe('the blocker badge menu', () => {
   it('keeps the off switch reachable when the blocker is already off', () => {
     // The one item that must never disappear with the feature: a blocker with no visible way back on is a
     // blocker people uninstall.
-    const items = blockerMenuTemplate(blocker({ blockerEnabled: false, canPickElement: false }))
+    const items = blockerMenuTemplate(blocker({ blockerEnabled: false, host: null }))
     expect(labels(items)).toContain('Blocking enabled')
   })
 
   it('hides element picking where it could not work, and keeps everything else', () => {
-    const items = labels(blockerMenuTemplate(blocker({ canPickElement: false })))
+    const items = labels(blockerMenuTemplate(blocker({ host: null })))
     expect(items).not.toContain('Block element…')
     expect(items).toContain('Update filter lists now')
-    expect(items).toContain('My rules (3)')
+    expect(items).toContain('Blocking enabled')
   })
 
-  it('says how many rules the user wrote', () => {
-    expect(labels(blockerMenuTemplate(blocker({ userRuleCount: 0 })))).toContain('My rules (0)')
+  it('says nothing was blocked rather than reporting zero', () => {
+    /*
+      The button is in the address bar on every page now, so this is the label most pages get. "0 requests
+      blocked on this page" reads as a fault report about the correct and expected state of a well-behaved
+      site.
+    */
+    const first = blockerMenuTemplate(blocker({ blockedOnPage: 0 }))[0]
+    expect(first?.label).toBe('Nothing blocked on this page')
   })
 
   it('does what each of its items says', () => {
@@ -348,20 +390,15 @@ describe('the blocker badge menu', () => {
     // `() => undefined` survived. The off switch is the one that matters most — a menu that displays the state
     // correctly and cannot change it is worse than no menu.
     const onBlockElement = vi.fn()
-    const onOpenSettings = vi.fn()
     const onRefreshLists = vi.fn()
     const onSetBlockerEnabled = vi.fn()
-    const items = blockerMenuTemplate(
-      blocker({ onBlockElement, onOpenSettings, onRefreshLists, onSetBlockerEnabled })
-    )
+    const items = blockerMenuTemplate(blocker({ onBlockElement, onRefreshLists, onSetBlockerEnabled }))
 
     click(items, 'Block element…')
-    click(items, 'My rules (3)')
     click(items, 'Update filter lists now')
     click(items, 'Blocking enabled')
 
     expect(onBlockElement).toHaveBeenCalledTimes(1)
-    expect(onOpenSettings).toHaveBeenCalledTimes(1)
     expect(onRefreshLists).toHaveBeenCalledTimes(1)
     // Toggled, not set: clicking a checked box must switch it off. `true` here would mean the box could only
     // ever be turned on, which reads as the menu ignoring the click.
@@ -371,9 +408,157 @@ describe('the blocker badge menu', () => {
   it('turns blocking back on from the unchecked state', () => {
     const onSetBlockerEnabled = vi.fn()
     click(
-      blockerMenuTemplate(blocker({ blockerEnabled: false, onSetBlockerEnabled })),
+      blockerMenuTemplate(blocker({ blockerEnabled: false, host: null, onSetBlockerEnabled })),
       'Blocking enabled'
     )
     expect(onSetBlockerEnabled).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('the per-site off switch, which is what makes the global one safe', () => {
+  /**
+   * This file's own docblock argued that a blocker with no visible off switch for the current site is a
+   * blocker people uninstall — and the menu had only the *global* switch. So fixing one broken page meant
+   * switching filtering off everywhere and remembering to put it back, which nobody does.
+   */
+  it('states the site\'s state as a checkbox', () => {
+    const on = blockerMenuTemplate(blocker()).find((item) => item.label === 'Blocking on this site')
+    expect(on?.type).toBe('checkbox')
+    expect(on?.checked).toBe(true)
+
+    const off = blockerMenuTemplate(blocker({ blockerEnabledOnSite: false })).find(
+      (item) => item.label === 'Blocking on this site'
+    )
+    expect(off?.checked).toBe(false)
+  })
+
+  it('switches the site off, keyed on the host it was opened over', () => {
+    const onSetBlockerEnabledOnSite = vi.fn()
+    click(blockerMenuTemplate(blocker({ onSetBlockerEnabledOnSite })), 'Blocking on this site')
+    expect(onSetBlockerEnabledOnSite).toHaveBeenCalledWith('shop.example', false)
+  })
+
+  it('switches it back on from the unchecked state', () => {
+    const onSetBlockerEnabledOnSite = vi.fn()
+    click(
+      blockerMenuTemplate(blocker({ blockerEnabledOnSite: false, onSetBlockerEnabledOnSite })),
+      'Blocking on this site'
+    )
+    expect(onSetBlockerEnabledOnSite).toHaveBeenCalledWith('shop.example', true)
+  })
+
+  it('is absent rather than disabled where there is no host to key it on', () => {
+    // An internal page, a `file:` document. A checkbox that cannot be clicked invites the reading that
+    // blocking is off here, which would be a false statement about the one thing this menu is for.
+    expect(labels(blockerMenuTemplate(blocker({ host: null })))).not.toContain('Blocking on this site')
+  })
+
+  it('never claims a site is filtered while the blocker is off entirely', () => {
+    /*
+      The one combination that could produce a lie. With the global switch off, nothing is blocked
+      anywhere — so a checked "Blocking on this site" would be the only statement in this menu that is
+      simply untrue, and it is the statement somebody debugging a page would read first.
+    */
+    const item = blockerMenuTemplate(blocker({ blockerEnabled: false })).find(
+      (candidate) => candidate.label === 'Blocking on this site'
+    )
+    expect(item?.checked).toBe(false)
+    expect(item?.enabled, 'the site switch is offered while it could do nothing').toBe(false)
+  })
+})
+
+describe('the user\'s own rules, which nothing could show before', () => {
+  /**
+   * `user-rules.ts` states the requirement: *"The three operations that matter are not 'add': they are
+   * see, disable, delete."* All three had core handlers — `userrules:list`, `userrules:setEnabled`,
+   * `userrules:remove` — and no caller anywhere in the application. So the element picker could write
+   * rules and no surface could show one, switch one off, or remove it: a rule that hid the wrong thing
+   * was permanent and unfindable.
+   */
+  it('lists this site\'s rules, newest first', () => {
+    const items = labels(rulesSubmenu())
+    expect(items.slice(0, 2)).toEqual(['shop.example##.banner-ad', 'shop.example##.sponsored'])
+  })
+
+  it('includes a rule written against a parent domain', () => {
+    // It is affecting the page in front of the user, so it has to be switchable from here. `siteRules`
+    // matches whole labels, which is what makes `example.com##…` cover `shop.example`… or rather not:
+    // asserted directly so the boundary is on the record either way.
+    expect(siteRules(userRules(), 'shop.example').map((rule) => rule.id)).toEqual(['r1', 'r2'])
+    expect(siteRules(userRules(), 'www.example.com').map((rule) => rule.id)).toEqual(['r3'])
+  })
+
+  it('leaves out a rule that applies everywhere', () => {
+    /*
+      A rule with no host affects every site, and switching it off from a menu opened on one of them would
+      change all of them with nothing on screen saying so.
+    */
+    const global = [
+      { id: 'g1', text: '##.ad-slot', enabled: true, createdAt: 400, origin: 'manual' as const }
+    ]
+    expect(siteRules(global, 'shop.example')).toEqual([])
+  })
+
+  it('shows each rule as a checkbox, so disabling is a click rather than a deletion', () => {
+    // Disable rather than delete is the operation for a page that broke: it keeps the line so the list can
+    // still be read, which is why `enabled` is stored rather than implied by presence.
+    const [first, second] = rulesSubmenu()
+    expect(first?.type).toBe('checkbox')
+    expect(first?.checked).toBe(true)
+    expect(second?.checked, 'a disabled rule is shown as unchecked').toBe(false)
+  })
+
+  it('toggles the rule it was clicked on', () => {
+    const onSetRuleEnabled = vi.fn()
+    click(rulesSubmenu(blocker({ onSetRuleEnabled })), 'shop.example##.banner-ad')
+    expect(onSetRuleEnabled).toHaveBeenCalledWith('r1', false)
+
+    const again = vi.fn()
+    click(rulesSubmenu(blocker({ onSetRuleEnabled: again })), 'shop.example##.sponsored')
+    expect(again, 'a disabled rule cannot be switched back on').toHaveBeenCalledWith('r2', true)
+  })
+
+  it('deletes this site\'s rules and no others', () => {
+    const onRemoveRules = vi.fn()
+    click(rulesSubmenu(blocker({ onRemoveRules })), 'Delete my rules for this site (2)')
+    expect(onRemoveRules).toHaveBeenCalledWith(['r1', 'r2'])
+  })
+
+  it('offers the settings page whether or not there are rules', () => {
+    const onOpenSettings = vi.fn()
+    click(rulesSubmenu(blocker({ onOpenSettings })), 'Manage in settings…')
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
+
+    const empty = vi.fn()
+    const none = rulesSubmenu(blocker({ userRules: [], onOpenSettings: empty }))
+    expect(labels(none)).toContain('No rules of your own yet')
+    click(none, 'Manage in settings…')
+    expect(empty).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts only the rules it lists', () => {
+    // "My rules (3)" beside a list of two would be the menu contradicting itself in one glance.
+    const entry = blockerMenuTemplate(blocker()).find((item) =>
+      typeof item.label === 'string' ? item.label.startsWith('My rules') : false
+    )
+    expect(entry?.label).toBe('My rules (2)')
+  })
+
+  it('elides a long rule in the middle, where the ends are what identify it', () => {
+    /*
+      A rule is `host##selector`, and both ends carry the identity. Cutting the tail off
+      `www.example.com##div.wrapper > div.container > .ad-slot` leaves every rule on a site looking the
+      same, which is worse than an ellipsis in the middle of one.
+    */
+    const long = `shop.example##${'div.wrapper > '.repeat(6)}.ad`
+    const label = ruleMenuLabel(long)
+    expect(label.length).toBeLessThan(long.length)
+    expect(label.startsWith('shop.example##')).toBe(true)
+    expect(label.endsWith('.ad')).toBe(true)
+    expect(label).toContain('…')
+  })
+
+  it('leaves a short rule exactly as written', () => {
+    expect(ruleMenuLabel('shop.example##.ad')).toBe('shop.example##.ad')
   })
 })

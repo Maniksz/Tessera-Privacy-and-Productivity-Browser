@@ -166,9 +166,25 @@ export function Toolbar({
           title={titleWithShortcut(t('toolbar.settings'), 'settings')}
           onClick={onOpenSettings}
         >
+          {/*
+            A cog, and the previous drawing has to be named because it is the kind of mistake that
+            looks like a choice. It was a circle with eight straight rays leaving it — which is the
+            icon for brightness, not for settings. Reported as "das settings icon ist eine sonne?",
+            and the question mark is the whole problem: a reader could not tell whether the browser
+            meant a theme switch.
+
+            The teeth are therefore a closed outline rather than radial strokes. That is the only
+            shape that cannot be read as a sun: a ray touches the circle at one point and a tooth
+            has flanks, and at 20px the flanks are what the eye uses. Six teeth rather than eight —
+            with a 1.6 stroke on a 20px grid, eight leaves under two pixels of gap between them and
+            they merge back into a blur.
+
+            Geometry, so the next person can move it without re-deriving it: tips on r=8, roots on
+            r=5.75, teeth 26° wide on a 60° period, centred on (10,10).
+          */}
           <svg viewBox="0 0 20 20" aria-hidden="true">
-            <circle cx="10" cy="10" r="2.6" />
-            <path d="M10 3v2M10 15v2M3 10h2M15 10h2M5.1 5.1l1.4 1.4M13.5 13.5l1.4 1.4M14.9 5.1l-1.4 1.4M6.5 13.5l-1.4 1.4" />
+            <path d="M8.2 2.21L11.8 2.21L11.87 4.56L13.77 5.66L15.85 4.54L17.65 7.66L15.64 8.9L15.64 11.1L17.65 12.34L15.85 15.46L13.77 14.34L11.87 15.44L11.8 17.79L8.2 17.79L8.13 15.44L6.23 14.34L4.15 15.46L2.35 12.34L4.36 11.1L4.36 8.9L2.35 7.66L4.15 4.54L6.23 5.66L8.13 4.56Z" />
+            <circle cx="10" cy="10" r="2.5" />
           </svg>
         </button>
       </div>

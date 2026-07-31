@@ -114,6 +114,111 @@ describe('blocker stage', () => {
     )
     expect(outcome.action).toBe('continue')
   })
+
+  describe('a site the user switched filtering off for', () => {
+    /**
+     * The per-site off switch, at the point where it has to take effect.
+     *
+     * The interesting part is *which* URL decides. A third-party advert host is not in the user's list
+     * and never will be — they exempted the site they were reading, not the advert network it pulls
+     * from. So the decision has to be keyed on `documentUrl`, and a stage that read `url` instead would
+     * exempt nothing that matters while looking entirely correct in a test written with a first-party
+     * request.
+     */
+    const exempt = withSettings({ 'privacy.blockerOffForSites': ['example.com'] })
+
+    it('lets the page\'s own requests through', () => {
+      const outcome = evaluateStages(
+        context({
+          url: 'https://example.com/ads/banner.js',
+          resourceType: 'script',
+          documentUrl: 'https://example.com/',
+          settings: exempt
+        }),
+        engine
+      )
+      expect(outcome.action).toBe('continue')
+    })
+
+    it('lets a third-party request from that page through too', () => {
+      // The case the feature exists for, and the one a naive implementation gets wrong: the advert host
+      // is not the exempt host.
+      const outcome = evaluateStages(
+        context({
+          url: 'https://cdn.adnetwork.test/ads/banner.js',
+          resourceType: 'script',
+          documentUrl: 'https://www.example.com/article',
+          settings: exempt
+        }),
+        engine
+      )
+      expect(outcome.action).toBe('continue')
+    })
+
+    it('still blocks the same request from a site that is not exempt', () => {
+      const outcome = evaluateStages(
+        context({
+          url: 'https://cdn.adnetwork.test/ads/banner.js',
+          resourceType: 'script',
+          documentUrl: 'https://other.test/article',
+          settings: exempt
+        }),
+        engine
+      )
+      expect(outcome).toEqual({ action: 'block', reason: 'blocker' })
+    })
+
+    it('still blocks a request whose document is unknown', () => {
+      /*
+        Filtering is the default, and a request that cannot be attributed to a document is not evidence
+        that the user asked for less of it. Failing the other way would turn every unattributable request
+        into an exemption.
+      */
+      const outcome = evaluateStages(
+        context({
+          url: 'https://cdn.adnetwork.test/ads/banner.js',
+          resourceType: 'script',
+          documentUrl: null,
+          settings: exempt
+        }),
+        engine
+      )
+      expect(outcome.action).toBe('block')
+    })
+
+    it('leaves the other stages running', () => {
+      /*
+        The promise `site-exemption.ts` makes and the reason it is narrow: an exempt site is one this
+        browser does not *filter*, not one it stops protecting. Somebody switches this on because a page
+        is broken, and the measures they would otherwise lose — HTTPS-only here, and with it cookie
+        blocking, referrer trimming and fingerprint masking — have nothing to do with a broken page.
+      */
+      const outcome = evaluateStages(
+        context({
+          url: 'http://example.com/article',
+          resourceType: 'mainFrame',
+          documentUrl: 'http://example.com/article',
+          settings: exempt
+        }),
+        engine
+      )
+      expect(outcome.action, 'HTTPS-only stopped applying to an exempt site').not.toBe('continue')
+    })
+
+    it('blocks a telemetry host on an exempt site', () => {
+      // Same promise, the other stage that is easy to lose by widening the exemption "for consistency".
+      const outcome = evaluateStages(
+        context({
+          url: 'https://safebrowsing.googleapis.com/x',
+          resourceType: 'xhr',
+          documentUrl: 'https://example.com/',
+          settings: exempt
+        }),
+        engine
+      )
+      expect(outcome).toEqual({ action: 'block', reason: 'telemetry' })
+    })
+  })
 })
 
 describe('blocker stage with the real filter engine', () => {

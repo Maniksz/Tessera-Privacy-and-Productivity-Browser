@@ -139,7 +139,19 @@ describe('window event wiring', () => {
       this test exists.
     */
     const waiting = OVERLAY_KINDS.filter((kind) => OVERLAY_AWAITS_ANSWER[kind])
-    expect(waiting.length, 'no surface awaits an answer; this test has nothing to guard').toBe(2)
+    /*
+      A floor rather than an exact count, and the change is deliberate.
+
+      This asserted `toBe(2)` so that the test could not silently end up guarding nothing. But it also
+      failed the moment a *third* awaiting surface was declared — `navigation-request` — which is the
+      opposite of what it is for: the protection is derived from the table precisely so a new surface is
+      covered by declaring it. A floor keeps the guard against an empty set and stops the test from having
+      an opinion about how many kinds ask questions.
+    */
+    expect(
+      waiting.length,
+      'no surface awaits an answer; this test has nothing to guard'
+    ).toBeGreaterThanOrEqual(2)
 
     for (const event of ['resize', 'blur']) {
       const window = harness()

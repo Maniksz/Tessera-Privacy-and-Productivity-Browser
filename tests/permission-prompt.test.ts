@@ -160,16 +160,27 @@ describe('the permission prompt is a modal surface', () => {
     expect(regionOf('permission-request')).toBe('window')
   })
 
-  it('is one of the two surfaces something is waiting on', () => {
+  it('is one of the three surfaces something is waiting on', () => {
     /*
-      It was the only one. The master-password prompt is the second, and the pair is worth asserting
-      together rather than loosening this to "at least the prompt": what makes a surface belong here is that
-      its departure strands somebody — a page holding an unsettled `getUserMedia`, or a caller holding an
-      unsettled `passwords:requestUnlock`. A third kind that quietly joined them would be a third
-      consequence nobody had decided the safe answer for.
+      It was the only one, then one of two, and is now one of three. The set is asserted whole rather than
+      loosened to "at least the prompt", and the reason has held every time it changed: what makes a
+      surface belong here is that its departure strands somebody, and each one strands a different thing
+      with a different safe answer.
+
+      - `permission-request` — a page holding an unsettled `getUserMedia`. Safe answer: refuse.
+      - `master-password` — a caller holding an unsettled `passwords:requestUnlock`. Safe answer:
+        `cancelled`, not `wrong-password`; a resize is not the user mistyping.
+      - `navigation-request` — the core holding a callback that would perform a navigation or open a tab.
+        Safe answer: refuse, which is also what the feature was asked for — the page stays where it is.
+
+      A fourth kind that quietly joined them would be a fourth consequence nobody had decided for.
     */
     const waiting = OVERLAY_KINDS.filter((kind) => OVERLAY_AWAITS_ANSWER[kind])
-    expect([...waiting].sort()).toEqual(['master-password', 'permission-request'])
+    expect([...waiting].sort()).toEqual([
+      'master-password',
+      'navigation-request',
+      'permission-request'
+    ])
   })
 
   it('reports a prompt as awaiting an answer and a menu as not', () => {

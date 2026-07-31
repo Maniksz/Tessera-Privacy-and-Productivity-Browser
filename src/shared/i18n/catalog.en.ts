@@ -124,6 +124,18 @@ export const en = {
   'omnibox.security.internal': '{app} page',
   'omnibox.privateMode': 'Private window',
   'omnibox.blockedCount': '{count} requests blocked',
+  /*
+    The blocker button's label when there is no count to report, which is now most of the time.
+
+    The button used to appear only where something had been blocked, so it had one label and it was a
+    number. It is in the address bar on every page now — the element picker and the per-site switch are
+    behind it, and a control that only appears once a site has misbehaved is not a control anybody can
+    reach for. So it needs a name for the resting state, and the name has to be what the button *is*
+    rather than what has happened.
+  */
+  'omnibox.blocker': 'Content blocker',
+  'omnibox.blockerOffHere': 'Not filtering this site',
+  'omnibox.blockerOff': 'Blocking is switched off',
   'omnibox.siteSettings': 'Site settings',
 
   // tabs
@@ -494,10 +506,40 @@ export const en = {
   'page.inspect': 'Inspect',
 
   // blocker menu, behind the badge in the address bar
+  /*
+    The popup-and-redirect prompt.
+
+    Worded as what the *page* is doing rather than as a request it is making — "wants to open" and not
+    "would like permission to open" — because the dialogue is up precisely because nobody asked for this.
+    The host is the subject of the sentence, since it is the fact the answer turns on.
+  */
+  'navigation.wantsToOpen': '{host} wants to open a new tab',
+  'navigation.wantsToLeave': 'This page wants to send you to {host}',
+  /** Why the dialogue is there at all, in one line. Without it the prompt looks arbitrary. */
+  'navigation.noGesture': 'You did not click or press anything to start this.',
+  'navigation.open': 'Open the tab',
+  'navigation.dontOpen': 'Do not open it',
+  'navigation.follow': 'Go there',
+  'navigation.stay': 'Stay on this page',
+  'navigation.keyboardHint': 'Escape stays where you are',
+
   'blocker.blockedOnPage': '{count} requests blocked on this page',
   'blocker.myRules': 'My rules ({count})',
   'blocker.updateLists': 'Update filter lists now',
   'blocker.enabled': 'Blocking enabled',
+  /*
+    The per-site switch, worded as the state rather than as the change.
+
+    "Blocking on this site ✓" says what is true now as well as what a click would do, which is what a
+    checkbox is for — and it matters more here than for the global switch, because somebody who turned
+    filtering off to read one page and forgot has a wrong idea of why that site is full of adverts.
+  */
+  'blocker.enabledOnSite': 'Blocking on this site',
+  'blocker.nothingBlockedYet': 'Nothing blocked on this page',
+  'blocker.noRules': 'No rules of your own yet',
+  'blocker.openSettings': 'Manage in settings…',
+  /** How many of the user's own rules apply to the site in front of them, rather than in total. */
+  'blocker.forgetSiteRules': 'Delete my rules for this site ({count})',
 
   // reader mode
   'reader.title': 'Reader',

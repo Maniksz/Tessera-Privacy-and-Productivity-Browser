@@ -323,8 +323,29 @@ describe('bundle weight', () => {
         roughly halve this and is a real change with a real risk — the chunk is fetched before first paint —
         so it belongs in its own pass rather than smuggled in with a feature. What would not justify another
         raise: more keys for a screen nobody has designed yet.
+
+        ## Raised to 48 kB, and what the raise admits
+
+        Sixteen keys in two locales for two surfaces that exist and are reachable: the blocker menu behind
+        the address-bar shield (its per-site switch, and the user's own rules, which nothing could display
+        before) and the dialogue that asks about a popup or redirect nobody requested. That clears the bar
+        the paragraph above sets — these are not keys for an undesigned screen — and it is still the second
+        raise, so it is worth naming what the number is really measuring.
+
+        **Five of the sixteen are read only by the main process.** `blocker.enabledOnSite`,
+        `nothingBlockedYet`, `noRules`, `openSettings` and `forgetSiteRules` are used by
+        `menu/blocker-menu-items.ts` and by nothing else — a native menu is built in the core, so every
+        renderer downloads and parses those sentences for a surface it cannot draw. That is not something
+        this change introduced: it is true of every `menu.*` key in the catalogue, which is most of the file.
+        `settings-text.ts` already argues the whole case and solves it for the settings screen by keeping
+        that prose in the core.
+
+        So there are now two structural fixes available, either of which would bring this well under 40 kB
+        and both of which are their own pass: the per-locale split named above, and a core-side catalogue
+        for strings only the core renders, on the precedent `settings-text.ts` set. Whoever hits this budget
+        next should do one of them rather than raise the number a third time.
       */
-      { match: /^catalog-.*\.js$/, maxKb: 46, note: 'message catalogue, both locales' },
+      { match: /^catalog-.*\.js$/, maxKb: 48, note: 'message catalogue, both locales' },
       { match: /\.js$/, maxKb: 40, note: 'shared chunk' }
     ]
 
@@ -1548,6 +1569,96 @@ describe('content security', () => {
   })
 })
 
+describe('internal page scrolling', () => {
+  /**
+   * Every internal page can reach its own content, and none of them inherits the chrome's clipping.
+   *
+   * ## The defect, and why nothing else could have caught it
+   *
+   * `tokens.css` ends with the chrome UI's reset: `html, body { height: 100% }` and
+   * `body { overflow: hidden }`. That is correct for the chrome renderer, which is one viewport-sized
+   * window whose scrolling happens in regions inside it. Every internal page imports the same file —
+   * for the palette, which is the whole reason it is shared — and inherits the clipping with it.
+   *
+   * The settings page did, and could not be scrolled at all: everything below the fold was rendered
+   * and then cut off. It was reported twice. The first fix undid the clipping on the `.panel` *inside*
+   * the page, which changed nothing, because a body exactly one viewport tall with `overflow: hidden`
+   * clips whatever is in it however that thing is styled.
+   *
+   * No other level of the suite can see this. The rendering tests run in happy-dom, which does not
+   * apply stylesheets and has no layout, so a page that renders every control correctly and shows
+   * none of them scores identically. The smoke test cannot see it either — it drives a real window,
+   * but "is there content below the fold" is a question nobody thought to ask it.
+   *
+   * ## Why the premise is asserted first
+   *
+   * If `tokens.css` stopped clipping, every check below would pass while proving nothing — the
+   * classic vacuous fitness function. So the reset is asserted to still be there, and it is the
+   * reason this test's failure message can name the fix.
+   */
+  const scrollableBody = (css: string): boolean => {
+    // Rule blocks whose selector names `body`, which is where the answer has to be: an `overflow` on
+    // an inner container cannot un-clip an ancestor.
+    const pattern = /(?:^|\})([^{}]*\bbody\b[^{}]*)\{([^}]*)\}/g
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(css)) !== null) {
+      if (/overflow(-y)?\s*:\s*(auto|scroll|visible)/.test(match[2]!)) return true
+    }
+    return false
+  }
+
+  it('has the chrome reset that internal pages have to answer', () => {
+    const tokens = readFileSync(join(ROOT, 'src/renderer/src/tokens.css'), 'utf8')
+    expect(
+      tokens,
+      'tokens.css no longer clips the body — the checks below have nothing left to protect against ' +
+        'and should be removed rather than left passing'
+    ).toMatch(/body\s*\{[^}]*overflow:\s*hidden/)
+  })
+
+  it('lets every internal page that imports the chrome reset scroll its own document', async () => {
+    const sheets = (await collect('src/renderer/internal', ['.css'])).filter((file) =>
+      file.text.includes('tokens.css')
+    )
+    expect(sheets.length, 'expected internal stylesheets importing tokens.css').toBeGreaterThan(0)
+
+    for (const sheet of sheets) {
+      expect(
+        scrollableBody(withoutComments(sheet.text)),
+        `${sheet.relative} imports the chrome reset, which sets body { overflow: hidden } and ` +
+          'height: 100%. Nothing below the fold can be reached. Answer it in this file with an ' +
+          'overflow on the body — `overflow-y: auto`, or `height: auto; min-height: 100%; ' +
+          'overflow: visible` for a page whose document should grow.'
+      ).toBe(true)
+    }
+  })
+
+  it('undoes the full-height reset wherever it lets the document grow instead of scrolling it', async () => {
+    /*
+      The pair that has to travel together, and the half that is easy to forget.
+
+      `overflow: visible` on a body that is still `height: 100%` does not scroll — it overflows a
+      fixed-height box, and the viewport has no reason to grow. So a sheet choosing the
+      grow-the-document route must also release the height; one choosing `overflow-y: auto` keeps the
+      body a viewport tall on purpose and scrolls inside it, which is the other valid answer.
+    */
+    const sheets = (await collect('src/renderer/internal', ['.css'])).filter((file) =>
+      file.text.includes('tokens.css')
+    )
+
+    for (const sheet of sheets) {
+      const css = withoutComments(sheet.text)
+      if (!/overflow(-y)?\s*:\s*visible/.test(css)) continue
+      expect(
+        /body\s*\{[^}]*height:\s*auto/.test(css) || /html,\s*body\s*\{[^}]*height:\s*auto/.test(css),
+        `${sheet.relative} sets overflow: visible on the body but leaves height: 100% from the chrome ` +
+          'reset in force. A visible overflow out of a fixed-height box still cannot be scrolled to; ' +
+          'add height: auto (with min-height: 100% to keep the background) beside it.'
+      ).toBe(true)
+    }
+  })
+})
+
 describe('privacy invariants', () => {
   it('flushes every store that can buffer a write before the process exits', async () => {
     /*
@@ -1787,5 +1898,73 @@ describe('product identity', () => {
       )
       expect(inMessages, `${file.relative} names the product directly`).toEqual([])
     }
+  })
+
+  it('lets the Windows installer take every name from a define', () => {
+    /*
+      The rename that did not reach a file nobody reads, and the reason this check exists rather than
+      the rename simply being finished.
+
+      `build/installer.nsh` registers the browser as a default-apps candidate and cleans those keys up
+      again on uninstall. Every key in it said `ownbrowser` — the project's previous name — while
+      `productName` said `tessera`. Nothing anywhere could see it: NSIS is not type-checked, not linted
+      and not run by any test, and the symptom needs a Windows machine and a registry editor. The
+      browser therefore offered itself to Windows under a name it was not installed under, and the
+      uninstaller removed that other product's keys and left the real ones behind.
+
+      Asserted as "no product name literal at all" rather than "says tessera", which is the direction
+      that keeps working: the whole point of `${PRODUCT_NAME}` is that this file stops having an opinion
+      about what the product is called.
+    */
+    const nsh = readFileSync(join(ROOT, 'build/installer.nsh'), 'utf8')
+    // Comment lines are stripped — the prose above the macros explains the defect and names both
+    // names, which is exactly what a naive scan would trip over.
+    const script = nsh
+      .split('\n')
+      .filter((line) => !line.trimStart().startsWith(';'))
+      .join('\n')
+
+    for (const name of ['ownbrowser', 'tessera']) {
+      expect(
+        script.toLowerCase(),
+        `build/installer.nsh writes "${name}" into the registry as a literal. Use \${PRODUCT_NAME} ` +
+          'so a rename cannot leave this file behind — it already did once.'
+      ).not.toContain(name)
+    }
+    // And the define really is what it uses, so the check above cannot pass by the file being empty.
+    expect(script, 'build/installer.nsh no longer reads the product name from a define').toContain(
+      '${PRODUCT_NAME}'
+    )
+  })
+
+  it('gives the uninstaller a Start-menu entry, because that is where it was looked for', () => {
+    /*
+      Reported as there being no uninstaller for Windows. There is one — NSIS writes it into the
+      install directory and registers it under `Uninstall`, so "Apps & features" has it — but with
+      `perMachine: false` the install directory is `%LOCALAPPDATA%\Programs\<product>` rather than
+      Program Files, and a user who looks in the obvious place and finds nothing is drawing a
+      reasonable conclusion.
+
+      The two halves are asserted together: the shortcut is created, and the uninstall macro removes
+      it again. Only the first is the feature; only the second keeps an uninstall from leaving a
+      Start-menu entry pointing at an executable that has deleted itself.
+    */
+    const nsh = readFileSync(join(ROOT, 'build/installer.nsh'), 'utf8')
+    expect(nsh, 'no Start-menu shortcut is created for the uninstaller').toMatch(
+      /CreateShortCut\s+"\$SMPROGRAMS\\[^"]*"\s+"\$INSTDIR\\\$\{UNINSTALL_FILENAME\}"/
+    )
+    const uninstallMacro = /!macro customUnInstall([\s\S]*?)!macroend/.exec(nsh)?.[1] ?? ''
+    expect(uninstallMacro, 'the uninstaller leaves its own Start-menu shortcut behind').toMatch(
+      /Delete\s+"\$SMPROGRAMS\\/
+    )
+  })
+
+  it('has electron-builder actually include that script', () => {
+    // The whole file is inert if `nsis.include` stops pointing at it, and the failure is silent: the
+    // build succeeds, the installer works, and none of the system integration happens.
+    const config = readFileSync(join(ROOT, 'electron-builder.yml'), 'utf8')
+    expect(config, 'nsis.include no longer points at build/installer.nsh').toMatch(
+      /include:\s*build\/installer\.nsh/
+    )
   })
 })

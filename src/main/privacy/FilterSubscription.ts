@@ -185,6 +185,7 @@ export class FilterSubscription {
       loaded: this.#loadedCount,
       networkRules: this.#engine.networkRuleCount,
       cosmeticRules: this.#engine.cosmeticRuleCount,
+      scriptletRules: this.#engine.scriptletRuleCount,
       userRules: this.#engine.userRuleCount,
       // Copied rather than handed out: the counters are a snapshot, and a caller holding the array
       // this class keeps could reorder the outcomes the settings page is about to render.

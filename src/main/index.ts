@@ -535,17 +535,24 @@ async function main(): Promise<void> {
   userRules.onChange(() => filterSubscription.reloadUserRules())
 
   /*
-    The hiding half of the blocker.
+    The two halves of a filter list that act on the page rather than on the network.
 
     Installed here rather than in `applySessionHardening`, because it needs the engine and hardening is
     per-session while this is per-application. Blocking a request removes an advert; it does not remove
     the space it occupied, and roughly a third of what a filter list contains is the rules that close
     that hole. Without this, fifty thousand of them are parsed on every launch and never used.
+
+    `scriptletsFor` is the other half, and it was the larger gap of the two: 2 112 of the rules in the
+    three default lists are `##+js(…)`, which no amount of hiding can substitute for — they exist for
+    pages whose own script decides what to show. They were not merely unused before; they were being
+    written into the page's stylesheet as if they were selectors, where each one invalidated the whole
+    CSS rule it was joined into. See `shared/filters/selector-safety.ts`.
   */
   new CosmeticInjector({
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
     stylesFor: (documentUrl) => filterSubscription.engine.cosmeticStylesFor(documentUrl),
-    openFeed: (documentUrl) => filterSubscription.engine.openCosmeticFeed(documentUrl)
+    openFeed: (documentUrl) => filterSubscription.engine.openCosmeticFeed(documentUrl),
+    scriptletsFor: (documentUrl) => filterSubscription.engine.scriptletsFor(documentUrl)
   }).install()
 
   /*

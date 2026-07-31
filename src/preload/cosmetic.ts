@@ -1,11 +1,14 @@
-import { ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import {
   COSMETIC_GENERIC_CHANNEL,
   COSMETIC_SPECIFIC_CHANNEL,
+  SCRIPTLET_CHANNEL,
   asCosmeticStyles,
+  asScriptletCalls,
   sameFeatures,
   surveyFeatures
 } from '@shared/filters/injection.js'
+import { runScriptlets } from '@shared/filters/scriptlet-runtime.js'
 import type { DocumentFeatures } from '@shared/filters/features.js'
 
 /**
@@ -177,12 +180,65 @@ function installGenericStyles(): void {
 }
 
 /**
- * Installs both halves. Called from the content preload only.
+ * The scriptlets, in the page's own world, before the page's own scripts.
  *
- * Guarded as a whole as well as in parts: a failure here must cost the page its cosmetic filtering and
- * nothing else. A preload that throws takes the document with it.
+ * ## Why this is the only part that crosses the isolation boundary
+ *
+ * The stylesheet above goes in through the DOM, which both worlds share — the rare case where context
+ * isolation costs nothing. A scriptlet is the opposite: it has to redefine a property that the *page's*
+ * script will read, and a property defined in this isolated world is invisible over there. So
+ * `contextBridge.executeInMainWorld` is the only route, exactly as for fingerprint masking.
+ *
+ * ## Why synchronous, and why it runs first
+ *
+ * `sendSync`, for a harder reason than the stylesheet has. A late stylesheet shows an advert for a
+ * moment. A late scriptlet does nothing at all: `abort-current-script` has to have redefined the property
+ * before the inline script that reads it runs, and there is no second chance at it.
+ *
+ * One `executeInMainWorld` call for the whole library rather than one per scriptlet, which is what makes
+ * `runScriptlets` a single function with its helpers nested inside — see the docblock there. The
+ * alternative was eight serialisations of eight functions that would each have needed their own copy of
+ * the dotted-path walker.
+ */
+function installScriptlets(): void {
+  let answer: unknown
+  try {
+    answer = ipcRenderer.sendSync(SCRIPTLET_CHANNEL, documentUrl())
+  } catch {
+    // No responder — an old build, or a view created outside a hardened session. Running nothing is the
+    // only safe reading: these change what a page's own script observes, and guessing is not available.
+    return
+  }
+
+  const calls = asScriptletCalls(answer)
+  if (calls.length === 0) return
+
+  try {
+    // The function is serialised and re-compiled in the page's world, so it may reference nothing from
+    // this file. See `shared/filters/scriptlet-runtime.ts`.
+    contextBridge.executeInMainWorld({ func: runScriptlets, args: [calls] })
+  } catch (error) {
+    console.warn('[cosmetic] scriptlets could not be installed:', error)
+  }
+}
+
+/**
+ * Installs all three parts. Called from the content preload only.
+ *
+ * Guarded as a whole as well as in parts: a failure here must cost the page its filtering and nothing
+ * else. A preload that throws takes the document with it.
+ *
+ * Scriptlets first, and the order is the requirement rather than a preference. They are the only part
+ * with a deadline — the page's first inline script — while a stylesheet arriving a millisecond later
+ * costs a flicker. Guarded separately for the same reason: a page whose scriptlets failed must still get
+ * its hiding rules.
  */
 export function installCosmeticFiltering(): void {
+  try {
+    installScriptlets()
+  } catch (error) {
+    console.warn('[cosmetic] scriptlets could not be installed:', error)
+  }
   try {
     installSpecificStyles()
     installGenericStyles()

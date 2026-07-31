@@ -90,6 +90,13 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
     problem: null,
     minLength: MIN_MASTER_PASSWORD_LENGTH
   },
+  'navigation-request': {
+    kind: 'navigation-request',
+    requestId: 'n1',
+    navigationKind: 'popup',
+    url: 'https://ads.example/landing?id=1',
+    host: 'ads.example'
+  },
   'tile-bar': {
     kind: 'tile-bar',
     tileIndex: 1,
@@ -360,12 +367,19 @@ describe('surfaces whose departure is not free', () => {
     expect(departureMatters(SAMPLES['master-password'])).toBe(true)
   })
 
-  it('waits for an answer on exactly the two kinds that ask a question', () => {
-    // Driven off the table so a seventh kind cannot be added without an answer to this question.
+  it('waits for an answer on exactly the three kinds that ask a question', () => {
+    /*
+      Driven off the table so a further kind cannot be added without an answer to this question.
+
+      Three now rather than two: `navigation-request` joined them. It awaits in the same sense — something
+      in the core is holding a callback for it — with a different thing at stake: a permission prompt
+      leaves a page's promise unsettled, while this one leaves a navigation neither performed nor visibly
+      refused. Both are answered `false` on departure, and for this one that is also the behaviour the
+      feature was asked for: the page stays where it is.
+    */
+    const asking = new Set(['permission-request', 'master-password', 'navigation-request'])
     for (const kind of OVERLAY_KINDS) {
-      expect(OVERLAY_AWAITS_ANSWER[kind], kind).toBe(
-        kind === 'permission-request' || kind === 'master-password'
-      )
+      expect(OVERLAY_AWAITS_ANSWER[kind], kind).toBe(asking.has(kind))
     }
   })
 })

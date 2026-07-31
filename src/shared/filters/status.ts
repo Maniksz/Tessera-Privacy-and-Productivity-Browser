@@ -24,6 +24,14 @@ const diagnosticsSchema = z.object({
   comments: z.number().int().nonnegative(),
   network: z.number().int().nonnegative(),
   cosmetic: z.number().int().nonnegative(),
+  /**
+   * Lines that produced a `##+js(…)` rule.
+   *
+   * Added with the field on `FilterListDiagnostics`, and it had to be: `z.object` strips what it does not
+   * declare, so a counter the core computes and this schema omits arrives at the settings page as
+   * `undefined` — a number that exists everywhere except where it is read.
+   */
+  scriptlet: z.number().int().nonnegative(),
   unsupported: z.number().int().nonnegative(),
   /** Reason -> line count. Keys are stable strings a settings page can list. */
   unsupportedByReason: z.record(z.string(), z.number().int().nonnegative())
@@ -43,6 +51,14 @@ export const filterStatusSchema = z.object({
   loaded: z.number().int().nonnegative(),
   networkRules: z.number().int().nonnegative(),
   cosmeticRules: z.number().int().nonnegative(),
+  /**
+   * Scriptlet rules compiled in, reported separately from the cosmetic ones.
+   *
+   * Separately because they are a different power — hiding an element against running code in the page —
+   * and because the numbers are wildly different in shape: the default lists carry 24 259 cosmetic rules
+   * and 1 720 scriptlets, and a single figure covering both would hide the second entirely.
+   */
+  scriptletRules: z.number().int().nonnegative(),
   userRules: z.number().int().nonnegative(),
   diagnostics: diagnosticsSchema,
   /** Per-list outcome of the last refresh, or `null` before one has run. */

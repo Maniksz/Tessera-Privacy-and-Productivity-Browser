@@ -101,6 +101,15 @@ export const INVOKE_CHANNELS = [
    * itself the camera, so the sender policy classifies it independently of what the preload believes.
    */
   'permissions:answer',
+  /**
+   * The answer to a "this page wants to open something" prompt.
+   *
+   * Chrome-only, and on no internal page's allowlist, for the same reason `permissions:answer` is: a page
+   * that could reach this channel could permit its own popup, which is the whole thing the prompt exists
+   * to stop. The core checks the request id against the prompt actually on screen as well, so even the
+   * chrome UI cannot answer a question that is not being asked.
+   */
+  'navigation:answer',
   /*
     Media the page fetched, and downloading it.
 

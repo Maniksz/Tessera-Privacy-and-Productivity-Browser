@@ -31,10 +31,26 @@
   box-sizing: border-box;
 }
 
+/*
+  `height` and `overflow` are here because of what `tokens.css` ends with, not because this page
+  wants either value.
+
+  That file carries the chrome UI's reset along with the palette: `html, body { height: 100% }` and
+  `body { overflow: hidden }`. Right for the chrome, which is one viewport-sized window that scrolls
+  in regions inside itself, and wrong for a document in a tab. `min-height: 100%` below does not
+  answer it — a minimum and a fixed height are different properties, so the body stayed exactly one
+  viewport tall and clipped everything past it. A profile with enough quick links to fill more than a
+  screen, or a folder opened at the bottom of the grid, was simply unreachable.
+
+  Found by the fitness function in `tests/architecture.test.ts` while the same defect was being fixed
+  on the settings page, which is the argument for having written it: this page was never reported.
+*/
 html,
 body {
   margin: 0;
+  height: auto;
   min-height: 100%;
+  overflow: visible;
   background: var(--bg);
   color: var(--fg);
   font:

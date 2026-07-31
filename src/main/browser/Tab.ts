@@ -20,6 +20,8 @@ import {
   pendingNavigationOf,
   type NavigationSource
 } from './navigation-policy.js'
+import { decideAutomaticNavigation, withinGestureWindow } from './automatic-navigation.js'
+import { isFillGestureInput } from '@shared/passwords/gesture.js'
 
 /**
  * One tab: a full `WebContentsView` with its own renderer process.
@@ -41,8 +43,31 @@ export interface TabCallbacks {
    * one being looked at.
    */
   onFocused(tab: Tab): void
-  /** Link opened with target=_blank or middle-click. */
-  onOpenNewTab(url: string, options: { background: boolean }): void
+  /**
+   * A page asked for a new tab or window — `window.open`, `target=_blank`, a middle-click.
+   *
+   * `userGesture` is the part that was missing. Every one of these used to become a tab
+   * unconditionally, so a popup on a timer and a link the user middle-clicked were the same event as
+   * far as the core could tell. The flag is `true` only when the *core* saw a real input event in this
+   * view moments before — see `automatic-navigation.ts` for why a renderer's own claim about a gesture
+   * is worth nothing.
+   *
+   * Reported upwards rather than decided here, because the decision needs the settings and, for `ask`,
+   * a dialogue on the window's overlay layer. A tab has neither.
+   */
+  onOpenNewTab(url: string, options: { background: boolean; userGesture: boolean }): void
+  /**
+   * The page is about to send *itself* somewhere else, and nothing the user did explains it.
+   *
+   * Called only for the main frame, only across sites, and only when the settings say to gate it — see
+   * `decideAutomaticNavigation`, which holds every one of those conditions and the reasoning for each.
+   * The navigation has already been stopped by the time this runs: answering `true` re-issues it as a
+   * load the core owns, and answering `false` leaves the page where it is.
+   *
+   * A callback rather than a return value because the answer may need a person: with the setting on
+   * `ask` the window puts a prompt on the overlay layer and this resolves when it is answered.
+   */
+  onAutomaticNavigation(tab: Tab, url: string, allow: (permitted: boolean) => void): void
   onEnterHtmlFullscreen(tab: Tab): void
   onLeaveHtmlFullscreen(tab: Tab): void
   onCloseRequested(tab: Tab): void
@@ -225,6 +250,19 @@ export class Tab {
    * queue of them all photographing the same view.
    */
   #captureTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * When the core last saw a real input event in this view, or `null` if it never has.
+   *
+   * The whole of "did a person do this". A page opening a tab or redirecting itself is judged against
+   * this, because `input-event` only fires for input the *browser process* dispatched — a page calling
+   * `element.click()` never produces one and so can never move this number. See
+   * `automatic-navigation.ts`.
+   *
+   * Per view rather than per window: a click in one tile is not consent to a popup in another, and with
+   * four pages on screen that distinction is the difference between the feature working and not.
+   */
+  #lastGestureAt: number | null = null
   #disposers: Array<() => void> = []
 
   private readonly getSettings: () => SettingsSnapshot
@@ -348,8 +386,25 @@ export class Tab {
       must never be read as the pointer leaving.
     */
     on('input-event', (...args: unknown[]) => {
-      if (this.getSettings()['splitView.tileBarMode'] !== 'hover') return
       const [, input] = args
+      /*
+        The gesture record, before the tile-bar filter and deliberately not gated on any setting.
+
+        This is the one signal that tells a popup the user asked for from one that arrived on a timer, and
+        `automatic-navigation.ts` explains why it has to be taken here: `input-event` fires for input the
+        *browser process* dispatched into the view, so `element.click()` and `dispatchEvent` inside a page
+        produce nothing. A renderer cannot forge it, which is the whole property.
+
+        Recorded rather than reported: a timestamp per view costs one field and is read only when a page
+        tries to open or navigate something, where sending an event per keystroke up to the window would
+        be a message per keystroke for a question nobody asked.
+      */
+      if (isFillGestureInput(input)) this.#lastGestureAt = Date.now()
+
+      // Gated on the setting here rather than further up: this runs per mouse move in every tile, which is
+      // exactly the cost `splitView.tileBarMode: 'keyboard'` exists to remove on a machine that cannot
+      // afford it.
+      if (this.getSettings()['splitView.tileBarMode'] !== 'hover') return
       const y = mouseMoveY(input)
       if (y === null) return
       this.callbacks.onPointerMoved(this, y)
@@ -514,10 +569,76 @@ export class Tab {
     on('will-frame-navigate', guardNavigation('frame'))
     on('will-redirect', guardNavigation('redirect'))
 
-    // window.open and target=_blank become tabs, never popups we do not control.
+    /*
+      The page sending itself somewhere, gated on whether anybody asked for it.
+
+      Registered *after* the privilege guard above and reached only if that one let the navigation
+      through, which is the right order: an internal address is refused outright and never becomes a
+      question for the user.
+
+      ## Why the navigation is stopped first and re-issued afterwards
+
+      `preventDefault` has to be called synchronously — the event is over by the time an answer could
+      arrive from a person — so the only way to offer "ask" at all is to stop the navigation and perform
+      it again if it is permitted. `loadUrl` is what re-issues it, which means the second attempt is a
+      load the *core* owns and therefore does not come back through here. `navigation-policy.ts` already
+      rests on that same documented behaviour of `will-frame-navigate`, so this is not a new assumption.
+
+      ## Why only the main frame
+
+      A subframe navigating itself is what an embed does, several times per page on a great many sites,
+      and it cannot take the tab anywhere. The filter is here rather than in the decision because there
+      is no reading of a subframe navigation the decision would answer differently.
+    */
+    on('will-frame-navigate', (...args: unknown[]) => {
+      const pending = pendingNavigationOf(args[0], 'frame')
+      if (pending?.isMainFrame !== true) return
+      if (!/^https?:/i.test(pending.url)) return
+
+      const decision = decideAutomaticNavigation({
+        kind: 'navigation',
+        url: pending.url,
+        documentUrl: wc.getURL(),
+        sinceGestureMs: this.#sinceGesture(),
+        gate: this.getSettings()['privacy.pageInitiatedRedirects']
+      })
+      if (decision.action === 'allow') return
+
+      pending.prevent()
+      if (decision.action === 'block') {
+        console.warn(`[navigation] refused: ${decision.reason} (${pending.url})`)
+        return
+      }
+
+      const target = pending.url
+      this.callbacks.onAutomaticNavigation(this, target, (permitted) => {
+        // Guarded because the answer arrives later: the tab may have been closed, or navigated
+        // elsewhere by the user, while the prompt was on screen.
+        if (!permitted || this.view.webContents.isDestroyed()) return
+        this.loadUrl(target)
+      })
+    })
+
+    /*
+      window.open and target=_blank become tabs, never popups we do not control — and now only when
+      somebody asked for one.
+
+      This used to open a tab for every request, so a popup on a timer, a popup on page load and a link
+      the user middle-clicked were one event as far as the core could tell. The gesture is decided here
+      and carried upwards rather than decided upwards, because `#lastGestureAt` belongs to this view and
+      "was there a gesture *in the tile the popup came from*" is the question that matters with four
+      pages on screen.
+
+      `{ action: 'deny' }` on every path, as before: whether a tab is opened is the window's business,
+      and letting Electron open a real popup window would hand a page a surface this browser does not
+      control.
+    */
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (/^https?:/i.test(url)) {
-        this.callbacks.onOpenNewTab(url, { background: disposition === 'background-tab' })
+        this.callbacks.onOpenNewTab(url, {
+          background: disposition === 'background-tab',
+          userGesture: withinGestureWindow(this.#sinceGesture())
+        })
       }
       return { action: 'deny' }
     })
@@ -731,6 +852,11 @@ export class Tab {
     // real address rather than the saved one.
     this.#deferred = null
     this.loadUrl(deferred.url)
+  }
+
+  /** Milliseconds since the core last saw real input in this view, or `null` if it never has. */
+  #sinceGesture(): number | null {
+    return this.#lastGestureAt === null ? null : Date.now() - this.#lastGestureAt
   }
 
   #cancelCapture(): void {

@@ -5,6 +5,7 @@ import { invoke, subscribe } from '../bridge.js'
 import { LayoutMenuSurface } from './LayoutMenuSurface.js'
 import { TabDropSurface } from './TabDropSurface.js'
 import { PermissionSurface } from './PermissionSurface.js'
+import { NavigationRequestSurface } from './NavigationRequestSurface.js'
 import { MasterPasswordSurface } from './MasterPasswordSurface.js'
 import { TileBarSurface } from '../../overlay/TileBarSurface.js'
 import { FindBarSurface } from '../../overlay/FindBarSurface.js'
@@ -88,6 +89,13 @@ export function OverlaySurface(): React.ReactNode {
       reader of the next bug would spend an afternoon on it.
     */
     if (presentation.kind === 'master-password') return
+    /*
+      And except for the popup-or-redirect prompt, for the permission prompt's reason exactly: the core is
+      holding a callback, and a generic dismissal here would race the surface's own Escape handler. Either
+      winner leaves the same defect — a navigation that is neither performed nor refused, or one refused
+      twice.
+    */
+    if (presentation.kind === 'navigation-request') return
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       event.preventDefault()
@@ -123,6 +131,16 @@ export function OverlaySurface(): React.ReactNode {
   */
   if (presentation.kind === 'master-password') {
     return <MasterPasswordSurface presentation={presentation} />
+  }
+
+  /*
+    Returned before the wrapper below for the permission prompt's reason: a click that misses would dismiss
+    the layer, and for this surface a dismissal is a refusal of a question the user may still be reading.
+    Refusing is the safe answer here, so the cost is smaller than for a consent dialogue — but it is still
+    the browser answering on the user's behalf, and the surface answers Escape itself.
+  */
+  if (presentation.kind === 'navigation-request') {
+    return <NavigationRequestSurface presentation={presentation} />
   }
 
   /*

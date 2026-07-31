@@ -2,9 +2,12 @@ import { app, type WebContents } from 'electron'
 import {
   COSMETIC_GENERIC_CHANNEL,
   COSMETIC_SPECIFIC_CHANNEL,
+  SCRIPTLET_CHANNEL,
   asDocumentFeatures,
   injectableDocumentUrl
 } from '@shared/filters/injection.js'
+import type { ScriptletCall } from '@shared/filters/scriptlets.js'
+import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { CosmeticFeedHandle } from './FilterEngine.js'
 
@@ -43,6 +46,16 @@ export interface CosmeticInjectorOptions {
   readonly stylesFor: (documentUrl: string) => string | null
   /** An incremental view of the generic selectors. `FilterEngine.openCosmeticFeed`. */
   readonly openFeed: (documentUrl: string) => CosmeticFeedHandle
+  /**
+   * The scriptlets for a document. `FilterEngine.scriptletsFor`.
+   *
+   * Answered from here rather than from a file of its own, because the question is the same question
+   * this class already answers — *which document is this, and may it be filtered* — and that answer has
+   * three parts (`injectableDocumentUrl`, the blocker switches, the per-site exemption) that must not
+   * come out differently for the two halves of a filter list. A second injector would be a second copy
+   * of all three.
+   */
+  readonly scriptletsFor: (documentUrl: string) => readonly ScriptletCall[]
 }
 
 /** What one view is currently being served, so a navigation can be noticed. */
@@ -76,6 +89,10 @@ export class CosmeticInjector {
   install(): void {
     app.on('web-contents-created', (_event, contents) => {
       contents.on('ipc-message-sync', (event, channel, ...args) => {
+        if (channel === SCRIPTLET_CHANNEL) {
+          event.returnValue = this.#scriptlets(contents, args[0])
+          return
+        }
         if (channel !== COSMETIC_SPECIFIC_CHANNEL) return
         event.returnValue = this.#specificStyles(contents, args[0])
       })
@@ -103,18 +120,55 @@ export class CosmeticInjector {
   #specificStyles(contents: WebContents, reportedUrl: unknown): string | null {
     if (!this.#enabled()) return null
     const url = injectableDocumentUrl(reportedUrl, contents.getURL())
-    if (url === null) return null
+    if (url === null || this.#exempt(url)) return null
     // Opened here as well as in the generic path, so the very first request establishes the document
     // and a later generic report for the same page continues rather than restarts.
     this.#documentFor(contents.id, url)
     return this.#options.stylesFor(url)
   }
 
+  /**
+   * The scriptlets for a document, as plain data the preload hands to the page's world.
+   *
+   * Gated on `blockerEnabled` and the per-site exemption but **not** on `cosmeticFiltering`: that switch
+   * means "do not alter this page's layout", and a scriptlet does not. Its own switch,
+   * `privacy.scriptletInjection`, is checked one layer down in `FilterEngine.scriptletsFor` — where the
+   * rules are, and where the same check also covers a document whose feed was opened before the switch
+   * was flipped.
+   *
+   * Answers with an array rather than `null` for nothing, because the preload iterates it. `sendSync`
+   * serialises this, so it has to be data all the way down — a `ScriptletCall` is two strings and an
+   * array of strings, which is the reason the library is keyed by *name* rather than being functions the
+   * core hands over.
+   */
+  #scriptlets(contents: WebContents, reportedUrl: unknown): readonly ScriptletCall[] {
+    const settings = this.#options.getSettings()
+    if (!settings['privacy.blockerEnabled']) return []
+    const url = injectableDocumentUrl(reportedUrl, contents.getURL())
+    if (url === null || this.#exempt(url)) return []
+    return this.#options.scriptletsFor(url)
+  }
+
   #genericStyles(contents: WebContents, reportedUrl: unknown, reportedFeatures: unknown): string | null {
     if (!this.#enabled()) return null
     const url = injectableDocumentUrl(reportedUrl, contents.getURL())
-    if (url === null) return null
+    if (url === null || this.#exempt(url)) return null
     return this.#documentFor(contents.id, url).feed.take(asDocumentFeatures(reportedFeatures))
+  }
+
+  /**
+   * Whether the user has switched filtering off for this site.
+   *
+   * Checked per request rather than per document, and after the URL is resolved rather than before: the
+   * exemption is keyed on the document's host, and `injectableDocumentUrl` is what decides which
+   * document a report is about at all. Doing it in `#enabled()` was the shorter route and is not
+   * available — that method has no URL, only the settings.
+   *
+   * Answering `null` rather than an empty stylesheet matters for the specific path, which is
+   * synchronous: the preload appends nothing for `null` and would append an empty rule otherwise.
+   */
+  #exempt(documentUrl: string): boolean {
+    return filteringExemptFor(documentUrl, this.#options.getSettings()['privacy.blockerOffForSites'])
   }
 
   #documentFor(webContentsId: number, url: string): OpenDocument {

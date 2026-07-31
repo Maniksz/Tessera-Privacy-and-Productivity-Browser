@@ -34,6 +34,22 @@ body {
   z-index: 2;
 }
 
+/*
+  Window fullscreen: the chrome goes, and only its pixels go.
+
+  Not `display: none`. The chrome measures itself with a `ResizeObserver` and reports the height to the
+  core, which positions the tile views below it — an element removed from layout measures zero, and the
+  measurement has to stay true across the whole of fullscreen so that leaving it does not lay the tiles
+  out against a toolbar that is briefly nothing.
+
+  The visible symptom this removes: tiles cover the whole window in fullscreen except the gutters
+  between them, which no native view covers, so a vertical gutter showed the tab strip through its top
+  88 pixels — a strip of browser interface down the middle of a full-screen page.
+*/
+.chrome--hidden {
+  visibility: hidden;
+}
+
 .tabbar {
   height: var(--tab-height);
   display: flex;
@@ -463,6 +479,73 @@ body {
 .omnibox__badge--private {
   background: var(--accent-private);
   color: #17171a;
+}
+
+/*
+  The blocker button, in the address bar on every page.
+
+  A shield plus an optional count rather than the bare number this used to be. The number alone was only
+  ever rendered where something had been blocked, so the menu behind it — element picker, per-site off
+  switch, the user's own rules — was unreachable on exactly the pages where somebody wants it: the ones
+  that look wrong because *nothing* was blocked.
+
+  `gap: 0` when there is no count, which comes free: the span is simply not rendered.
+*/
+.omnibox__blocker {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+.omnibox__blocker:hover {
+  background: var(--bg-input);
+  color: var(--fg);
+}
+
+.omnibox__blocker svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/*
+  Filtering off for this site, or off entirely.
+
+  Worth showing on the closed button rather than only inside the menu: somebody who switched a site off
+  last week and came back to a page full of adverts should be able to see why without opening anything.
+  A dashed shield reads as "deliberately not doing its job", where a dimmed one alone reads as disabled.
+*/
+.omnibox__blocker--off {
+  color: var(--fg-dim);
+  opacity: 0.55;
+}
+
+.omnibox__blocker--off svg {
+  stroke-dasharray: 2.5 2;
+}
+
+/* Filled, because the count is the one thing here that is a number worth reading at a glance. */
+.omnibox__blockerCount {
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--border);
+  color: var(--fg);
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
 }
 
 /* Preview of what Enter will do — address or search (spec 1). */

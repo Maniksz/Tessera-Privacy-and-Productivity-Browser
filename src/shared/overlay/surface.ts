@@ -40,7 +40,8 @@ export const OVERLAY_KINDS = [
   'permission-request',
   'tile-bar',
   'find-bar',
-  'master-password'
+  'master-password',
+  'navigation-request'
 ] as const
 
 export type OverlayKind = (typeof OVERLAY_KINDS)[number]
@@ -111,7 +112,17 @@ export const OVERLAY_REGION = {
    * the address bar, which is to say part of somebody's master password would appear in the omnibox
    * and then in its history. The full region is what makes that unreachable rather than unlikely.
    */
-  'master-password': 'window'
+  'master-password': 'window',
+  /**
+   * The whole window, on the permission prompt's reasoning rather than the find bar's.
+   *
+   * This is a question about where the browser is going, and while it is up the answer is the only thing
+   * the window is for. Sized to the content area it would leave the toolbar live, so the user could
+   * navigate away or close the tab underneath a dialogue asking about a page that no longer exists — and
+   * each of those takes the prompt down, which the safe default turns into a refusal of something the
+   * user was in the middle of allowing.
+   */
+  'navigation-request': 'window'
 } as const satisfies Record<OverlayKind, OverlayRegion>
 
 /** The layout menu carries the current layout so it can render its radio state at once. */
@@ -339,6 +350,36 @@ export interface MasterPasswordPresentation {
   minLength: number
 }
 
+/**
+ * A page tried to open a tab, or to send itself somewhere else, and nothing the user did explains it.
+ *
+ * Everything the dialogue says comes from here, for the reason the permission prompt gives: a prompt that
+ * appeared before its own text arrived would be a dialogue about nothing, and this one has to name the
+ * address before it offers a button that goes there.
+ */
+export interface NavigationRequestPresentation {
+  kind: 'navigation-request'
+  /**
+   * Identity of the question, echoed back with the answer.
+   *
+   * The same rule as every other prompt on this layer: a reply may only resolve the question it was shown
+   * for, or a click that landed while the surface was being replaced would answer a different one.
+   */
+  requestId: string
+  /** Whether a new tab was asked for, or the tab moving itself. The dialogue says which. */
+  navigationKind: 'popup' | 'navigation'
+  /**
+   * Where the page wants to go, in full.
+   *
+   * In full, and not shortened. This is the one fact the answer depends on, and a truncated address is
+   * how a user is persuaded that `evil.test/paypal.com` is PayPal. The surface elides it visually if it
+   * has to; the value is the whole thing.
+   */
+  url: string
+  /** The host of that address, so the dialogue can lead with the part that decides the answer. */
+  host: string
+}
+
 export type OverlayPresentation =
   | LayoutMenuPresentation
   | TabDropPresentation
@@ -346,6 +387,7 @@ export type OverlayPresentation =
   | TileBarPresentation
   | FindBarPresentation
   | MasterPasswordPresentation
+  | NavigationRequestPresentation
 
 /** Nothing presented is a first-class state, not an absent one. */
 export type OverlayState = OverlayPresentation | null
@@ -382,7 +424,15 @@ export const OVERLAY_AWAITS_ANSWER = {
    * `wrong-password` is what the page renders as "that was not it", and a window resize is not the
    * user getting their own master password wrong.
    */
-  'master-password': true
+  'master-password': true,
+  /**
+   * A page is waiting to find out whether it may open a tab or leave the page.
+   *
+   * Awaiting in the same sense as a permission prompt and with a stronger safe answer: nothing in the
+   * page is holding a promise — a popup that does not open simply does not — so a vanished dialogue
+   * refuses, and refusing is also exactly what was asked for. *"Sonst bleiben wir auf der seite."*
+   */
+  'navigation-request': true
 } as const satisfies Record<OverlayKind, boolean>
 
 export function awaitsAnswer(presentation: OverlayPresentation): boolean {
@@ -416,7 +466,9 @@ export const OVERLAY_MARKS_THE_PAGE = {
   'tile-bar': false,
   'find-bar': true,
   /** A dialogue over a page changes nothing in it, and this one does not even read it. */
-  'master-password': false
+  'master-password': false,
+  /** Nothing is written into the page: the navigation was stopped before it started. */
+  'navigation-request': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function marksThePage(presentation: OverlayPresentation): boolean {
@@ -467,6 +519,8 @@ export function surfaceIdentity(presentation: OverlayPresentation): string {
       return `find-bar:${presentation.sessionId}`
     case 'master-password':
       return `master-password:${presentation.requestId}`
+    case 'navigation-request':
+      return `navigation-request:${presentation.requestId}`
   }
 }
 
@@ -498,7 +552,9 @@ export const OVERLAY_CAPTURES_KEYBOARD = {
   'tile-bar': false,
   /** A real text field with a real caret; see the docblock above. */
   'find-bar': false,
-  'master-password': true
+  'master-password': true,
+  /** Two buttons, reached by Tab and answered by Return, in the renderer — as a dialogue should be. */
+  'navigation-request': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function capturesKeyboard(presentation: OverlayPresentation): boolean {
@@ -571,6 +627,19 @@ export const OVERLAY_PRECEDENCE = {
   'layout-menu': 2,
   'tab-drop': 2,
   'permission-request': 3,
+  /**
+   * Ranked with the permission prompt, and the tie is the decision rather than an omission.
+   *
+   * Both await an answer that a person has to give, and neither may be displaced by a hover or by a
+   * find bar. Between the two of them, *equal replaces* — which is right in both directions here: a page
+   * that gets a camera prompt in front of a pending popup question has not gained anything (the popup is
+   * refused, which is the safe default it already gets from a dismissal), and neither can be summoned to
+   * destroy half-typed input, because neither collects any.
+   *
+   * Below `master-password` for the reason given at length above: nothing a page can cause may interrupt
+   * somebody typing their master password, and a page can cause this one at any moment.
+   */
+  'navigation-request': 3,
   'master-password': 4
 } as const satisfies Record<OverlayKind, number>
 
@@ -610,6 +679,16 @@ export function takesFocus(presentation: OverlayPresentation): boolean {
     case 'permission-request':
     case 'find-bar':
     case 'master-password':
+    /*
+      `navigation-request` is focused like every other dialogue here, although it is the one surface on
+      this list that a *page* can cause. Taking focus is what makes Escape reach it, and Escape is a
+      refusal — so the surface a page can raise is one whose default answer the keyboard gives fastest.
+
+      The comment sits above the group rather than between the two cases: a comment between them reads as
+      an intentional fallthrough to `no-fallthrough`, which then wants a `break` that would change the
+      behaviour.
+    */
+    case 'navigation-request':
       return true
     case 'tile-bar':
       return presentation.invokedBy === 'keyboard'

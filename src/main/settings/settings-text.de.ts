@@ -135,10 +135,40 @@ export const de: SettingTextTable = {
       description:
         'Eine Adresse je Zeile. Die letzten beiden der vier voreingestellten Listen entfernen Cookie-Banner und Adblock-Sperren: Sie verändern, was eine Seite zeigt, nicht was sie lädt – ein Fehlgriff blendet dort also etwas aus, das du sehen wolltest.'
     },
+    scriptletInjection: {
+      label: 'Skripte kontern, die Blocker erkennen',
+      description:
+        'Filterlisten enthalten kleine benannte Gegenmaßnahmen für Seiten, bei denen das eigene Skript entscheidet, was zu sehen ist – eine Adblock-Sperre, ein Overlay per Timer, eine Weiterleitung bei jedem Klick. Dies führt sie aus. Eine Liste darf nur eine Gegenmaßnahme benennen, die dieser Browser mitbringt, und ihr Text übergeben; Code aus einer Liste wird nie ausgeführt.'
+    },
+    blockerOffForSites: {
+      label: 'Diese Seiten nicht filtern',
+      description:
+        'Ein Host je Zeile. Wird vom Schalter „Auf dieser Seite blockieren“ im Blocker-Menü gefüllt und ist hier bearbeitbar. Für diese Seiten sind Filterlisten und das Ausblenden von Elementen aus; Nur-HTTPS, Cookie-Blockade, Referrer-Kürzung und Fingerprint-Maskierung bleiben an.'
+    },
     cosmeticFiltering: {
       label: 'Lücke blockierter Elemente ausblenden',
       description:
         'Ohne dies hinterlässt eine blockierte Anzeige ein Loch im Layout. Damit wird das Layout der Seite selbst verändert, ein Fehlgriff verbirgt also etwas Echtes.'
+    },
+    pageOpenedTabs: {
+      label: 'Tabs, die eine Seite selbst öffnet',
+      description:
+        'Ein Tab, hinter dem kein Klick und kein Tastendruck steht – ein Popup per Timer oder beim Laden der Seite. Was du selbst öffnest, ist immer erlaubt, egal was hier steht: geprüft wird ein echtes Eingabeereignis, das der Browser gesehen hat, und das kann eine Seite nicht vortäuschen.',
+      choices: {
+        allow: 'Immer öffnen',
+        ask: 'Jedes Mal fragen',
+        block: 'Nie öffnen'
+      }
+    },
+    pageInitiatedRedirects: {
+      label: 'Weiterleitungen, die eine Seite selbst auslöst',
+      description:
+        'Nur Weiterleitungen, die die Seite verlassen, und nur für den Tab selbst. Wenn eine Seite dich innerhalb ihrer selbst weiterschickt oder ein eingebetteter Rahmen sich selbst weiterschickt, bleibt das unberührt – dafür zu fragen hieße, auf Seiten zu fragen, die nichts falsch machen. Eine Weiterleitung aus einem Klick hat eine Geste hinter sich und ist erlaubt; dafür ist die Einstellung zu den Gegenmaßnahmen da.',
+      choices: {
+        allow: 'Immer folgen',
+        ask: 'Jedes Mal fragen',
+        block: 'Nie folgen'
+      }
     },
     blockRedirectTrackers: {
       label: 'Weiterleitungs-Tracker blockieren',

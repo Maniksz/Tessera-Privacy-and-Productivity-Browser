@@ -5,6 +5,8 @@ import {
   type FilterResourceType,
   type NetworkRule
 } from './model.js'
+import { selectorProblem } from './selector-safety.js'
+import { lookupScriptlet, type ScriptletRule } from './scriptlets.js'
 
 /**
  * Adblock Plus filter syntax, parsed into the rule shapes the matcher works on.
@@ -148,6 +150,13 @@ const NO_HOSTS: readonly string[] = []
 export interface ParsedFilterLists {
   readonly network: readonly NetworkRule[]
   readonly cosmetic: readonly CosmeticRule[]
+  /**
+   * `##+js(…)` rules, of which the three default lists carry 2 112.
+   *
+   * A third list rather than a flavour of `cosmetic`, because hiding an element and running code in the
+   * page are different powers and the settings screen reports them separately.
+   */
+  readonly scriptlet: readonly ScriptletRule[]
   readonly diagnostics: FilterListDiagnostics
 }
 
@@ -157,6 +166,7 @@ interface Counters {
   comments: number
   network: number
   cosmetic: number
+  scriptlet: number
   unsupported: number
   readonly reasons: Map<string, number>
 }
@@ -341,6 +351,57 @@ function parseNetworkRule(line: string, counters: Counters): NetworkRule | null 
   }
 }
 
+/**
+ * A `##+js(…)` line as a scriptlet rule, `null` when it is one this browser cannot run, and the sentinel
+ * `'not-a-scriptlet'` when the line is an ordinary cosmetic rule.
+ *
+ * Three outcomes rather than two, and the sentinel is what keeps the caller honest: `null` already means
+ * "recognised and refused, and counted", so reusing it for "this is not mine" would make the caller fall
+ * through to the cosmetic parser on a *rejected* scriptlet and count the same line twice.
+ *
+ * ## Which markers carry a scriptlet
+ *
+ * `##` and `#@#`. uBlock Origin also writes the exception form, `#@#+js(…)`, to cancel a scriptlet the
+ * list applied elsewhere — that is the escape hatch for a site the scriptlet breaks, so refusing it while
+ * honouring the positive form would leave the browser applying a scriptlet the list itself had withdrawn.
+ * The other markers (`#?#`, `#$#`, `#%#`) are rejected by `parseCosmeticRule` as before.
+ */
+function parseScriptletRule(
+  line: string,
+  separator: RegExpExecArray,
+  counters: Counters
+): ScriptletRule | null | 'not-a-scriptlet' {
+  const marker = separator[0]
+  if (marker !== '##' && marker !== '#@#') return 'not-a-scriptlet'
+
+  const payload = line.slice(separator.index + marker.length).trim()
+  const lookup = lookupScriptlet(payload)
+  if (lookup.kind === 'none') return 'not-a-scriptlet'
+
+  if (lookup.kind === 'unimplemented') {
+    /*
+      Named in the reason, which is the difference between a number and a work item.
+
+      `scriptlet-unimplemented: 296` says the browser is missing something. `scriptlet-unimplemented:aost`
+      repeated twenty times says *which* one and how much it would buy — and that is what the library in
+      `scriptlets.ts` was chosen from. Same shape as `unsupported-option:popup`, which is where the idea
+      of putting the name in the key came from.
+    */
+    const name = lookup.name === '' ? 'unnamed' : lookup.name
+    return reject(counters, `scriptlet-unimplemented:${name}`)
+  }
+
+  const hosts = parseHostList(line.slice(0, separator.index), ',')
+  if (hosts === null) return reject(counters, 'domain-entity')
+
+  return {
+    call: lookup.call,
+    isException: marker === '#@#',
+    includeHosts: hosts.include,
+    excludeHosts: hosts.exclude
+  }
+}
+
 function parseCosmeticRule(
   line: string,
   separator: RegExpExecArray,
@@ -354,6 +415,22 @@ function parseCosmeticRule(
   }
   const selector = line.slice(separator.index + marker.length).trim()
   if (selector === '') return reject(counters, 'cosmetic-empty-selector')
+  /*
+    `##` says the rest is a *selector*; it does not make it one.
+
+    uBlock Origin puts three different instructions behind this separator: plain hiding, scriptlet
+    injection (`##+js(set-constant, …)`) and procedural selectors (`##.box:has-text(Anzeige)`). Only the
+    first is CSS. Checking the marker alone — which is all this function used to do — stored the other
+    two as selectors, and `cosmeticCss` then joined them into the same CSS rule as the real ones. A CSS
+    selector list is all-or-nothing, so one scriptlet line took down every hiding rule it was sent with;
+    on any site covered by uAssets' annoyances list, that was most of them, silently.
+
+    Refused here rather than filtered later so the cost lands in the diagnostics, where the settings
+    page can show it. `selectorProblem` returns the reason, and the reason is the point: a five-figure
+    `procedural-cosmetic` count names a feature to build, where `unsupported` alone would not.
+  */
+  const problem = selectorProblem(selector)
+  if (problem !== null) return reject(counters, problem)
   const hosts = parseHostList(line.slice(0, separator.index), ',')
   if (hosts === null) return reject(counters, 'domain-entity')
   return {
@@ -405,12 +482,14 @@ function hostNameRule(raw: string, name: string): NetworkRule {
 export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
   const network: NetworkRule[] = []
   const cosmetic: CosmeticRule[] = []
+  const scriptlet: ScriptletRule[] = []
   const counters: Counters = {
     lines: 0,
     blank: 0,
     comments: 0,
     network: 0,
     cosmetic: 0,
+    scriptlet: 0,
     unsupported: 0,
     reasons: new Map()
   }
@@ -434,6 +513,24 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
         ? null
         : COSMETIC_SEPARATOR.exec(line)
       if (separator !== null) {
+        /*
+          A scriptlet before a selector, because both arrive behind `##` and only one of them is CSS.
+
+          uBlock Origin overloads the separator: `##.ad-slot` hides an element and
+          `##+js(set-constant, canRunAds, true)` runs a named piece of code. Asking about the scriptlet
+          form first is what stops the second from being read as the first — which is what happened, and
+          it did not merely fail: the payload went into the page's stylesheet and invalidated the whole
+          CSS rule it was joined into. See `selector-safety.ts`.
+        */
+        const asScriptlet = parseScriptletRule(line, separator, counters)
+        if (asScriptlet !== 'not-a-scriptlet') {
+          if (asScriptlet !== null) {
+            scriptlet.push(asScriptlet)
+            counters.scriptlet += 1
+          }
+          continue
+        }
+
         const rule = parseCosmeticRule(line, separator, counters)
         if (rule !== null) {
           cosmetic.push(rule)
@@ -464,12 +561,14 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
   return {
     network,
     cosmetic,
+    scriptlet,
     diagnostics: {
       lines: counters.lines,
       blank: counters.blank,
       comments: counters.comments,
       network: counters.network,
       cosmetic: counters.cosmetic,
+      scriptlet: counters.scriptlet,
       unsupported: counters.unsupported,
       unsupportedByReason: Object.fromEntries(counters.reasons)
     }

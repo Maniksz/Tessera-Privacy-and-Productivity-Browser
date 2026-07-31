@@ -1,6 +1,7 @@
 import type { CallbackResponse, Session } from 'electron'
 import { registrableDomain, hostMatchesRule, isIpAddress } from '@shared/url/domain.js'
 import { stripTrackingParams } from '@shared/url/tracking-params.js'
+import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 
 /**
@@ -144,8 +145,26 @@ function blockerStage(engine: FilterListEngine | null): RequestStage {
   return {
     id: 'blocker',
     isEnabled: (settings) => settings['privacy.blockerEnabled'] && engine !== null,
-    evaluate: (context) =>
-      engine?.matches(context) ? { action: 'block', reason: 'blocker' } : { action: 'continue' }
+    /*
+      The per-site off switch is checked here rather than in `isEnabled`, and not by choice: `isEnabled`
+      is handed the settings alone, while whether a site is exempt depends on which *document* the
+      request belongs to. That is in the context.
+
+      `documentUrl` is the top-level document, not the request's own address, which is the whole point —
+      an exemption for `example.com` has to cover the third-party advert host the page pulls in, or it
+      exempts nothing that matters. The one case it cannot answer is a request whose document is unknown
+      (`null`), and there the exemption does not apply: filtering is the default and an unattributable
+      request is not evidence that the user asked for less of it.
+
+      Only this stage and cosmetic filtering are affected. `site-exemption.ts` argues why the other four
+      stages keep running.
+    */
+    evaluate: (context) => {
+      if (filteringExemptFor(context.documentUrl, context.settings['privacy.blockerOffForSites'])) {
+        return { action: 'continue' }
+      }
+      return engine?.matches(context) ? { action: 'block', reason: 'blocker' } : { action: 'continue' }
+    }
   }
 }
 

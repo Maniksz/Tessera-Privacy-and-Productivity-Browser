@@ -148,6 +148,66 @@ export const settingDefinitions = {
     'privacy'
   ),
   'privacy.cosmeticFiltering': def(z.boolean(), true, 'privacy'),
+  /**
+   * `##+js(…)` — the scriptlet half of a filter list.
+   *
+   * Its own switch rather than sharing `cosmeticFiltering`, because they are different powers. Cosmetic
+   * filtering changes what a page *looks* like; a scriptlet runs code in the page before the page's own,
+   * to defeat what its script decides — an anti-adblock wall reading `window.canRunAds`, an overlay set
+   * on a timer, a redirect from a document-wide click handler. Nothing else in a filter list can touch
+   * those, and 2 112 of the rules in the three default lists are of this kind.
+   *
+   * On by default, and the two things that bound the risk are worth stating: the list names a scriptlet
+   * from a library this browser ships and passes it *string arguments*, so no list-supplied code is ever
+   * executed; and the trusted-* family, whose entire purpose is to inject list-author values into a page,
+   * is deliberately not implemented. See `shared/filters/scriptlets.ts`.
+   */
+  'privacy.scriptletInjection': def(z.boolean(), true, 'privacy'),
+  /**
+   * Sites the blocker is switched off for, one host per line.
+   *
+   * The switch that makes the global one safe. `blocker-menu-items.ts` argues that a blocker with no
+   * visible off switch for the current site is a blocker people uninstall — and the only off switch
+   * there was is the global one, so the way to read a page this breaks was to stop blocking everywhere
+   * and remember to turn it back on. Nobody remembers.
+   *
+   * A list rather than a flag on the tab: a flag is lost on navigation, on session restore and on
+   * opening the same site in a second tile, which is three ways for the page to break again with the
+   * switch still apparently on. A setting is also auditable — the entries the menu adds are visible and
+   * editable here, rather than only accumulating out of sight.
+   *
+   * What "off" covers is deliberately narrow and is argued in `shared/filters/site-exemption.ts`: the
+   * filter lists and cosmetic filtering, and nothing else. HTTPS-only, cookie blocking, referrer
+   * trimming and fingerprint masking stay on, because "this page is broken" is not a reason to drop
+   * measures the user cannot see.
+   */
+  'privacy.blockerOffForSites': def(z.array(z.string()), [], 'privacy'),
+  /**
+   * New tabs and windows a page opened without the user doing anything.
+   *
+   * Every `window.open` and `target=_blank` used to become a tab unconditionally, so a popup on a timer
+   * or on page load was indistinguishable from one the user asked for. The test is a real input event
+   * seen by the *core* — a page calling `element.click()` cannot produce one — so a popup the user opened
+   * is always allowed whatever this is set to. See `main/browser/automatic-navigation.ts`.
+   *
+   * `ask` by default: a blocked popup that mattered is a login window or a payment flow that silently did
+   * not appear, and there is no way for the user to find out why.
+   */
+  'privacy.pageOpenedTabs': def(z.enum(['allow', 'ask', 'block']), 'ask', 'privacy'),
+  /**
+   * A page sending the tab somewhere else on its own — the JavaScript half of a redirect.
+   *
+   * Scoped to navigation that **leaves the site**, and that is a deliberate narrowing rather than an
+   * oversight: a site sending `/` to `/home`, or replacing the address after an asynchronous sign-in
+   * check, is ordinary and constant, and prompting for it would produce dialogues on sites that are
+   * behaving perfectly. Subframes are not gated either — a cross-site iframe navigating itself is what an
+   * embed is, and it cannot take the tab anywhere.
+   *
+   * What this does not catch is stated in `automatic-navigation.ts` and is worth knowing before trusting
+   * it: an advertising redirect fired from a click handler on the whole document *does* have a gesture
+   * behind it and is allowed here. `privacy.scriptletInjection` is what answers that one.
+   */
+  'privacy.pageInitiatedRedirects': def(z.enum(['allow', 'ask', 'block']), 'ask', 'privacy'),
   'privacy.blockRedirectTrackers': def(z.boolean(), true, 'privacy'),
   'privacy.stripTrackingParameters': def(z.boolean(), true, 'privacy'),
   'privacy.blockTelemetryDomains': def(z.boolean(), true, 'privacy'),

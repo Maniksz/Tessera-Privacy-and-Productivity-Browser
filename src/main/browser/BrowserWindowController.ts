@@ -6,6 +6,9 @@ import type { EventChannel } from '@shared/ipc/channels.js'
 import type { EventPayload } from '@shared/ipc/contract.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Fractions, LayoutId, Rect } from '@shared/split/layout.js'
+import { chromeInsetsFor } from '@shared/split/chrome-insets.js'
+import { decideAutomaticNavigation } from './automatic-navigation.js'
+import { AutomaticNavigationPrompt } from './AutomaticNavigationPrompt.js'
 import { HOME_URL, resolveOmniboxInput } from '@shared/url/omnibox.js'
 import type { OverlayPresentation, OverlayState } from '@shared/overlay/surface.js'
 import { Tab, adoptTabId, nextTabId, type TabWiring } from './Tab.js'
@@ -70,6 +73,21 @@ export interface WindowControllerOptions {
 
 const DEFAULT_CHROME_INSETS: ChromeInsets = { top: 88, bottom: 0, left: 0, right: 0 }
 
+/**
+ * The host of an address, for a dialogue to lead with.
+ *
+ * The empty string for anything unparseable, which the surface renders as the full address instead — a
+ * prompt that said "wants to open" with no subject would be unanswerable, and a URL this could not read
+ * is one the user most needs to see in full.
+ */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return ''
+  }
+}
+
 export class BrowserWindowController {
   readonly window: BrowserWindow
   readonly split: SplitController
@@ -113,6 +131,13 @@ export class BrowserWindowController {
    * constructor and six imports, all of which said the same thing the factory's return type already says.
    */
   readonly #seams: WindowSeams
+  /**
+   * The dialogue for a popup or a redirect the user did not ask for.
+   *
+   * Assigned in the constructor rather than initialised here, because it needs `presentOverlay` and
+   * `dismissOverlay` bound to this instance.
+   */
+  readonly #navigationPrompt: AutomaticNavigationPrompt
   /**
    * The second route to `closeTab`, for the state in which the menu accelerator stops arriving.
    *
@@ -205,6 +230,21 @@ export class BrowserWindowController {
     })
 
     this.#seams = seams
+
+    /*
+      The dialogue for a popup or a redirect nobody asked for.
+
+      Its own small controller rather than a second `PermissionArbiter`: nothing in the page is holding a
+      promise here, so a second request arriving while one is on screen is refused instead of queued —
+      which is both simpler and the right answer, since a page firing popups in a loop is the case the
+      feature exists for. See that file.
+    */
+    this.#navigationPrompt = new AutomaticNavigationPrompt({
+      host: {
+        presentOverlay: (presentation) => this.presentOverlay(presentation),
+        dismissOverlay: () => this.dismissOverlay()
+      }
+    })
 
     /*
       What the OS tells this window and what it does about it: nine handlers, in `window-events.ts`, where
@@ -353,8 +393,46 @@ export class BrowserWindowController {
       ...(options.zoomPercent === undefined ? {} : { zoomPercent: options.zoomPercent }),
       callbacks: {
         onStateChanged: () => this.#scheduleBroadcast(),
-        onOpenNewTab: (url, { background }) => {
-          this.createTab({ url, background, tileIndex: null })
+        /*
+          A tab a page asked for, which is not the same as a tab the user asked for.
+
+          Every one of these used to open unconditionally. `userGesture` comes from the tab, because only
+          the view that received the input knows whether it did — with four pages on screen, a click in
+          one tile is not consent to a popup from another.
+
+          The decision is made here rather than in the tab because it needs the settings and, for `ask`,
+          a dialogue on this window's overlay layer.
+        */
+        onOpenNewTab: (url, { background, userGesture }) => {
+          const decision = decideAutomaticNavigation({
+            kind: 'popup',
+            url,
+            documentUrl: url,
+            // The tab has already applied the window; this only has to say whether there was one.
+            sinceGestureMs: userGesture ? 0 : null,
+            gate: this.getSettings()['privacy.pageOpenedTabs']
+          })
+          if (decision.action === 'allow') {
+            this.createTab({ url, background, tileIndex: null })
+            return
+          }
+          if (decision.action === 'block') {
+            console.warn(`[popup] refused: ${decision.reason} (${url})`)
+            return
+          }
+          this.#navigationPrompt.ask({ kind: 'popup', url, host: hostOf(url) }, (permitted) => {
+            // Guarded because the answer arrives later: the window may be gone by then.
+            if (!permitted || this.window.isDestroyed()) return
+            this.createTab({ url, background, tileIndex: null })
+          })
+        },
+        /*
+          The page sending itself somewhere else. Already stopped by the time this runs; `allow` re-issues
+          it as a load the core owns. See the subscription in `Tab.ts` and the reasoning in
+          `automatic-navigation.ts`.
+        */
+        onAutomaticNavigation: (_source, url, allow) => {
+          this.#navigationPrompt.ask({ kind: 'navigation', url, host: hostOf(url) }, allow)
         },
         onFocused: (source) => this.#handleTabFocused(source),
         onEnterHtmlFullscreen: (source) => this.#seams.fullscreen.onPageEnter(source.id),
@@ -845,6 +923,27 @@ export class BrowserWindowController {
     this.#seams.tileInput.requestTileBar(request)
   }
 
+  /**
+   * The answer to this window's popup-or-redirect prompt.
+   *
+   * On the controller rather than reaching into the seam from the handler, so the id check stays in one
+   * place: `AutomaticNavigationPrompt.answer` ignores a reply for a question that is not the one on
+   * screen, and every route to it goes through here.
+   */
+  answerNavigationPrompt(requestId: string, permitted: boolean): void {
+    this.#navigationPrompt.answer(requestId, permitted)
+  }
+
+  /**
+   * The prompt left without being answered — dismissed, displaced, the window resized.
+   *
+   * Refuses, which is the whole safe default of this feature: the page stays where it is. Called from the
+   * overlay layer's vacancy announcement, the same route a permission prompt's refusal takes.
+   */
+  navigationPromptVacated(requestId: string): void {
+    this.#navigationPrompt.cancel(requestId)
+  }
+
   overlayPresentation(): OverlayState {
     return this.#overlay.presentation
   }
@@ -863,14 +962,17 @@ export class BrowserWindowController {
 
   #contentRect(): Rect {
     const { width, height } = this.window.getContentBounds()
-    const insets = this.#chromeInsets
-    // Website fullscreen inside a tile leaves the chrome in place; only real
-    // window fullscreen gives the whole surface to content.
-    const chromeHidden = this.split.escalation === 'window-fullscreen'
-    const top = chromeHidden ? 0 : insets.top
-    const bottom = chromeHidden ? 0 : insets.bottom
-    const left = chromeHidden ? 0 : insets.left
-    const right = chromeHidden ? 0 : insets.right
+    /*
+      Website fullscreen inside a tile leaves the chrome in place; only real window fullscreen gives
+      the whole surface to content.
+
+      The rule moved to `chrome-insets.ts` and is called from here rather than restated. It used to be
+      four ternaries on a local `chromeHidden`, and the renderer — which draws the divider handles over
+      this very rectangle — had no equivalent at all, so in fullscreen the handles sat a chrome height
+      below the gutters they belong to and stopped working. Two derivations of one number is what that
+      was; there is one now, and `App.tsx` reads the same function.
+    */
+    const { top, bottom, left, right } = chromeInsetsFor(this.split.escalation, this.#chromeInsets)
 
     return {
       x: Math.round(left),

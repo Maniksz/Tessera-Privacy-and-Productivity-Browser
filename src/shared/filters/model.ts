@@ -165,6 +165,17 @@ export interface FilterListDiagnostics {
   readonly network: number
   /** Lines that produced a cosmetic rule. */
   readonly cosmetic: number
+  /**
+   * Lines that produced a scriptlet rule.
+   *
+   * Its own counter rather than folded into `cosmetic`, because the two are different powers and the
+   * numbers are what the settings screen reports: hiding an element and running code in the page are not
+   * the same promise, and a single figure covering both would say neither.
+   *
+   * A sixth counter, so `accountedLines` had to grow with it — a counter added without that is a counter
+   * that breaks the invariant it exists to support.
+   */
+  readonly scriptlet: number
   /** Lines recognised as filter syntax that this engine does not implement. */
   readonly unsupported: number
   /**
@@ -182,6 +193,7 @@ export function accountedLines(diagnostics: FilterListDiagnostics): number {
     diagnostics.comments +
     diagnostics.network +
     diagnostics.cosmetic +
+    diagnostics.scriptlet +
     diagnostics.unsupported
   )
 }
