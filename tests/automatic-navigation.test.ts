@@ -174,6 +174,63 @@ describe('a page sending itself somewhere', () => {
   })
 })
 
+/**
+ * One click authorises one thing.
+ *
+ * ## What was reported
+ *
+ * *"Wenn die webseite weiterleiten will, dann kommt die anzeige zwar, dass ich sagen kann, nicht
+ * redirecten, aber es wird teilweise dennoch ein neuer tab geöffnet."*
+ *
+ * The gesture used to be a timestamp that was only ever *read*, so a single click vouched for everything
+ * a page did in the second that followed. The pattern this feature exists for — a click handler hung on
+ * the whole document, opening a tab and then sending the page somewhere — therefore got its tab through
+ * on the click while the slower half of the same script arrived after the second was up and was put to
+ * the user. Asked about one, not asked about the other, which is exactly how it reads from outside.
+ *
+ * This is Chromium's transient user activation, which `window.open` consumes for the same reason. The
+ * direction that must not break is the other one: spending must be reported only when the gesture is
+ * genuinely what let the request through, or a click would be consumed by a navigation that was going to
+ * be allowed anyway and the next honest popup would be questioned.
+ */
+describe('spending the gesture', () => {
+  it('is reported when the gesture is what allowed it', () => {
+    for (const kind of ['popup', 'navigation'] as const) {
+      const decision = decideAutomaticNavigation(request({ kind, gate: 'ask', sinceGestureMs: 40 }))
+      expect(decision.spendsGesture, kind).toBe(true)
+    }
+  })
+
+  it('is not reported when the setting allowed it outright', () => {
+    // Nothing was spent, because nothing was asked of the click: with the gate open the request never
+    // reaches the gesture at all, and consuming it here would question the next real popup.
+    const decision = decideAutomaticNavigation(request({ gate: 'allow', sinceGestureMs: 40 }))
+    expect(decision.action).toBe('allow')
+    expect(decision.spendsGesture).toBe(false)
+  })
+
+  it('is not reported for a page moving within its own site', () => {
+    // Ordinary navigation, allowed on its own merits. A site sending `/` to `/home` must not spend the
+    // click the user is about to open a tab with.
+    const decision = decideAutomaticNavigation(
+      request({
+        kind: 'navigation',
+        gate: 'ask',
+        documentUrl: 'https://shop.example/cart',
+        url: 'https://shop.example/checkout'
+      })
+    )
+    expect(decision.action).toBe('allow')
+    expect(decision.spendsGesture).toBe(false)
+  })
+
+  it('is not reported when there was nothing to spend', () => {
+    for (const gate of ['ask', 'block'] as const) {
+      expect(decideAutomaticNavigation(request({ gate })).spendsGesture, gate).toBe(false)
+    }
+  })
+})
+
 describe('what counts as a gesture at all', () => {
   /**
    * Shared with password filling on purpose, and the reason it is worth an assertion here too: the whole

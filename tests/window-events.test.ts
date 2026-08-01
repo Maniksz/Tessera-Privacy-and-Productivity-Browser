@@ -56,7 +56,9 @@ function harness(): Harness {
     split: {
       setWindowFullscreen: (fullscreen) => calls.push(`setWindowFullscreen(${fullscreen})`)
     },
-    fullscreen: { applyPolicy: () => calls.push('fullscreen.applyPolicy') },
+    fullscreen: {
+      onWindowLeftFullscreen: () => calls.push('fullscreen.onWindowLeftFullscreen')
+    },
     tileInput: {
       navigateByGesture: (source, name) => calls.push(`navigate(${source}, ${name})`)
     },
@@ -197,15 +199,19 @@ describe('window event wiring', () => {
     expect(window.calls).toEqual(['setWindowFullscreen(true)', 'relayout', 'scheduleBroadcast'])
   })
 
-  it('restores the tile confinement on the way out, before anything else redraws', () => {
+  it('hands leaving fullscreen to the seam, before anything else redraws', () => {
     // Spec 2: `fullScreenable` was lifted so the user's key could take the window, and leaving is the
     // only moment it can safely come back. Ordered ahead of the relayout so nothing is drawn against a
     // window that is still marked freely fullscreenable.
+    //
+    // Through the seam rather than to `applyPolicy` directly, because a window can leave fullscreen
+    // because a *page* gave up its own — and then the answer is to put the window back, not the
+    // confinement. See `TileFullscreenController.onWindowLeftFullscreen`.
     const window = harness()
     window.emit('leave-full-screen')
     expect(window.calls).toEqual([
       'setWindowFullscreen(false)',
-      'fullscreen.applyPolicy',
+      'fullscreen.onWindowLeftFullscreen',
       'relayout',
       'scheduleBroadcast'
     ])

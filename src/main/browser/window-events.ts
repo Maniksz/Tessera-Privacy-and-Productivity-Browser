@@ -73,8 +73,11 @@ export interface WindowEventHost {
   overlay: { dismissKind(kind: OverlayKind): boolean }
   /** The split layout's own record of whether the window is fullscreen, which changes what it may draw. */
   split: { setWindowFullscreen(fullscreen: boolean): void }
-  /** Re-derives whether the window may be taken fullscreen at all; see `TileFullscreenController`. */
-  fullscreen: { applyPolicy(): void }
+  /**
+   * What leaving fullscreen means for the tile confinement — which is not always "put it back", because
+   * a window can leave fullscreen because a *page* gave up its own. See `TileFullscreenController`.
+   */
+  fullscreen: { onWindowLeftFullscreen(): void }
   /** Which tile a hardware navigation gesture meant, decided from the cursor; see `TileInputController`. */
   tileInput: { navigateByGesture(source: GestureSource, name: string): void }
 
@@ -162,8 +165,13 @@ export function wireWindowEvents(host: WindowEventHost): void {
       video in one pane could then take the whole window and blank the other three, which is the thing
       spec 2 is about. Restoring it on the way *in* would trap the user in fullscreen; on the way out is
       both the earliest safe moment and the one that needs no second flag to remember why.
+
+      Through the seam rather than straight to `applyPolicy`, because "the window left fullscreen" is not
+      always the user leaving it: Chromium takes a window out of fullscreen when a page it had credited
+      with putting it there gives that fullscreen up. Which of the two this was decides whether the
+      confinement goes back or the window does — see `onWindowLeftFullscreen`.
     */
-    host.fullscreen.applyPolicy()
+    host.fullscreen.onWindowLeftFullscreen()
     host.relayout()
     host.scheduleBroadcast()
   }

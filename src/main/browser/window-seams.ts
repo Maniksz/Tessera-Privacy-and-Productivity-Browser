@@ -56,6 +56,8 @@ export interface WindowInternals {
   contentRect(): Rect
   setFullScreenable(allowed: boolean): void
   exitWindowFullscreen(): void
+  /** Puts the window back, for a fullscreen that was taken away by something other than the user. */
+  enterWindowFullscreen(): void
   /** Flips it, for the key that means "fullscreen" rather than "leave fullscreen". */
   toggleWindowFullscreen(): void
 
@@ -118,6 +120,17 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     setFullScreenable: (allowed) => internals.setFullScreenable(allowed),
     exitWindowFullscreen: () => internals.exitWindowFullscreen(),
     toggleWindowFullscreen: () => internals.toggleWindowFullscreen(),
+    enterWindowFullscreen: () => internals.enterWindowFullscreen(),
+    /*
+      A turn of the event loop, not a microtask.
+
+      The question it buys time for — did this window leave fullscreen because a page gave up its own? —
+      is answered by an event Electron emits from the same native stack as the one being handled, and V8
+      drains microtasks between two such callbacks. A timer cannot fall in that gap.
+    */
+    defer: (run) => {
+      setTimeout(run, 0)
+    },
     askPageToExitFullscreen: (tabId) => {
       /*
         Asked rather than forced, and the failure swallowed on purpose.

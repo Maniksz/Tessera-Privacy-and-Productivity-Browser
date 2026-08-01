@@ -54,8 +54,13 @@ export interface TabCallbacks {
    *
    * Reported upwards rather than decided here, because the decision needs the settings and, for `ask`,
    * a dialogue on the window's overlay layer. A tab has neither.
+   *
+   * Returns whether the gesture was **spent** — whether it is what let this popup through. The record it
+   * would be spent from belongs to this view, but only the window knows which rule answered, so the fact
+   * comes back rather than being guessed at here. See `AutomaticNavigationDecision.spendsGesture` for
+   * what one click is and is not allowed to vouch for.
    */
-  onOpenNewTab(url: string, options: { background: boolean; userGesture: boolean }): void
+  onOpenNewTab(url: string, options: { background: boolean; userGesture: boolean }): boolean
   /**
    * The page is about to send *itself* somewhere else, and nothing the user did explains it.
    *
@@ -459,6 +464,22 @@ export class Tab {
       notify()
     })
     on('did-navigate', () => {
+      /*
+        The gesture does not cross into the new document, and this is the other half of the report in
+        `AutomaticNavigationDecision.spendsGesture`.
+
+        `#lastGestureAt` is one field on a tab that outlives every page shown in it, so a click on the
+        page being left counted as a click on the page arriving — for as long as a second, which is
+        precisely how long a page needs to open something the moment it loads. The click that followed a
+        link is consent to follow that link; it says nothing about what the destination then decides to
+        open, and a tab that appears by itself right after a page loads is the exact complaint this
+        gating exists to answer.
+
+        `did-navigate` rather than `did-start-navigation`: only a committed main-frame document is a new
+        document, and a subframe loading — an advert, an embed — must not spend the click the user made
+        on the page around it.
+      */
+      this.#lastGestureAt = null
       // Read once and kept. Three of the lines below want it, and the blocker wants it once per
       // refused request until the next commit — see `#currentUrl`.
       this.#currentUrl = wc.getURL()
@@ -602,7 +623,11 @@ export class Tab {
         sinceGestureMs: this.#sinceGesture(),
         gate: this.getSettings()['privacy.pageInitiatedRedirects']
       })
-      if (decision.action === 'allow') return
+      if (decision.action === 'allow') {
+        // The click that vouched for this redirect cannot also vouch for the popup behind it.
+        if (decision.spendsGesture) this.#lastGestureAt = null
+        return
+      }
 
       pending.prevent()
       if (decision.action === 'block') {
@@ -635,10 +660,13 @@ export class Tab {
     */
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (/^https?:/i.test(url)) {
-        this.callbacks.onOpenNewTab(url, {
+        const spent = this.callbacks.onOpenNewTab(url, {
           background: disposition === 'background-tab',
           userGesture: withinGestureWindow(this.#sinceGesture())
         })
+        // One click, one thing. A page that answers a click with four `window.open` calls gets one tab
+        // and three questions, which is what every browser's own popup blocker does.
+        if (spent) this.#lastGestureAt = null
       }
       return { action: 'deny' }
     })

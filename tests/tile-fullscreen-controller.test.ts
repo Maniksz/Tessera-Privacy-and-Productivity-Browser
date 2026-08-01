@@ -21,10 +21,15 @@ interface Harness {
   split: SplitController
   fullScreenable: boolean[]
   exitedWindowFullscreen: number
+  enteredWindowFullscreen: number
   toggledWindowFullscreen: number
   askedPages: string[]
   changes: number
   scope: 'tile' | 'window'
+  /** Everything the controller put off until the events around it had finished arriving. */
+  deferred: Array<() => void>
+  /** Runs them, which is what a turn of the event loop does in the real window. */
+  settle: () => void
 }
 
 function harness(layout: LayoutId = '2x2'): Harness {
@@ -33,10 +38,12 @@ function harness(layout: LayoutId = '2x2'): Harness {
     split,
     fullScreenable: [],
     exitedWindowFullscreen: 0,
+    enteredWindowFullscreen: 0,
     toggledWindowFullscreen: 0,
     askedPages: [],
     changes: 0,
-    scope: 'tile'
+    scope: 'tile',
+    deferred: []
   }
 
   const host: TileFullscreenHost = {
@@ -48,8 +55,14 @@ function harness(layout: LayoutId = '2x2'): Harness {
     exitWindowFullscreen: () => {
       state.exitedWindowFullscreen! += 1
     },
+    enterWindowFullscreen: () => {
+      state.enteredWindowFullscreen! += 1
+    },
     toggleWindowFullscreen: () => {
       state.toggledWindowFullscreen! += 1
+    },
+    defer: (run) => {
+      state.deferred!.push(run)
     },
     askPageToExitFullscreen: (tabId) => {
       state.askedPages!.push(tabId)
@@ -60,6 +73,10 @@ function harness(layout: LayoutId = '2x2'): Harness {
   }
 
   state.controller = new TileFullscreenController(host)
+  state.settle = () => {
+    const pending = state.deferred!.splice(0)
+    for (const run of pending) run()
+  }
   return state as Harness
 }
 
@@ -153,6 +170,140 @@ describe('a page asking for fullscreen', () => {
     h.controller.onPageEnter('tab-b')
     h.controller.onPageLeave()
     expect(h.split.fullscreenTile).toBeNull()
+  })
+})
+
+/**
+ * A page giving up its fullscreen must not take the window's with it.
+ *
+ * ## What was reported
+ *
+ * *"wenn ich ein video in full screen mache und dann f11 drücke und in einer kachel das video wieder aus
+ * dem fullscreen für die kachel beende, beendet es auch den f11 fullscreen"* — and the order in that
+ * sentence is the whole bug. Chromium decides who owns a window's fullscreen at the moment a page asks
+ * for one, by looking at whether the window is fullscreen already. Confined to a tile the answer is no,
+ * because the confinement is what stops the request moving the window — so a later F11 is credited to
+ * the page, and the page's exit spends it.
+ *
+ * ## Why every case here is written twice
+ *
+ * The window's `leave-full-screen` and the page's `leave-html-full-screen` arrive in either order
+ * depending on the platform, and the fix reads a different signal in each. Both orderings are exercised
+ * because a version that handled one would look completely correct on the machine it was written on.
+ */
+describe('a page giving up fullscreen inside a tile', () => {
+  /** Video fullscreen in a tile, then F11. The state both orderings start from. */
+  function fullscreenVideoUnderF11(): Harness {
+    const h = harness('2x2')
+    h.split.assignTab('tab-a', 1)
+    h.controller.onPageEnter('tab-a')
+    h.controller.toggleFullscreen()
+    h.split.setWindowFullscreen(true)
+    return h
+  }
+
+  it('puts the window back when its own event arrives first', () => {
+    const h = fullscreenVideoUnderF11()
+
+    // Chromium drops the window's fullscreen on the way to releasing the page's, and reports the
+    // window before the page.
+    h.split.setWindowFullscreen(false)
+    h.controller.onWindowLeftFullscreen()
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.enteredWindowFullscreen, 'F11 went with the video').toBe(1)
+    expect(h.fullScreenable.at(-1), 'an un-fullscreenable window cannot be put back').toBe(true)
+  })
+
+  it("puts the window back when the page's event arrives first", () => {
+    const h = fullscreenVideoUnderF11()
+
+    // The other ordering: the page reports first and the window's exit is still animating, so the
+    // split's own record still says fullscreen.
+    h.controller.onPageLeave()
+    expect(h.enteredWindowFullscreen).toBe(1)
+
+    h.split.setWindowFullscreen(false)
+    h.controller.onWindowLeftFullscreen()
+    expect(
+      h.fullScreenable.at(-1),
+      'the confinement was put back on top of the re-entry, which would swallow it'
+    ).toBe(true)
+
+    // And then Chromium grants it.
+    h.split.setWindowFullscreen(true)
+    h.settle()
+    expect(h.fullScreenable.at(-1)).toBe(true)
+  })
+
+  it('puts it back for the Escape that shrinks the video too', () => {
+    /*
+      The same defect one rung down the ladder. `escape()` takes the tile out of fullscreen and then
+      *asks* the page to follow, so the tile is already clear when the page answers — which is why the
+      page's own fullscreen is tracked separately from the tile's.
+    */
+    const h = fullscreenVideoUnderF11()
+
+    h.controller.escape()
+    h.split.setWindowFullscreen(false)
+    h.controller.onWindowLeftFullscreen()
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.askedPages).toEqual(['tab-a'])
+    expect(h.enteredWindowFullscreen).toBe(1)
+  })
+
+  it('leaves the window alone when the user is the one leaving it', () => {
+    /*
+      The case the deferred answer exists for, and the one a simpler fix gets wrong: F11 out — or the
+      green button on macOS — while a video carries on being fullscreen in its tile. The window's exit
+      and a page still holding fullscreen look identical in the moment; what tells them apart is that
+      the page does *not* release its fullscreen in the same breath.
+    */
+    const h = fullscreenVideoUnderF11()
+
+    h.controller.toggleFullscreen()
+    h.split.setWindowFullscreen(false)
+    h.controller.onWindowLeftFullscreen()
+    h.settle()
+
+    expect(h.enteredWindowFullscreen, 'the user was put back into a fullscreen they left').toBe(0)
+    expect(h.fullScreenable.at(-1), 'the confinement did not come back').toBe(false)
+
+    // And the video ending later is not a second chance to re-open it.
+    h.controller.onPageLeave()
+    h.settle()
+    expect(h.enteredWindowFullscreen).toBe(0)
+  })
+
+  it('confines nothing in a single pane, where the page really does own the window', () => {
+    // With one tile there is no confinement, so a page's fullscreen *is* the window's and Chromium's
+    // own bookkeeping is right. Putting the window back here would trap the user in it.
+    const h = harness('1x1')
+    h.split.assignTab('tab-a', 0)
+    h.controller.onPageEnter('tab-a')
+    h.split.setWindowFullscreen(true)
+
+    h.controller.onPageLeave()
+    expect(h.enteredWindowFullscreen).toBe(0)
+  })
+
+  it('restores the confinement when the re-entry never arrives', () => {
+    /*
+      The self-heal. `onWindowLeftFullscreen` steps aside for a re-entry this controller asked for, and
+      a window left both out of fullscreen *and* freely fullscreenable is the state spec 2 rules out —
+      a page could take it and blank the other tiles. So the policy is deferred rather than skipped.
+    */
+    const h = fullscreenVideoUnderF11()
+
+    h.controller.onPageLeave()
+    h.split.setWindowFullscreen(false)
+    h.controller.onWindowLeftFullscreen()
+    h.settle()
+
+    expect(h.fullScreenable.at(-1)).toBe(false)
   })
 })
 

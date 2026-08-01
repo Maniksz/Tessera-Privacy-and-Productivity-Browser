@@ -208,6 +208,7 @@ export class BrowserWindowController {
       contentRect: () => this.#contentRect(),
       setFullScreenable: (allowed) => this.window.setFullScreenable(allowed),
       exitWindowFullscreen: () => this.window.setFullScreen(false),
+      enterWindowFullscreen: () => this.window.setFullScreen(true),
       toggleWindowFullscreen: () => this.window.setFullScreen(!this.window.isFullScreen()),
       tab: (tabId) => this.#tabs.get(tabId),
       tabIds: () => [...this.#tabs.keys()],
@@ -414,17 +415,18 @@ export class BrowserWindowController {
           })
           if (decision.action === 'allow') {
             this.createTab({ url, background, tileIndex: null })
-            return
+            return decision.spendsGesture
           }
           if (decision.action === 'block') {
             console.warn(`[popup] refused: ${decision.reason} (${url})`)
-            return
+            return decision.spendsGesture
           }
           this.#navigationPrompt.ask({ kind: 'popup', url, host: hostOf(url) }, (permitted) => {
             // Guarded because the answer arrives later: the window may be gone by then.
             if (!permitted || this.window.isDestroyed()) return
             this.createTab({ url, background, tileIndex: null })
           })
+          return decision.spendsGesture
         },
         /*
           The page sending itself somewhere else. Already stopped by the time this runs; `allow` re-issues

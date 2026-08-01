@@ -97,6 +97,36 @@ export interface AutomaticNavigationDecision {
   action: 'allow' | 'ask' | 'block'
   /** For the log, and for the tests. Never shown to a page. */
   reason: string
+  /**
+   * Whether a real input event is what permitted this, and is therefore now spent.
+   *
+   * ## What was reported
+   *
+   * *"Wenn die webseite weiterleiten will, dann kommt die anzeige zwar, dass ich sagen kann, nicht
+   * redirecten, aber es wird teilweise dennoch ein neuer tab geöffnet."* The dialogue appears for the
+   * redirect, and a tab the user never asked for is already open beside it.
+   *
+   * ## Why one click could do both
+   *
+   * The gesture was a *timestamp that was only ever read*. One click therefore vouched for everything a
+   * page did in the second that followed — a popup, and another popup, and a redirect — because each
+   * question was asked of the same unspent click. So the pattern this feature exists for got its tab
+   * through on the gesture while the slower half of the same script arrived after the second was up and
+   * was, correctly, put to the user. From the outside that reads exactly as reported: asked about one,
+   * not asked about the other.
+   *
+   * ## The rule, and why it is the browsers' own
+   *
+   * **A gesture authorises one thing.** This is Chromium's transient user activation, which `window.open`
+   * consumes for precisely this reason, and it is the difference between "the user clicked" and "the user
+   * asked for this". Nothing legitimate is lost: a click that opens a tab still opens it, and a click that
+   * follows a link still follows it. What stops is one click standing in for a page's second, third and
+   * fourth idea.
+   *
+   * Reported rather than decided by the caller, because only this function knows *which* of the four rules
+   * let the request through — the gate allowing it outright, or same-site, spend nothing.
+   */
+  spendsGesture: boolean
 }
 
 /** Whether a real input event is recent enough for this to be the user's own action. */
@@ -117,10 +147,16 @@ export function withinGestureWindow(sinceGestureMs: number | null): boolean {
 export function decideAutomaticNavigation(
   request: AutomaticNavigationRequest
 ): AutomaticNavigationDecision {
-  if (request.gate === 'allow') return { action: 'allow', reason: 'the setting allows it' }
+  if (request.gate === 'allow') {
+    return { action: 'allow', reason: 'the setting allows it', spendsGesture: false }
+  }
 
   if (withinGestureWindow(request.sinceGestureMs)) {
-    return { action: 'allow', reason: `a real input event ${request.sinceGestureMs}ms ago` }
+    return {
+      action: 'allow',
+      reason: `a real input event ${request.sinceGestureMs}ms ago`,
+      spendsGesture: true
+    }
   }
 
   /*
@@ -129,13 +165,25 @@ export function decideAutomaticNavigation(
     browser's own popup blocker does.
   */
   if (request.kind === 'navigation' && sameSiteNavigation(request.documentUrl, request.url)) {
-    return { action: 'allow', reason: 'the page is navigating within its own site' }
+    return {
+      action: 'allow',
+      reason: 'the page is navigating within its own site',
+      spendsGesture: false
+    }
   }
 
   if (request.gate === 'block') {
-    return { action: 'block', reason: `no user gesture, and the setting blocks ${request.kind}` }
+    return {
+      action: 'block',
+      reason: `no user gesture, and the setting blocks ${request.kind}`,
+      spendsGesture: false
+    }
   }
-  return { action: 'ask', reason: `no user gesture; asking about ${request.kind}` }
+  return {
+    action: 'ask',
+    reason: `no user gesture; asking about ${request.kind}`,
+    spendsGesture: false
+  }
 }
 
 /**
