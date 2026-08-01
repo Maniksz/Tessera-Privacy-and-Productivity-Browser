@@ -18,9 +18,11 @@ import { defaultSettings } from '@shared/settings/definitions.js'
  * stored number can put a pane somewhere it cannot be read.
  *
  * What is *not* here, named rather than quietly missing: applying a factor to a live view, the
- * `zoom-changed` subscription, the `did-navigate` re-assert and the `webPreferences.zoomFactor` that
- * covers the first paint. All four need a window. The round trip that carries a pane's zoom across a
- * restart is reachable and is pinned in the session tests.
+ * subscription that carries a zoom gesture in, the `did-navigate` re-assert and the
+ * `webPreferences.zoomFactor` that covers the first paint. All four need a window. The gesture's own
+ * decisions — what counts as one, and which pane it lands on — moved out of that subscription and
+ * are covered in `wheel-zoom.test.ts`. The round trip that carries a pane's zoom across a restart is
+ * reachable and is pinned in the session tests.
  */
 
 describe('a pane that has never been zoomed', () => {

@@ -24,6 +24,7 @@ import { makeInvoker, makeSubscriber, markPreloadRan, type Role } from './bridge
 import { installCosmeticFiltering } from './cosmetic.js'
 import { installElementPicker } from './picker.js'
 import { installAutofill } from './autofill.js'
+import { installZoomGesture } from './zoom.js'
 
 /**
  * The preload for tab views: everything a *document* gets, and nothing the browser's own interface
@@ -215,6 +216,20 @@ function installFingerprintMasking(): void {
   apply(maskCanvas, plan.canvas)
   apply(maskWebgl, plan.webgl)
   apply(maskAudio, plan.audio)
+}
+
+if (role === 'content') {
+  /*
+    The zoom gesture, above the internal-page line and therefore for *every* tab view.
+
+    The three below are about defending the user from a site, so a `tessera://` page is exempt from
+    all of them. This one is not a defence, it is an input device: the settings screen, the history
+    list and the start page are zoomed with the same fingers as everything else, and a browser whose
+    own pages ignored the trackpad would look broken rather than principled.
+
+    First, and cheaply — one listener, no message until something is actually zoomed.
+  */
+  installZoomGesture()
 }
 
 if (role === 'content' && internalPage === null) {

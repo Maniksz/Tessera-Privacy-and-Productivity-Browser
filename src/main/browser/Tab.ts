@@ -9,6 +9,11 @@ import type { ThumbnailCapturer } from '@shared/thumbnails/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import { mouseMoveY } from '@shared/gestures/pointer.js'
 import type { ZoomDirection } from '@shared/gestures/zoom.js'
+import {
+  PINCH_GRACE_MS,
+  ZOOM_GESTURE_CHANNEL,
+  pinchInputPhase
+} from '@shared/gestures/wheel-zoom.js'
 import { clampZoomPercent, effectiveZoomPercent, type PaneZoom } from '@shared/zoom/model.js'
 import { sequenceOfTabId, tabIdForSequence } from '@shared/session/tab-ids.js'
 import { INTERNAL_SCHEME } from '@shared/product.js'
@@ -93,15 +98,15 @@ export interface TabCallbacks {
    */
   onPointerMoved(tab: Tab, y: number): void
   /**
-   * A pinch or a `Ctrl`-wheel over *this* tab's page.
+   * A pinch or a `Ctrl`-wheel, reported by *this* tab's page.
    *
-   * Per tile without any work, and worth saying why: this arrives on the tab's own `webContents`, so
-   * the page that received the gesture is the page the gesture is about. The navigation gestures have
-   * a whole function for that question (`decideNavigationGesture`) only because their events reach the
-   * window carrying no position at all.
+   * The tab it arrives on is the one under the pointer, because that is the view Chromium routes
+   * wheel input to — but it is no longer necessarily the tab that zooms. A trackpad pinch applies to
+   * the focused tile instead, which is a question a tab cannot answer; the window decides through
+   * `decideZoomTarget`, using `isPinching` to tell the two gestures apart.
    *
-   * Reported rather than applied here because the step belongs to the ladder in `gestures/zoom.ts`,
-   * which both this and the menu's zoom go through so the two cannot disagree.
+   * Reported rather than applied here for that reason and one more: the step belongs to the ladder in
+   * `gestures/zoom.ts`, which both this and the menu's zoom go through so the two cannot disagree.
    */
   onZoomGesture(tab: Tab, direction: ZoomDirection): void
   /**
@@ -268,6 +273,22 @@ export class Tab {
    * four pages on screen that distinction is the difference between the feature working and not.
    */
   #lastGestureAt: number | null = null
+
+  /**
+   * Until when a zoom step from this view counts as part of a trackpad pinch.
+   *
+   * `Infinity` while the fingers are still down, a deadline once they lift (see `PINCH_GRACE_MS` for
+   * the race that needs one), and `-Infinity` — never — when no pinch has happened. One number
+   * rather than a flag and a timestamp, because "is this a pinch" then has exactly one answer and
+   * cannot be assembled wrongly from two.
+   *
+   * The state a *failure* leaves is the reason it is written this way round: if `gesturePinchBegin`
+   * never arrives on this view, this stays `-Infinity`, `isPinching` stays false, and the pinch
+   * still zooms — just the pane under the pointer rather than the focused one. The feature degrades
+   * in its routing instead of disappearing.
+   */
+  #pinchUntil = Number.NEGATIVE_INFINITY
+
   #disposers: Array<() => void> = []
 
   private readonly getSettings: () => SettingsSnapshot
@@ -367,17 +388,29 @@ export class Tab {
     on('focus', () => this.callbacks.onFocused(this))
 
     /*
-      Pinch and `Ctrl`-wheel, which on a laptop is the only zoom there is.
+      Zoom by pinch or by `Ctrl`-wheel, as the page's own preload read it.
 
-      Chromium raises this on the view under the pointer, not the focused one — the same routing it uses
-      for scrolling — so with four pages on screen the gesture lands on the page being looked at. That is
-      the behaviour asked for, and it comes free: no tile has to be worked out.
+      This used to be Electron's `zoom-changed`, and that subscription is gone rather than kept
+      alongside — `shared/gestures/zoom-gesture.ts` holds the report that led to it and the whole
+      argument, of which two lines matter here. `zoom-changed` never fired for a trackpad pinch,
+      which is the bug; and it could not see whether the page wanted the gesture for itself, which
+      is why the reading has to happen in the renderer. Two sources would mean two ladder steps per
+      notch for anyone with a mouse.
 
-      The direction is read defensively because it comes from an untyped event payload, and an unknown
-      value must do nothing rather than be treated as one of the two.
+      ## Why a message from a page can be trusted with this
+
+      It is not a page's message. A visited page has no bridge and cannot reach `ipcRenderer` (spec
+      6), and `nodeIntegrationInSubFrames` is off, so this bundle runs in the top frame only — the
+      sender is this view's own preload or nothing. The same construction as the autofill channels,
+      and for the same reason `install-autofill.ts` gives: a listener attached to a view makes the
+      sender *be* the view, so there is no sender check written by hand.
+
+      The direction is still read defensively. It crosses a process boundary, and an unknown value
+      must do nothing rather than be treated as one of the two.
     */
-    on('zoom-changed', (...args: unknown[]) => {
-      const [, direction] = args
+    on('ipc-message', (...args: unknown[]) => {
+      const [, channel, direction] = args
+      if (channel !== ZOOM_GESTURE_CHANNEL) return
       if (direction !== 'in' && direction !== 'out') return
       this.callbacks.onZoomGesture(this, direction)
     })
@@ -405,6 +438,19 @@ export class Tab {
         be a message per keystroke for a question nobody asked.
       */
       if (isFillGestureInput(input)) this.#lastGestureAt = Date.now()
+
+      /*
+        The pinch bracket, which decides *which pane* a zoom step lands on rather than whether one
+        happens — see `decideZoomTarget`.
+
+        Read here because this is the only trustworthy place it exists. The wheel events the preload
+        reports look identical whether a finger or a wheel produced them; `gesturePinchBegin` is the
+        browser process saying which, and a renderer cannot forge it any more than it can forge the
+        click above.
+      */
+      const pinch = pinchInputPhase(input)
+      if (pinch === 'begin') this.#pinchUntil = Number.POSITIVE_INFINITY
+      else if (pinch === 'end') this.#pinchUntil = Date.now() + PINCH_GRACE_MS
 
       // Gated on the setting here rather than further up: this runs per mouse move in every tile, which is
       // exactly the cost `splitView.tileBarMode: 'keyboard'` exists to remove on a machine that cannot
@@ -885,6 +931,16 @@ export class Tab {
   /** Milliseconds since the core last saw real input in this view, or `null` if it never has. */
   #sinceGesture(): number | null {
     return this.#lastGestureAt === null ? null : Date.now() - this.#lastGestureAt
+  }
+
+  /**
+   * Whether a zoom step arriving now belongs to a trackpad pinch.
+   *
+   * Read by the window to decide which pane the step lands on; see `decideZoomTarget` and
+   * `#pinchUntil` for what the two ends of the number mean.
+   */
+  get isPinching(): boolean {
+    return Date.now() <= this.#pinchUntil
   }
 
   #cancelCapture(): void {

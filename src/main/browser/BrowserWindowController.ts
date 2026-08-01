@@ -19,6 +19,7 @@ import type { LayoutChangeOptions } from './TileOccupancyController.js'
 import { chromeWindowOptions } from './window-options.js'
 import type { TileBarRequest } from '@shared/split/tile-bar.js'
 import { nextZoomPercent } from '@shared/gestures/zoom.js'
+import { decideZoomTarget } from '@shared/gestures/wheel-zoom.js'
 import type { PaneZoom } from '@shared/zoom/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
@@ -448,16 +449,35 @@ export class BrowserWindowController {
           this.requestTileBar({ invokedBy: 'pointer', tileIndex, y })
         },
         /*
-          The pane the gesture landed on zooms, whichever tile that is and whether or not it is active —
-          and only that pane, since the user reversed spec 1 on 29.07.2026. `Tab`'s zoom section carries
-          the decision and the consequence: two tiles showing one page no longer zoom together.
+          One pane zooms, and which one depends on where the hand is.
+
+          For `Ctrl`-wheel it is the pane the gesture landed on, whichever tile that is and whether or
+          not it is active — the user's reversal of spec 1 on 29.07.2026, unchanged. `Tab`'s zoom
+          section carries that decision and its consequence: two tiles showing one page no longer zoom
+          together.
+
+          For a trackpad pinch it is the **focused** tile, which was asked for afterwards and is not a
+          contradiction: on a mouse the hand is on the pointer, so the pointer names a pane; on a
+          trackpad the hand is on the pad and the pointer is wherever it was last left, so it names
+          nothing. `decideZoomTarget` holds both rules and the argument; the two are told apart by
+          `isPinching`, which reads the browser process's own gesture bracket rather than guessing
+          from the wheel deltas.
 
           Through `setZoomPercent` rather than the view's own zoom, because the view's factor is
           Chromium's per-origin state and this one is the pane's. Only this one survives a navigation
           somewhere else, and only this one reaches the session file.
         */
         onZoomGesture: (source, direction) => {
-          source.setZoomPercent(nextZoomPercent(source.zoomPercent, direction))
+          const targetId = decideZoomTarget({
+            pinch: source.isPinching,
+            senderTabId: source.id,
+            activeTabId: this.split.activeTabId()
+          })
+          // `null` is an empty focused tile, which is a pinch with nothing to apply to. Falling back
+          // to the sender would silently change which pane the gesture meant.
+          const target = targetId === null ? undefined : this.resolveTab(targetId)
+          if (target === undefined) return
+          target.setZoomPercent(nextZoomPercent(target.zoomPercent, direction))
         },
         onPageKeystroke: (source, keystroke) => this.#handlePageKeystroke(source, keystroke)
       }
