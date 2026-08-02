@@ -13,6 +13,8 @@ import {
   type SaveAnswer,
   type SaveBarChrome
 } from '@shared/passwords/wire.js'
+import { inPageCoordinates } from '@shared/zoom/injection.js'
+import { pageZoomPercent } from './page-zoom.js'
 
 /**
  * Autofill, inside the page.
@@ -222,9 +224,20 @@ function showSuggestion(anchor: HTMLInputElement, offer: FillOffer, fill: (id: s
   const surface = createSurface(SUGGESTION_HOST_ID, offer.chrome.styles)
   if (surface === null) return
 
+  /*
+    Translated out of client coordinates, for the reason the element picker's highlight is.
+
+    The list is `position: fixed` *inside* the page, and a zoomed pane is zoomed by a stylesheet on
+    `:root` — so a length written here is multiplied on the way to the screen while the rectangle it
+    came from already includes that multiplication. Untranslated, the list drifts away from its field
+    as the zoom rises, which is worst at the zoom levels somebody actually needs it at.
+  */
+  const zoom = pageZoomPercent()
   const rect = anchor.getBoundingClientRect()
-  surface.host.style.setProperty('left', `${String(Math.round(rect.left))}px`, 'important')
-  surface.host.style.setProperty('top', `${String(Math.round(rect.bottom + 4))}px`, 'important')
+  const left = Math.round(inPageCoordinates(rect.left, zoom))
+  const top = Math.round(inPageCoordinates(rect.bottom, zoom)) + 4
+  surface.host.style.setProperty('left', `${String(left)}px`, 'important')
+  surface.host.style.setProperty('top', `${String(top)}px`, 'important')
 
   const panel = document.createElement('div')
   panel.className = 'panel'

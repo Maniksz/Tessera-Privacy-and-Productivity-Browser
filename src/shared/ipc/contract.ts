@@ -519,6 +519,20 @@ export const invokeContract = {
     response: z.array(historyEntrySchema)
   },
 
+  // --- zoom ----------------------------------------------------------------
+  /**
+   * Back to following `appearance.defaultZoom`, for one pane.
+   *
+   * `ok` rather than the new percentage, although the caller is a badge that displays one. The pane's
+   * zoom travels on `TabState`, which is broadcast whenever it changes — so answering with a number
+   * here would give the toolbar two sources for one value and a moment where they disagree. The same
+   * rule every write in this contract follows: the state comes back through the state.
+   *
+   * `tabId` optional, like the navigation channels above it: absent means the active tile's tab,
+   * which is what the toolbar means.
+   */
+  'zoom:reset': { request: z.object({ tabId: z.string().optional() }), response: ok },
+
   // --- split view ----------------------------------------------------------
   'split:setLayout': {
     request: z.object({ layout: z.enum(LAYOUT_IDS) }),

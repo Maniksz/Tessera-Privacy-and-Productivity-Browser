@@ -302,3 +302,77 @@ describe('the rules already stored', () => {
     expect(list).toHaveBeenCalledTimes(1)
   })
 })
+
+/**
+ * The block's answer to the settings search box.
+ *
+ * It used to have none: `SettingsView` rendered it only while the box was empty. The argument was
+ * consistent — the search filters setting descriptors by label and key, and a block it cannot filter
+ * would sit there while everything around it disappeared — but the consequence inverted the block's
+ * whole purpose. Somebody looking for their filter rules types the word for them, and typing the word
+ * made the only screen that shows them go away. It was reported as there being no field for the rules
+ * at all, and from outside the code that is exactly what it was.
+ *
+ * So there are two ways in, and they answer different questions: *where is this feature* is matched
+ * against the heading and the explanation, and *which rule broke this site* is matched against the
+ * rules themselves. The second is the one the plain list could not do — five hundred rules is a
+ * scroll, and the one that broke a page is findable by typing its host.
+ */
+describe('searching the settings page', () => {
+  async function editorWithQuery(host: UserRulesHost, query: string): Promise<void> {
+    render(<UserRulesEditor host={host} query={query} />)
+    // Awaited on the *rules* rather than on the add button: a query that matches nothing renders no
+    // section at all, and there would be nothing to wait for.
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
+  }
+
+  it('shows the whole block when the search names the feature', async () => {
+    const { host } = harness({ rules: [rule()] })
+    await editorWithQuery(host, 'filter')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add rule' })).toBeTruthy())
+    expect(screen.getByText('example.com##.banner-ad')).toBeTruthy()
+  })
+
+  it('narrows to the rule when the search names a site', async () => {
+    const { host } = harness({
+      rules: [rule(), rule({ id: 'r2', text: 'other.test##.promo' })]
+    })
+    await editorWithQuery(host, 'other.test')
+    await waitFor(() => expect(screen.getByText('other.test##.promo')).toBeTruthy())
+    // The point of narrowing: the rule that is not being looked for is gone rather than merely below.
+    expect(screen.queryByText('example.com##.banner-ad')).toBeNull()
+  })
+
+  it('matches a rule whatever case it was typed in', async () => {
+    const { host } = harness({ rules: [rule({ text: 'Example.COM##.banner-ad' })] })
+    await editorWithQuery(host, 'example.com')
+    await waitFor(() => expect(screen.getByText('Example.COM##.banner-ad')).toBeTruthy())
+  })
+
+  it('disappears entirely when nothing here answers what was typed', async () => {
+    /*
+      Rather than a heading with an empty list under it, which would read as "you have no rules" — a
+      statement that is false and that would send somebody off to write one they already have.
+    */
+    const { host } = harness({ rules: [rule()] })
+    /*
+      Rendered with no query first and then re-rendered with one, rather than asserting an absence
+      straight away: the block renders nothing until the words arrive from the core either, so a test
+      that only looked for it to be missing would pass before the load had finished and would go on
+      passing if the search stopped working entirely.
+    */
+    const { rerender } = render(<UserRulesEditor host={host} query="" />)
+    await waitFor(() => expect(screen.getByText('My filter rules')).toBeTruthy())
+
+    rerender(<UserRulesEditor host={host} query="proxy" />)
+    expect(screen.queryByText('My filter rules')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add rule' })).toBeNull()
+  })
+
+  it('is there in full when nothing is being searched for', async () => {
+    const { host } = harness({ rules: [rule()] })
+    await editorWithQuery(host, '   ')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add rule' })).toBeTruthy())
+    expect(screen.getByText('example.com##.banner-ad')).toBeTruthy()
+  })
+})

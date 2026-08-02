@@ -560,6 +560,18 @@ export function registerIpcHandlers(deps: {
     return { url: url ?? '' }
   })
 
+  // --- zoom ------------------------------------------------------------------
+  /*
+    The same call the View menu's Reset Zoom makes, from the toolbar badge.
+
+    `resetZoom` rather than setting the number `appearance.defaultZoom` holds right now: reset puts a
+    pane back to *following* the setting, which is a state a percentage cannot express. See `PaneZoom`.
+  */
+  handle('zoom:reset', ({ tabId }, event) => {
+    windows.resolve(event)?.resolveTab(tabId)?.resetZoom()
+    return OK
+  })
+
   handle('nav:getBackForwardList', ({ tabId }, event) => {
     const tab = windows.resolve(event)?.resolveTab(tabId)
     if (!tab || tab.view.webContents.isDestroyed()) return []

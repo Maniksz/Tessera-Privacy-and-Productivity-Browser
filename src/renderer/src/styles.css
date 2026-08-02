@@ -374,6 +374,23 @@ body {
   stroke-linejoin: round;
 }
 
+/*
+  The zoom badge: a percentage where every neighbour is a 20px drawing.
+
+  `width: auto` with a floor rather than a fixed size, because "90 %" and "300 %" are different
+  widths and a fixed one would either clip the long value or leave a gap beside the short one. Tabular
+  figures so the badge does not twitch sideways while somebody pinches through the stops.
+*/
+.iconbutton--zoom {
+  width: auto;
+  min-width: 32px;
+  padding: 0 7px;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* The layout button carries a preview plus a caret, so it needs a little more room. */
 .iconbutton--wide {
   width: auto;

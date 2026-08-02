@@ -209,6 +209,15 @@ export default defineConfig({
         */
         'src/shared/ui/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/gestures/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          Both halves of zoom: what a pane's value means, and the stylesheet that now carries it.
+
+          Listed the moment the second file appeared, which is what the paragraph above asks for. It
+          matters more here than the count suggests: `injection.ts` is imported by the *preload*, whose
+          own code cannot be unit-tested at all, so these functions are the only part of per-pane zoom
+          a test can reach. A gap here is a gap in the whole feature.
+        */
+        'src/shared/zoom/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/overlay/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/filters/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/favicons/**': { lines: 100, functions: 100, branches: 100, statements: 100 },

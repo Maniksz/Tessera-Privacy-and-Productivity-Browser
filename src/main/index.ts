@@ -530,10 +530,6 @@ async function main(): Promise<void> {
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
     userRules: () => userRules?.enabledText() ?? ''
   })
-  // A rule added or switched off has to apply without a restart, and only the user's own half is
-  // recompiled — the downloaded lists are left alone.
-  userRules.onChange(() => filterSubscription.reloadUserRules())
-
   /*
     The two halves of a filter list that act on the page rather than on the network.
 
@@ -548,13 +544,33 @@ async function main(): Promise<void> {
     written into the page's stylesheet as if they were selectors, where each one invalidated the whole
     CSS rule it was joined into. See `shared/filters/selector-safety.ts`.
   */
-  new CosmeticInjector({
+  const cosmeticInjector = new CosmeticInjector({
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
     stylesFor: (documentUrl) => filterSubscription.engine.cosmeticStylesFor(documentUrl),
     openFeed: (documentUrl) => filterSubscription.engine.openCosmeticFeed(documentUrl),
     scriptletsFor: (documentUrl) => filterSubscription.engine.scriptletsFor(documentUrl),
     proceduralFor: (documentUrl) => filterSubscription.engine.proceduralSelectorsFor(documentUrl)
-  }).install()
+  })
+  cosmeticInjector.install()
+
+  /*
+    The two halves of "a rule the user just wrote takes effect".
+
+    Recompiling was the half that existed, and on its own it only ever reached the *next* page load:
+    the engine knew about the rule and no open document was ever told, so the element picker looked
+    broken — you pointed at a banner and the banner stayed. `refresh` is the other half, and the order
+    of these two lines is the requirement rather than the reading order: it re-serves from the engine
+    that the line above has just rebuilt.
+
+    Only the user's own rules are recompiled here; the downloaded lists are left alone. Registered
+    after the injector exists rather than beside the store, which is where it used to sit — a
+    subscription that reaches forward to a variable declared below it is a load-order bug waiting for
+    somebody to make this function eager.
+  */
+  userRules.onChange(() => {
+    filterSubscription.reloadUserRules()
+    cosmeticInjector.refresh()
+  })
 
   /*
     The element picker, which is the "and I want to block things myself, like uBlock Origin" half.

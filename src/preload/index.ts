@@ -25,6 +25,7 @@ import { installCosmeticFiltering } from './cosmetic.js'
 import { installElementPicker } from './picker.js'
 import { installAutofill } from './autofill.js'
 import { installZoomGesture } from './zoom.js'
+import { installPageZoom } from './page-zoom.js'
 
 /**
  * The preload for tab views: everything a *document* gets, and nothing the browser's own interface
@@ -230,6 +231,16 @@ if (role === 'content') {
     First, and cheaply — one listener, no message until something is actually zoomed.
   */
   installZoomGesture()
+  /*
+    And the zoom itself, which is now this side's job too.
+
+    Above the internal-page line for the same reason the gesture is: the settings screen and the start
+    page are zoomed with the same fingers as everything else. It has to run before the masking and the
+    filtering below rather than after, because it is the only one of them with a *paint* deadline —
+    the page is about to be drawn, and drawing it at the wrong size and then correcting is the flash
+    this whole ordering exists to avoid.
+  */
+  installPageZoom()
 }
 
 if (role === 'content' && internalPage === null) {

@@ -113,6 +113,12 @@ export const en = {
   'toolbar.settings': 'Settings',
   'toolbar.extensions': 'Extensions',
   'toolbar.menu': 'Main menu',
+  /*
+    The badge's own text, in the catalogue rather than built in the component, because where the space
+    before `%` goes is a language's business: German writes `150 %` and English writes `150%`.
+  */
+  'toolbar.zoomLevel': '{percent}%',
+  'toolbar.zoomReset': 'Reset zoom',
 
   // address bar
   'omnibox.placeholder': 'Search or enter address',

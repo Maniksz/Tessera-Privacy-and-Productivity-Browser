@@ -14,18 +14,21 @@
  * a kindness and it is the domain register again, kept invisibly — the exact thing being abolished.
  * A new pane starts at the setting.
  *
- * ## The one part Chromium will not give us
+ * ## The part Chromium would not give us, and what was done about it
  *
- * Its zoom is same-origin per session — `webContents.setZoomLevel` says so in as many words — so
- * while two panes are showing the *same host* they still share the live factor, and the last one
- * zoomed wins. What is genuinely per pane is the value stored here: it survives a navigation, it is
- * written to the session, and `Tab` re-asserts it at every commit, so navigating either of those
- * two panes anywhere sends it straight back to its own zoom.
+ * For a while only the *value* here was per pane. The rendering was not: `setZoomFactor` writes into
+ * a zoom map Chromium keys by origin and shares across the session, so two panes showing the same
+ * host tracked each other and the last one zoomed won. Reported, in exactly those words — *"der zoom
+ * gilt pro domain, nicht pro kachel"*.
  *
- * Making even the live case independent needs Chromium's isolated zoom mode, which Electron does
- * not expose. The other route — zooming from the content preload with `webFrame` — would mean
- * handing a visited page a bridge it must not have (spec 6), and carries the same same-origin note
- * anyway. Worth knowing rather than discovering.
+ * Chromium's isolated zoom mode would have fixed it and Electron 43 does not expose it. So zoom moved
+ * off the view and onto the document: the content preload inserts a stylesheet that puts `zoom` on
+ * the page's root element, which is per document by construction and touches no shared map.
+ * `shared/zoom/injection.ts` holds that decision, what it costs — media queries and viewport units do
+ * not move with it — and why the preload channel is not a bridge (spec 6).
+ *
+ * Nothing in *this* file changed when that happened, which is the point of it having been separated
+ * out: the clamp, the fallback and the sentinel are the same rules whoever applies them.
  *
  * ## Why zoom needed a file at all
  *

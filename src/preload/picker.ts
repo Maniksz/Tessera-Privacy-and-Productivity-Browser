@@ -10,6 +10,8 @@ import {
   type PickerChrome
 } from '@shared/filters/picker-wire.js'
 import type { SelectorProposal } from '@shared/filters/picker.js'
+import { inPageCoordinates } from '@shared/zoom/injection.js'
+import { pageZoomPercent } from './page-zoom.js'
 
 /**
  * "Block this element", inside the page.
@@ -145,10 +147,21 @@ function start(chrome: PickerChrome): void {
 
   const show = (target: Element): void => {
     const rect = target.getBoundingClientRect()
-    ui.box.style.left = `${String(rect.left)}px`
-    ui.box.style.top = `${String(rect.top)}px`
-    ui.box.style.width = `${String(rect.width)}px`
-    ui.box.style.height = `${String(rect.height)}px`
+    /*
+      Translated out of client coordinates, because the highlight lives inside the page it highlights.
+
+      A zoomed pane is zoomed by a stylesheet on `:root` now — `shared/zoom/injection.ts` says why —
+      so every length written into this box is multiplied on the way to the screen, while the
+      rectangle it came from already includes that multiplication. Written back unchanged, the
+      highlight drifts further from its element the more the user has zoomed, which reads as the
+      picker being broken. `inPageCoordinates` is the one place that arithmetic is explained.
+    */
+    const zoom = pageZoomPercent()
+    const inPage = (value: number): string => String(inPageCoordinates(value, zoom))
+    ui.box.style.left = `${inPage(rect.left)}px`
+    ui.box.style.top = `${inPage(rect.top)}px`
+    ui.box.style.width = `${inPage(rect.width)}px`
+    ui.box.style.height = `${inPage(rect.height)}px`
 
     proposal = describe(target)
     if (proposal === null) {

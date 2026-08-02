@@ -190,7 +190,9 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
   */
   const channelCaveat = useMemo(() => {
     if (settings?.['updates.channel'] !== 'stable') return null
-    return descriptors.find((descriptor) => descriptor.key === 'updates.channel')?.description ?? null
+    return (
+      descriptors.find((descriptor) => descriptor.key === 'updates.channel')?.description ?? null
+    )
   }, [descriptors, settings])
 
   const visible = useMemo(() => {
@@ -457,17 +459,20 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
         )}
 
         {/*
-          The user's own filter rules, after the generated sections and hidden while a search is running.
+          The user's own filter rules, after the generated sections and taking part in the search.
 
           After, because it is the one block here that is not a settings row: the rules have no default to
-          reset to and no descriptor, so putting them among the sections would mean a section the search box
-          cannot filter sitting between nine that it can.
+          reset to and no descriptor, so putting them among the sections would mean a section built by hand
+          sitting between nine that are generated.
 
-          Hidden during a search for the same reason. The box filters descriptors by label and key; a block
-          it cannot filter would stay put while everything around it disappeared, which reads as the search
-          having failed rather than as the block being exempt.
+          It used to be *hidden* whenever the box had anything in it, on the argument that a block the
+          search cannot filter must not stay put while everything around it disappears. That was the wrong
+          half of the problem: somebody looking for their filter rules types the word for them, and typing
+          it made the only screen that shows them vanish — which is how a screen that exists gets reported
+          as missing. So the query goes in instead and the block answers it; `UserRulesEditor` has the
+          words to match against and this file does not.
         */}
-        {query.trim() === '' && <UserRulesEditor host={host.userRules} />}
+        <UserRulesEditor host={host.userRules} query={query} />
       </div>
     </div>
   )

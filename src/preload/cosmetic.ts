@@ -35,9 +35,27 @@ import type { DocumentFeatures } from '@shared/filters/features.js'
  * Appending would leave a page with dozens of `<style>` elements after a busy minute — visible in the
  * inspector, and a hint to a site that something is filtering it. One element whose text grows keeps
  * both the count and the shape constant.
+ *
+ * ## Why the host-specific rules are a second element, and this one is *replaced*
+ *
+ * They used to share the growing element, and that was the reason a rule the user had just written did
+ * nothing until the page was reloaded. Reported as *"blocked elemente sind nicht blocked"*: the element
+ * picker stored the rule and the engine recompiled it, and the document in front of the user — the one
+ * they had just pointed at — was never told. Nothing in the browser could tell it, because the only way
+ * host-specific rules ever arrived was a synchronous question asked once, before the page existed.
+ *
+ * So the core can now push them as well, and a push has to *replace* rather than append: the answer is
+ * the complete set of host rules for this document, so appending a second copy on every change would
+ * grow the sheet without bound and — worse — would make a rule the user *deleted* impossible to undo,
+ * because the text that hid the element would still be there. Replacement is what makes deleting a rule
+ * — or switching one off — take effect in front of the person doing it.
  */
 
+/** The growing one: generic selectors, in instalments, each only what is new. */
 const STYLE_ELEMENT_ID = 'tessera-cosmetic'
+
+/** The replaced one: this host's rules, complete on every answer. See the docblock. */
+const SPECIFIC_STYLE_ELEMENT_ID = 'tessera-cosmetic-host'
 
 /** How long a mutation burst is allowed to settle before the page is surveyed again. */
 const SURVEY_DEBOUNCE_MS = 250
@@ -75,8 +93,8 @@ const earlyDocument = document as Omit<Document, 'head' | 'documentElement'> & {
   documentElement: HTMLElement | null
 }
 
-function styleElement(): HTMLStyleElement | null {
-  const existing = document.getElementById(STYLE_ELEMENT_ID)
+function styleElement(id: string): HTMLStyleElement | null {
+  const existing = document.getElementById(id)
   if (existing instanceof HTMLStyleElement) return existing
 
   // No `<head>` yet means putting the sheet in `documentElement`, where it applies just as well. The
@@ -85,26 +103,75 @@ function styleElement(): HTMLStyleElement | null {
   if (parent === null) return null
 
   const created = document.createElement('style')
-  created.id = STYLE_ELEMENT_ID
+  created.id = id
   parent.appendChild(created)
   return created
 }
 
 function appendStyles(css: string): void {
-  const element = styleElement()
+  const element = styleElement(STYLE_ELEMENT_ID)
   if (element === null) return
   element.textContent = `${element.textContent}\n${css}`
 }
 
 /**
- * The host-specific rules, before anything else runs.
+ * The host's rules, as the whole of them, replacing whatever was there.
  *
- * Synchronous on purpose, and it is the one place in this file that blocks: `document-start` is the
- * last moment before the page's own scripts, and an awaited answer arrives after them — which the user
- * sees as the advert appearing and then vanishing. The cost is one round trip on a channel the core
- * answers from an in-memory index.
+ * Answers whether it managed it, which the caller needs rather than ignores: at `document-start` there
+ * may be no `<html>` to put a sheet in, and a silent failure there is the worst kind — the rules were
+ * computed, sent, and simply never applied, with nothing anywhere reporting it. See
+ * `installSpecificStyles` for what it does with a `false`.
+ */
+function replaceSpecificStyles(css: string): boolean {
+  const element = styleElement(SPECIFIC_STYLE_ELEMENT_ID)
+  if (element === null) return false
+  element.textContent = css
+  return true
+}
+
+/**
+ * The host-specific rules: asked for before anything else runs, and re-served whenever they change.
+ *
+ * ## Why the question is synchronous
+ *
+ * It is the one place in this file that blocks. `document-start` is the last moment before the page's
+ * own scripts, and an awaited answer arrives after them — which the user sees as the advert appearing
+ * and then vanishing. The cost is one round trip on a channel the core answers from an in-memory index.
+ *
+ * ## Why there is also a listener on the same channel
+ *
+ * Because the answer can change while the document is open, and until it could be re-served it did not:
+ * a rule written by the element picker took effect on the *next* page load, which reads as the picker
+ * not working. The core pushes the complete set on the same channel; `replaceSpecificStyles` is what
+ * makes a re-send safe, and the file docblock argues why replacement rather than appending.
+ *
+ * ## Why a failed first write is retried
+ *
+ * `styleElement` needs somewhere to put the sheet, and at `document-start` there may be no `<html>`
+ * yet. That is a real timing on a slow first byte, and the failure is invisible — the rules arrive and
+ * are dropped. One retry when the DOM exists costs a listener that is never installed on the common
+ * path, and turns "sometimes this site is not filtered and nobody can say why" into a flicker.
  */
 function installSpecificStyles(): void {
+  /*
+    The rules as last heard, written through one function.
+
+    Held rather than passed to the retry below, and that is the whole reason this is a variable: a
+    retry that closed over the *first* answer would undo a rule the user wrote in the meantime, which
+    is the one thing this change exists to make impossible.
+  */
+  let latest = ''
+  const write = (): boolean => replaceSpecificStyles(latest)
+
+  ipcRenderer.on(COSMETIC_SPECIFIC_CHANNEL, (_event, payload: unknown) => {
+    // Not `asCosmeticStyles`: that reads the empty string as "nothing to add", and here it is the
+    // opposite — it is the core saying this document has no host rules *any more*, which is how a
+    // rule the user deleted stops applying to the page they deleted it on.
+    if (typeof payload !== 'string') return
+    latest = payload
+    write()
+  })
+
   let answer: unknown
   try {
     answer = ipcRenderer.sendSync(COSMETIC_SPECIFIC_CHANNEL, documentUrl())
@@ -114,7 +181,11 @@ function installSpecificStyles(): void {
     return
   }
   const css = asCosmeticStyles(answer)
-  if (css !== null) appendStyles(css)
+  if (css === null) return
+  latest = css
+  if (write()) return
+
+  document.addEventListener('DOMContentLoaded', write, { once: true })
 }
 
 /**

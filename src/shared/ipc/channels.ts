@@ -165,6 +165,16 @@ export const INVOKE_CHANNELS = [
   'nav:navigate',
   'nav:getBackForwardList',
   /*
+    Reset Zoom, from the toolbar rather than from the menu.
+
+    The only zoom channel, and deliberately the only one: stepping in and out already has a menu item,
+    an accelerator and two gestures, all of which go through `nextZoomPercent`. What had no way in at
+    all was the way *back* — reported as "es gibt keinen zoom reset button" — and reset is the one
+    operation a keyboard shortcut cannot advertise, because nothing on screen says a pane is zoomed
+    until something shows the percentage.
+  */
+  'zoom:reset',
+  /*
     Find in page, for the tile the bar was opened over.
 
     Chrome-only and on no internal page's allowlist: a page that could reach these could search — and

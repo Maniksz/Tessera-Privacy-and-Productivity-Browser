@@ -72,6 +72,15 @@ export interface CosmeticInjectorOptions {
 interface OpenDocument {
   readonly url: string
   readonly feed: CosmeticFeedHandle
+  /**
+   * The view itself, so the rules can be re-served without being asked for.
+   *
+   * Held rather than looked up by id at the moment of use, and it costs nothing: the entry is deleted
+   * on `destroyed` either way, so this reference lives exactly as long as the one the map key stood
+   * for. `webContents.fromId` would be the alternative and it can answer a *different* view — ids are
+   * reused once a renderer is gone — which is a re-serve landing on somebody else's page.
+   */
+  readonly contents: WebContents
 }
 
 export class CosmeticInjector {
@@ -133,13 +142,54 @@ export class CosmeticInjector {
     this.#documents.delete(webContentsId)
   }
 
+  /**
+   * Re-serves every open document, because the rules changed under it.
+   *
+   * ## The bug this is
+   *
+   * Host-specific rules were served exactly once, synchronously, before the page existed — so a rule
+   * written *now* applied to the next page load and not to the page in front of the person who wrote
+   * it. With the element picker that is the whole feature failing: you point at a banner, confirm the
+   * selector, and the banner is still there. Reported in those words — *"blocked elemente sind nicht
+   * blocked"*.
+   *
+   * Called when the user's own rules change. Not when a downloaded list is recompiled: that happens on
+   * a timer and at startup, where nobody is watching a particular element and every open page would be
+   * restyled at once for no visible gain.
+   *
+   * ## What it can and cannot undo
+   *
+   * The stylesheet is *replaced* on the other side, so this un-hides as well as hides: a rule deleted
+   * or switched off stops applying in front of the person who switched it off, which is the half that
+   * makes an over-eager rule recoverable. An empty string is therefore sent rather than skipped — it is
+   * the instruction to stop hiding, and skipping it would leave the last stylesheet in place.
+   *
+   * It would carry a blocker switched off or a site exempted just as well, and nothing calls it for
+   * either today: both are settings, and a settings change already restyles differently. Worth knowing
+   * before somebody adds a second mechanism for it.
+   *
+   * The procedural half is one-way. It is re-sent so a `:has-text()` rule starts applying immediately,
+   * but a procedural rule that has already hidden something cannot be taken back without a reload:
+   * the matcher wrote `display: none` onto an element, and the core does not know which one.
+   */
+  refresh(): void {
+    for (const open of this.#documents.values()) {
+      const { contents } = open
+      if (contents.isDestroyed()) continue
+      contents.send(COSMETIC_SPECIFIC_CHANNEL, this.#specificStyles(contents, open.url) ?? '')
+      const selectors = this.#procedural(contents, open.url)
+      if (selectors.length > 0) contents.send(PROCEDURAL_CHANNEL, selectors)
+    }
+  }
+
   #specificStyles(contents: WebContents, reportedUrl: unknown): string | null {
     if (!this.#enabled()) return null
     const url = injectableDocumentUrl(reportedUrl, contents.getURL())
     if (url === null || this.#exempt(url)) return null
     // Opened here as well as in the generic path, so the very first request establishes the document
-    // and a later generic report for the same page continues rather than restarts.
-    this.#documentFor(contents.id, url)
+    // and a later generic report for the same page continues rather than restarts. It is also what
+    // puts the view in the map at all, which is what `refresh` walks.
+    this.#documentFor(contents, url)
     return this.#options.stylesFor(url)
   }
 
@@ -179,11 +229,15 @@ export class CosmeticInjector {
     return this.#options.proceduralFor(url)
   }
 
-  #genericStyles(contents: WebContents, reportedUrl: unknown, reportedFeatures: unknown): string | null {
+  #genericStyles(
+    contents: WebContents,
+    reportedUrl: unknown,
+    reportedFeatures: unknown
+  ): string | null {
     if (!this.#enabled()) return null
     const url = injectableDocumentUrl(reportedUrl, contents.getURL())
     if (url === null || this.#exempt(url)) return null
-    return this.#documentFor(contents.id, url).feed.take(asDocumentFeatures(reportedFeatures))
+    return this.#documentFor(contents, url).feed.take(asDocumentFeatures(reportedFeatures))
   }
 
   /**
@@ -198,14 +252,17 @@ export class CosmeticInjector {
    * synchronous: the preload appends nothing for `null` and would append an empty rule otherwise.
    */
   #exempt(documentUrl: string): boolean {
-    return filteringExemptFor(documentUrl, this.#options.getSettings()['privacy.blockerOffForSites'])
+    return filteringExemptFor(
+      documentUrl,
+      this.#options.getSettings()['privacy.blockerOffForSites']
+    )
   }
 
-  #documentFor(webContentsId: number, url: string): OpenDocument {
-    const open = this.#documents.get(webContentsId)
+  #documentFor(contents: WebContents, url: string): OpenDocument {
+    const open = this.#documents.get(contents.id)
     if (open?.url === url) return open
-    const fresh: OpenDocument = { url, feed: this.#options.openFeed(url) }
-    this.#documents.set(webContentsId, fresh)
+    const fresh: OpenDocument = { url, feed: this.#options.openFeed(url), contents }
+    this.#documents.set(contents.id, fresh)
     return fresh
   }
 

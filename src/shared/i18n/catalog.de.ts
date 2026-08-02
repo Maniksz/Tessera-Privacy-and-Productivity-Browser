@@ -103,6 +103,9 @@ export const de = {
   'toolbar.settings': 'Einstellungen',
   'toolbar.extensions': 'Erweiterungen',
   'toolbar.menu': 'Hauptmenü',
+  // Mit Leerzeichen vor dem Prozentzeichen — anders als im Englischen.
+  'toolbar.zoomLevel': '{percent} %',
+  'toolbar.zoomReset': 'Zoom zurücksetzen',
 
   'omnibox.placeholder': 'Suchen oder Adresse eingeben',
   'omnibox.searchWith': 'Mit {engine} suchen',

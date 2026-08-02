@@ -53,7 +53,20 @@ export interface UserRulesHost {
   remove(id: string): Promise<void>
 }
 
-export function UserRulesEditor({ host }: { host: UserRulesHost }): React.ReactNode {
+export function UserRulesEditor({
+  host,
+  query = ''
+}: {
+  host: UserRulesHost
+  /**
+   * What the settings page's search box currently holds.
+   *
+   * Optional, and the default is what "nobody is searching" means — which is also what a test that
+   * only cares about the rules gets. See `matchesSearch` below for why this block takes part in the
+   * search at all rather than being hidden while one runs.
+   */
+  query?: string
+}): React.ReactNode {
   const [rules, setRules] = useState<EditableUserRule[]>([])
   const [text, setText] = useState<Record<string, string>>({})
   const [draft, setDraft] = useState('')
@@ -145,6 +158,38 @@ export function UserRulesEditor({ host }: { host: UserRulesHost }): React.ReactN
     )
   }
 
+  /*
+    The search, and the reason this block is in it at all.
+
+    It used to be *hidden* whenever the box had anything in it. The argument was consistent — the box
+    filters descriptors by label and key, and a block it cannot filter would sit there while everything
+    around it disappeared — but the consequence was the opposite of what the block is for: a person
+    looking for their filter rules types "Regeln", and typing the word makes the only screen that shows
+    them go away. Reported as there being no field for the rules at all, which from the outside it was.
+
+    So it answers the search instead. Two ways in, because they are two different questions:
+
+      - The **heading and the explanation** match, which is somebody looking for the feature. Then the
+        whole block appears, rules and all.
+      - A **rule's own text** matches, which is somebody looking for one rule — almost always by the
+        site it broke. Then the list narrows to it, which is the thing the whole list could not do:
+        five hundred rules is a scroll, and the rule that broke a page is findable by typing its host.
+
+    Matched on the words the *core* sent rather than on a keyword list kept here, so the German
+    interface answers German searches without a second table to forget to translate.
+  */
+  const term = query.trim().toLowerCase()
+  const matchesSearch =
+    term === '' ||
+    word('heading').toLowerCase().includes(term) ||
+    word('hint').toLowerCase().includes(term)
+  const shown = matchesSearch
+    ? rules
+    : rules.filter((rule) => rule.text.toLowerCase().includes(term))
+  // Nothing here answers what was typed: leave the results to the sections that do, rather than
+  // showing a heading with an empty list under it, which reads as "you have no rules".
+  if (!matchesSearch && shown.length === 0) return null
+
   return (
     <section className="panel__section userrules">
       <h3 className="panel__sectionTitle">{word('heading')}</h3>
@@ -200,11 +245,11 @@ export function UserRulesEditor({ host }: { host: UserRulesHost }): React.ReactN
         </p>
       )}
 
-      {rules.length === 0 ? (
+      {shown.length === 0 ? (
         <p className="panel__empty">{word('empty')}</p>
       ) : (
         <ul className="userrules__list">
-          {rules.map((rule) => (
+          {shown.map((rule) => (
             <li className="userrules__rule" key={rule.id}>
               <input
                 type="checkbox"

@@ -2,6 +2,7 @@ import type { SplitState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { ShortcutTitle } from '@shared/shortcuts/format.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
+import { effectiveZoomPercent } from '@shared/zoom/model.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import { LayoutMenu } from './LayoutMenu.js'
@@ -51,6 +52,37 @@ export function Toolbar({
   // Named once because it is the accessible name *and* the first line of the tooltip, and the two
   // drifting apart would mean a screen reader and a tooltip describing different buttons.
   const maximizeLabel = t(maximized ? 'split.restore' : 'split.maximize')
+
+  /*
+    This pane's zoom, shown only while it is not the ordinary size.
+
+    Two things had to be true before a Reset Zoom button was worth adding, and only one of them was.
+    The command existed — the View menu and `Ctrl+0` — but nothing on screen ever said a pane *was*
+    zoomed, so the way back was a shortcut you had to already know. Reported as "es gibt keinen zoom
+    reset button", and the badge is the more important half of the answer: it is the only thing that
+    makes an accidental pinch on a trackpad recoverable by looking rather than by remembering.
+
+    Measured against `appearance.defaultZoom` rather than against 100, because that setting is what
+    "ordinary" means on this profile — a person who set it to 125 does not want a badge on every pane.
+    Both sides go through `effectiveZoomPercent` so the comparison happens after the same clamp; a
+    setting outside the range would otherwise never equal the value the pane is actually showing, and
+    the badge would be permanent.
+
+    Hidden rather than disabled when there is nothing to reset. A disabled control is a promise that it
+    will do something under other circumstances, and this one would be lying: at the default zoom the
+    reset is a no-op.
+  */
+  const defaultZoom = settings?.['appearance.defaultZoom'] ?? null
+  const paneZoom =
+    tab === undefined || defaultZoom === null
+      ? null
+      : effectiveZoomPercent(tab.zoomPercent, defaultZoom)
+  const zoomBadge =
+    paneZoom === null ||
+    defaultZoom === null ||
+    paneZoom === effectiveZoomPercent(null, defaultZoom)
+      ? null
+      : t('toolbar.zoomLevel', { percent: paneZoom })
 
   return (
     <div className="toolbar">
@@ -128,6 +160,25 @@ export function Toolbar({
       <Omnibox tab={tab} settings={settings} privateMode={privateMode} focusRequest={focusRequest} />
 
       <div className="toolbar__actions">
+        {/*
+          Text rather than an icon, because the number *is* the information: a magnifying glass would
+          say "zoom" to somebody who can already see the page is the wrong size, and say nothing about
+          how far off it is or which way.
+        */}
+        {zoomBadge !== null && (
+          <button
+            type="button"
+            className="iconbutton iconbutton--zoom"
+            // The level in the accessible name as well as on the face: a screen reader user gets
+            // "Reset zoom: 150%" rather than a button whose only clue is a number they cannot see.
+            aria-label={`${t('toolbar.zoomReset')}: ${zoomBadge}`}
+            title={titleWithShortcut(t('toolbar.zoomReset'), 'zoomReset')}
+            onClick={() => void invoke('zoom:reset', {})}
+          >
+            {zoomBadge}
+          </button>
+        )}
+
         <LayoutMenu current={split?.layout ?? '1x1'} open={layoutMenuOpen} />
 
         {/* Only meaningful once more than one tile exists. */}
