@@ -47,35 +47,48 @@ export function pageZoomPercent(): number {
   return percent
 }
 
+/**
+ * Puts the current percentage on the document: new sheet in, old sheet out, in that order.
+ *
+ * ## Why the insertion comes first
+ *
+ * Two reasons, and the second is the one that was learned the hard way.
+ *
+ * There is no frame between the two states — remove-then-insert leaves a moment with no rule at all,
+ * which on a slow pass is a page flashing back to its unzoomed size on every step of a pinch.
+ *
+ * And the removal is no longer what correctness rests on. It used to be: 100 % was *the absence of a
+ * sheet*, so returning to it meant removing one, and when that did not happen the page stayed zoomed
+ * with no way back — the report that led to this. Every value is a rule now (`zoomCss`), so the
+ * newest insertion wins on cascade order regardless, and this call is housekeeping: it keeps one
+ * sheet on the document instead of one per zoom step.
+ *
+ * ## Why the author origin
+ *
+ * `cssOrigin: 'user'` was tried, on the argument that a browser's own declaration outranks a site's
+ * `!important` there. It is the sharper cascade position and it is off the documented path — the
+ * pair Electron documents is `insertCSS` and `removeInsertedCSS`, and a stylesheet that goes in
+ * somewhere its partner does not look for it is a stylesheet that cannot be taken out. `!important`
+ * in the author origin loses only to a page that writes `zoom` on its own root with `!important`,
+ * which is a page fighting the browser's zoom for a living.
+ */
 function apply(): void {
-  if (insertedKey !== null) {
-    try {
-      webFrame.removeInsertedCSS(insertedKey)
-    } catch {
-      // The document went, or the key belongs to one that did. Nothing to remove and nothing to fix.
-    }
-    insertedKey = null
-  }
-
-  const css = zoomCss(percent)
-  // Nothing inserted at 100 %, which is what makes the default leave no trace: `zoom` reads back as
-  // the page left it, rather than as a rule of ours that happens to be a no-op.
-  if (css === '') return
+  const previous = insertedKey
 
   try {
-    /*
-      The user cascade origin, which is where a *browser's* own declaration belongs.
-
-      With `!important`, a user-origin declaration outranks an author-origin `!important` one — that is
-      the one place in the cascade where the user wins outright, and it exists for exactly this: a
-      preference the person has expressed about how they want to see the page. In the author origin,
-      a site with `html { zoom: 1 !important }` would silently pin the pane at 100 % and nothing in
-      the browser would say why.
-    */
-    insertedKey = webFrame.insertCSS(css, { cssOrigin: 'user' })
+    insertedKey = webFrame.insertCSS(zoomCss(percent))
   } catch {
-    // No frame to style. The page renders unzoomed, which is wrong but visible and recoverable —
-    // the next push re-tries.
+    // No frame to style. The page renders at whatever it had, which is wrong but visible and
+    // recoverable — the next push re-tries, and the pane's own value is unchanged in the core.
+    return
+  }
+
+  if (previous === null) return
+  try {
+    webFrame.removeInsertedCSS(previous)
+  } catch {
+    // Housekeeping that did not happen. The rule just inserted still wins, so this costs a stylesheet
+    // on the document and nothing the user can see.
   }
 }
 

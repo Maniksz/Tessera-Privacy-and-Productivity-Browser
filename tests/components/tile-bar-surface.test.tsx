@@ -60,6 +60,8 @@ function presentation(overrides: Partial<TileBarPresentation> = {}): TileBarPres
     canGoBack: true,
     canGoForward: true,
     loading: false,
+    zoomPercent: 100,
+    zoomed: false,
     invokedBy: 'pointer',
     ...overrides
   }
@@ -261,7 +263,10 @@ describe('the keyboard route', () => {
       exactly as they were, and this only says more about what lies between them.
     */
     screen.getByRole('button', { name: /back/i }).focus()
-    for (const name of [/forward/i, /reload/i, /home/i, /maximize/i]) {
+    // The zoom cluster sits between maximise and the address field: out, the level, in. Its level
+    // button is disabled at the default zoom this fixture uses, so it is not a stop — which is the
+    // same rule the disabled back button is held to two tests down.
+    for (const name of [/forward/i, /reload/i, /home/i, /maximize/i, /zoom out/i, /zoom in/i]) {
       fireEvent.keyDown(document.activeElement!, { key: 'Tab' })
       expect(document.activeElement).toBe(screen.getByRole('button', { name }))
     }

@@ -139,6 +139,17 @@ export interface TileBarTab {
   canGoBack: boolean
   canGoForward: boolean
   loading: boolean
+  /**
+   * What this pane is showing at, with `appearance.defaultZoom` already substituted for a pane that
+   * has never been zoomed.
+   *
+   * Resolved in the core rather than sent as the nullable `PaneZoom`, because the bar has to *print*
+   * it and the sentinel is not printable. `zoomed` below is what the `null` becomes: the two together
+   * carry everything the surface needs and neither needs the settings.
+   */
+  zoomPercent: number
+  /** Whether that differs from the setting — which is the same as "reset would change something". */
+  zoomed: boolean
 }
 
 /**
@@ -180,6 +191,8 @@ export function tileBarPresentation(input: {
     canGoBack: tab.canGoBack,
     canGoForward: tab.canGoForward,
     loading: tab.loading,
+    zoomPercent: tab.zoomPercent,
+    zoomed: tab.zoomed,
     invokedBy: input.invokedBy
   }
 }
@@ -261,6 +274,15 @@ function sameTileBar(a: TileBarPresentation, b: TileBarPresentation): boolean {
     a.canGoBack === b.canGoBack &&
     a.canGoForward === b.canGoForward &&
     a.loading === b.loading &&
+    /*
+      Both, and `zoomed` is not implied by the percentage.
+
+      A pane deliberately set to the same value the setting holds prints the same number as a pane
+      nobody has touched, and only one of them has a reset to offer. Comparing the number alone would
+      leave the reset button in the state it was drawn in when that distinction changed.
+    */
+    a.zoomPercent === b.zoomPercent &&
+    a.zoomed === b.zoomed &&
     a.bounds.x === b.bounds.x &&
     a.bounds.y === b.bounds.y &&
     a.bounds.width === b.bounds.width &&

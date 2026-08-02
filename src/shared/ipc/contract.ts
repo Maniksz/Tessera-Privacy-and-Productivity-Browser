@@ -170,6 +170,10 @@ const overlayPresentationSchema = z.discriminatedUnion('kind', [
     canGoForward: z.boolean(),
     /** Turns the reload button into stop, exactly as the toolbar's does. */
     loading: z.boolean(),
+    /** Already resolved against `appearance.defaultZoom`, so the bar can print it. */
+    zoomPercent: z.number().int(),
+    /** Whether the pane holds a zoom of its own, which is what Reset has to act on. */
+    zoomed: z.boolean(),
     /** Keyboard invocation moves focus into the bar; a hover must not steal the caret. */
     invokedBy: z.enum(['pointer', 'keyboard'])
   }),
@@ -532,6 +536,17 @@ export const invokeContract = {
    * which is what the toolbar means.
    */
   'zoom:reset': { request: z.object({ tabId: z.string().optional() }), response: ok },
+  /**
+   * One stop in or out, for the named pane.
+   *
+   * A direction rather than a percentage, which is the same shape the gesture channel uses and for
+   * the same reason: the ladder lives in `shared/gestures/zoom.ts` and is walked in the core, so no
+   * caller can invent a stop that is not on it or step past either end.
+   */
+  'zoom:step': {
+    request: z.object({ tabId: z.string().optional(), direction: z.enum(['in', 'out']) }),
+    response: ok
+  },
 
   // --- split view ----------------------------------------------------------
   'split:setLayout': {
@@ -1084,7 +1099,16 @@ export const invokeContract = {
   'passwords:answerPrompt': {
     request: passwordPromptAnswerSchema,
     response: ok
-  }
+  },
+  /**
+   * Opens `tessera://passwords` in the sending window.
+   *
+   * `nothing` in, and that is the whole security argument rather than a simplification: with no
+   * address in the request there is no address to forge, so the channel's reach is a constant in the
+   * handler. `ok` out, because a tab is not state this caller tracks — the settings page has no list
+   * of tabs and would have nothing to do with an id.
+   */
+  'passwords:openManager': { request: nothing, response: ok }
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract

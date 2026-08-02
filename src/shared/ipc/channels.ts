@@ -165,15 +165,22 @@ export const INVOKE_CHANNELS = [
   'nav:navigate',
   'nav:getBackForwardList',
   /*
-    Reset Zoom, from the toolbar rather than from the menu.
+    Reset Zoom, from a surface rather than from the menu.
 
-    The only zoom channel, and deliberately the only one: stepping in and out already has a menu item,
-    an accelerator and two gestures, all of which go through `nextZoomPercent`. What had no way in at
-    all was the way *back* — reported as "es gibt keinen zoom reset button" — and reset is the one
-    operation a keyboard shortcut cannot advertise, because nothing on screen says a pane is zoomed
-    until something shows the percentage.
+    The command existed — the View menu and `Ctrl+0` — and nothing on screen ever said a pane *was*
+    zoomed, so the way back was a shortcut you had to already know. Reported as "es gibt keinen zoom
+    reset button", which was true of every surface even though it was false of the browser.
   */
   'zoom:reset',
+  /**
+   * One step up or down the ladder, for one pane.
+   *
+   * The same `nextZoomPercent` the View menu and both gestures walk, so a browser with four ways to
+   * zoom still has one set of stops. It exists because the tile bar needed one: a pane can be zoomed
+   * by a gesture the pointer happens to be over, and a person who wants tile 3 at 150 % had no way to
+   * say so without putting the mouse in tile 3 and holding Ctrl.
+   */
+  'zoom:step',
   /*
     Find in page, for the tile the bar was opened over.
 
@@ -308,7 +315,22 @@ export const INVOKE_CHANNELS = [
    * It carries a request id and a verb, so the worst a forged call can do is submit or abandon whatever
    * the person in front of the machine had already typed.
    */
-  'passwords:answerPrompt'
+  'passwords:answerPrompt',
+  /**
+   * "Take me to my passwords." No payload, one fixed destination.
+   *
+   * For the settings page, which cannot get there any other way. `tessera://passwords` in an `<a>` is
+   * refused by `navigation-policy.ts` — page content may not navigate to an internal address, and an
+   * internal page is page content — so a link is not merely inelegant here, it does nothing. The
+   * precedent is `bookmarks:open`: the core resolves the target from the sender, so the page steers
+   * itself and nothing else.
+   *
+   * Narrower than that precedent, in fact, because there is nothing to resolve. It carries no
+   * address, so the *only* thing it can do is open the page whose name is written in the handler —
+   * which makes granting it cheaper than granting `tabs:create`, the channel a page would otherwise
+   * need and which would let it open anything at all.
+   */
+  'passwords:openManager'
 ] as const
 
 export type InvokeChannel = (typeof INVOKE_CHANNELS)[number]
@@ -405,7 +427,16 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'userrules:list',
     'userrules:add',
     'userrules:setEnabled',
-    'userrules:remove'
+    'userrules:remove',
+    /*
+      The way from the Passwords section to the passwords themselves.
+
+      Granted because the section would otherwise be two switches and a dead end: the vault's contents
+      are not settings and do not belong on this screen, and a page cannot navigate itself to an
+      internal address. What is granted is one fixed destination with no payload — see the channel's
+      own comment for why that is strictly less than the `tabs:create` a link would have needed.
+    */
+    'passwords:openManager'
   ],
   extensions: ['i18n:getCatalog', 'extensions:list', 'extensions:load', 'extensions:remove'],
   history: [

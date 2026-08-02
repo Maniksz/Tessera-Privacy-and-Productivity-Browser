@@ -18,6 +18,16 @@ export const SETTINGS_SECTIONS = [
   'search',
   'splitView',
   'privacy',
+  /*
+    Between privacy and permissions, which is where somebody goes looking for it.
+
+    Reported as *"in den settings gibt es kein Passwörter"*, and that was exactly true: there was no
+    section because there were no keys, and there were no keys because the two things a person would
+    want to change here — whether autofill runs at all, and how long the vault stays unlocked — were
+    constants in the source. The vault's *contents* are not settings and are not here; the section
+    links to the page that holds them.
+  */
+  'passwords',
   'permissions',
   'network',
   'downloads',

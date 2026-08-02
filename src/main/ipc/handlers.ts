@@ -13,6 +13,7 @@ import { readerOutcomeFor } from '../reader/reader-mode.js'
 import { assertAllChannelsRegistered, configureSenderPolicy, handle, OK } from './router.js'
 import { catalogs, resolveLocale, type Locale } from '@shared/i18n/catalog.js'
 import { DEFAULT_BINDINGS } from '@shared/shortcuts/bindings.js'
+import { nextZoomPercent } from '@shared/gestures/zoom.js'
 import { translate } from '@shared/i18n/catalog.js'
 import type { HistoryStore } from '../data/HistoryStore.js'
 import { buildTabContextMenu } from '../menu/tabContextMenu.js'
@@ -569,6 +570,18 @@ export function registerIpcHandlers(deps: {
   */
   handle('zoom:reset', ({ tabId }, event) => {
     windows.resolve(event)?.resolveTab(tabId)?.resetZoom()
+    return OK
+  })
+
+  /*
+    A step, through the same ladder every other way of zooming walks.
+
+    `nextZoomPercent` rather than arithmetic here: it holds the stops and both ends, so a caller
+    pressing "in" at 300 % gets 300 % rather than a pane it cannot read its way out of.
+  */
+  handle('zoom:step', ({ tabId, direction }, event) => {
+    const tab = windows.resolve(event)?.resolveTab(tabId)
+    if (tab) tab.setZoomPercent(nextZoomPercent(tab.zoomPercent, direction))
     return OK
   })
 

@@ -106,6 +106,8 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
     canGoBack: true,
     canGoForward: false,
     loading: false,
+    zoomPercent: 100,
+    zoomed: false,
     invokedBy: 'pointer'
   },
   'find-bar': {

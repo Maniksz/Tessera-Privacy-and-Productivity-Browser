@@ -65,22 +65,34 @@ import { clampZoomPercent } from './model.js'
 export const PAGE_ZOOM_CHANNEL = 'tessera:page-zoom'
 
 /**
- * The stylesheet for a percentage, or the empty string for a page that should not be zoomed at all.
+ * The stylesheet for a percentage. Always a rule, including at 100 %.
  *
  * `:root` rather than `body`, because a page's background, its scrollbars and anything positioned
  * outside `<body>` are part of what a person means by "make this bigger". `!important` because the
  * point is to beat the page's own rule — the same reason `cosmeticCss` uses it.
  *
- * The empty string at 100 % is load-bearing rather than an optimisation: it is what lets the preload
- * *remove* its stylesheet instead of inserting a no-op one, so a page at the default zoom carries no
- * trace of this at all and `zoom` reads back as the page left it.
+ * ## Why 100 % is a rule and not the absence of one
+ *
+ * It was the absence of one, on the argument that a pane at the ordinary size should carry no trace
+ * of this. That argument cost the feature its way back. Zooming in *inserts* a stylesheet and
+ * returning to 100 % *removed* the last one — two different operations, so the second could fail on
+ * its own, and it did: the zoom percentage went up and down and the reset button did nothing.
+ * Reported as *"der prozentuale button setzt nicht zurück"*.
+ *
+ * Making every value a rule makes every change one operation. Reset is now the same insertion that
+ * zooming in is, so there is no path that works only in one direction — and removing the previous
+ * sheet becomes housekeeping rather than the thing correctness rests on, because the newest rule
+ * wins whether or not the old one went away.
+ *
+ * The price is real and small: `zoom` on the root element now reads back as `1` rather than as
+ * whatever the page left there, and a site doing its own root-level zoom is overridden even at the
+ * default. A site doing that is doing page zoom by hand, which would have compounded with ours.
  *
  * A percentage rather than a factor, so the text is an integer and no float formatting has to be
  * agreed on between this and whatever reads it.
  */
 export function zoomCss(percent: number): string {
-  const applied = clampZoomPercent(percent)
-  return applied === 100 ? '' : `:root{zoom:${String(applied)}%!important}`
+  return `:root{zoom:${String(clampZoomPercent(percent))}%!important}`
 }
 
 /**

@@ -2,6 +2,7 @@ import { screen } from 'electron'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
 import type { OverlayPresentation } from '@shared/overlay/surface.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
+import { effectiveZoomPercent } from '@shared/zoom/model.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SplitController } from './SplitController.js'
 import type { OverlayLayer } from './OverlayLayer.js'
@@ -191,6 +192,9 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     setTileMuted: (tileIndex, muted) => tabInTile(internals, tileIndex)?.setMuted(muted)
   })
 
+  /** What "not zoomed" means on this profile right now, read per call because the setting is live. */
+  const defaultZoom = (): number => internals.getSettings()['appearance.defaultZoom']
+
   const tileInput = new TileInputController({
     tileRects: () => internals.split.tileRects(internals.contentRect()),
     activeTile: () => internals.split.activeTile,
@@ -206,7 +210,14 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
         url: state.url,
         canGoBack: state.canGoBack,
         canGoForward: state.canGoForward,
-        loading: state.loading
+        loading: state.loading,
+        /*
+          Resolved here, where the settings are, so the surface never has to know what a `null` zoom
+          means. `zoomed` is that `null` turned into the only question the bar asks about it: whether
+          there is anything to reset.
+        */
+        zoomPercent: effectiveZoomPercent(state.zoomPercent, defaultZoom()),
+        zoomed: state.zoomPercent !== null && state.zoomPercent !== defaultZoom()
       }
     },
     cursor: () => cursorInWindow(internals),

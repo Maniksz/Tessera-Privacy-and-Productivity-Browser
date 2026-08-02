@@ -620,6 +620,7 @@ export const en = {
   'settings.section.search': 'Search',
   'settings.section.splitView': 'Split View',
   'settings.section.privacy': 'Privacy',
+  'settings.section.passwords': 'Passwords',
   'settings.section.permissions': 'Permissions',
   'settings.section.network': 'Network',
   'settings.section.downloads': 'Downloads',
@@ -636,6 +637,8 @@ export const en = {
   'settings.noMatches': 'No setting matches {query}.',
   'settings.readOnly': 'Not editable here yet',
   'settings.listHint': 'One entry per line',
+  /* The link out of the Passwords section; the vault's contents are a page, not a settings row. */
+  'settings.openPasswordManager': 'Manage saved passwords',
   'settings.on': 'On',
   'settings.off': 'Off',
 

@@ -307,6 +307,19 @@ export const en = {
     }
   },
 
+  passwords: {
+    autofill: {
+      label: 'Fill saved passwords into login forms',
+      description:
+        'Covers the whole feature: the list of accounts that appears in a login field, filling one, and the offer to save a password after you sign in. Switching it off changes nothing about what is stored — your saved passwords stay, and the passwords page still shows them.'
+    },
+    lockAfterMinutes: {
+      label: 'Lock saved passwords after (minutes of inactivity)',
+      description:
+        'Only applies once you have set a master password: without one there is no key to drop, so the vault is never locked. While it is locked nothing is filled and nothing is offered to be saved.'
+    }
+  },
+
   permissions: {
     geolocation: {
       label: 'Location',

@@ -249,6 +249,17 @@ export interface TileBarPresentation {
   canGoForward: boolean
   /** Turns the reload button into stop, exactly as the toolbar's does. */
   loading: boolean
+  /**
+   * This pane's zoom, resolved: what it shows at, and whether that is its own choice.
+   *
+   * On the bar rather than only in the toolbar, because zoom is per pane and the toolbar has one of
+   * itself. Reported as *"es gibt den zoom button nicht per kachel individuell in dessen overlay"* —
+   * and it is the tile bar that already names a tab, so it is the only surface where a zoom control
+   * can act on the pane the user is pointing at rather than on whichever one is active.
+   */
+  zoomPercent: number
+  /** False for a pane still following `appearance.defaultZoom`; see `PaneZoom`. */
+  zoomed: boolean
   invokedBy: OverlayInvocation
 }
 

@@ -271,6 +271,19 @@ export const de: SettingTextTable = {
     }
   },
 
+  passwords: {
+    autofill: {
+      label: 'Passwörter automatisch in Anmeldeformulare eintragen',
+      description:
+        'Betrifft die ganze Funktion: die Kontoliste, die in einem Anmeldefeld erscheint, das Eintragen selbst und die Nachfrage, ob ein Passwort gespeichert werden soll. Am Gespeicherten ändert das Ausschalten nichts — die Passwörter bleiben, und die Passwort-Seite zeigt sie weiterhin.'
+    },
+    lockAfterMinutes: {
+      label: 'Passwörter sperren nach (Minuten ohne Nutzung)',
+      description:
+        'Gilt nur, wenn ein Master-Passwort gesetzt ist: ohne eines gibt es keinen Schlüssel, der verworfen werden könnte, und der Tresor wird nie gesperrt. Solange er gesperrt ist, wird nichts eingetragen und nichts zum Speichern angeboten.'
+    }
+  },
+
   permissions: {
     geolocation: {
       label: 'Standort',

@@ -14,6 +14,7 @@ import {
   settingDefinitions,
   settingsSnapshotSchema
 } from '@shared/settings/definitions.js'
+import { VAULT_IDLE_TIMEOUT_MS } from '@shared/passwords/vault.js'
 
 async function tempStore(seed?: Record<string, unknown>): Promise<SettingsStore> {
   const dir = await mkdtemp(join(tmpdir(), 'tessera-settings-'))
@@ -206,5 +207,42 @@ describe('SettingsStore', () => {
 
     const store = await SettingsStore.open(file)
     expect(store.snapshot()).toEqual(defaultSettings())
+  })
+})
+
+/**
+ * The two password settings, and the one number that exists in two places.
+ *
+ * Neither existed until the section did: autofill ran with no way out and the vault's idle timeout was
+ * a constant. Both are now keys, which means both can be wrong in a way the constants could not —
+ * a default that disagrees with the fallback, or a bound that lets somebody park the vault open.
+ */
+describe('the password settings', () => {
+  it('defaults the lock to what the vault falls back to, so the two never disagree', () => {
+    /*
+      Held by a test rather than by an import, and the direction matters: `VAULT_IDLE_TIMEOUT_MS` is
+      the vault's fallback for a build with no settings behind it, so making the *setting's* default
+      read from it would define the normal case in terms of the exceptional one. They have to agree;
+      neither owns the other.
+    */
+    expect(defaultSettings()['passwords.lockAfterMinutes'] * 60_000).toBe(VAULT_IDLE_TIMEOUT_MS)
+  })
+
+  it('refuses a lock timeout that would keep the key in memory indefinitely', async () => {
+    /*
+      There is deliberately no "never". Somebody who wants no locking has it already — a vault with no
+      master password is never idle-locked, because there is no key to drop — so the only thing a zero
+      here could buy is keeping a key the user chose to protect in memory for the life of the process.
+    */
+    const store = await tempStore()
+    expect(() => store.set('passwords.lockAfterMinutes', 0)).toThrow(InvalidSettingValueError)
+    expect(() => store.set('passwords.lockAfterMinutes', 10_000)).toThrow(InvalidSettingValueError)
+    store.set('passwords.lockAfterMinutes', 1)
+    expect(store.get('passwords.lockAfterMinutes')).toBe(1)
+  })
+
+  it('has autofill on, because a browser that fills nothing by default is one nobody notices', () => {
+    // The switch exists so it can be turned *off*; arriving off would make the feature look absent.
+    expect(defaultSettings()['passwords.autofill']).toBe(true)
   })
 })

@@ -77,6 +77,16 @@ export function SettingsPage(): React.ReactNode {
         }
       },
       /*
+        The way from the Passwords section to the passwords.
+
+        No re-read afterwards and nothing to show for it: the answer is a new tab, which this page
+        neither owns nor tracks. The channel carries no address — see its comment in `channels.ts` for
+        why that is what makes granting it cheaper than granting `tabs:create`.
+      */
+      openPasswordManager: async () => {
+        await invoke('passwords:openManager')
+      },
+      /*
         The one call here that does not end in a re-read, because nothing it does is stored.
 
         A check reports itself in a native dialog the core raises, so the `{ ok: true }` is discarded

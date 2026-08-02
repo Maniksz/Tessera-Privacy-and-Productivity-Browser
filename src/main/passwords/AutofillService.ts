@@ -125,6 +125,19 @@ export interface AutofillVault {
 export interface AutofillServiceOptions {
   readonly vault: AutofillVault
   /**
+   * Whether the user wants any of this. `passwords.autofill`.
+   *
+   * Read per call rather than captured, so switching it off reaches the form already on screen —
+   * spec 5's promise, and here it is the one that matters most: somebody turning this off is usually
+   * turning it off *because* of the page in front of them.
+   *
+   * Checked at the three ways in — offer, fill, submission — rather than at one central point,
+   * because there is no central point: the three arrive on their own channels from a preload that
+   * knows nothing about settings. Gating them all is what makes "off" mean off rather than "off
+   * unless the page asks a different way".
+   */
+  readonly enabled: () => boolean
+  /**
    * The browsing mode of the window a view belongs to, or `null` when it belongs to none.
    *
    * `null` refuses everything. A view this browser cannot place — a devtools window, something
@@ -207,6 +220,9 @@ export class AutofillService {
    * attacker can make fire repeatedly, and it has to be worthless when it does.
    */
   offerFor(view: AutofillView, frame: AutofillFrame, reported: unknown): FillOffer | null {
+    // Before the vault is even asked. A user who switched autofill off must not have a suggestion
+    // list appear on focus, and this is the path a page can make fire at will.
+    if (!this.#options.enabled()) return null
     // First, and before the form is even looked at. A locked vault has no summaries to offer — they
     // are inside the sealed document — so this is a statement of fact rather than a policy, and it
     // means the busiest page-triggerable path in the feature does nothing at all while locked.
@@ -241,9 +257,10 @@ export class AutofillService {
    * renderer that invented an id it was never offered.
    */
   fillFor(view: AutofillView, frame: AutofillFrame, reported: unknown): FillAnswer | null {
-    // Checked again here rather than trusted from the offer. The vault can lock between a suggestion
-    // being drawn and a click on it — an idle timeout is a clock, not an event the page waits for —
-    // and the offer is never a token that can be spent later.
+    // Both checked again here rather than trusted from the offer. The setting can be switched off and
+    // the vault can lock between a suggestion being drawn and a click on it — an idle timeout is a
+    // clock, not an event the page waits for — and the offer is never a token that can be spent later.
+    if (!this.#options.enabled()) return null
     if (!this.#options.vault.isUnlocked()) return null
     const mode = this.#options.modeFor(view.id)
     if (mode === null) return null
@@ -287,6 +304,7 @@ export class AutofillService {
       before `#pending` is written means the submitted credential is dropped on the spot instead of
       being kept in main-process memory against an unlock that may never come.
     */
+    if (!this.#options.enabled()) return
     if (!this.#options.vault.isUnlocked()) return
     const mode = this.#options.modeFor(view.id)
     if (mode === null) return

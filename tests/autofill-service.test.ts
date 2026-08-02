@@ -124,12 +124,15 @@ interface ComparedCall {
 
 interface HarnessState {
   unlocked: boolean
+  /** `passwords.autofill`. Mutable, so a test can switch the feature off between two calls. */
+  enabled: boolean
   mode: BrowsingMode | null
   locale: Locale
 }
 
 interface HarnessOptions {
   readonly unlocked?: boolean
+  readonly enabled?: boolean
   readonly summaries?: readonly PasswordSummary[]
   readonly secrets?: Readonly<Record<string, string>>
   readonly neverSaved?: readonly string[]
@@ -153,6 +156,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const clock = { now: NOW }
   const state: HarnessState = {
     unlocked: options.unlocked ?? true,
+    enabled: options.enabled ?? true,
     mode: options.mode === undefined ? 'normal' : options.mode,
     locale: options.locale ?? 'en'
   }
@@ -193,6 +197,7 @@ function harness(options: HarnessOptions = {}): Harness {
 
   const service = new AutofillService({
     vault,
+    enabled: () => state.enabled,
     modeFor: () => state.mode,
     locale: () => state.locale,
     now: () => clock.now
@@ -1165,5 +1170,70 @@ describe('the keystrokes taken out of the input pipeline', () => {
     notifyOverlayKey(PROMPT, keystroke({ key: 'l' }))
 
     expect(seen, 'the keystroke in flight was lost, or the removal did not take').toEqual(['k'])
+  })
+})
+
+/**
+ * `passwords.autofill`, which until now was not a thing anybody could switch off.
+ *
+ * The feature reads every login form in every page and can put a secret into one, and it had no way
+ * out — reported as there being no Passwords section in the settings at all, of which this was the
+ * missing half that mattered. The switch is checked at all three ways in rather than at one central
+ * point, because there is no central point: the three arrive on their own channels from a preload
+ * that knows nothing about settings.
+ *
+ * What is asserted here is that each of the three refuses on its own. A test that only covered the
+ * offer would leave "off" meaning "no list, but still fills and still asks to save", which is the
+ * shape a partial gate always takes.
+ */
+describe('autofill switched off', () => {
+  it('offers nothing, and does not ask the vault for a list either', () => {
+    // The same standard the locked vault is held to: the busiest page-triggerable path must not even
+    // reach the summaries, because reaching them is how a list of the user's accounts gets built.
+    const { service, view, reads } = harness({ enabled: false })
+    press(service)
+
+    expect(service.offerFor(view, frame(), formPayload())).toBeNull()
+    expect(reads.lists, 'a switched-off feature asked the vault for its summaries').toBe(0)
+  })
+
+  it('fills nothing, even for an id that was offered before it was switched off', () => {
+    /*
+      The offer is never a token that can be spent later. Somebody switching this off usually does it
+      *because* of the form in front of them, so the suggestion list they are looking at was drawn
+      while it was still on — and a click on it must not go through.
+    */
+    const { service, view, state, reads } = harness()
+    press(service)
+    expect(service.offerFor(view, frame(), formPayload())).not.toBeNull()
+
+    state.enabled = false
+    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(reads.secrets, 'a secret was fetched for a fill that was refused').toEqual([])
+  })
+
+  it('does not offer to save what was submitted, and keeps nothing while it decides not to', () => {
+    /*
+      The path that arrives holding a password. Returning before anything is stored means the
+      credential is dropped where it was read rather than sitting in main-process memory for two
+      minutes against a bar that is never going up.
+    */
+    const { service, view, writes } = harness({ enabled: false })
+    service.reportSubmission(view, frame(), reportPayload())
+
+    expect(view.sent).toEqual([])
+    expect(service.hasPendingSave(VIEW_ID)).toBe(false)
+    expect(writes).toEqual([])
+  })
+
+  it('is read per call, so switching it back on needs no new page', () => {
+    // Spec 5, and the reason `enabled` is a function rather than a value: a captured flag would make
+    // this a setting that applies to the next document rather than to this one.
+    const { service, view, state } = harness({ enabled: false })
+    press(service)
+    expect(service.offerFor(view, frame(), formPayload())).toBeNull()
+
+    state.enabled = true
+    expect(service.offerFor(view, frame(), formPayload())).not.toBeNull()
   })
 })

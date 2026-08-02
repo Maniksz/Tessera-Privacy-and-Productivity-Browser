@@ -121,7 +121,17 @@ describe('internal page privileges', () => {
           scriptlets whatever this page sends — so the grant adds "hide or restyle an element on a named site"
           and nothing else.
         */
-        ...invokesMentioned(settingsPage, 'userrules')
+        ...invokesMentioned(settingsPage, 'userrules'),
+        /*
+          A fourth family, and exactly one member of it: `passwords:openManager`.
+
+          It is the only channel on this page that reaches a *different feature*, and it is here for a
+          reason the two above share — the Passwords section would otherwise be two switches and a dead
+          end, because a page cannot navigate itself to an internal address. Derived from the adapter
+          like the rest, so granting it and never calling it fails here, and calling any *other*
+          `passwords:` channel from this page fails too: the grant list is compared whole.
+        */
+        ...invokesMentioned(settingsPage, 'passwords')
       ].sort()
     )
   })

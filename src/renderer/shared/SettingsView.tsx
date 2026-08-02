@@ -58,6 +58,7 @@ const SECTION_LABELS: Readonly<Record<SettingsSection, MessageKey>> = {
   search: 'settings.section.search',
   splitView: 'settings.section.splitView',
   privacy: 'settings.section.privacy',
+  passwords: 'settings.section.passwords',
   permissions: 'settings.section.permissions',
   network: 'settings.section.network',
   downloads: 'settings.section.downloads',
@@ -101,6 +102,14 @@ export interface SettingsHost {
    * interface about the settings table and lets the editor be driven on its own in a test.
    */
   userRules: UserRulesHost
+  /**
+   * Opens the passwords page.
+   *
+   * Here rather than as a link, because a link does not work: `navigation-policy.ts` refuses page
+   * content navigating to an internal address, and this screen is page content. See
+   * `passwords:openManager`, whose whole payload is nothing at all.
+   */
+  openPasswordManager(): Promise<void>
   t: Translate
 }
 
@@ -394,6 +403,32 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
           (section) => (
             <section className="panel__section" key={section}>
               <h3 className="panel__sectionTitle">{t(SECTION_LABELS[section])}</h3>
+
+              {/*
+                The one section that leads somewhere, and the reason it has to.
+
+                Everything else on this screen is a value with a default. A saved password is neither:
+                it has no default to reset to, it must not sit in a list that a search box filters into
+                view, and reading one needs a master password this surface has no business collecting.
+                So the section holds the two switches that *are* settings and points at the page that
+                holds the rest — which is what somebody means when they look here for "Passwörter" and
+                find nothing.
+
+                Directly under the heading rather than after the switches: it is the thing most people
+                came for, and a link below two rows of controls is a link found by the people who did
+                not need it.
+              */}
+              {section === 'passwords' && (
+                <div className="panel__lead">
+                  <button
+                    type="button"
+                    className="dialog__button"
+                    onClick={() => void run(() => host.openPasswordManager())}
+                  >
+                    {t('settings.openPasswordManager')}
+                  </button>
+                </div>
+              )}
 
               {(bySection.get(section) ?? []).map((descriptor) => {
                 const note = appliesNote(descriptor.applies)

@@ -184,11 +184,45 @@ function start(chrome: PickerChrome): void {
     show(target)
   }
 
+  /*
+    Everything a press consists of, taken away from the page — not just the `click`.
+
+    Cancelling `click` was the whole of this, and it was reported as not working: *"wenn ich ein
+    element blockieren will, dann wird das element dennoch angeklickt"*. It is not that the refusal
+    failed; it is that `click` is the *last* event of a press and most of the web does not wait for
+    it. A menu opens on `mousedown`, a carousel starts dragging on `pointerdown`, a field takes focus
+    on `mousedown`, and a framework's own handler frequently sits on `pointerdown` because that is
+    where the latency is. All of those had already happened by the time the picker said no.
+
+    So the whole sequence is swallowed while the picker is up, and the two halves are treated
+    differently on purpose:
+
+      - **Propagation is stopped for all of them**, pointer events included. That is what keeps the
+        page's own handlers from running, and it is the half that fixes the report.
+      - **Default is prevented only for the mouse events.** Cancelling `pointerdown` would suppress
+        the compatibility mouse events that follow it, which is a second mechanism doing the first
+        one's job and one more thing to reason about. Preventing `mousedown` is what stops focus,
+        text selection and the start of a drag; preventing `click` is what stops a link.
+
+    `stopImmediatePropagation` as well as `stopPropagation`, because a page can add its own listener
+    on `window` in the capture phase. It cannot get in front of this one — the preload runs before any
+    page script — but it would otherwise still run *beside* it.
+
+    `click` is still what commits, and it still arrives: neither cancelling `mousedown` nor cancelling
+    `pointerdown` suppresses it.
+  */
+  const swallow = (event: Event): void => {
+    if (event.cancelable && !event.type.startsWith('pointer')) event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+  }
+
   const onClick = (event: MouseEvent): void => {
     // Captured and cancelled: the click must not also reach the page, or picking an element inside a link
     // would navigate away from the page the user was editing.
     event.preventDefault()
     event.stopPropagation()
+    event.stopImmediatePropagation()
     if (proposal !== null) {
       try {
         ipcRenderer.send(PICKER_COMMIT_CHANNEL, proposal.selector)
@@ -209,6 +243,26 @@ function start(chrome: PickerChrome): void {
   // Capture phase throughout, so a page that stops propagation on its own handlers cannot take the
   // picker's events away from it.
   const options = { capture: true } as const
+
+  /**
+   * The press, in the order Chromium dispatches it, minus the `click` that commits.
+   *
+   * `mouseover` is deliberately absent: it is what the highlight follows, and the page seeing a hover
+   * costs nothing. `contextmenu` is here because a right-click while picking should not leave the
+   * site's own menu on screen over the picker — the browser's own menu is a different mechanism and
+   * comes from the core, which is where picker mode is already accounted for.
+   */
+  const SWALLOWED = [
+    'pointerdown',
+    'mousedown',
+    'pointerup',
+    'mouseup',
+    'auxclick',
+    'dblclick',
+    'contextmenu'
+  ] as const
+
+  for (const type of SWALLOWED) window.addEventListener(type, swallow, options)
   window.addEventListener('mouseover', onMove, options)
   window.addEventListener('click', onClick, options)
   window.addEventListener('keydown', onKeyDown, options)
@@ -216,6 +270,7 @@ function start(chrome: PickerChrome): void {
   session = {
     ui,
     teardown: () => {
+      for (const type of SWALLOWED) window.removeEventListener(type, swallow, options)
       window.removeEventListener('mouseover', onMove, options)
       window.removeEventListener('click', onClick, options)
       window.removeEventListener('keydown', onKeyDown, options)

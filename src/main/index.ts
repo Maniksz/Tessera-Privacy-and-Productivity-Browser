@@ -333,7 +333,16 @@ async function main(): Promise<void> {
     keyFilePath: passwordVaultKeyFile(),
     documentPath: passwordsFile(),
     safeStorage,
-    previousCodec: protection.codec
+    previousCodec: protection.codec,
+    /*
+      `passwords.lockAfterMinutes`, read at every idle check rather than captured here.
+
+      A function because the setting is live (spec 5), and here that is not a formality: somebody
+      shortening this has just decided the current timeout is too long, and a value captured at
+      startup would tell them to come back after a restart. The vault keeps its own fallback for the
+      case this is absent, which is a test rather than a launch.
+    */
+    idleTimeoutMs: () => (settings?.get('passwords.lockAfterMinutes') ?? 15) * 60_000
   })
   flushOnExit.push(() => passwords?.flush() ?? Promise.resolve())
 
@@ -394,6 +403,9 @@ async function main(): Promise<void> {
   */
   const autofill = new AutofillService({
     vault: passwordVault,
+    // `passwords.autofill`, per call. Switching it off has to reach the form on screen, because that
+    // form is usually why somebody is switching it off.
+    enabled: () => settings?.get('passwords.autofill') ?? true,
     modeFor: (viewId) => {
       const controller = windows?.controllerForWebContents(viewId)
       if (controller === undefined) return null

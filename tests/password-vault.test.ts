@@ -180,7 +180,17 @@ async function openVault(options: OpenOptions = {}): Promise<Fixture> {
     // Absent rather than `undefined` where a test wants the production default; see the two tests
     // that assert `status().idleTimeoutMs` and the credential's own timestamps.
     ...(options.now === undefined ? {} : { now: options.now }),
-    ...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
+    /*
+      Wrapped in a function, because the vault now reads its timeout per check rather than holding it.
+
+      The tests keep passing a plain number: what they are about is the *value*, and a test that had to
+      write `() => 60_000` at fourteen call sites would be spelling out a mechanism none of them is
+      testing. That the value is genuinely re-read is asserted on its own, below, by moving the answer
+      between two sweeps.
+    */
+    ...(options.idleTimeoutMs === undefined
+      ? {}
+      : { idleTimeoutMs: (): number => options.idleTimeoutMs ?? 0 }),
     idleSweepMs: 0,
     generateId: () => {
       created += 1
@@ -624,6 +634,49 @@ describe('the idle lock', () => {
     expect(locks).toEqual([T0 + 91_000])
   })
 
+  it('reads the timeout at every check, so shortening it does not need a restart', async () => {
+    /*
+      `passwords.lockAfterMinutes` is a setting, and a setting captured at construction is a setting
+      that applies tomorrow — spec 5's failure, and a sharper one here than elsewhere: somebody
+      shortening this has just decided the current timeout is too long.
+
+      Asserted by moving the answer rather than by moving the clock. The vault sits idle for two
+      minutes with a one-hour timeout and stays open; the timeout then drops to one minute, with no
+      further activity and no new vault, and the very next sweep closes it.
+    */
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    await seedMasterProtected({ profile: where, safeStorage, masterPassword: MASTER })
+    const clock = clockAt(T0)
+    let timeout = 3_600_000
+    const vault = await PasswordVault.open({
+      keyFilePath: where.keyFilePath,
+      documentPath: where.documentPath,
+      safeStorage,
+      previousCodec: null,
+      now: clock.now,
+      idleTimeoutMs: () => timeout,
+      idleSweepMs: 0,
+      debounceMs: 0
+    })
+    const locks: number[] = []
+    vault.onLock(() => locks.push(clock.now()))
+
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    clock.set(T0 + 120_000)
+    vault.sweepIdle()
+    expect(vault.isUnlocked(), 'two minutes is not idle against an hour').toBe(true)
+
+    timeout = 60_000
+    vault.sweepIdle()
+    await whenNotified(locks)
+
+    expect(vault.isUnlocked()).toBe(false)
+    // The status reports the value in force now, not the one the vault was opened with.
+    expect(vault.status().idleTimeoutMs).toBe(60_000)
+    vault.dispose()
+  })
+
   it('runs the check on a timer of its own and gives the handle back on dispose', async () => {
     /*
       A timer rather than a check on the next read, because the promise is that the key *is gone*
@@ -643,7 +696,7 @@ describe('the idle lock', () => {
         safeStorage,
         previousCodec: null,
         now: clock.now,
-        idleTimeoutMs: 60_000,
+        idleTimeoutMs: () => 60_000,
         debounceMs: 0
       })
 

@@ -95,7 +95,19 @@ export interface PasswordVaultOptions {
    */
   readonly previousCodec: DocumentCodec | null
   readonly now?: () => number
-  readonly idleTimeoutMs?: number
+  /**
+   * How long the vault stays unlocked with nobody using it, read per check.
+   *
+   * A function rather than a number, and the change is what makes `passwords.lockAfterMinutes` a
+   * setting rather than a constant with a label. Captured at construction it would take a restart to
+   * move, which spec 5 forbids and which is worse here than elsewhere: somebody shortening this has
+   * just decided the current timeout is too long, and telling them it applies tomorrow is telling
+   * them no.
+   *
+   * Absent means `VAULT_IDLE_TIMEOUT_MS` — the fallback for a build with no settings behind it, which
+   * in practice is a test.
+   */
+  readonly idleTimeoutMs?: () => number
   /**
    * How often the idle check runs. `0` starts no timer, and a test then calls `sweepIdle()`.
    *
@@ -111,7 +123,7 @@ export interface PasswordVaultOptions {
 export class PasswordVault implements AutofillVault, ImportTarget {
   readonly #options: PasswordVaultOptions
   readonly #now: () => number
-  readonly #idleTimeoutMs: number
+  readonly #idleTimeoutMs: () => number
   readonly #lockListeners = new Set<() => void>()
 
   #file: VaultKeyFile | null = null
@@ -124,7 +136,7 @@ export class PasswordVault implements AutofillVault, ImportTarget {
   private constructor(options: PasswordVaultOptions) {
     this.#options = options
     this.#now = options.now ?? ((): number => Date.now())
-    this.#idleTimeoutMs = options.idleTimeoutMs ?? VAULT_IDLE_TIMEOUT_MS
+    this.#idleTimeoutMs = options.idleTimeoutMs ?? ((): number => VAULT_IDLE_TIMEOUT_MS)
   }
 
   /**
@@ -271,7 +283,7 @@ export class PasswordVault implements AutofillVault, ImportTarget {
           : vaultKeyProtectionOf(file),
       unlocked: this.#store !== null,
       unreadable: this.#unreadable,
-      idleTimeoutMs: this.#idleTimeoutMs
+      idleTimeoutMs: this.#idleTimeoutMs()
     }
   }
 
@@ -346,7 +358,7 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     if (this.#store === null) return
     // Nothing to lock back to. See the class docblock.
     if (!this.#hasMasterPassword()) return
-    if (!isVaultIdle(this.#lastActivityAt, this.#now(), this.#idleTimeoutMs)) return
+    if (!isVaultIdle(this.#lastActivityAt, this.#now(), this.#idleTimeoutMs())) return
     void this.lock()
   }
 

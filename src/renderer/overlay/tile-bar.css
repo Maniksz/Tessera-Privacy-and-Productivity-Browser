@@ -50,6 +50,58 @@
 }
 
 /*
+  The zoom cluster: out, the level, in — kept together so the level cannot be read as a neighbour.
+
+  A group with no gap between its three, against the bar's own spacing on either side. That is what
+  makes it one control rather than three buttons that happen to be adjacent, and it is the difference
+  between "150 %" belonging to the minus beside it and belonging to the address field.
+*/
+.tilebar__zoom {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0;
+}
+
+/*
+  The level, which is also the reset button.
+
+  `width: auto` with a floor, because "90 %" and "300 %" are different widths and a fixed one would
+  either clip the long value or leave a hole beside the short one. Tabular figures so the two buttons
+  around it do not shift while somebody steps through the stops.
+*/
+.tilebar__level {
+  flex: 0 0 auto;
+  min-width: 44px;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tilebar__level:hover:not(:disabled) {
+  background: var(--bg-input);
+}
+
+/*
+  Dimmed at the default zoom rather than hidden.
+
+  The number is worth reading even when it is the ordinary one — it is how you tell a pane that is
+  merely small from a pane that is zoomed — and a button that vanished would move the two beside it
+  every time somebody crossed 100 %.
+*/
+.tilebar__level:disabled {
+  opacity: 0.55;
+}
+
+/*
   The one button here that cannot be undone says so before it is pressed.
 
   Colour only under the pointer, and nothing at rest: a permanently red control would pull the eye to

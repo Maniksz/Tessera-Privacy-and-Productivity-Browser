@@ -54,6 +54,9 @@ function tab(id: string, overrides: Partial<TileBarTab> = {}): TileBarTab {
     canGoBack: false,
     canGoForward: false,
     loading: false,
+    // A pane nobody has zoomed, which is every pane until a test says otherwise.
+    zoomPercent: 100,
+    zoomed: false,
     ...overrides
   }
 }

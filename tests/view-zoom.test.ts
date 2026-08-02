@@ -114,19 +114,22 @@ describe('the stylesheet a zoomed pane gets', () => {
     expect(zoomCss(150)).toBe(':root{zoom:150%!important}')
   })
 
-  it('is nothing at all at 100 %', () => {
+  it('is a rule at 100 % too, which is what makes reset work', () => {
     /*
-      Not an optimisation. It is what lets the preload *remove* its sheet rather than insert a no-op
-      one, so a pane at the ordinary size carries no trace of this — `zoom` reads back as the page left
-      it, and a site cannot tell a default pane from a browser without the feature.
+      It used to be the empty string, so that a pane at the ordinary size carried no trace of this.
+      That is what broke the way back: zooming in *inserted* a sheet and returning to 100 % *removed*
+      one, two operations that can fail independently — and the removing one did. Reported as the
+      percentage button not resetting.
+
+      Every value being a rule makes every change an insertion, so there is no direction that can work
+      on its own.
     */
-    expect(zoomCss(100)).toBe('')
+    expect(zoomCss(100)).toBe(':root{zoom:100%!important}')
   })
 
-  it('rounds to nothing rather than to a fraction of a percent', () => {
-    // The value can arrive from a hand-edited settings file. `zoom:99.6%` is a page at a size nobody
-    // chose; the clamp rounds first, so this collapses to the no-sheet case above.
-    expect(zoomCss(99.6)).toBe('')
+  it('rounds, so no page ends up at a size nobody chose', () => {
+    // The value can arrive from a hand-edited settings file, where `zoom:99.6%` is reachable.
+    expect(zoomCss(99.6)).toBe(':root{zoom:100%!important}')
   })
 
   it('cannot put a page at a size the user cannot read their way out of', () => {

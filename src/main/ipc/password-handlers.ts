@@ -3,6 +3,7 @@ import type { PasswordApi } from '../passwords/PasswordApi.js'
 import { onOverlayKey } from '../passwords/overlay-keys.js'
 import { onOverlayVacancy } from '../permissions/vacancy.js'
 import type { WindowRegistry } from '../browser/WindowRegistry.js'
+import { internalUrl } from '@shared/product.js'
 import { handle, OK } from './router.js'
 
 /**
@@ -93,6 +94,24 @@ export function registerPasswordHandlers(deps: {
   */
   handle('passwords:answerPrompt', ({ requestId, action }) => {
     prompt.answer(requestId, action)
+    return OK
+  })
+
+  /*
+    The settings page's way to the passwords page, and the reason it needs one.
+
+    An `<a href="tessera://passwords">` there is not merely unfashionable — `navigation-policy.ts`
+    refuses it. Page content may not navigate to an internal address, and the settings page *is* page
+    content; the rule exists so a visited site cannot reach an address whose privileges it would then
+    inherit, and it cannot make an exception for our own pages without making one for every page.
+
+    The address is written here rather than taken from the request, so this channel has exactly one
+    destination however it is called. The window comes from the sender, so a settings tab opens the
+    passwords tab beside itself rather than in whichever window happens to be focused — the same rule
+    the master-password prompt follows one screen up, and for a milder version of the same reason.
+  */
+  handle('passwords:openManager', (_payload, event) => {
+    windows.controllerForWebContents(event.sender.id)?.createTab({ url: internalUrl('passwords') })
     return OK
   })
 

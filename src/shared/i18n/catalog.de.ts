@@ -463,6 +463,7 @@ export const de = {
   'settings.section.search': 'Suche',
   'settings.section.splitView': 'Split View',
   'settings.section.privacy': 'Datenschutz',
+  'settings.section.passwords': 'Passwörter',
   'settings.section.permissions': 'Berechtigungen',
   'settings.section.network': 'Netzwerk',
   'settings.section.downloads': 'Downloads',
@@ -479,6 +480,7 @@ export const de = {
   'settings.noMatches': 'Keine Einstellung passt zu {query}.',
   'settings.readOnly': 'Hier noch nicht bearbeitbar',
   'settings.listHint': 'Ein Eintrag pro Zeile',
+  'settings.openPasswordManager': 'Gespeicherte Passwörter verwalten',
   'settings.on': 'An',
   'settings.off': 'Aus',
 

@@ -240,6 +240,41 @@ export const settingDefinitions = {
   'fingerprint.spoofTimezone': def(z.string(), '', 'privacy', 'new-tab'),
   'fingerprint.spoofLocale': def(z.string(), '', 'privacy', 'new-tab'),
 
+  // --- Passwörter ----------------------------------------------------------
+  /**
+   * Whether autofill runs at all.
+   *
+   * The whole feature behind one switch, deliberately: no suggestion list, no fill, and no offer to
+   * save. Three switches would have been the other design and it splits a decision nobody makes in
+   * parts — somebody who does not want this browser touching login forms does not want two thirds of
+   * it either, and the two they left on would be the ones they had to reason about.
+   *
+   * It has never been switchable, and that is what makes it worth a key rather than a preference: a
+   * feature that reads a form on every page and can put a secret into one is not a feature a browser
+   * should offer no way out of. The vault is untouched by this — the passwords stay stored and the
+   * page still shows them; what stops is the browser acting on them by itself.
+   */
+  'passwords.autofill': def(z.boolean(), true, 'passwords'),
+  /**
+   * How long the vault stays unlocked with nobody using it.
+   *
+   * Minutes rather than milliseconds, because it is a number a person types. Fifteen is what the
+   * constant in `shared/passwords/vault.ts` has always been, and the two are held together by a test
+   * rather than by an import: that module is the vault's own fallback for a build with no settings
+   * at all, and reading it here would make the default of a *setting* depend on a default meant for
+   * the absence of one.
+   *
+   * No "never". A vault with no master password is already never idle-locked — there is no key to
+   * drop — so the person who wants no locking has that already and it costs them nothing they were
+   * relying on. Offering "never" *with* a master password would keep the key in memory for the life
+   * of the process, which is the one thing the timeout exists to prevent, in exchange for saving a
+   * password somebody chose to set.
+   *
+   * Four hours at the top: long enough to cover a working day's worth of interruptions, short
+   * enough that a laptop left in a café does not sit unlocked overnight.
+   */
+  'passwords.lockAfterMinutes': def(z.number().int().min(1).max(240), 15, 'passwords'),
+
   // --- Berechtigungen ------------------------------------------------------
   // Everything denied until the user says otherwise (spec 4). Chromium's
   // default is to auto-approve, so these are load-bearing.

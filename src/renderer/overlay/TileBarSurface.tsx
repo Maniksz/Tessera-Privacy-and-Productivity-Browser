@@ -251,6 +251,71 @@ export function TileBarSurface({
         </svg>
       </button>
 
+      {/*
+        Zoom for *this* pane, which is the only place a per-pane control can honestly live.
+
+        Reported twice over: as the toolbar's badge not resetting, and as there being no zoom control
+        per tile at all. Both are the same fact seen from two sides — the toolbar acts on the active
+        tile, and the pane somebody wants to zoom is very often the one they are pointing at rather
+        than the one that holds focus. `Ctrl`-wheel already works that way (`decideZoomTarget`), so a
+        button that did not would contradict the gesture beside it.
+
+        Three controls rather than a menu of levels. The stops are a ladder the core owns and the two
+        gestures already walk it; a dropdown listing them would be a second vocabulary for the same
+        thing and would have to be kept in step with `ZOOM_STOPS`. Out, the level, in — and the level
+        *is* the reset, which is why it is a button and not a label.
+      */}
+      {/*
+        No `role="group"` of its own, and that is a decision about the *bar* rather than about zoom.
+
+        The whole bar is already one labelled group — "tile 3" — and every control in it takes its
+        tile from that. A second, nested group naming the same tile would make a screen reader announce
+        the tile twice on the way in, and it broke a test that asks for "the group named tile 3" and
+        got two. The cluster is a box for the eye; the three labels inside it are complete on their own.
+      */}
+      <div className="tilebar__zoom">
+        <button
+          type="button"
+          className="tilebar__button"
+          aria-label={t('menu.view.zoomOut')}
+          title={t('menu.view.zoomOut')}
+          onClick={() => void invoke('zoom:step', { tabId, direction: 'out' })}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M5 10h10" />
+          </svg>
+        </button>
+
+        {/*
+          Disabled at the default, because there is nothing to go back to and a control that does
+          nothing is indistinguishable from one that is broken — which is exactly how the toolbar's
+          badge was read. It stays *visible* rather than disappearing, so the number is always there
+          to be read and the two buttons beside it do not move when it changes.
+        */}
+        <button
+          type="button"
+          className="tilebar__level"
+          disabled={!presentation.zoomed}
+          aria-label={`${t('menu.view.zoomReset')}: ${t('toolbar.zoomLevel', { percent: presentation.zoomPercent })}`}
+          title={t('menu.view.zoomReset')}
+          onClick={() => void invoke('zoom:reset', { tabId })}
+        >
+          {t('toolbar.zoomLevel', { percent: presentation.zoomPercent })}
+        </button>
+
+        <button
+          type="button"
+          className="tilebar__button"
+          aria-label={t('menu.view.zoomIn')}
+          title={t('menu.view.zoomIn')}
+          onClick={() => void invoke('zoom:step', { tabId, direction: 'in' })}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M5 10h10M10 5v10" />
+          </svg>
+        </button>
+      </div>
+
       <form
         className="tilebar__address"
         onSubmit={(event) => {

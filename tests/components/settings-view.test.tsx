@@ -59,6 +59,8 @@ interface Recorded {
   set: Array<{ key: string; value: unknown }>
   reset: string[]
   checks: number
+  /** How often the Passwords section's link asked the core to open the page. */
+  managerOpens: number
 }
 
 function hostWith(options: {
@@ -69,7 +71,7 @@ function hostWith(options: {
   /** Held open so a test can look at the surface *while* a check is running. */
   checkRunsUntil?: Promise<void>
 }): { host: SettingsHost; calls: Recorded } {
-  const calls: Recorded = { set: [], reset: [], checks: 0 }
+  const calls: Recorded = { set: [], reset: [], checks: 0, managerOpens: 0 }
   return {
     calls,
     host: {
@@ -88,6 +90,10 @@ function hostWith(options: {
         add: () => Promise.resolve('added' as const),
         setEnabled: () => Promise.resolve(),
         remove: () => Promise.resolve()
+      },
+      openPasswordManager: () => {
+        calls.managerOpens += 1
+        return Promise.resolve()
       },
       set: (key, value) => {
         calls.set.push({ key, value })
@@ -280,7 +286,9 @@ describe('the channel this check cannot see past', () => {
     // On `alpha` the check answers correctly, and a warning nobody needs is a warning everybody
     // learns to skip.
     const { host } = hostWith({ descriptors: [channelDescriptor()] })
-    const { container } = render(<SettingsView host={host} settings={{ 'updates.channel': 'alpha' }} />)
+    const { container } = render(
+      <SettingsView host={host} settings={{ 'updates.channel': 'alpha' }} />
+    )
     // The exact label, not a fragment of it: the row's reset button carries the same words in its
     // `aria-label`, so a loose match finds two elements and the query throws.
     await waitFor(() => expect(screen.getByLabelText(CHANNEL_LABEL)).toBeTruthy())
@@ -572,5 +580,48 @@ describe('searching the settings', () => {
 
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'zzzz' } })
     expect(screen.getByText(/settings\.noMatches/)).toBeTruthy()
+  })
+})
+
+/**
+ * The Passwords section's one control that is not a setting.
+ *
+ * Reported as *"in den settings gibt es kein Passwörter"*, and the section that answers it cannot be
+ * only two switches: what somebody looking for "Passwörter" wants is the list, and the list is a page
+ * — it has no default to reset to, and a master password must not be typed into a screen that is
+ * mostly checkboxes. So the section points at that page.
+ *
+ * The button rather than a link, and that is not a style choice: `navigation-policy.ts` refuses page
+ * content navigating to an internal address, and this screen is page content. An `<a href>` here
+ * would render, be clicked, and do nothing.
+ */
+describe('the passwords section', () => {
+  const passwordsSetting = (): SettingDescriptor =>
+    descriptor({
+      key: 'passwords.autofill',
+      kind: 'toggle',
+      section: 'passwords',
+      label: 'Passwörter automatisch eintragen'
+    })
+
+  it('asks the core to open the passwords page rather than navigating itself', async () => {
+    const { host, calls } = hostWith({ descriptors: [passwordsSetting()] })
+    render(<SettingsView host={host} settings={{}} />)
+    await waitFor(() =>
+      expect(screen.getByLabelText('Passwörter automatisch eintragen')).toBeTruthy()
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.openPasswordManager' }))
+    expect(calls.managerOpens).toBe(1)
+  })
+
+  it('appears in no other section, so the link cannot follow a search elsewhere', async () => {
+    // The block is rendered inside the section rather than beside the list, so a screen with no
+    // passwords descriptors on it — a search for something else — has no stray button on it either.
+    const { host } = hostWith({ descriptors: [descriptor()] })
+    render(<SettingsView host={host} settings={{}} />)
+    await waitFor(() => expect(screen.getByLabelText(BLOCKER)).toBeTruthy())
+
+    expect(screen.queryByRole('button', { name: 'settings.openPasswordManager' })).toBeNull()
   })
 })
