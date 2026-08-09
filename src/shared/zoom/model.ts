@@ -14,20 +14,38 @@
  * a kindness and it is the domain register again, kept invisibly — the exact thing being abolished.
  * A new pane starts at the setting.
  *
- * ## The part Chromium would not give us, and what was done about it
+ * ## The part Chromium would not give us, and where it went in the end
  *
- * For a while only the *value* here was per pane. The rendering was not: `setZoomFactor` writes into
- * a zoom map Chromium keys by origin and shares across the session, so two panes showing the same
- * host tracked each other and the last one zoomed won. Reported, in exactly those words — *"der zoom
- * gilt pro domain, nicht pro kachel"*.
+ * Only the *value* here is per pane. The rendering is not: `setZoomFactor` writes into a zoom map
+ * Chromium keys by origin and shares across the session, so two panes showing the same host track
+ * each other and the last one zoomed wins. Reported in exactly those words — *"der zoom gilt pro
+ * domain, nicht pro kachel"* — and Electron 43 exposes no isolated zoom mode to fix it with.
  *
- * Chromium's isolated zoom mode would have fixed it and Electron 43 does not expose it. So zoom moved
- * off the view and onto the document: the content preload inserts a stylesheet that puts `zoom` on
- * the page's root element, which is per document by construction and touches no shared map.
- * `shared/zoom/injection.ts` holds that decision, what it costs — media queries and viewport units do
- * not move with it — and why the preload channel is not a bridge (spec 6).
+ * The answer tried in between was to leave the engine entirely: a stylesheet putting CSS `zoom` on
+ * the page's root element, which is per document by construction. It worked and it was **unusably
+ * slow**, and the reason is worth keeping because it is not an implementation detail. CSS `zoom`
+ * changes the computed style of every element in the subtree, so each step is a style recalculation
+ * and a layout of the whole document; engine zoom changes one factor and runs the layout pipeline
+ * once. On a large page the difference is the difference between a control and a wait.
  *
- * Nothing in *this* file changed when that happened, which is the point of it having been separated
+ * So the rendering came back to the engine, and the case that started it — a gesture that should
+ * belong to the pane under the hand — was answered by the *other* mechanism Chromium has and Electron
+ * keeps switched off. See below.
+ *
+ * ## Two mechanisms, which is what Safari does
+ *
+ * Page zoom reflows: the viewport shrinks in CSS pixels and the text rewraps. It is what this file's
+ * percentages mean, what the menu and `Ctrl`-wheel drive, and it is per origin per session, as
+ * Safari's own Cmd+± is per website rather than per tab.
+ *
+ * Visual zoom magnifies: it is the page *scale* factor, it lives in the compositor, and it neither
+ * reflows nor lays out — so it costs a GPU transform per frame and is genuinely per view.
+ * `setVisualZoomLevelLimits` turns it on, and Electron's own note bounds it: *"visual zoom only
+ * applies to pinch-to-zoom behavior"*. That is exactly the split Safari presents — the trackpad pinch
+ * magnifies instantly, Cmd+± reflows — and it is why the pinch there feels like nothing this browser
+ * could build out of stylesheets.
+ *
+ * Nothing else in this file moved through any of it, which is the point of it having been separated
  * out: the clamp, the fallback and the sentinel are the same rules whoever applies them.
  *
  * ## Why zoom needed a file at all
@@ -61,6 +79,27 @@
  */
 export const MIN_ZOOM_PERCENT = 30
 export const MAX_ZOOM_PERCENT = 300
+
+/**
+ * The ends of *visual* zoom — the pinch — which are page scale factors and not percentages.
+ *
+ * A different pair from the two above, and not a duplicate of them, because they bound a different
+ * mechanism: these are the limits handed to `setVisualZoomLevelLimits`, and Chromium multiplies the
+ * two together — a pane at 150 % page zoom pinched to 3× is showing 450 %. Sharing a range with the
+ * ladder would therefore not mean what it looks like it means.
+ *
+ * The minimum is 1 and cannot usefully be less. Page scale below 1 is Chromium's mobile
+ * "zoomed-out-to-fit" state, which needs a layout viewport wider than the window to be about
+ * anything; on a desktop view it produces a page in the corner of a grey field. Shrinking is what
+ * page zoom is for, and it reflows, which is what somebody shrinking a page actually wants.
+ *
+ * Three at the top rather than Chromium's mobile default of five: the pinch does not reflow, so every
+ * further step is more horizontal scrolling for the same words, and past 3× reading a page means
+ * pushing it sideways line by line. Anybody who wants more than that wants the text to rewrap, which
+ * is the other mechanism and is a keystroke away.
+ */
+export const MIN_VISUAL_ZOOM = 1
+export const MAX_VISUAL_ZOOM = 3
 
 /**
  * One pane's own zoom, or `null` for a pane that has never been zoomed.

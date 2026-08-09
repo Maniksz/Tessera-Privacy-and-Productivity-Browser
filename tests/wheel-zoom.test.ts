@@ -18,11 +18,16 @@ import { ZOOM_STOPS } from '@shared/gestures/zoom.js'
  *
  * ## What was reported
  *
- * *"warum geht kein zoom per kachel einzeln mit der pinch geste auf einem touchpad?"*, and then
- * *"zoom für rein und pinch für raus […] und dass es nur für die aktuell fokussierte kachel gilt"*.
- * The pinch never reached this browser: `zoom-changed` is a mouse-wheel event by Electron's own
- * typings, and visual zoom is off by default. It is now read in the renderer, where Chromium delivers
- * a trackpad pinch as a `Ctrl`-wheel — on every platform, which is why none of this is macOS-only.
+ * *"warum geht kein zoom per kachel einzeln mit der pinch geste auf einem touchpad?"*. The pinch never
+ * reached this browser at all: `zoom-changed` is a mouse-wheel event by Electron's own typings, and
+ * visual zoom is off by default in Electron.
+ *
+ * It was answered first by reading the gesture in the renderer, where Chromium delivers a trackpad
+ * pinch as a `Ctrl`-wheel, and stepping the page-zoom ladder from it. That worked and was slow, and
+ * the second half of the original problem — *"visual zoom is off by default"* — turned out to be the
+ * answer rather than an obstacle: switching it on hands the pinch to the engine's own page-scale
+ * zoom, which is per view and costs no layout. So the reading below stays, and what it decides
+ * changed: a pinch is now recognised in order to be *ignored*.
  *
  * ## The two directions of failure, which are not symmetrical
  *
@@ -175,32 +180,20 @@ describe('which pane a step lands on', () => {
   it('gives a wheel to the pane it landed on, active or not', () => {
     // The user's own decision of 29.07.2026, unchanged: on a mouse the hand is on the pointer, so
     // the pointer names the pane.
-    expect(
-      decideZoomTarget({ pinch: false, senderTabId: 'tab-hovered', activeTabId: 'tab-active' })
-    ).toBe('tab-hovered')
+    expect(decideZoomTarget({ pinch: false, senderTabId: 'tab-hovered' })).toBe('tab-hovered')
   })
 
-  it('gives a pinch to the focused pane, wherever the pointer happens to rest', () => {
-    // Asked for in those words. On a trackpad the hand is on the pad and the pointer is wherever it
-    // was last left, so it names nothing.
-    expect(
-      decideZoomTarget({ pinch: true, senderTabId: 'tab-hovered', activeTabId: 'tab-active' })
-    ).toBe('tab-active')
-  })
-
-  it('zooms nothing when a pinch meets an empty focused tile', () => {
+  it('gives a pinch to nobody, because the engine has already applied it', () => {
     /*
-      Deliberately not falling back to the sender. That would let one gesture silently change which
-      pane it meant halfway through, and an empty tile is a state the user can see — so nothing
-      happening is readable, where the wrong pane zooming is not.
-    */
-    expect(decideZoomTarget({ pinch: true, senderTabId: 'tab-hovered', activeTabId: null })).toBeNull()
-  })
+      The pinch is Chromium's now: `setVisualZoomLevelLimits` turns on the engine's own pinch-to-zoom,
+      which is the page *scale* factor — per view, in the compositor, no layout. What still arrives
+      here is the same gesture reported to the page as a `Ctrl`-wheel, and applying it would zoom the
+      pane a second time by a second mechanism.
 
-  it('still zooms the hovered pane when the wheel turned and the focused tile is empty', () => {
-    expect(decideZoomTarget({ pinch: false, senderTabId: 'tab-hovered', activeTabId: null })).toBe(
-      'tab-hovered'
-    )
+      The sender is the tempting fallback and is the whole of what this refuses: the pane under the
+      pointer is a real tab, so returning it would type-check, run, and double every pinch.
+    */
+    expect(decideZoomTarget({ pinch: true, senderTabId: 'tab-hovered' })).toBeNull()
   })
 
   it('leaves room for the report that arrives after the pinch has ended', () => {

@@ -470,11 +470,10 @@ export class BrowserWindowController {
         onZoomGesture: (source, direction) => {
           const targetId = decideZoomTarget({
             pinch: source.isPinching,
-            senderTabId: source.id,
-            activeTabId: this.split.activeTabId()
+            senderTabId: source.id
           })
-          // `null` is an empty focused tile, which is a pinch with nothing to apply to. Falling back
-          // to the sender would silently change which pane the gesture meant.
+          // `null` is a trackpad pinch, which Chromium has already applied as visual zoom — applying
+          // it again here would zoom the pane twice by two mechanisms. See `decideZoomTarget`.
           const target = targetId === null ? undefined : this.resolveTab(targetId)
           if (target === undefined) return
           target.setZoomPercent(nextZoomPercent(target.zoomPercent, direction))

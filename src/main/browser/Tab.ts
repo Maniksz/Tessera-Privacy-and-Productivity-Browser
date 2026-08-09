@@ -14,8 +14,13 @@ import {
   ZOOM_GESTURE_CHANNEL,
   pinchInputPhase
 } from '@shared/gestures/wheel-zoom.js'
-import { clampZoomPercent, effectiveZoomPercent, type PaneZoom } from '@shared/zoom/model.js'
-import { PAGE_ZOOM_CHANNEL } from '@shared/zoom/injection.js'
+import {
+  MAX_VISUAL_ZOOM,
+  MIN_VISUAL_ZOOM,
+  clampZoomPercent,
+  effectiveZoomPercent,
+  type PaneZoom
+} from '@shared/zoom/model.js'
 import { sequenceOfTabId, tabIdForSequence } from '@shared/session/tab-ids.js'
 import { INTERNAL_SCHEME } from '@shared/product.js'
 import { applyWebRtcPolicy } from '../session/hardening.js'
@@ -99,12 +104,15 @@ export interface TabCallbacks {
    */
   onPointerMoved(tab: Tab, y: number): void
   /**
-   * A pinch or a `Ctrl`-wheel, reported by *this* tab's page.
+   * A `Ctrl`-wheel, reported by *this* tab's page — and a pinch, which is now dropped.
    *
    * The tab it arrives on is the one under the pointer, because that is the view Chromium routes
-   * wheel input to — but it is no longer necessarily the tab that zooms. A trackpad pinch applies to
-   * the focused tile instead, which is a question a tab cannot answer; the window decides through
-   * `decideZoomTarget`, using `isPinching` to tell the two gestures apart.
+   * wheel input to, and for a mouse wheel that is also the tab that zooms.
+   *
+   * A trackpad pinch arrives here too, because Chromium delivers one to the page as a `Ctrl`-wheel —
+   * and it must not be applied, because the engine has already magnified the view itself. The window
+   * decides through `decideZoomTarget`, using `isPinching` to tell the two apart; that function holds
+   * the whole argument.
    *
    * Reported rather than applied here for that reason and one more: the step belongs to the ladder in
    * `gestures/zoom.ts`, which both this and the menu's zoom go through so the two cannot disagree.
@@ -339,18 +347,16 @@ export class Tab {
          * switches in `runtime-flags.ts` cover the process-level equivalent.
          */
         backgroundThrottling: settings['splitView.throttleInactiveTiles'],
-        /*
-          No `zoomFactor` here, and its absence is the change rather than an omission.
-
-          It used to carry the first paint: `setZoomFactor` acts on the origin a view is on, a view
-          that has loaded nothing has none, and without a default every restored pane painted at
-          100 % and snapped. That whole problem belonged to Chromium's per-origin zoom, which is what
-          this browser stopped using — see `shared/zoom/injection.ts`. Setting it now would be worse
-          than pointless: it would write a level into the session's host zoom map, which is exactly
-          the shared state that made zoom behave per domain, and it would apply on top of the
-          stylesheet the preload inserts. The first paint is covered from the other side now, by the
-          preload asking for this pane's zoom before the page has rendered anything.
-        */
+        /**
+         * The zoom, ahead of the first paint — the only apply point there is before a document has
+         * committed, because `setZoomFactor` acts on the origin a view is on and a view that has
+         * loaded nothing has none. Without it, a session restored at 200 % and every pane on a
+         * profile whose `appearance.defaultZoom` is not 100 would paint wrong and snap, on every
+         * launch. A default only: Chromium's per-origin level wins once one exists, which is why
+         * `did-navigate` re-asserts.
+         */
+        zoomFactor:
+          effectiveZoomPercent(this.#zoomPercent, settings['appearance.defaultZoom']) / 100,
         spellcheck: settings['advanced.spellcheck'],
         autoplayPolicy:
           settings['splitView.autoplayInTiles'] === 'allow'
@@ -360,6 +366,30 @@ export class Tab {
     })
 
     applyWebRtcPolicy(this.view.webContents, settings)
+
+    /*
+      The pinch, handed to the engine — the one part of zoom this browser should not be implementing.
+
+      Electron switches visual zoom off, so a trackpad pinch did nothing until it was read out of the
+      page as a `Ctrl`-wheel and turned into steps on the page-zoom ladder. That route works and it is
+      the slow one: every step is a round trip and a relayout, and it applies a mechanism that is
+      shared per origin. Raising the limits gives the gesture back to Chromium, where it is the page *scale*
+      factor: per view, in the compositor, no layout at all. Safari's trackpad pinch is the same thing,
+      which is why it feels the way it does.
+
+      Per view rather than per session, because that is where the API is and because the scale itself
+      is per view — two tiles on one site can be pinched to different sizes, which no arrangement of
+      `setZoomFactor` can produce.
+
+      The promise is dropped deliberately: a view that refuses this is a view whose pinch does nothing,
+      which is where every Electron application starts, and it is not a reason to fail a tab.
+    */
+    void this.view.webContents
+      .setVisualZoomLevelLimits(MIN_VISUAL_ZOOM, MAX_VISUAL_ZOOM)
+      .catch(() => {
+        // A view torn down between construction and this call. Nothing to do and nothing to say.
+      })
+
     this.#wireEvents()
   }
 
@@ -418,25 +448,6 @@ export class Tab {
       this.callbacks.onZoomGesture(this, direction)
     })
 
-    /*
-      "What is this pane's zoom?", asked by the document before it paints.
-
-      The pull half of `PAGE_ZOOM_CHANNEL`; `applyZoom` below is the push half. Synchronous because
-      the question is asked at `document-start` and an awaited answer arrives after the first frame —
-      which the user sees as every page loading at 100 % and then jumping. The cost is one round trip
-      answered from a number this object already holds.
-
-      On this view rather than on `ipcMain`, the same construction the zoom gesture above uses and for
-      the same reason: a listener attached to a view makes the sender *be* the view, so the pane whose
-      zoom is being asked for is the pane that asked. There is no sender check to write and none to
-      forget.
-    */
-    on('ipc-message-sync', (...args: unknown[]) => {
-      const [event, channel] = args
-      if (channel !== PAGE_ZOOM_CHANNEL) return
-      if (typeof event !== 'object' || event === null) return
-      ;(event as { returnValue?: unknown }).returnValue = this.zoomPercent
-    })
 
     /*
       Every mouse move in the page, filtered to the one number the tile bar needs.
@@ -571,14 +582,9 @@ export class Tab {
       if (this.#favicon !== null && faviconDomainOf(this.#currentUrl) !== this.#favicon.site) {
         this.#favicon = null
       }
-      /*
-        The pane's zoom, pushed after every commit, and now a retry rather than the mechanism.
-
-        The new document asks for the zoom itself at `document-start`, which is earlier than this and
-        is what covers the first paint. This stays because that pull has one failure mode — nothing
-        answering, which is a view created outside a hardened session — and a push at commit is the
-        cheapest way back from it. When the pull worked, the preload compares and does nothing.
-      */
+      // The pane's zoom, put back after every commit. Chromium's zoom is same-origin per session, so
+      // re-asserting is what keeps the value the pane's rather than whatever another pane last left
+      // this origin at — see `shared/zoom/model.ts` for what that does and does not buy.
       this.applyZoom()
       notify()
     })
@@ -843,26 +849,23 @@ export class Tab {
   // --- zoom ----------------------------------------------------------------
 
   /**
-   * Zoom belongs to the pane, not to the site, and as of this change it finally does.
+   * Page zoom: the factor that reflows, put on the view.
    *
-   * Spec 1 said the opposite — "the same page open twice must look the same in both tabs" — and this
-   * was a `Map` from registrable domain to percentage. **The user reversed it on 29.07.2026**, and
-   * the value has been the pane's ever since; what stayed per domain was the *rendering*, because
-   * `setZoomFactor` writes into a zoom map Chromium keys by origin and shares across the session. Two
-   * tiles on one site zoomed together anyway, which is what was reported.
+   * The value is the pane's — spec 1 said the opposite and **the user reversed it on 29.07.2026** —
+   * and the *rendering* is per origin per session, because `setZoomFactor` writes into a zoom map
+   * Chromium keys by host. Two tiles showing one site therefore share the level, which is the cost
+   * that was weighed and accepted after the alternative was built and measured: a stylesheet putting
+   * CSS `zoom` on the page root is genuinely per pane and restyles the whole document on every step,
+   * which was reported as unusable. `shared/zoom/model.ts` carries that whole history, and the pinch
+   * — the case where per-pane really matters — is answered by visual zoom in the constructor.
    *
-   * So the factor no longer goes on the view. It goes to the document, as a stylesheet the content
-   * preload inserts — `shared/zoom/injection.ts` holds the whole argument, including what CSS `zoom`
-   * costs in exchange.
-   *
-   * A push, and the pane's own preload pulls the same value at `document-start`; the two halves are
-   * described at the subscription in `#wireEvents`. Guarded on the view being gone, because this is
-   * reached from a settings change that walks every pane in the window.
+   * Guarded on the view being gone, because this is reached from a settings change that walks every
+   * pane in the window.
    */
   applyZoom(): void {
     const wc = this.view.webContents
     if (wc.isDestroyed()) return
-    wc.send(PAGE_ZOOM_CHANNEL, this.zoomPercent)
+    wc.setZoomFactor(this.zoomPercent / 100)
   }
 
   setZoomPercent(percent: number): void {

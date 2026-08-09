@@ -30,13 +30,17 @@
  * refusal. One source for both is also what `zoom.ts` asks for in its own docblock — two ladders in
  * one browser is drift nobody reports and everybody feels.
  *
- * ## Why the pinch and the wheel go to different panes
+ * ## Why the pinch no longer arrives here at all
  *
- * The user asked for the pinch to apply to *"die aktuell fokussierte kachel"*, and it contradicts the
- * rule for `Ctrl`-wheel, which zooms the pane under the pointer whether or not it is active — the
- * user's own decision of 29.07.2026. Both are right, because the hand is in a different place: on a
- * mouse it is on the pointer, so the pointer names the pane; on a trackpad it is on the pad and the
- * pointer is wherever it was last left, so it names nothing. See `decideZoomTarget`.
+ * It used to be routed to the focused tile, because on a trackpad the hand is on the pad and the
+ * pointer names nothing. That is still true and it is now the engine's problem: `setVisualZoomLevelLimits`
+ * turns on Chromium's own pinch-to-zoom, which scales in the compositor, applies to the view the
+ * gesture is over, and costs nothing per step. What still reaches this file is the *report* of the
+ * same gesture — Chromium delivers a trackpad pinch to the page as a `Ctrl`-wheel as well — and
+ * `decideZoomTarget` drops it, so one gesture cannot be applied twice by two mechanisms.
+ *
+ * `Ctrl`-wheel from a mouse is unaffected and still zooms the pane under the pointer, which is the
+ * user's decision of 29.07.2026.
  */
 
 /** Preload -> core: one step of gesture zoom, already reduced to a direction. */
@@ -176,21 +180,42 @@ export function pinchInputPhase(input: unknown): 'begin' | 'end' | null {
 export const PINCH_GRACE_MS = 250
 
 export interface ZoomTargetRequest {
-  /** Whether a trackpad pinch is what produced this step. */
+  /**
+   * Whether a trackpad pinch is what produced this step.
+   *
+   * The only reason this is still asked. It used to choose *between* two panes; now it decides
+   * whether there is a pane at all, because a pinch has already been applied by the engine.
+   */
   pinch: boolean
   /** The tab whose page reported it, which is the tab under the pointer. */
   senderTabId: string
-  /** The tab in the focused tile, or `null` when that tile holds none. */
-  activeTabId: string | null
 }
 
 /**
  * Which tab a zoom step applies to, or `null` for none.
  *
- * Two rules, because two hands; the file docblock argues it. `null` for a pinch with nothing in the
- * focused tile is deliberate — falling back to the sender would mean the gesture silently changed
- * which pane it meant, and an empty tile is a state the user can see.
+ * ## A pinch is now nobody's, and that is the change
+ *
+ * It used to be the focused tile's, on the user's instruction that the pinch should apply to *"die
+ * aktuell fokussierte kachel"*. That instruction is honoured better by not answering it here at all.
+ *
+ * The pinch is Chromium's now. `setVisualZoomLevelLimits` turns on the engine's own pinch-to-zoom —
+ * page *scale*, which lives in the compositor rather than in layout, so it is per view by
+ * construction and costs no style recalc, no relayout and no round trip. It is the same mechanism a
+ * trackpad pinch drives in Safari, and it is why that feels instant while a zoom rebuilt out of
+ * stylesheets does not.
+ *
+ * So a step reported during a pinch is a *duplicate* of something the engine has already done, and
+ * applying it would zoom the pane twice by two different mechanisms at once. Returning `null` is what
+ * keeps the two from fighting. `PINCH_GRACE_MS` matters more than ever for the same reason: the last
+ * reports of a gesture routinely arrive after the browser process has seen `gesturePinchEnd`, and
+ * without the grace they would land on the page zoom as an unexplained jump at the end of every
+ * pinch.
+ *
+ * `Ctrl`-wheel is untouched and still lands here: Electron's own note says visual zoom *"only applies
+ * to pinch-to-zoom behavior"*, so a mouse wheel reaches nothing in the engine and is still this
+ * browser's to apply — to the pane under the pointer, which is the user's decision of 29.07.2026.
  */
 export function decideZoomTarget(request: ZoomTargetRequest): string | null {
-  return request.pinch ? request.activeTabId : request.senderTabId
+  return request.pinch ? null : request.senderTabId
 }
