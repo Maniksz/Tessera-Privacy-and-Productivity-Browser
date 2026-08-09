@@ -367,29 +367,8 @@ export class Tab {
 
     applyWebRtcPolicy(this.view.webContents, settings)
 
-    /*
-      The pinch, handed to the engine — the one part of zoom this browser should not be implementing.
-
-      Electron switches visual zoom off, so a trackpad pinch did nothing until it was read out of the
-      page as a `Ctrl`-wheel and turned into steps on the page-zoom ladder. That route works and it is
-      the slow one: every step is a round trip and a relayout, and it applies a mechanism that is
-      shared per origin. Raising the limits gives the gesture back to Chromium, where it is the page *scale*
-      factor: per view, in the compositor, no layout at all. Safari's trackpad pinch is the same thing,
-      which is why it feels the way it does.
-
-      Per view rather than per session, because that is where the API is and because the scale itself
-      is per view — two tiles on one site can be pinched to different sizes, which no arrangement of
-      `setZoomFactor` can produce.
-
-      The promise is dropped deliberately: a view that refuses this is a view whose pinch does nothing,
-      which is where every Electron application starts, and it is not a reason to fail a tab.
-    */
-    void this.view.webContents
-      .setVisualZoomLevelLimits(MIN_VISUAL_ZOOM, MAX_VISUAL_ZOOM)
-      .catch(() => {
-        // A view torn down between construction and this call. Nothing to do and nothing to say.
-      })
-
+    // The pinch, before the first page. Re-asserted at every commit; see `applyVisualZoomLimits`.
+    this.applyVisualZoomLimits()
     this.#wireEvents()
   }
 
@@ -586,6 +565,8 @@ export class Tab {
       // re-asserting is what keeps the value the pane's rather than whatever another pane last left
       // this origin at — see `shared/zoom/model.ts` for what that does and does not buy.
       this.applyZoom()
+      // And the pinch limits, which a cross-site navigation genuinely loses. See the method.
+      this.applyVisualZoomLimits()
       notify()
     })
     /*
@@ -866,6 +847,40 @@ export class Tab {
     const wc = this.view.webContents
     if (wc.isDestroyed()) return
     wc.setZoomFactor(this.zoomPercent / 100)
+  }
+
+  /**
+   * Visual zoom: the pinch, handed to the engine rather than implemented here.
+   *
+   * Electron switches visual zoom off, so a trackpad pinch did nothing until it was read out of the
+   * page as a `Ctrl`-wheel and stepped along the page-zoom ladder — the slow route, a round trip and
+   * a relayout per step, driving a factor that is shared per origin. Raising the limits gives the
+   * gesture back to Chromium, where it is the page *scale*: per view, in the compositor, no layout at
+   * all. Safari's trackpad pinch is the same mechanism.
+   *
+   * ## Why this is called again at every commit
+   *
+   * Because the limits belong to a *renderer*, and a tab does not keep the same one. Site isolation
+   * gives a cross-site navigation a fresh renderer process, and the fresh one starts at Electron's
+   * default — pinch disabled — so the setting made when the tab was built applies to the process that
+   * loaded the start page and to nothing after it.
+   *
+   * That is exactly how it was reported: *"warum klappt der nur auf der startseite?"*. The start page
+   * is where the tab begins, so it is the one document that shares a process with the call; every site
+   * navigated to afterwards is another process, and pinching there did nothing.
+   *
+   * Cheap enough to do unconditionally: it is one asynchronous message per committed document, on a
+   * path that has just loaded one.
+   *
+   * The promise is dropped deliberately. A view that refuses this is a view whose pinch does nothing,
+   * which is where every Electron application starts and is not a reason to fail a navigation.
+   */
+  applyVisualZoomLimits(): void {
+    const wc = this.view.webContents
+    if (wc.isDestroyed()) return
+    void wc.setVisualZoomLevelLimits(MIN_VISUAL_ZOOM, MAX_VISUAL_ZOOM).catch(() => {
+      // A view torn down between the commit and this call. Nothing to do and nothing to say.
+    })
   }
 
   setZoomPercent(percent: number): void {
