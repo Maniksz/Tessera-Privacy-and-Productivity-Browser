@@ -1,18 +1,13 @@
 import { app, type Event, type InputEvent, type IpcMainEvent, type WebContents } from 'electron'
-import {
-  AUTOFILL_FILL_CHANNEL,
-  AUTOFILL_OFFER_CHANNEL,
-  AUTOFILL_SAVE_ANSWER_CHANNEL,
-  AUTOFILL_SUBMIT_CHANNEL
-} from '@shared/passwords/wire.js'
 import type { AutofillFrame, AutofillService } from './AutofillService.js'
+import { wireAutofillView, type AutofillHost } from './autofill-wiring.js'
 
 /**
- * The wiring, and only the wiring.
+ * The Electron half of autofill's wiring, and only that.
  *
- * Every decision lives in `AutofillService`, which knows nothing about Electron so that it can be
- * tested. What is left here is the part that can only happen here: reading the frame tree, and
- * attaching per-view listeners.
+ * Every decision lives in `AutofillService`; what each of a view's events *means* lives in
+ * `autofill-wiring.ts`. What is left here is the part that can only happen here: reading the frame
+ * tree, and translating Electron's events into the host that file subscribes through.
  *
  * ## Why per-`webContents` listeners rather than `ipcMain`
  *
@@ -27,6 +22,14 @@ import type { AutofillFrame, AutofillService } from './AutofillService.js'
  * `event.senderFrame` is Chromium's own account of which frame spoke. The preload could claim
  * anything about its address and its depth; a compromised renderer is precisely the case the
  * cross-origin-frame rule exists for, so neither is taken from the message.
+ *
+ * ## Why the meaning of the events is not here
+ *
+ * Because the defect was in the meaning, not in the plumbing. `input-event` was attached only once
+ * an offer had been served, and an offer could not be served until an input event had been seen — a
+ * circle that made autofill unable to fill anything, that no test could reach, and that reading the
+ * two halves separately does not reveal. Behind the host below, the whole chain is drivable from a
+ * test. See `autofill-wiring.ts`.
  */
 
 /**
@@ -47,92 +50,54 @@ function frameOf(event: IpcMainEvent): AutofillFrame {
   return { url: frame.url, isTopLevel, topLevelUrl: top === null ? null : top.url }
 }
 
-/**
- * Starts answering autofill messages. Installed once for the application, not once per session.
- *
- * The subscription set is the interesting part:
- *
- *   - `input-event` is the *only* source of the gesture the fill rules require. It fires for input
- *     the browser process dispatched, so a page calling `.click()` cannot produce one. It is also the
- *     one subscription attached and detached on demand rather than for the life of the view: every
- *     mouse movement in every tab would otherwise cost a main-process round trip, for tabs that will
- *     never fill anything. `offerFor` already answers "is there anything to fill here" on every focus
- *     of a password-related field, so that answer is reused as the gate — see `installAutofill` below.
- *   - `did-start-navigation` drops a pending save that has left its site, and deliberately not one
- *     that is merely following the redirect a sign-in caused — that navigation is the one the save
- *     bar has to survive.
- *   - `dom-ready` re-raises a surviving pending save on the page the sign-in landed on. Without it
- *     the bar would be drawn into a document that is already gone and the question would never be
- *     asked, which is the shape this feature fails in silently.
- */
+/** Electron's account of one view, in the shape the wiring subscribes through. */
+function hostFor(contents: WebContents): AutofillHost {
+  return {
+    view: contents,
+    onSyncMessage: (listener) => {
+      contents.on('ipc-message-sync', (event, channel, ...args) => {
+        const reply = listener(channel, frameOf(event), args[0])
+        // Only when the channel was autofill's. Other features listen for their own synchronous
+        // channels on this same view, and assigning here unconditionally would answer theirs.
+        if (reply !== null) event.returnValue = reply.answer
+      })
+    },
+    onMessage: (listener) => {
+      contents.on('ipc-message', (event, channel, ...args) => {
+        listener(channel, frameOf(event), args[0])
+      })
+    },
+    onInput: (listener) => {
+      const subscription = (_event: Event, input: InputEvent): void => {
+        listener(input)
+      }
+      contents.on('input-event', subscription)
+      // The listener itself is what `removeListener` needs — a fresh arrow function would not match
+      // the one `.on()` was given — so the way off is closed over rather than looked up again.
+      return () => contents.removeListener('input-event', subscription)
+    },
+    onMainFrameNavigation: (listener) => {
+      contents.on('did-start-navigation', (details) => {
+        // `details.url` rather than the deprecated positional argument, and the main frame only: a
+        // subframe navigating says nothing about where the user is.
+        if (!details.isMainFrame) return
+        listener(details.url)
+      })
+    },
+    onDocumentReady: (listener) => {
+      contents.on('dom-ready', () => {
+        listener(contents.getURL())
+      })
+    },
+    onDestroyed: (listener) => {
+      contents.once('destroyed', listener)
+    }
+  }
+}
+
+/** Starts answering autofill messages. Installed once for the application, not once per session. */
 export function installAutofill(service: AutofillService): void {
   app.on('web-contents-created', (_event, contents: WebContents) => {
-    /**
-     * Whether `input-event` is currently attached for this view.
-     *
-     * Kept as a plain closure variable rather than a boolean, because the listener itself is what
-     * `removeListener` needs — a fresh arrow function would not match the one `.on()` was given.
-     */
-    let gestureListener: ((event: Event, inputEvent: InputEvent) => void) | null = null
-
-    const trackGestures = (needed: boolean): void => {
-      if (needed) {
-        if (gestureListener !== null) return
-        gestureListener = (_ipcEvent, input) => service.noteInput(contents.id, input)
-        contents.on('input-event', gestureListener)
-        return
-      }
-      if (gestureListener === null) return
-      contents.removeListener('input-event', gestureListener)
-      gestureListener = null
-    }
-
-    contents.on('ipc-message-sync', (event, channel, ...args) => {
-      if (channel === AUTOFILL_OFFER_CHANNEL) {
-        const offer = service.offerFor(contents, frameOf(event), args[0])
-        // `offerFor` already refused for every reason gesture-tracking would otherwise be wasted on:
-        // a locked vault, no entry for this site, a frame or form that does not qualify. Its answer
-        // is attached before this call returns, which is ahead of any click the user could make on a
-        // suggestion it just handed the page — so a fill immediately after an offer never finds the
-        // gesture missing.
-        trackGestures(offer !== null)
-        event.returnValue = offer
-        return
-      }
-      if (channel === AUTOFILL_FILL_CHANNEL) {
-        event.returnValue = service.fillFor(contents, frameOf(event), args[0])
-      }
-    })
-
-    contents.on('ipc-message', (event, channel, ...args) => {
-      if (channel === AUTOFILL_SUBMIT_CHANNEL) {
-        service.reportSubmission(contents, frameOf(event), args[0])
-        return
-      }
-      if (channel === AUTOFILL_SAVE_ANSWER_CHANNEL) {
-        service.answerSave(contents, args[0])
-      }
-    })
-
-    contents.on('did-start-navigation', (details) => {
-      // Main frame only, and `details.url` rather than the deprecated positional argument. A
-      // subframe navigating says nothing about where the user is, and a same-document navigation
-      // — the shape a single-page application signs in with — must not drop the offer either.
-      if (!details.isMainFrame) return
-      service.noteNavigation(contents.id, details.url)
-    })
-
-    contents.on('dom-ready', () => {
-      service.documentReady(contents, {
-        url: contents.getURL(),
-        // `dom-ready` is a main-frame event, so the document that just loaded is the top-level one.
-        isTopLevel: true,
-        topLevelUrl: contents.getURL()
-      })
-    })
-
-    contents.once('destroyed', () => {
-      service.forget(contents.id)
-    })
+    wireAutofillView(service, hostFor(contents))
   })
 }

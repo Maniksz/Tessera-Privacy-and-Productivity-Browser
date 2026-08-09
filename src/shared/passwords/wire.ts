@@ -32,6 +32,21 @@ import type { FieldDescriptor, FormDescriptor } from './fields.js'
  * that keeps refocusing a field — cannot leak anything even if they are noisy.
  */
 
+/**
+ * Preload -> core: "a fillable password field has focus here", or "it no longer has".
+ *
+ * One boolean, no form, no address, no reply. It exists for one job: to be the gate the core attaches
+ * its `input-event` listener behind, so the subscription costs nothing in the tabs that will never
+ * fill anything. That gate used to be a non-null offer — which `decideFill` refused for want of the
+ * gesture the listener was there to record, so no view ever got a listener and autofill could not
+ * fill anything at all. The gate has to be answerable *before* any rule has been applied, and the
+ * shape of the form in front of the user is the only fact that qualifies.
+ *
+ * It is not consent and it is not trusted: a page that lies here is granted an input listener and
+ * nothing whatever else. See `AutofillService.noteFillableForm`.
+ */
+export const AUTOFILL_FILLABLE_CHANNEL = 'tessera:autofill-fillable'
+
 /** Preload -> core, synchronous: "what could be filled into this form?" Answers a `FillOffer`. */
 export const AUTOFILL_OFFER_CHANNEL = 'tessera:autofill-offer'
 

@@ -1,3 +1,4 @@
+import { consentHolds, type FillConsent } from './consent.js'
 import { registrableDomainOfUrl } from '../url/domain.js'
 
 /**
@@ -68,14 +69,22 @@ export interface FillContext {
    */
   readonly formAction: string | null
   /**
-   * When the core last saw a real input event in this view, or `null` for never.
+   * The browser's own reason for believing the user asked for this, or `null` for none.
    *
-   * From `webContents.on('input-event')`, which fires for input the browser process
-   * dispatched and not for anything a page script synthesised. A renderer-supplied flag
-   * would be worthless here, because a compromised renderer is one of the things this is
-   * defending against.
+   * Built by the core from what it saw itself — an `input-event` it timed, or a request it opened
+   * from browser chrome — never from anything a renderer said. See `consent.ts` for both producers
+   * and for why the second one is bound to a single request.
    */
-  readonly lastGestureAt: number | null
+  readonly consent: FillConsent | null
+  /**
+   * The chrome-side fill request open for this view *now*, or `null`.
+   *
+   * Read a second time here rather than trusted from `consent`, in the same belt-and-braces shape as
+   * `isTopLevelFrame` beside `topLevelUrl`: a `chrome-action` consent whose id no longer matches
+   * what the core holds open is a spent or invented one, and without this field the rule that
+   * refuses it would live in the caller instead of in the decision.
+   */
+  readonly openRequestId: string | null
   readonly now: number
   /** Whether the form actually has a fillable password field. See `fields.ts`. */
   readonly hasFillablePasswordField: boolean
@@ -102,15 +111,6 @@ const ALLOWED: FillDecision = { allowed: true }
 function refuse(reason: FillRefusal): FillDecision {
   return { allowed: false, reason }
 }
-
-/**
- * How long after a real input event a fill still counts as user-initiated.
- *
- * Long enough that clicking our own suggestion is inside the window even on a slow machine,
- * short enough that a page cannot bank a gesture from a minute ago and spend it later on a
- * form the user never touched.
- */
-export const FILL_GESTURE_WINDOW_MS = 5_000
 
 /** `[::1]` is how `URL.hostname` reports the IPv6 loopback, brackets included. */
 const NAMED_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '[::1]'])
@@ -170,6 +170,57 @@ export function originMayReceiveCredentials(url: string): boolean {
   const parsed = schemeAndHostOf(url)
   if (parsed === null) return false
   return pageMayReceiveCredentials(parsed.scheme, parsed.host)
+}
+
+/** A refusal, or the page that survived it, parsed once. */
+type PageVerdict =
+  | { readonly allowed: false; readonly reason: FillRefusal }
+  | { readonly allowed: true; readonly scheme: string; readonly host: string }
+
+/**
+ * Everything the page's own address decides, and nothing situational.
+ *
+ * Split out because `decideFill` needs the parsed page afterwards — for the downgrade rule — and a
+ * predicate that threw the parse away would make the caller parse it a second time, which is a
+ * second reading of the same address and the beginning of two answers.
+ */
+function examinePage(frameUrl: string): PageVerdict {
+  const page = schemeAndHostOf(frameUrl)
+  if (page === null) return { allowed: false, reason: 'unsupported-scheme' }
+  /*
+    RULE unsupported-scheme / insecure-page — no credential over a scheme that cannot carry one,
+    and none over plain `http:` off loopback.
+
+    `insecure-page` is separate from `unsupported-scheme` because the two are different
+    conversations with the user: "this browser never fills here" versus "this page is not
+    encrypted". Collapsing them would make the honest message impossible.
+  */
+  if (page.scheme !== 'https:' && page.scheme !== 'http:') {
+    return { allowed: false, reason: 'unsupported-scheme' }
+  }
+  if (!pageMayReceiveCredentials(page.scheme, page.host)) {
+    return { allowed: false, reason: 'insecure-page' }
+  }
+  return { allowed: true, scheme: page.scheme, host: page.host }
+}
+
+/**
+ * Whether this page could be filled at all, before there is consent, a form or a frame to ask about.
+ *
+ * For the one caller that has to answer "would there be anything to do here" *early*: the toolbar
+ * key, which shows whether the vault is locked and whether this page is fillable, and has to show it
+ * on every navigation rather than at the moment of a click. Calling `decideFill` with an invented
+ * consent to get that answer is exactly the second predicate this file's header warns about; this is
+ * the same predicate, narrowed to the part that is knowable then.
+ *
+ * It answers a `FillDecision` rather than a boolean so the reason survives — an indicator that can
+ * say "not on an unencrypted page" is worth more than one that is merely grey, and `decideFill`
+ * remains the only thing that authorises a fill. It is optimistic by construction: every remaining
+ * rule can still refuse.
+ */
+export function decidePageFill(frameUrl: string): FillDecision {
+  const verdict = examinePage(frameUrl)
+  return verdict.allowed ? ALLOWED : refuse(verdict.reason)
 }
 
 /**
@@ -236,14 +287,11 @@ export function decideFill(context: FillContext, subject: FillSubject): FillDeci
     the user having done nothing but visit. Filling on load is the convenience every browser
     started with and every browser has since walked back.
 
-    The gesture is read from the core's own record of input events, not from anything the
-    renderer says, so a compromised renderer cannot manufacture one.
+    Both sources of consent are weighed here, by `consent.ts`, and there is no second path around
+    this line. Neither is anything the renderer said: one is an input event the browser process
+    dispatched, the other is a request the core opened from its own chrome and still holds.
   */
-  if (context.lastGestureAt === null) return refuse('no-user-gesture')
-  if (context.now - context.lastGestureAt > FILL_GESTURE_WINDOW_MS) return refuse('no-user-gesture')
-  // A gesture timestamp in the future is a clock that moved — an NTP correction, a resumed
-  // laptop — and not a gesture. Treating it as one would make the window unbounded.
-  if (context.lastGestureAt > context.now) return refuse('no-user-gesture')
+  if (!consentHolds(context.consent, context)) return refuse('no-user-gesture')
 
   /*
     RULE no-password-field — do not put a username into a search box.
@@ -256,19 +304,9 @@ export function decideFill(context: FillContext, subject: FillSubject): FillDeci
   */
   if (!context.hasFillablePasswordField) return refuse('no-password-field')
 
-  const page = schemeAndHostOf(context.frameUrl)
-  if (page === null) return refuse('unsupported-scheme')
-
-  /*
-    RULE unsupported-scheme / insecure-page — no credential over a scheme that cannot carry
-    one, and none over plain `http:` off loopback.
-
-    `insecure-page` is separate from `unsupported-scheme` because the two are different
-    conversations with the user: "this browser never fills here" versus "this page is not
-    encrypted". Collapsing them would make the honest message impossible.
-  */
-  if (page.scheme !== 'https:' && page.scheme !== 'http:') return refuse('unsupported-scheme')
-  if (!pageMayReceiveCredentials(page.scheme, page.host)) return refuse('insecure-page')
+  // The same examination the toolbar's indicator makes, called here rather than duplicated there.
+  const page = examinePage(context.frameUrl)
+  if (!page.allowed) return refuse(page.reason)
 
   const stored = schemeAndHostOf(subject.origin)
   if (stored === null) return refuse('unsupported-scheme')

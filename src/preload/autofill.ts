@@ -1,6 +1,7 @@
 import { ipcRenderer } from 'electron'
 import { chooseFillTargets, chooseSaveTargets, type FieldDescriptor, type FormDescriptor } from '@shared/passwords/fields.js'
 import {
+  AUTOFILL_FILLABLE_CHANNEL,
   AUTOFILL_FILL_CHANNEL,
   AUTOFILL_OFFER_CHANNEL,
   AUTOFILL_SAVE_ANSWER_CHANNEL,
@@ -345,6 +346,26 @@ function showSaveBar(chrome: SaveBarChrome): void {
 
 // --- wiring ------------------------------------------------------------------
 
+/**
+ * Tells the core whether a fillable password field has focus in this view.
+ *
+ * One boolean, no form, no address, no answer — and the whole of what makes autofill work at all.
+ * The core attaches its `input-event` listener on this report and on nothing else, because the
+ * listener is what records the gesture every fill requires; gating it on an offer, as it was gated
+ * before, meant gating it on a decision that refused for want of that very gesture.
+ *
+ * Sent on every focus change, including the ones that say "no", so the subscription is released as
+ * soon as the caret leaves the form rather than lasting the life of the tab.
+ */
+function reportFillable(fillable: boolean): void {
+  try {
+    ipcRenderer.send(AUTOFILL_FILLABLE_CHANNEL, fillable)
+  } catch {
+    // No responder — an old build, or a view created outside a hardened session. Nothing is lost
+    // that this side could act on: the report is for the core's benefit, not this one's.
+  }
+}
+
 function requestOffer(descriptor: FormDescriptor): FillOffer | null {
   try {
     /*
@@ -405,23 +426,42 @@ function performFill(anchor: HTMLInputElement, id: string): void {
 function onFocusIn(event: FocusEvent): void {
   const target = event.target
   hideSuggestion()
-  if (!(target instanceof HTMLInputElement)) return
-  if (!isFieldVisible(target)) return
+  const focused = fillableFocus(target)
+  /*
+    Reported before anything is asked of the core, and reported on every focus change either way.
+
+    This is the message the core attaches its input listener on, so it has to be sent for a focus
+    that qualifies *before* the offer is asked for — the press that authorises a fill is the one the
+    user is about to make on the list this focus draws, and a listener attached afterwards would
+    miss it.
+  */
+  reportFillable(focused !== null)
+  if (focused === null) return
+
+  const offer = requestOffer(focused.form.descriptor)
+  if (offer === null) return
+  showSuggestion(focused.field, offer, (id) => performFill(focused.field, id))
+}
+
+/** The focused element, when it is a field a fill would write to, with its form. */
+function fillableFocus(target: EventTarget | null): {
+  field: HTMLInputElement
+  form: { descriptor: FormDescriptor; elements: HTMLInputElement[] }
+} | null {
+  if (!(target instanceof HTMLInputElement)) return null
+  if (!isFieldVisible(target)) return null
 
   const described = describeForm(target)
-  if (described === null) return
+  if (described === null) return null
   const targets = chooseFillTargets(described.descriptor)
-  if (targets === null) return
+  if (targets === null) return null
   // The focused field has to be one of the two a fill would write to. Offering while the caret is
   // in an unrelated box would put a list of the user's accounts on screen for no reason.
   if (target !== described.elements[targets.password.index] &&
       (targets.username === null || target !== described.elements[targets.username.index])) {
-    return
+    return null
   }
-
-  const offer = requestOffer(described.descriptor)
-  if (offer === null) return
-  showSuggestion(target, offer, (id) => performFill(target, id))
+  return { field: target, form: described }
 }
 
 /**

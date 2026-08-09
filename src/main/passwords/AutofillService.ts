@@ -1,5 +1,6 @@
 import type { Locale } from '@shared/i18n/catalog.js'
 import { registrableDomainOfUrl } from '@shared/url/domain.js'
+import { consentFor } from '@shared/passwords/consent.js'
 import { chooseFillTargets, type FormDescriptor } from '@shared/passwords/fields.js'
 import { decideFill, fillableSubjects, type FillContext } from '@shared/passwords/fill-policy.js'
 import { isFillGestureInput } from '@shared/passwords/gesture.js'
@@ -196,6 +197,17 @@ export class AutofillService {
    * about lives here. See `gesture.ts`.
    */
   readonly #lastGestureAt = new Map<number, number>()
+  /**
+   * The chrome-side fill request open for a view, at most one, keyed by web-contents id.
+   *
+   * This is the whole of the second consent source, and its narrowness *is* the security property:
+   * an entry here means the user asked for a fill from browser chrome for this view and has not yet
+   * been served. It is written only by `noteChromeRequest`, which no message from a page can reach,
+   * and it is removed by the first authorised fill and by every one of the five events that end the
+   * request — see `consent.ts`. While it exists, `no-user-gesture` is satisfied for this view, so
+   * anything that leaves it behind turns the rule off for that tab for good.
+   */
+  readonly #openRequest = new Map<number, string>()
   readonly #pending = new Map<number, PendingSave>()
 
   constructor(options: AutofillServiceOptions) {
@@ -206,6 +218,61 @@ export class AutofillService {
   noteInput(viewId: number, input: unknown): void {
     if (!isFillGestureInput(input)) return
     this.#lastGestureAt.set(viewId, this.#options.now())
+  }
+
+  /**
+   * A view reports whether the user is standing in a form that could be filled.
+   *
+   * Answers whether the core wants to hear this view's input events, and that answer is the whole
+   * reason this message exists. Listening to `input-event` in every tab costs a main-process round
+   * trip per mouse press for tabs that will never fill anything, so the subscription is attached on
+   * demand — and until now the thing it was attached on demand *by* was a non-null offer, which
+   * `decideFill` refused for want of the very gesture the listener was there to record. The feature
+   * could not fill anything, and nothing failed. The gate has to be something a page can report
+   * before any rule has been applied, and the shape of the form in front of the user is it.
+   *
+   * The report carries no form, no address and no answer: it is one boolean about whether a
+   * fillable password field has focus, which is a fact the page already has. It is *not* consent —
+   * `noteInput` is still the only thing that records one, and it is still fed only by the browser
+   * process. A page that lies here buys itself an input listener and nothing else.
+   */
+  noteFillableForm(reported: unknown): boolean {
+    // Before anything else: somebody who switched autofill off must not have their input events
+    // reported to the main process at all, which is the cost this subscription carries.
+    if (!this.#options.enabled()) return false
+    return reported === true
+  }
+
+  /**
+   * The user asked for a fill from browser chrome. Opens the one request this view may have.
+   *
+   * Called from the toolbar, the shortcut and the context menu — never from a message that arrived
+   * from a page view. The id is the one the chrome surface was raised with, so the answer that comes
+   * back can be matched to the question, and so `consentHolds` can refuse a consent for a request
+   * that has since been closed.
+   *
+   * A second call replaces the first: one open request per view is the invariant, and two would mean
+   * two live consents where the user made one gesture.
+   */
+  noteChromeRequest(viewId: number, requestId: string): void {
+    this.#openRequest.set(viewId, requestId)
+  }
+
+  /**
+   * Closes the open chrome request for a view, if there is one.
+   *
+   * Wired to every ending a request can have other than being served: the surface leaving the
+   * overlay layer, the user dismissing it, the view's main frame navigating, the vault locking, and
+   * the view going away. Each is its own call rather than one catch-all, because a consent left
+   * open is `no-user-gesture` switched off for that tab.
+   */
+  dropChromeRequest(viewId: number): void {
+    this.#openRequest.delete(viewId)
+  }
+
+  /** Whether a chrome-side fill request is open on this view. For tests and diagnostics. */
+  hasChromeRequest(viewId: number): boolean {
+    return this.#openRequest.has(viewId)
   }
 
   /**
@@ -272,6 +339,17 @@ export class AutofillService {
 
     const context = this.#fillContext(view.id, frame, request.form)
     if (!decideFill(context, summary).allowed) return null
+
+    /*
+      Spent here, on the authorisation rather than on the answer.
+
+      A chrome consent is good for one fill. Releasing it after the secret was fetched would leave it
+      alive when the fetch fails — an entry deleted between the decision and the read — and a consent
+      that survives its own refusal is one a page can retry against. A page-input gesture is
+      deliberately *not* consumed: it is a record of input with a five-second life of its own, and
+      spending it would refuse the second field of a two-step sign-in.
+    */
+    if (context.consent?.source === 'chrome-action') this.#openRequest.delete(view.id)
 
     const password = this.#options.vault.secretOf(request.id)
     if (password === null) return null
@@ -371,6 +449,16 @@ export class AutofillService {
    * moved on".
    */
   noteNavigation(viewId: number, url: string): void {
+    /*
+      The chrome request goes on *any* main-frame navigation, unlike the pending save.
+
+      The two are held to different standards on purpose. A save bar has to survive the redirect a
+      sign-in causes, because the question is about the page the user came from. A consent is about
+      the document in front of the user right now: the form it was granted for is gone, and a
+      consent that outlived its document would be spent on whatever the next one contains — which
+      a page can choose.
+    */
+    this.#openRequest.delete(viewId)
     const pending = this.#pending.get(viewId)
     if (pending === undefined) return
     if (passwordOriginOf(url) !== pending.origin) this.#pending.delete(viewId)
@@ -424,18 +512,25 @@ export class AutofillService {
   /** Drops everything held for a view. Called when it is destroyed. */
   forget(viewId: number): void {
     this.#lastGestureAt.delete(viewId)
+    this.#openRequest.delete(viewId)
     this.#pending.delete(viewId)
   }
 
   /**
-   * Drops every submitted credential waiting for an answer. Wired to `PasswordVault.onLock`.
+   * What a lock means to the state held here. Wired to `PasswordVault.onLock`.
    *
-   * Without it a lock would be a half-truth: the key would be gone from the vault while a password the
-   * user typed two minutes ago sat in this map for the rest of its two minutes. The gesture timestamps
-   * are deliberately left alone — they are a record of input, not a secret, and clearing them would
-   * make the next legitimate fill refuse for `no-user-gesture` right after an unlock.
+   * Two things go. Every submitted credential waiting for an answer, because otherwise a lock would
+   * be a half-truth: the key would be gone from the vault while a password the user typed two
+   * minutes ago sat in this map for the rest of its two minutes. And every open chrome request,
+   * because the fill it was granted for cannot be served from a sealed vault — leaving it would
+   * carry consent across the unlock and let it be spent on a form the user never came back to.
+   *
+   * The gesture timestamps are deliberately left alone — they are a record of input, not a secret,
+   * and clearing them would make the next legitimate fill refuse for `no-user-gesture` right after
+   * an unlock.
    */
   dropPendingSaves(): void {
+    this.#openRequest.clear()
     this.#pending.clear()
   }
 
@@ -469,13 +564,18 @@ export class AutofillService {
   }
 
   #fillContext(viewId: number, frame: AutofillFrame, form: FormDescriptor): FillContext {
+    const now = this.#options.now()
+    const openRequestId = this.#openRequest.get(viewId) ?? null
     return {
       frameUrl: frame.url,
       topLevelUrl: frame.topLevelUrl,
       isTopLevelFrame: frame.isTopLevel,
       formAction: form.action,
-      lastGestureAt: this.#lastGestureAt.get(viewId) ?? null,
-      now: this.#options.now(),
+      // Both sources, weighed by the one function that knows what either is worth. Neither is built
+      // from the message: the timestamp was taken by the core, the request was opened by the core.
+      consent: consentFor({ lastGestureAt: this.#lastGestureAt.get(viewId) ?? null, openRequestId }, now),
+      openRequestId,
+      now,
       hasFillablePasswordField: chooseFillTargets(form) !== null
     }
   }

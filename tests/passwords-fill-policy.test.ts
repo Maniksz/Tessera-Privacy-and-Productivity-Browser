@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { FILL_GESTURE_WINDOW_MS, type FillConsent } from '@shared/passwords/consent.js'
 import {
-  FILL_GESTURE_WINDOW_MS,
   decideFill,
+  decidePageFill,
   fillableSubjects,
   originMayReceiveCredentials,
   type FillContext,
@@ -18,7 +19,8 @@ import {
  *
  * The rules under test, and the shape of each attack:
  *
- *   1. `no-user-gesture`        — a hidden form harvesting a credential on page load.
+ *   1. `no-user-gesture`        — a hidden form harvesting a credential on page load, and a consent
+ *                                 from browser chrome replayed after it was spent.
  *   2. `no-password-field`      — a username dropped into a search box, and an existing password
  *                                 pre-filled into a "choose a new password" field.
  *   3. `unsupported-scheme`     — a `file:` or `data:` document asking for a site's credential.
@@ -46,11 +48,22 @@ function goodContext(overrides: Partial<FillContext> = {}): FillContext {
     topLevelUrl: 'https://accounts.example.com/login',
     isTopLevelFrame: true,
     formAction: '/session',
-    lastGestureAt: NOW - 100,
+    consent: pressedAt(NOW - 100),
+    openRequestId: null,
     now: NOW,
     hasFillablePasswordField: true,
     ...overrides
   }
+}
+
+/** Consent as the core mints it after seeing a real input event in the page view. */
+function pressedAt(at: number): FillConsent {
+  return { source: 'page-input', at }
+}
+
+/** Consent as the core mints it for a fill the user asked for from browser chrome. */
+function askedFromChrome(requestId: string): FillConsent {
+  return { source: 'chrome-action', requestId }
 }
 
 const SUBJECT = { origin: 'https://example.com' }
@@ -75,25 +88,102 @@ describe('the baseline', () => {
 })
 
 describe('a hidden form must not be able to harvest a credential', () => {
-  it('refuses a fill with no user gesture at all', () => {
+  it('refuses a fill with no consent of any kind', () => {
     // The attack: a page appends an off-screen login form on load and submits it. With fill-on-load
     // the password is on the attacker's server before the user has done anything but visit.
-    expect(refusalFor({ lastGestureAt: null })).toBe('no-user-gesture')
+    expect(refusalFor({ consent: null })).toBe('no-user-gesture')
+  })
+
+  it('refuses a fill with no consent even where a chrome request could have supplied one', () => {
+    /*
+      Deliberately asserted with an open request in the context. The two are separate fields — the
+      consent, and what the core still holds open — and an implementation that read the second as
+      consent in its own right would turn `no-user-gesture` off for the whole tab. AE3: a page that
+      focuses a field and clicks our own badge programmatically gets nothing.
+    */
+    expect(refusalFor({ consent: null, openRequestId: 'fill-1' })).toBe('no-user-gesture')
   })
 
   it('refuses a gesture the page banked and spent later', () => {
     // A click a minute ago is not consent to a form the user has not touched since.
-    expect(refusalFor({ lastGestureAt: NOW - FILL_GESTURE_WINDOW_MS - 1 })).toBe('no-user-gesture')
+    expect(refusalFor({ consent: pressedAt(NOW - FILL_GESTURE_WINDOW_MS - 1) })).toBe(
+      'no-user-gesture'
+    )
   })
 
   it('accepts a gesture at the very edge of the window', () => {
-    expect(refusalFor({ lastGestureAt: NOW - FILL_GESTURE_WINDOW_MS })).toBe('allowed')
+    expect(refusalFor({ consent: pressedAt(NOW - FILL_GESTURE_WINDOW_MS) })).toBe('allowed')
   })
 
   it('refuses a gesture timestamp in the future, so a moved clock cannot open the window for ever', () => {
     // An NTP correction or a resumed laptop is enough to produce this, and treating it as a gesture
     // would make the window unbounded rather than five seconds wide.
-    expect(refusalFor({ lastGestureAt: NOW + 1 })).toBe('no-user-gesture')
+    expect(refusalFor({ consent: pressedAt(NOW + 1) })).toBe('no-user-gesture')
+  })
+})
+
+describe('a fill the user asked for from browser chrome', () => {
+  it('is allowed with no page-view input behind it at all', () => {
+    /*
+      AE5. A toolbar press, a shortcut or a context-menu item happens in a view the page cannot reach
+      and never touches the page's input pipeline, so it can produce no `input-event` in the tab.
+      Its proof is where it came from, and the core says so by opening a request for it.
+    */
+    expect(refusalFor({ consent: askedFromChrome('fill-1'), openRequestId: 'fill-1' })).toBe(
+      'allowed'
+    )
+  })
+
+  it('refuses a consent for a request the core no longer holds open', () => {
+    /*
+      AE8, and the whole reason the request id travels with the consent. The request is closed by the
+      first fill it authorises, by the surface leaving the layer, by a navigation, by a lock and by
+      the view going away — and after any of those the same value must buy nothing. Without this the
+      consent would be permanent for the tab, and a hidden form could be filled minutes later by a
+      page that simply waited.
+    */
+    expect(refusalFor({ consent: askedFromChrome('fill-1'), openRequestId: null })).toBe(
+      'no-user-gesture'
+    )
+  })
+
+  it('refuses a consent whose request id is not the one that is open', () => {
+    // The shape a replay takes when a second request has since been opened: the value is well formed
+    // and names a request that existed. It is not the one the user is being asked about now.
+    expect(refusalFor({ consent: askedFromChrome('fill-1'), openRequestId: 'fill-2' })).toBe(
+      'no-user-gesture'
+    )
+  })
+
+  it('is refused by every other rule exactly as a page gesture is', () => {
+    /*
+      The property the whole change rests on: one consent input, and not a second path. A fill from
+      the toolbar carries no permission to ignore the frame, the site, the scheme or the form's
+      action — R11 says so in words, and here it is in the only place it can be checked once.
+    */
+    const fromChrome: Partial<FillContext> = {
+      consent: askedFromChrome('fill-1'),
+      openRequestId: 'fill-1'
+    }
+    expect(refusalFor({ ...fromChrome, isTopLevelFrame: false })).toBe('cross-origin-frame')
+    expect(refusalFor({ ...fromChrome, formAction: 'https://evil.example/collect' })).toBe(
+      'cross-origin-form-action'
+    )
+    expect(
+      refusalFor({
+        ...fromChrome,
+        frameUrl: 'http://example.com/login',
+        topLevelUrl: 'http://example.com/login'
+      })
+    ).toBe('insecure-page')
+    expect(
+      refusalFor({
+        ...fromChrome,
+        frameUrl: 'https://evil.example/login',
+        topLevelUrl: 'https://evil.example/login'
+      })
+    ).toBe('different-site')
+    expect(refusalFor({ ...fromChrome, hasFillablePasswordField: false })).toBe('no-password-field')
   })
 })
 
@@ -357,7 +447,59 @@ describe('the offer list and the fill decision cannot disagree', () => {
   })
 
   it('offers nothing at all when the situation itself is refused', () => {
-    expect(fillableSubjects(goodContext({ lastGestureAt: null }), [SUBJECT])).toEqual([])
+    expect(fillableSubjects(goodContext({ consent: null }), [SUBJECT])).toEqual([])
+  })
+})
+
+describe('what the toolbar may know before there is a form or a consent', () => {
+  /*
+    The indicator has to answer "would there be anything to do here" on every navigation, long before
+    a click, a form or a field rectangle exists. Calling `decideFill` with an invented consent to get
+    that answer would be the second predicate this file's header warns about — two opinions about
+    filling, drifting in the direction where the indicator promises what the rules refuse. So the
+    part that is knowable then is exposed, and `decideFill` calls the same function rather than
+    repeating it.
+  */
+  it('says yes to an https page and no to plain http off loopback', () => {
+    expect(decidePageFill('https://example.com/login')).toEqual({ allowed: true })
+    expect(decidePageFill('http://intranet.example/login')).toEqual({
+      allowed: false,
+      reason: 'insecure-page'
+    })
+  })
+
+  it('says yes on loopback http, where there is no wire to listen on', () => {
+    expect(decidePageFill('http://localhost:3000/login')).toEqual({ allowed: true })
+  })
+
+  it('names the scheme rather than the encryption for a document that has no site', () => {
+    // The two are different conversations with the user — "this browser never fills here" against
+    // "this page is not encrypted" — and the indicator is only worth having if it can tell them apart.
+    expect(decidePageFill('file:///tmp/login.html')).toEqual({
+      allowed: false,
+      reason: 'unsupported-scheme'
+    })
+    expect(decidePageFill('tessera://start')).toEqual({
+      allowed: false,
+      reason: 'unsupported-scheme'
+    })
+    expect(decidePageFill('not a url')).toEqual({ allowed: false, reason: 'unsupported-scheme' })
+  })
+
+  it('agrees with the fill path on every page the fill path refuses for the page alone', () => {
+    // The property that makes it safe to be optimistic: it may say yes where a fill is later refused
+    // for the frame, the site or the form — it must never say yes where the *page* is the reason.
+    for (const url of [
+      'https://accounts.example.com/login',
+      'http://example.com/login',
+      'file:///tmp/login.html',
+      'tessera://start',
+      'http://127.0.0.2:8080/login'
+    ]) {
+      const page = decidePageFill(url)
+      if (page.allowed) continue
+      expect(refusalFor({ frameUrl: url, topLevelUrl: url }), url).toBe(page.reason)
+    }
   })
 })
 

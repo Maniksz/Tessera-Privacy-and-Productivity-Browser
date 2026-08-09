@@ -8,13 +8,19 @@ import {
 } from '@main/passwords/AutofillService.js'
 import { notifyOverlayKey, onOverlayKey } from '@main/passwords/overlay-keys.js'
 import type { Locale } from '@shared/i18n/catalog.js'
+import { wireAutofillView, type AutofillHost, type SyncReply } from '@main/passwords/autofill-wiring.js'
 import type { MasterPasswordPresentation } from '@shared/overlay/surface.js'
-import { FILL_GESTURE_WINDOW_MS } from '@shared/passwords/fill-policy.js'
+import { FILL_GESTURE_WINDOW_MS } from '@shared/passwords/consent.js'
 import type { BrowsingMode, PasswordSummary, SaveCredentialInput } from '@shared/passwords/model.js'
 import type { PromptKey } from '@shared/passwords/prompt.js'
 import type { StoredCredentialState } from '@shared/passwords/save-policy.js'
 import {
+  AUTOFILL_FILLABLE_CHANNEL,
+  AUTOFILL_FILL_CHANNEL,
+  AUTOFILL_OFFER_CHANNEL,
+  AUTOFILL_SAVE_ANSWER_CHANNEL,
   AUTOFILL_SAVE_PROMPT_CHANNEL,
+  AUTOFILL_SUBMIT_CHANNEL,
   asSaveBarChrome,
   type SaveBarChrome
 } from '@shared/passwords/wire.js'
@@ -35,6 +41,15 @@ import {
  *   - A fill needs an input event the *browser process* saw, inside five seconds. `noteInput` is fed
  *     from Electron's `input-event`, which never fires for a page calling `.click()`. Without the
  *     per-view record kept here, a hidden form harvests a credential on page load.
+ *   - A fill asked for from browser chrome has no page-view input event behind it and cannot have
+ *     one, so the core opens a request and that request *is* the consent. It is one-shot and bound:
+ *     spent by the fill it authorises, and dropped by five separate endings. Left open, it would be
+ *     `no-user-gesture` switched off for that tab, which is the rule the whole file exists for.
+ *   - The per-view wiring is driven here through its host, in the order Electron raises the events
+ *     in, and this file never calls `noteInput` inside those tests. That is not a stylistic choice:
+ *     the defect it replaces was a circle between two correct halves — the input listener attached
+ *     only after an offer, and the offer refused for want of the input — and a test that supplies
+ *     the gesture itself cannot see it.
  *   - A private window does not offer to save, and a fill in one is noted through a writer bound to
  *     that mode — so a private sign-in leaves no timestamp on disk.
  *   - `dropPendingSaves` is what makes a lock mean what it says. Autofill holds one submitted
@@ -1029,6 +1044,484 @@ describe('a destroyed view leaves nothing behind', () => {
     service.forget(OTHER_VIEW_ID)
 
     expect(service.hasPendingSave(VIEW_ID)).toBe(true)
+  })
+})
+
+/**
+ * The second consent source: a fill the user asked for from browser chrome.
+ *
+ * A toolbar press, a shortcut or a context-menu item happens in a view the page cannot reach and
+ * never touches the page's input pipeline, so it can produce no `input-event` in the tab — there is
+ * nothing for `noteInput` to record and nothing a five-second window could be measured from. Its
+ * proof is its provenance, and the core states that proof by opening a request.
+ *
+ * Everything below is about the price of that: while the request is open, `no-user-gesture` is
+ * satisfied for the view, so a request nobody closed is the rule switched off for that tab. Each
+ * ending is asserted on its own, because a catch-all that covered four of the five would look
+ * exactly like this suite passing.
+ */
+describe('a fill the user asked for from browser chrome', () => {
+  const REQUEST = 'fill-request-1'
+
+  it('authorises a fill with no input event in the page at all', () => {
+    // AE5. The rest of the rules are `fill-policy.ts`'s and are tested there against the same
+    // consent; what is asserted here is that the core mints one from a request it opened itself.
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+
+    expect(service.fillFor(view, frame(), fillPayload())?.password).toBe(SECRET)
+  })
+
+  it('builds an offer with no input event either, so there is a list to choose from', () => {
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+
+    expect(service.offerFor(view, frame(), formPayload())?.entries).toEqual([
+      { id: STORED.id, username: STORED.username }
+    ])
+  })
+
+  it('does not spend the request on merely being asked what could be filled', () => {
+    // The list is drawn before the user has picked anything. Spending the one-shot on the question
+    // would refuse the answer.
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+
+    service.offerFor(view, frame(), formPayload())
+
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
+  })
+
+  it('is spent by the first fill it authorises', () => {
+    // AE8. The page can ask again on its own channel the moment the first fill lands — a renderer
+    // chooses when it sends — and the second attempt has to find nothing left.
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+
+    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(false)
+    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+  })
+
+  it('is spent even when the entry disappeared between the decision and the fetch', () => {
+    // Deleted on the passwords page while the surface was up. The consent was already used to
+    // authorise; leaving it alive would let the page retry against a refusal it caused.
+    const { service, view } = harness({ secrets: {} })
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+
+    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(false)
+  })
+
+  it('is not spent by a fill the rules refused, because none was authorised', () => {
+    // A refusal is not a use. The user asked for a fill and has not had one, so the request stands
+    // until one of its endings — otherwise a page could burn the consent by racing with a subframe.
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+
+    expect(service.fillFor(view, frame({ isTopLevel: false }), fillPayload())).toBeNull()
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
+  })
+
+  it('is left unspent while a page-view gesture would have served', () => {
+    // The one-shot is the scarce one. Spending it when an ordinary press was available would cost
+    // the user their next fill for nothing.
+    const { service, view } = harness()
+    press(service)
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+
+    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
+  })
+
+  it('does not spend a page gesture, so a two-step sign-in fills its second field too', () => {
+    // The contrast that makes the paragraph above true: an input event is a record with a life of
+    // its own, not a token, and the five-second window is the only thing that ends it.
+    const { service, view } = harness()
+    press(service)
+
+    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+  })
+
+  it('belongs to the view it was opened for', () => {
+    // A request opened for the tab the user is looking at must not authorise a fill in a background
+    // tab, for the same reason the gesture record is keyed by view.
+    const { service, view } = harness()
+    service.noteChromeRequest(OTHER_VIEW_ID, REQUEST)
+
+    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+  })
+
+  it('is opened by nothing that arrives from a page view', () => {
+    /*
+      The property that keeps the second source out of the page's reach. Every message a preload can
+      send is played through here, and none of them may leave a consent behind — if one did, a page
+      could mint the very thing the gesture rule exists to withhold.
+    */
+    const { service, view } = harness()
+
+    service.offerFor(view, frame(), formPayload())
+    service.fillFor(view, frame(), fillPayload())
+    service.reportSubmission(view, frame(), reportPayload())
+    service.answerSave(view, 'save')
+    service.documentReady(view, frame())
+    service.noteFillableForm(true)
+    press(service)
+
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(false)
+  })
+})
+
+describe('every ending of a chrome request, one at a time', () => {
+  const REQUEST = 'fill-request-1'
+
+  /** Opens a request, applies one ending, and reports what is left of the consent. */
+  function afterEnding(ending: (service: AutofillService, view: AutofillView) => void): {
+    open: boolean
+    filled: boolean
+  } {
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+    ending(service, view)
+    return {
+      open: service.hasChromeRequest(VIEW_ID),
+      filled: service.fillFor(view, frame(), fillPayload()) !== null
+    }
+  }
+
+  it('drops it when the surface leaves the overlay layer', () => {
+    // The user pressed Escape, or something higher-ranking took the layer. Either way the question
+    // is no longer on screen, and a consent nobody can see is one nobody can withdraw.
+    expect(afterEnding((service) => service.dropChromeRequest(VIEW_ID))).toEqual({
+      open: false,
+      filled: false
+    })
+  })
+
+  it('drops it on any main-frame navigation, including one inside the same site', () => {
+    /*
+      Stricter than the pending save deliberately, and the asymmetry is the point: a save bar is
+      about the page the user came *from* and has to survive the redirect a sign-in causes, while a
+      consent is about the document in front of them. The form it was granted for is gone.
+    */
+    expect(afterEnding((service) => service.noteNavigation(VIEW_ID, `${LOGIN_ORIGIN}/welcome`))).toEqual(
+      { open: false, filled: false }
+    )
+  })
+
+  it('drops it when the vault locks', () => {
+    // The fill it was granted for cannot be served from a sealed vault. Carrying it across the
+    // unlock would let it be spent on a form the user never came back to.
+    expect(afterEnding((service) => service.dropPendingSaves())).toEqual({
+      open: false,
+      filled: false
+    })
+  })
+
+  it('drops it when the view is forgotten', () => {
+    expect(afterEnding((service) => service.forget(VIEW_ID))).toEqual({
+      open: false,
+      filled: false
+    })
+  })
+
+  it('leaves the other views alone when one of them ends', () => {
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, REQUEST)
+    service.noteChromeRequest(OTHER_VIEW_ID, 'fill-request-2')
+
+    service.dropChromeRequest(OTHER_VIEW_ID)
+
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
+    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+  })
+
+  it('has nothing to drop for a view that never asked', () => {
+    const { service } = harness()
+
+    service.dropChromeRequest(VIEW_ID)
+
+    expect(service.hasChromeRequest(VIEW_ID)).toBe(false)
+  })
+})
+
+/**
+ * The gate the input listener hangs on, which is the whole of the defect this replaces.
+ *
+ * `input-event` is not attached for the life of a view: every mouse press in every tab would cost a
+ * main-process round trip, for tabs that will never fill anything. The gate used to be a non-null
+ * offer — and `decideFill` refuses an offer for want of the gesture the listener was there to record,
+ * so no view ever got one and autofill could not fill anything at all, in any tab, ever, with every
+ * test passing. What gates it now is a fact the page can state before any rule has been applied.
+ */
+describe('whether the core wants to hear the input events of a view', () => {
+  it('wants them once a view reports a fillable form', () => {
+    const { service } = harness()
+
+    expect(service.noteFillableForm(true)).toBe(true)
+  })
+
+  it('stops wanting them once the field is no longer there', () => {
+    const { service } = harness()
+
+    expect(service.noteFillableForm(false)).toBe(false)
+  })
+
+  it('never wants them while autofill is switched off', () => {
+    // Somebody who switched this off must not have their presses in every tab reported to the main
+    // process, which is the cost the subscription carries.
+    const { service } = harness({ enabled: false })
+
+    expect(service.noteFillableForm(true)).toBe(false)
+  })
+
+  it('reads anything that is not exactly true as no', () => {
+    // A renderer chooses what it sends. The report is one boolean and nothing else is a report.
+    const { service } = harness()
+
+    const reports: Array<{ readonly named: string; readonly reported: unknown }> = [
+      { named: 'the string true', reported: 'true' },
+      { named: 'a number', reported: 1 },
+      { named: 'an object', reported: {} },
+      { named: 'an array', reported: [] },
+      { named: 'null', reported: null },
+      { named: 'nothing at all', reported: undefined }
+    ]
+    for (const { named, reported } of reports) {
+      expect(service.noteFillableForm(reported), named).toBe(false)
+    }
+  })
+})
+
+/**
+ * The per-view wiring, driven in the order Electron raises the events in.
+ *
+ * Not one test below calls `noteInput`. That is the property that would have caught the defect: the
+ * gesture has to arrive the way it does in a browser — an input event dispatched into a view that
+ * the core decided to listen to — and a test that hands the service a gesture directly proves only
+ * that the service can hold one.
+ */
+describe('the chain from a focused form to an authorised fill', () => {
+  interface FakeHost extends AutofillHost {
+    /** A synchronous message from the preload. `null` back means the channel was not autofill's. */
+    ask(channel: string, payload: unknown, from?: AutofillFrame): SyncReply
+    tell(channel: string, payload: unknown, from?: AutofillFrame): void
+    /** An input event, as Electron dispatches one into the view. Delivered only if anybody listens. */
+    press(input?: unknown): void
+    navigate(url: string): void
+    loaded(url: string): void
+    destroy(): void
+    /** Whether the core is currently subscribed to this view's input. */
+    readonly listening: boolean
+    /** How many subscriptions have ever been made, so a repeated report cannot stack them. */
+    readonly subscriptions: number
+  }
+
+  function fakeHost(view: AutofillView): FakeHost {
+    let sync: ((channel: string, frame: AutofillFrame, payload: unknown) => SyncReply) | null = null
+    let message: ((channel: string, frame: AutofillFrame, payload: unknown) => void) | null = null
+    let navigated: ((url: string) => void) | null = null
+    let ready: ((url: string) => void) | null = null
+    let destroyed: (() => void) | null = null
+    let input: ((value: unknown) => void) | null = null
+    let subscriptions = 0
+
+    return {
+      view,
+      onSyncMessage: (listener) => {
+        sync = listener
+      },
+      onMessage: (listener) => {
+        message = listener
+      },
+      onInput: (listener) => {
+        subscriptions += 1
+        input = listener
+        return () => {
+          input = null
+        }
+      },
+      onMainFrameNavigation: (listener) => {
+        navigated = listener
+      },
+      onDocumentReady: (listener) => {
+        ready = listener
+      },
+      onDestroyed: (listener) => {
+        destroyed = listener
+      },
+      ask: (channel, payload, from = frame()) => sync?.(channel, from, payload) ?? null,
+      tell: (channel, payload, from = frame()) => message?.(channel, from, payload),
+      press: (value = { type: 'mouseDown', button: 'left' }) => input?.(value),
+      navigate: (url) => navigated?.(url),
+      loaded: (url) => ready?.(url),
+      destroy: () => destroyed?.(),
+      get listening() {
+        return input !== null
+      },
+      get subscriptions() {
+        return subscriptions
+      }
+    }
+  }
+
+  function wired(options: HarnessOptions = {}): Harness & { host: FakeHost } {
+    const built = harness(options)
+    const host = fakeHost(built.view)
+    wireAutofillView(built.service, host)
+    return { ...built, host }
+  }
+
+  it('turns a reported form, a press and a click into a filled credential', () => {
+    /*
+      AE7, and the regression this unit exists for. Every step is one the browser performs: the
+      preload says a fillable field has focus, Electron dispatches a press into the view, the preload
+      asks what could be filled, and the user's choice comes back on the fill channel. Before the
+      change, the second offer was as null as the first, for ever, because the listener that would
+      have recorded the press was itself waiting on an offer.
+    */
+    const { host } = wired()
+
+    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer, 'offered before any input').toBeNull()
+
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    host.press()
+
+    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).not.toBeNull()
+    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toEqual({
+      username: STORED.username,
+      password: SECRET
+    })
+  })
+
+  it('hears nothing at all until a view reports a fillable form', () => {
+    // The press happens in a view nobody is listening to, which is the ordinary case: most tabs
+    // never focus a password field, and their input must not cross into the main process.
+    const { host } = wired()
+
+    host.press()
+
+    expect(host.listening).toBe(false)
+    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).toBeNull()
+  })
+
+  it('stops listening once the field is gone, and a press afterwards buys nothing', () => {
+    const { host } = wired()
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, false)
+
+    host.press()
+
+    expect(host.listening).toBe(false)
+    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).toBeNull()
+  })
+
+  it('never listens while autofill is switched off', () => {
+    const { host } = wired({ enabled: false })
+
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+
+    expect(host.listening).toBe(false)
+    expect(host.subscriptions).toBe(0)
+  })
+
+  it('subscribes once however often the page repeats the report', () => {
+    // A page can refocus a field as often as it likes. Stacked subscriptions would report every
+    // press several times over and leave listeners behind when the field went.
+    const { host } = wired()
+
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+
+    expect(host.subscriptions).toBe(1)
+  })
+
+  it('leaves the synchronous channel of another feature unanswered', () => {
+    /*
+      Several features listen for their own synchronous channels on the same view. A wiring that
+      answered every message it saw would set `undefined` as the reply to theirs — a preload waiting
+      on `sendSync` would get nothing back and the feature would fail somewhere else entirely.
+    */
+    const { host } = wired()
+
+    expect(host.ask('tessera:cosmetic-rules', {})).toBeNull()
+  })
+
+  it('does nothing at all with a message on a channel that belongs to another feature', () => {
+    // Every `ipc-message` from the view arrives here, most of them for other features. An unknown
+    // channel is not a submission, not an answer and not a report, and must move nothing.
+    const { host, view, service } = wired()
+
+    host.tell('tessera:cosmetic-hit', reportPayload())
+
+    expect(view.sent).toEqual([])
+    expect(service.hasPendingSave(VIEW_ID)).toBe(false)
+    expect(host.listening).toBe(false)
+  })
+
+  it('decides on the frame the core read, not on anything the message claimed', () => {
+    // The frame travels beside the payload rather than inside it, so a subframe cannot describe
+    // itself as the top document.
+    const { host } = wired()
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    host.press()
+
+    expect(
+      host.ask(AUTOFILL_OFFER_CHANNEL, formPayload(), frame({ isTopLevel: false }))?.answer
+    ).toBeNull()
+    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).not.toBeNull()
+  })
+
+  it('carries a submission to the save bar and the answer back to the vault', () => {
+    const { host, view, writes } = wired()
+
+    host.tell(AUTOFILL_SUBMIT_CHANNEL, reportPayload())
+    expect(barMessages(view)).toEqual(['Save the password for example.com?'])
+
+    host.tell(AUTOFILL_SAVE_ANSWER_CHANNEL, 'save')
+    expect(writes).toEqual([
+      {
+        mode: 'normal',
+        call: 'save',
+        input: { url: LOGIN_URL, username: STORED.username, password: SUBMITTED }
+      }
+    ])
+  })
+
+  it('raises the bar again on the page the sign-in landed on', () => {
+    // The half of the save path that only the wiring can get wrong: `dom-ready` reports the view's
+    // own address, and the bar has to be re-raised into the document that just loaded.
+    const { host, view } = wired()
+    host.tell(AUTOFILL_SUBMIT_CHANNEL, reportPayload())
+
+    host.navigate(`${LOGIN_ORIGIN}/welcome`)
+    host.loaded(`${LOGIN_ORIGIN}/welcome`)
+
+    expect(view.sent).toHaveLength(2)
+  })
+
+  it('drops a pending save once the view has left the site', () => {
+    const { host, service } = wired()
+    host.tell(AUTOFILL_SUBMIT_CHANNEL, reportPayload())
+
+    host.navigate('https://other.example/')
+
+    expect(service.hasPendingSave(VIEW_ID)).toBe(false)
+  })
+
+  it('stops listening and releases the view when it is destroyed', () => {
+    const { host, service } = wired()
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    host.press()
+
+    host.destroy()
+
+    expect(host.listening, 'the input subscription outlived the view').toBe(false)
+    expect(service.hasPendingSave(VIEW_ID)).toBe(false)
+    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer, 'the gesture outlived the view').toBeNull()
   })
 })
 
