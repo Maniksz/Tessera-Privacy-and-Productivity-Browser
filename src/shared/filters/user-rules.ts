@@ -53,8 +53,11 @@ export function emptyUserRuleDocument(): UserRuleDocument {
 
 /**
  * Beyond this the list is no longer something a person can audit, and the point of
- * these rules is that they are auditable. Reached only by a script, and the oldest go
- * first because the newest are the ones being worked on.
+ * these rules is that they are auditable. Reached only by a script.
+ *
+ * Adding past it is refused — see `addUserRule`. Healing a stored document that is
+ * already past it still cuts, because the alternative is a file that cannot be opened;
+ * see `repairUserRules`.
  */
 export const MAX_USER_RULES = 500
 
@@ -148,12 +151,35 @@ export interface AddUserRuleContext {
   readonly now: number
 }
 
-export type AddUserRuleOutcome = 'added' | 'invalid' | 'duplicate'
+/**
+ * Every answer an attempt to add can produce, and there is no sixth.
+ *
+ * A list rather than a bare union for the reason `USER_RULE_ORIGINS` is one: the wire
+ * schema enumerates it, so a value added here reaches the channel without a second
+ * declaration to keep in step.
+ *
+ * The two duplicates are separate because they need different sentences and different
+ * next actions. "You already have this rule" is the end of the matter; "you already have
+ * this rule and it is switched off" has a switch to offer. A surface handed one word for
+ * both would have to go and find the rule to tell which it meant — and one of the two
+ * looks, to the user, exactly like the browser ignoring them.
+ */
+export const ADD_USER_RULE_OUTCOMES = [
+  'added',
+  'invalid',
+  'duplicate-active',
+  'duplicate-disabled',
+  'limit-reached'
+] as const
+
+export type AddUserRuleOutcome = (typeof ADD_USER_RULE_OUTCOMES)[number]
 
 export interface AddUserRuleResult {
   readonly rules: UserRule[]
   /** The stored rule, or null when nothing was stored. */
   readonly added: UserRule | null
+  /** The rule that was already there, on either duplicate outcome; null otherwise. */
+  readonly existing: UserRule | null
   readonly outcome: AddUserRuleOutcome
 }
 
@@ -162,20 +188,44 @@ export interface AddUserRuleResult {
  *
  * A duplicate is reported rather than stored twice, and rather than silently ignored:
  * the picker's answer to "you already have this rule" is to point at the existing one,
- * which it cannot do if the call merely succeeded. A duplicate that was *disabled*
- * counts as a duplicate too — re-blocking something is a change to the rule that is
- * already there, not a new one.
+ * which it cannot do if the call merely succeeded — so the rule comes back on `existing`
+ * rather than only its name. A duplicate that was *disabled* counts as a duplicate too:
+ * re-blocking something is a change to the rule that is already there, not a new one.
+ *
+ * ## Why the limit refuses instead of making room
+ *
+ * It used to make room. The five hundred-and-first rule was stored, the oldest was
+ * dropped, and the call reported plain `added` — silent deletion of something the user
+ * wrote by hand and cannot download again, in the one part of the browser whose entire
+ * argument is that it is auditable. So the limit is an answer now. Nothing is written
+ * and nothing is deleted, and the caller has something it can say out loud, which is the
+ * only thing that lets a person decide which of their own rules to give up.
+ *
+ * The duplicate check runs first and stays first. With the list full, both answers write
+ * nothing — but "you are at the limit" would send somebody deleting rules to make room
+ * for a rule they already have.
  */
 export function addUserRule(
   rules: readonly UserRule[],
   input: UserRuleInput,
   context: AddUserRuleContext
 ): AddUserRuleResult {
+  /** Every refusal in one place, so none of the four can accidentally return a changed list. */
+  const refused = (
+    outcome: AddUserRuleOutcome,
+    existing: UserRule | null = null
+  ): AddUserRuleResult => ({ rules: [...rules], added: null, existing, outcome })
+
   const text = input.text.trim()
-  if (!isStorableUserRule(text)) return { rules: [...rules], added: null, outcome: 'invalid' }
-  if (rules.some((rule) => rule.text === text)) {
-    return { rules: [...rules], added: null, outcome: 'duplicate' }
+  if (!isStorableUserRule(text)) return refused('invalid')
+
+  const existing = rules.find((rule) => rule.text === text)
+  if (existing !== undefined) {
+    return refused(existing.enabled ? 'duplicate-active' : 'duplicate-disabled', existing)
   }
+
+  if (rules.length >= MAX_USER_RULES) return refused('limit-reached')
+
   const added: UserRule = {
     id: context.id,
     text,
@@ -183,10 +233,16 @@ export function addUserRule(
     createdAt: context.now,
     origin: input.origin
   }
-  return { rules: trimToLimit([...rules, added]), added, outcome: 'added' }
+  return { rules: [...rules, added], added, existing: null, outcome: 'added' }
 }
 
-/** Oldest first out, because the newest rule is the one being worked on. */
+/**
+ * Oldest first out, because the newest rule is the one being worked on.
+ *
+ * The healing path only. Adding refuses at the limit rather than coming through here —
+ * a stored document that is already too long has to open, and every rule is a worse
+ * loss than the oldest one.
+ */
 function trimToLimit(rules: readonly UserRule[]): UserRule[] {
   return rules.slice(Math.max(0, rules.length - MAX_USER_RULES))
 }

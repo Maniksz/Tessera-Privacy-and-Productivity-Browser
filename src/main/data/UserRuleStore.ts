@@ -67,6 +67,15 @@ void _modelMatchesDocument
 
 export interface AddRuleResult {
   readonly outcome: AddUserRuleOutcome
+  /**
+   * The rule the answer is about: the one just stored, or — on either duplicate outcome
+   * — the one already there.
+   *
+   * Filled in the duplicate case rather than left null, because "you already have this
+   * rule" is only useful with the rule attached. A surface handed the bare word has to
+   * go looking through the list for the line it just refused, and the surface that
+   * matters here is an element picker that has hidden nothing and has to explain why.
+   */
   readonly rule: UserRule | null
 }
 
@@ -206,7 +215,9 @@ export class UserRuleStore {
     })
     // A rejected line must not schedule a write or wake a listener: the picker offers a
     // proposal on every hover, and a duplicate is the expected answer, not an event.
-    if (result.added === null) return { outcome: result.outcome, rule: null }
+    // `existing` rides back out so a duplicate answer arrives with the rule it is about;
+    // it is null for the two refusals that have no rule to point at.
+    if (result.added === null) return { outcome: result.outcome, rule: result.existing }
     this.#store.update((document) => ({ ...document, rules: result.rules }))
     return { outcome: result.outcome, rule: result.added }
   }
@@ -257,11 +268,20 @@ class SessionUserRuleEditor implements UserRuleEditor {
 
   add(input: UserRuleInput): AddRuleResult {
     this.#sequence += 1
+    /*
+      Against `list()`, which is the stored rules plus this session's own — so the limit
+      is read against the set the user can actually see. It was already the argument
+      here, but the limit used to be applied by *trimming the returned list*, and this
+      method keeps only `result.added` and throws that list away. A private window was
+      therefore the one place the five hundred could be exceeded without bound. Refusing
+      at the limit rather than trimming is what closes that, because the answer is the
+      outcome rather than a list somebody has to remember to keep.
+    */
     const result = addUserRule(this.list(), input, {
       id: `session-${this.#sequence}`,
       now: this.#now()
     })
-    if (result.added === null) return { outcome: result.outcome, rule: null }
+    if (result.added === null) return { outcome: result.outcome, rule: result.existing }
     this.#added.push(result.added)
     this.#notify()
     return { outcome: result.outcome, rule: result.added }

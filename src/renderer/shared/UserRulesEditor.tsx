@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { UserRule } from '@shared/filters/user-rules.js'
+import type { AddUserRuleOutcome, UserRule } from '@shared/filters/user-rules.js'
 import { useCoreCall } from './useCoreCall.js'
 
 /**
@@ -29,7 +29,7 @@ import { useCoreCall } from './useCoreCall.js'
  *
  * The core, on the same answer as the rules. `main/settings/user-rules-text.ts` explains why: the shared
  * message catalogue is one chunk that every internal page fetches before first paint, it is held to a
- * measured budget, and fourteen sentences about filter syntax should not be downloaded by the start page.
+ * measured budget, and sixteen sentences about filter syntax should not be downloaded by the start page.
  */
 
 /** A rule with what the core worked out about it. `kind` decides which cost the row reports. */
@@ -37,7 +37,37 @@ export interface EditableUserRule extends UserRule {
   readonly kind: 'declarative' | 'procedural'
 }
 
-export type AddRuleOutcome = 'added' | 'invalid' | 'duplicate'
+/**
+ * What the core made of the line, in the core's own vocabulary.
+ *
+ * An alias rather than a union spelled again here. The two lists were written twice and drifted the moment
+ * the core learned to tell a switched-off duplicate from an applied one — and the way that drift shows up
+ * on screen is *nothing at all*: an answer with no branch renders no sentence, which to the user is a
+ * button that does not work.
+ */
+export type AddRuleOutcome = AddUserRuleOutcome
+
+/**
+ * The sentence and the tone each answer gets, and the compiler insists on one for every answer.
+ *
+ * A table rather than a chain of comparisons, the same shape and for the same reason as `UpdateService`'s:
+ * an outcome added to the core without a sentence here fails to compile instead of arriving silently.
+ *
+ * `added` is deliberately the one with no sentence — the rule appears in the list below, which says it
+ * better than a line of prose would. The two refusals are alerts because the browser declined to do what
+ * was asked; the two duplicates are a status, because the rule the user wants exists and that is not a
+ * failure.
+ */
+const OUTCOME_MESSAGES: Record<
+  AddRuleOutcome,
+  { readonly word: string; readonly role: 'alert' | 'status' } | null
+> = {
+  added: null,
+  invalid: { word: 'invalid', role: 'alert' },
+  'duplicate-active': { word: 'duplicate', role: 'status' },
+  'duplicate-disabled': { word: 'duplicateDisabled', role: 'status' },
+  'limit-reached': { word: 'limitReached', role: 'alert' }
+}
 
 /**
  * What this component needs from the browser.
@@ -190,6 +220,9 @@ export function UserRulesEditor({
   // showing a heading with an empty list under it, which reads as "you have no rules".
   if (!matchesSearch && shown.length === 0) return null
 
+  /** Null until something has been submitted, and null again for the answer that speaks through the list. */
+  const message = outcome === null ? null : OUTCOME_MESSAGES[outcome]
+
   return (
     <section className="panel__section userrules">
       <h3 className="panel__sectionTitle">{word('heading')}</h3>
@@ -234,14 +267,12 @@ export function UserRulesEditor({
         </button>
       </div>
 
-      {outcome === 'invalid' && (
-        <p className="panel__error" role="alert">
-          {word('invalid')}
-        </p>
-      )}
-      {outcome === 'duplicate' && (
-        <p className="panel__notice" role="status">
-          {word('duplicate')}
+      {message !== null && (
+        <p
+          className={message.role === 'alert' ? 'panel__error' : 'panel__notice'}
+          role={message.role}
+        >
+          {word(message.word)}
         </p>
       )}
 
