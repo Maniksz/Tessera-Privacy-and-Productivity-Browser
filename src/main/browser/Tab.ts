@@ -573,9 +573,34 @@ export class Tab {
       A client-side route change commits a new address without a new document, so `did-navigate`
       never fires for it. The blocker attributes a refused request by address, and a single-page
       application that moved route would otherwise credit every advert it then fetched to nobody.
+
+      ## Why the history is written here too
+
+      It was not, and that is a hole the size of the modern web. `did-navigate` fires once per
+      *document*, and on a site that routes in the page — a video site, a code host, a mail client —
+      the document is fetched once and every page the user reads afterwards is one of these. So the
+      history kept the address somebody landed on and nothing they went on to look at, which is
+      indistinguishable from the history missing whole tabs.
+
+      Bounded to the main frame, and that is the difference between recording a visit and inflating a
+      count: a subframe routing in place leaves `wc.getURL()` on the top document, so recording it
+      would advance the entry for a page nobody navigated. Electron passes the flag as the third
+      argument, read defensively because it crosses from a browser process this file cannot type.
+
+      Nothing is deduplicated here. `recordVisit` advances an existing entry for the same address
+      rather than adding a second one, so `replaceState` called in a loop — which is how a page tracks
+      a scroll position — costs one entry whose timestamp moves, not one entry per call.
+
+      The title is read at the same moment and is routinely the *old* one: an application that changes
+      route sets `document.title` shortly afterwards. That is what `page-title-updated` and `noteTitle`
+      are for, and it is why an empty or stale title never overwrites a known one.
     */
-    on('did-navigate-in-page', () => {
+    on('did-navigate-in-page', (...args: unknown[]) => {
+      const [, , isMainFrame] = args
       this.#currentUrl = wc.getURL()
+      if (isMainFrame === true) {
+        this.wiring.history.recordVisit({ url: this.#currentUrl, title: wc.getTitle() })
+      }
       notify()
     })
     on('page-favicon-updated', (...args: unknown[]) => {
