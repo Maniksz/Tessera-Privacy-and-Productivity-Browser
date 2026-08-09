@@ -50,6 +50,13 @@ async function readRules(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, 'utf8')) as unknown
 }
 
+/** A list of distinct, storable rules, for the assertions about the limit. */
+function fullRuleList(length: number): UserRule[] {
+  return Array.from({ length }, (_unused, index) =>
+    ruleOf({ id: `r${index}`, text: `example.com##.ad-${index}` })
+  )
+}
+
 function ruleOf(overrides: Partial<UserRule>): UserRule {
   return {
     id: 'r1',
@@ -168,20 +175,42 @@ describe('the rule list', () => {
     expect(result.rules).toEqual([])
   })
 
-  it('reports a duplicate rather than storing it twice', () => {
-    const existing = [ruleOf({ text: 'example.com##.ad' })]
+  it('refuses the lines the parser refuses, through the same door', () => {
+    // The three the picker must never be able to write past: request-blocking syntax, a
+    // scriptlet, and a paste accident. `describeUserRule` decides; this asserts that the
+    // add path asks it rather than having a second opinion.
+    for (const text of [
+      '||ads.example.com^',
+      'example.com##+js(set-constant, x, true)',
+      `example.com##.${'a'.repeat(600)}`
+    ]) {
+      const result = addUserRule([], { text, origin: 'manual' }, context)
+      expect(result.outcome, text).toBe('invalid')
+      expect(result.existing, text).toBeNull()
+    }
+  })
+
+  it('reports a duplicate rather than storing it twice, and points at the one already there', () => {
+    // The rule the user wants exists, so the answer is where it is — a surface that only
+    // heard "duplicate" can say so and cannot show which of five hundred lines it means.
+    const existing = [ruleOf({ id: 'kept', text: 'example.com##.ad' })]
     const result = addUserRule(existing, { text: 'example.com##.ad', origin: 'picker' }, context)
-    expect(result.outcome).toBe('duplicate')
+    expect(result.outcome).toBe('duplicate-active')
+    expect(result.existing).toEqual(existing[0])
+    expect(result.added).toBeNull()
     expect(result.rules).toEqual(existing)
   })
 
-  it('treats a disabled rule as a duplicate too', () => {
+  it('tells a disabled duplicate from an active one', () => {
     // Re-blocking something is a change to the rule already there, not a new one; a
     // second copy would leave the user with two entries and one of them doing nothing.
-    const existing = [ruleOf({ text: 'example.com##.ad', enabled: false })]
-    expect(
-      addUserRule(existing, { text: 'example.com##.ad', origin: 'picker' }, context).outcome
-    ).toBe('duplicate')
+    // But the two are not the same answer: one means "already done", the other means
+    // "you have this rule and it is switched off", which has a next step.
+    const existing = [ruleOf({ id: 'kept', text: 'example.com##.ad', enabled: false })]
+    const result = addUserRule(existing, { text: 'example.com##.ad', origin: 'picker' }, context)
+    expect(result.outcome).toBe('duplicate-disabled')
+    expect(result.existing?.id).toBe('kept')
+    expect(result.added).toBeNull()
   })
 
   it('switches a rule off without forgetting it', () => {
@@ -203,14 +232,47 @@ describe('the rule list', () => {
     expect(removeUserRule(rules, 'a').map((rule) => rule.id)).toEqual(['b'])
   })
 
-  it('keeps the newest when the list grows past what a person can audit', () => {
-    const many = Array.from({ length: MAX_USER_RULES }, (_unused, index) =>
-      ruleOf({ id: `r${index}`, text: `example.com##.ad-${index}` })
-    )
+  it('refuses the rule past the limit rather than dropping the oldest', () => {
+    /*
+      This used to assert the opposite, and the opposite was silent data loss: the five
+      hundred-and-first rule was stored, the oldest was deleted to make room, and the
+      call reported plain success. Nobody was told, and the rule that vanished was one
+      the user wrote by hand and cannot download again.
+
+      So the limit refuses. Nothing is written and nothing is deleted, and the caller
+      gets an answer it can say out loud — which is the only thing that lets a person
+      decide which rule to delete.
+    */
+    const many = fullRuleList(MAX_USER_RULES)
     const result = addUserRule(many, { text: 'example.com##.newest', origin: 'picker' }, context)
+    expect(result.rules.at(0)?.text).toBe('example.com##.ad-0')
+    expect(result.rules).toEqual(many)
+    expect(result.outcome).toBe('limit-reached')
+    expect(result.added).toBeNull()
+    expect(result.existing).toBeNull()
+  })
+
+  it('accepts the rule that fills the list exactly', () => {
+    // The boundary belongs to the user: five hundred rules is five hundred rules, not
+    // four hundred and ninety-nine plus a refusal nobody can explain.
+    const result = addUserRule(
+      fullRuleList(MAX_USER_RULES - 1),
+      { text: 'example.com##.last', origin: 'picker' },
+      context
+    )
+    expect(result.outcome).toBe('added')
     expect(result.rules).toHaveLength(MAX_USER_RULES)
-    expect(result.rules.at(-1)?.text).toBe('example.com##.newest')
-    expect(result.rules.at(0)?.text).toBe('example.com##.ad-1')
+    expect(result.rules.at(-1)?.text).toBe('example.com##.last')
+  })
+
+  it('still answers a full list’s duplicate as a duplicate', () => {
+    // Nothing would be written either way, so the honest answer is the one that helps:
+    // "you already have this" rather than sending somebody deleting rules to make room
+    // for a rule they already have.
+    const many = fullRuleList(MAX_USER_RULES)
+    const result = addUserRule(many, { text: 'example.com##.ad-0', origin: 'picker' }, context)
+    expect(result.outcome).toBe('duplicate-active')
+    expect(result.existing?.id).toBe('r0')
   })
 
   it('hands the enabled rules to the compiler as one list body', () => {
@@ -265,10 +327,13 @@ describe('repairUserRules', () => {
   })
 
   it('caps a file that grew past the limit', () => {
-    const many = Array.from({ length: MAX_USER_RULES + 5 }, (_unused, index) =>
-      ruleOf({ id: `r${index}`, text: `example.com##.ad-${index}` })
-    )
-    expect(repairUserRules(many)).toHaveLength(MAX_USER_RULES)
+    /*
+      Healing still cuts, where adding now refuses. The two are not the same situation: a
+      stored document is already over the limit — by a hand edit or by a build that
+      evicted silently — and refusing it would mean a file that can no longer be opened
+      at all. Cutting the oldest is a loss; not starting is every rule.
+    */
+    expect(repairUserRules(fullRuleList(MAX_USER_RULES + 5))).toHaveLength(MAX_USER_RULES)
   })
 
   it('has nothing to repair in an empty document', () => {
@@ -338,6 +403,62 @@ describe('UserRuleStore', () => {
     expect(editor.add({ text: 'nonsense', origin: 'manual' }).outcome).toBe('invalid')
     await store.flush()
     expect(await readRules(path)).toEqual({ version: 1, rules: [] })
+  })
+
+  it('points at the rule already there when the line is one it has', async () => {
+    // KTD9: the field was always on the answer and was only ever filled on success, so a
+    // surface that wanted to show the user their existing rule had to go and find it.
+    const { store } = await storeAt('user-rules.json')
+    const editor = store.editorFor('normal')
+    const first = editor.add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+
+    const again = editor.add({ text: 'example.com##.ad', origin: 'picker' })
+    expect(again.outcome).toBe('duplicate-active')
+    expect(again.rule?.id).toBe(first.id)
+
+    editor.setEnabled(first.id, false)
+    const whileOff = editor.add({ text: 'example.com##.ad', origin: 'picker' })
+    expect(whileOff.outcome).toBe('duplicate-disabled')
+    expect(whileOff.rule?.id).toBe(first.id)
+    // And the switch is still off: an add is not a way to re-enable a rule behind the
+    // user's back, it is a way to be told that one is there.
+    expect(editor.list().map((rule) => rule.enabled)).toEqual([false])
+  })
+
+  it('writes nothing and deletes nothing once the list is full', async () => {
+    /*
+      R18. The file on disk has to be the same file afterwards — this is the assertion
+      that the old eviction is gone from the whole path, not just from the model.
+    */
+    const stored = fullRuleList(MAX_USER_RULES)
+    const { path, store } = await storeAt(
+      'user-rules.json',
+      JSON.stringify({ version: 1, rules: stored })
+    )
+    const editor = store.editorFor('normal')
+    const seen: number[] = []
+    const stop = store.onChange((rules) => seen.push(rules.length))
+
+    const result = editor.add({ text: 'example.com##.newest', origin: 'picker' })
+    expect(result.outcome).toBe('limit-reached')
+    expect(result.rule).toBeNull()
+    // Not a change, so not an event: a refusal must not wake the listeners that re-read
+    // and recompile the rules.
+    expect(seen).toEqual([])
+    stop()
+
+    await store.flush()
+    expect(await readRules(path)).toEqual({ version: 1, rules: stored })
+  })
+
+  it('cuts a stored document that is already over the limit, rather than refusing to open', async () => {
+    const { store } = await storeAt(
+      'user-rules.json',
+      JSON.stringify({ version: 1, rules: fullRuleList(MAX_USER_RULES + 5) })
+    )
+    expect(store.rules()).toHaveLength(MAX_USER_RULES)
+    // The newest survive, because they are the ones being worked on.
+    expect(store.rules().at(-1)?.text).toBe(`example.com##.ad-${MAX_USER_RULES + 4}`)
   })
 
   it('switches a rule off and leaves it in the list', async () => {
@@ -537,7 +658,40 @@ describe('a private window', () => {
     const { editor } = await privateEditor()
     expect(editor.add({ text: 'nonsense', origin: 'manual' }).outcome).toBe('invalid')
     expect(editor.add({ text: '##.ad', origin: 'manual' }).outcome).toBe('added')
-    expect(editor.add({ text: '##.ad', origin: 'manual' }).outcome).toBe('duplicate')
+    const again = editor.add({ text: '##.ad', origin: 'manual' })
+    expect(again.outcome).toBe('duplicate-active')
+    expect(again.rule?.id).toMatch(/^session-/)
+  })
+
+  it('counts a stored duplicate as one, and says it is switched off', async () => {
+    const { store, editor } = await privateEditor()
+    const stored = store
+      .editorFor('normal')
+      .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    editor.setEnabled(stored.id, false)
+    const result = editor.add({ text: 'example.com##.ad', origin: 'picker' })
+    expect(result.outcome).toBe('duplicate-disabled')
+    expect(result.rule?.id).toBe(stored.id)
+  })
+
+  it('counts the stored rules against the limit rather than growing past it', async () => {
+    /*
+      The session's list is the stored rules plus its own, so the limit has to be read
+      against that sum. It was not: the session kept the added rule and threw away the
+      trimmed list the model handed back, so a private window was the one place the five
+      hundred could be exceeded without limit — noted in `docs/IMPROVEMENT-PLAN.md`.
+    */
+    const { store } = await storeAt(
+      'user-rules.json',
+      JSON.stringify({ version: 1, rules: fullRuleList(MAX_USER_RULES - 1) })
+    )
+    const editor = store.editorFor('private')
+    expect(editor.add({ text: 'example.com##.fits', origin: 'picker' }).outcome).toBe('added')
+
+    const result = editor.add({ text: 'example.com##.over', origin: 'picker' })
+    expect(result.outcome).toBe('limit-reached')
+    expect(result.rule).toBeNull()
+    expect(editor.list()).toHaveLength(MAX_USER_RULES)
   })
 
   it('reports an unknown id as unchanged', async () => {

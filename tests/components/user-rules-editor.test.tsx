@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   UserRulesEditor,
+  type AddRuleOutcome,
   type EditableUserRule,
   type UserRulesHost
 } from '@renderer-shared/UserRulesEditor.js'
@@ -35,6 +36,8 @@ const TEXT: Record<string, string> = {
   empty: 'No rules of your own yet.',
   invalid: 'This is not a rule this browser can apply.',
   duplicate: 'You already have that rule.',
+  duplicateDisabled: 'You already have that rule, and it is switched off.',
+  limitReached: 'You have as many rules as this browser will keep.',
   toggle: 'Apply this rule',
   remove: 'Delete this rule',
   kindDeclarative: 'CSS',
@@ -65,7 +68,7 @@ interface Harness {
 
 function harness(options: {
   rules?: EditableUserRule[]
-  outcome?: 'added' | 'invalid' | 'duplicate'
+  outcome?: AddRuleOutcome
   /** Refuses the initial read, which is a different path from a refused write. */
   refuseList?: string
   refuseRemove?: string
@@ -177,7 +180,7 @@ describe('typing a rule', () => {
   it('says a rule is already there, and does not call it an error', async () => {
     // A duplicate is an answer, not a failure: the rule the user wants exists. `role="status"` rather than
     // `role="alert"` is the difference between telling them and alarming them.
-    const { host } = harness({ outcome: 'duplicate', rules: [rule()] })
+    const { host } = harness({ outcome: 'duplicate-active', rules: [rule()] })
     await editor(host)
     fireEvent.change(screen.getByLabelText('My filter rules'), {
       target: { value: 'example.com##.banner-ad' }
@@ -188,6 +191,50 @@ describe('typing a rule', () => {
       expect(screen.getByRole('status').textContent).toBe('You already have that rule.')
     )
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('says when the rule already there is switched off, which is not the same answer', async () => {
+    /*
+      The two used to be one word. A user who blocks something, later switches the rule off to unbreak the
+      page, and then blocks the same thing again was told "you already have that rule" — and nothing
+      happened, because the rule is off. From the outside that is a button that does not work. So it says
+      where the rule is and what to do, and it is still a status rather than an alert: the rule exists.
+    */
+    const { host } = harness({ outcome: 'duplicate-disabled', rules: [rule({ enabled: false })] })
+    await editor(host)
+    fireEvent.change(screen.getByLabelText('My filter rules'), {
+      target: { value: 'example.com##.banner-ad' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add rule' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(
+        'You already have that rule, and it is switched off.'
+      )
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('says the list is full, and keeps the line for after a deletion', async () => {
+    // The core refuses at the limit rather than deleting the oldest rule to make room. That refusal is
+    // only worth anything if it is said: an add that reported success and quietly removed somebody's
+    // oldest hand-written rule is what this replaced.
+    const { host } = harness({ outcome: 'limit-reached', rules: [rule()] })
+    await editor(host)
+    fireEvent.change(screen.getByLabelText('My filter rules'), {
+      target: { value: 'example.com##.one-too-many' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add rule' }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe(
+        'You have as many rules as this browser will keep.'
+      )
+    )
+    expect(screen.getByLabelText('My filter rules')).toHaveProperty(
+      'value',
+      'example.com##.one-too-many'
+    )
   })
 
   it('drops the verdict as soon as the line changes', async () => {

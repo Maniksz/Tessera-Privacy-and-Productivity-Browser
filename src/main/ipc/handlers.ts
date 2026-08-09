@@ -419,9 +419,10 @@ export function registerIpcHandlers(deps: {
     Through the mode-bound editor like the other two, so a private window's settings page writes nothing
     into the rules the normal profile keeps.
 
-    The outcome travels back rather than being thrown: `duplicate` means the rule is already there and
-    `invalid` means the line is not one this build can honour, and the editor beside the text box has to be
-    able to say either. A rejected promise would make both look like a failure of the browser.
+    The outcome travels back rather than being thrown: the two duplicates mean the rule is already there —
+    applied, or sitting switched off — `limit-reached` means the list is as long as this build will keep it,
+    and `invalid` means the line is not one this build can honour. The editor beside the text box has to be
+    able to say each of them. A rejected promise would make them all look like a failure of the browser.
   */
   handle('userrules:add', ({ text }, event) => {
     const editor = editorFor(event)

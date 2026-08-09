@@ -10,7 +10,7 @@ import type { Locale } from '@shared/i18n/catalog.js'
  * and the budget was raised to 48 kB for the blocker menu and the navigation prompt — with a note saying
  * that whoever hit it next should fix the structure rather than raise it a third time. This is next.
  *
- * So these fourteen sentences live here. The main process is not bundled for any renderer, exactly one
+ * So these sixteen sentences live here. The main process is not bundled for any renderer, exactly one
  * screen ever asks for them, and they travel on the answer to `userrules:list` — a call that screen was
  * already making. Zero bytes for the start page, the history page and the four other internal pages that
  * will never show a filter rule.
@@ -48,6 +48,15 @@ const en = {
   invalid:
     'This is not a rule this browser can apply. Request-blocking rules and ##+js(…) countermeasures cannot be added here, and a rule using :has-text() or :upward() has to name a site.',
   duplicate: 'You already have that rule.',
+  /**
+   * The same rule, switched off — which looks from the outside exactly like the browser ignoring the
+   * button, so it says where the rule is and what to do about it.
+   */
+  duplicateDisabled:
+    'You already have that rule, and it is switched off. Turn it back on in the list below.',
+  /** A refusal with a next step, because there is one and only the user can take it. */
+  limitReached:
+    'You have as many rules as this browser will keep. Delete one you no longer need, and this line can be added.',
   /** The per-rule controls. Both name the rule, so a screen reader says which one is being acted on. */
   toggle: 'Apply this rule',
   remove: 'Delete this rule',
@@ -71,6 +80,10 @@ const de: UserRulesText = {
   invalid:
     'Das ist keine Regel, die dieser Browser anwenden kann. Regeln, die Anfragen blockieren, und ##+js(…)-Gegenmaßnahmen lassen sich hier nicht hinzufügen, und eine Regel mit :has-text() oder :upward() muss eine Seite nennen.',
   duplicate: 'Diese Regel hast du schon.',
+  duplicateDisabled:
+    'Diese Regel hast du schon, sie ist aber ausgeschaltet. Schalte sie in der Liste unten wieder ein.',
+  limitReached:
+    'Mehr Regeln behält dieser Browser nicht. Lösche eine, die du nicht mehr brauchst, dann lässt sich diese Zeile hinzufügen.',
   toggle: 'Diese Regel anwenden',
   remove: 'Diese Regel löschen',
   kindDeclarative: 'CSS',

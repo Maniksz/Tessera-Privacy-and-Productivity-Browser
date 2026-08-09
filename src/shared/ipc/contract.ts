@@ -19,7 +19,7 @@ import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
 // The bound the store enforces, so the schema and the storage cannot disagree about what is too long.
-import { MAX_USER_RULE_LENGTH } from '../filters/user-rules.js'
+import { ADD_USER_RULE_OUTCOMES, MAX_USER_RULE_LENGTH } from '../filters/user-rules.js'
 import {
   PERMISSION_ANSWERS,
   PERMISSION_DEVICES,
@@ -639,11 +639,14 @@ export const invokeContract = {
    * the only thing that could reach it, so a person could not write `example.com##.box:has-text(Anzeige)`
    * anywhere in the browser.
    *
-   * The outcome is returned rather than thrown, because two of the three answers are not errors: a
-   * duplicate means the rule is already there and the surface should point at it, and `invalid` means the
-   * line is not one this build can honour — which the editor has to say beside the text box rather than as a
-   * failed call. `describeUserRule` decides, and it refuses network syntax and scriptlets whatever the user
-   * types.
+   * The outcome is returned rather than thrown, because most of the answers are not errors: a duplicate
+   * means the rule is already there and the surface should point at it, `limit-reached` means the user has
+   * as many rules as this build will keep, and `invalid` means the line is not one this build can honour —
+   * all of which the editor has to say beside the text box rather than as a failed call. `describeUserRule`
+   * decides the last, and it refuses network syntax and scriptlets whatever the user types.
+   *
+   * The enum comes from the model rather than being spelled again here, so an outcome cannot be added to
+   * the rule set and then fail to fit through the channel that reports it.
    */
   'userrules:add': {
     request: z.object({ text: z.string().min(1).max(MAX_USER_RULE_LENGTH) }),
@@ -652,7 +655,7 @@ export const invokeContract = {
       new list here — the same rule the settings page follows for every write: the store may repair, dedupe or
       trim, and a screen that displayed what it *sent* would disagree with what was kept.
     */
-    response: z.object({ outcome: z.enum(['added', 'invalid', 'duplicate']) })
+    response: z.object({ outcome: z.enum(ADD_USER_RULE_OUTCOMES) })
   },
   /** Keeps the line and stops applying it, which is how a page the user broke gets un-broken. */
   'userrules:setEnabled': {
