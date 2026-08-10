@@ -9,6 +9,7 @@ import { NavigationRequestSurface } from './NavigationRequestSurface.js'
 import { MasterPasswordSurface } from './MasterPasswordSurface.js'
 import { TileBarSurface } from '../../overlay/TileBarSurface.js'
 import { FindBarSurface } from '../../overlay/FindBarSurface.js'
+import { PickerBarSurface } from '../../overlay/PickerBarSurface.js'
 
 /**
  * Root of the window's topmost layer.
@@ -165,6 +166,20 @@ export function OverlaySurface(): React.ReactNode {
   */
   if (presentation.kind === 'find-bar') {
     return <FindBarSurface presentation={presentation} />
+  }
+
+  /*
+    Returned before the wrapper below, for the find bar's reason: the layer is sized to the box, so the bar *is*
+    the layer and there is no outside to click. Inside the wrapper, every click on the bar's own padding would be
+    a miss and would end a selection the user is in the middle of judging.
+
+    The generic Escape handler above is deliberately left in play. The bar stops Escape itself and answers it with
+    a *named* cancel — a dismissal takes down whatever is up, and one that raced a consent dialogue onto the layer
+    would take the dialogue down — but if it ever failed to stop the event, a dismissal still ends the session and
+    lifts the provisional rule off the page through the layer's vacancy route. The fallback is worse and not wrong.
+  */
+  if (presentation.kind === 'picker-bar') {
+    return <PickerBarSurface presentation={presentation} />
   }
 
   return (
