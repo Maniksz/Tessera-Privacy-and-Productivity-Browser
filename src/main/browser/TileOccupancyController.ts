@@ -1,6 +1,6 @@
 import { emptyTiles, shrunkLayout, tabsToCloseOnShrink } from '@shared/split/tile-fill.js'
 import type { DropZone } from '@shared/split/dropzones.js'
-import type { LayoutId } from '@shared/split/layout.js'
+import { TILE_COUNT, type LayoutId } from '@shared/split/layout.js'
 import type { SplitController } from './SplitController.js'
 
 /**
@@ -199,6 +199,59 @@ export class TileOccupancyController {
     // tab that was just closed, and the pane would never go away. `rehome` costs nothing either
     // way — there is no hidden tab left, or the branch above would have taken it.
     if (smaller !== null) this.host.applyLayout(smaller, { fill: false, rehome: true })
+  }
+
+  /**
+   * Takes away the panes a fold has just emptied, and nothing else.
+   *
+   * Deliberately **not** `afterTabClosed`, although the two look like the same shrink, and the plan
+   * that asked for this said why before it was written. That path does two things this one must not:
+   *
+   *  - It puts `#firstHiddenTab()` into the freed tile and only shrinks when there is none — the
+   *    "fill the pane with some other loaded tab" behaviour KD7 rejects outright. Folding a group away
+   *    is the user saying they want *fewer* pages on screen; answering it with a page they did not
+   *    choose is the opposite of the request (R9).
+   *  - It returns early when `adaptEnabled()` is false. That switch governs the browser *adapting* to
+   *    tabs coming and going. A fold is not an adaptation: the panes are empty because the user just
+   *    emptied them, and leaving them standing would mean the setting decides whether R9 holds — which
+   *    is exactly the window AE10 describes.
+   *
+   * So: compact, then shrink, and close nothing on the way.
+   *
+   * **Compacting first is what makes it safe.** `applyLayout` hands every tab past the new tile count
+   * to `afterLayoutChange`, which closes the browser's own untouched fillers among them — and R13
+   * forbids the fold costing even one of those. Moving the survivors down to the leading tiles before
+   * the layout changes means nothing is orphaned, so there is nothing to sweep up. It is also the only
+   * way the survivors keep a tile at all: a `2x2` holding a member, a stranger, a member and a stranger
+   * releases tiles 0 and 2, and a shrink without compaction would drop the stranger in tile 3 off the
+   * end of the grid.
+   *
+   * `fill: false, rehome: false` for the same reason: neither a start page nor a loaded tab may move
+   * into the panes on their way out.
+   *
+   * The active tile follows the tab that was in it, because compacting moves tabs between tiles and
+   * the active *tile* index would otherwise land on whoever shifted into it. A window whose active tab
+   * was one of the released members has no answer here — `activeTabId()` is already `null` — and that
+   * case belongs to `TabGroupController.setCollapsed`, which knows which tabs were hidden (R10).
+   */
+  shrinkAfterRelease(): void {
+    const occupants = this.host.split
+      .toState()
+      .tileTabIds.filter((tabId): tabId is string => tabId !== null)
+    const stayActive = this.host.split.activeTabId()
+
+    for (const [index, tabId] of occupants.entries()) {
+      if (this.host.split.tileOfTab(tabId) !== index) this.host.assignTabToTile(tabId, index)
+    }
+
+    const target = layoutFitting(this.host.split.layout, occupants.length)
+    if (target !== this.host.split.layout) {
+      this.host.applyLayout(target, { fill: false, rehome: false })
+    }
+
+    if (stayActive === null) return
+    const tile = this.host.split.tileOfTab(stayActive)
+    if (tile !== null) this.host.setActiveTile(tile)
   }
 
   /**
@@ -470,5 +523,25 @@ export class TileOccupancyController {
       if (candidate === undefined) break
       this.host.assignTabToTile(candidate, index)
     }
+  }
+}
+
+/**
+ * The smallest arrangement down the shrink chain that still has room for `occupants`.
+ *
+ * Written as "how few panes will do" rather than "one step per released tile", although the two agree
+ * on every example the requirements give. The difference is a window that already had an empty pane
+ * before the fold: counting steps would leave it standing beside the ones the fold emptied, and R9's
+ * sentence is about not leaving empty panes rather than about arithmetic. `1x1` is the floor, so a
+ * window with nothing left in a tile still has one to put something back into.
+ *
+ * Every step of the chain removes exactly one tile, so this terminates on any layout.
+ */
+function layoutFitting(layout: LayoutId, occupants: number): LayoutId {
+  let current = layout
+  for (;;) {
+    const smaller = shrunkLayout(current)
+    if (smaller === null || TILE_COUNT[smaller] < Math.max(occupants, 1)) return current
+    current = smaller
   }
 }

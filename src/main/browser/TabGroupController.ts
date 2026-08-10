@@ -43,8 +43,22 @@ export interface TabGroupHost {
   /** The strip's order, which this controller rewrites when a group needs to become contiguous. */
   tabOrder(): readonly string[]
   setTabOrder(order: readonly string[]): void
-  /** Take a tab out of the grid without closing it — a collapsed group's tabs stay loaded (spec 2). */
-  unassign(tabId: string): void
+  /**
+   * Take these tabs out of the grid without closing any of them — a collapsed group's tabs stay
+   * loaded (spec 2). Answers whether any of them held a tile at all.
+   *
+   * Plural, and it has to reach the split rather than the tabs. The single-tab version wrote
+   * `tileIndex = null` on a `Tab` and left `SplitController` believing the tile was still occupied,
+   * so a folded group's pages stayed on screen — precisely the state the docblock over `setCollapsed`
+   * claims to prevent (KTD5).
+   */
+  releaseTiles(tabIds: readonly string[]): boolean
+  /** Take away the panes the release has just emptied, without filling or closing anything (R9). */
+  shrinkTiles(): void
+  /** The tab in the active tile, read before the fold to decide whether R10 has anything to do. */
+  activeTabId(): string | null
+  /** Make a tab the active one, the way a click in the strip does. */
+  activateTab(tabId: string): void
   /** Every live tab id, so a group can be told which of its members still exist. */
   liveTabIds(): readonly string[]
   /** Push the new state to the renderer. */
@@ -135,6 +149,25 @@ export class TabGroupController {
    * The way back is not a guess and is not here: `ArrangementController` holds what the panes looked
    * like, and clicking a member is what applies it.
    *
+   * ## Three steps, in this order, and each one is load-bearing
+   *
+   * **Release**, then **shrink**, then **activate**. The release reaches the split grid — that is the
+   * whole of `releaseTiles`, and the reason it exists (KTD5). The shrink then takes the emptied panes
+   * away rather than leaving them standing, which is KD7; it runs whether or not the user has layout
+   * adaptation switched on, because it is undoing something the *fold* did rather than adapting to
+   * anything (R9, AE10). And the activation exists because a release can leave the active tile empty:
+   * `SplitController.activeTabId()` is `tabIdAt(activeTile)`, so the window would be left with no
+   * active tab at all and every toolbar command would silently do nothing.
+   *
+   * The activation rule is narrow on purpose. Only a *previously active tab that is now hidden* moves
+   * the selection, and it moves it to the first tab of the strip order the fold has not hidden. A user
+   * watching a page in another pane keeps watching it — the fold is about the group, not about them —
+   * and a window whose every remaining tab is hidden gets no activation, because there is nothing left
+   * to activate.
+   *
+   * Expanding runs all three too, and all three decline: no member holds a tile, so `releaseTiles`
+   * answers `false`, nothing shrinks, and no tab was hidden, so nothing is activated.
+   *
    * ## Collapsing writes nothing here, and nothing to the arrangement either
    *
    * It used to be a rule with an argument behind it: a recording existed only where the *browser* took
@@ -144,11 +177,26 @@ export class TabGroupController {
    * made before the fold, not from one made by it.
    */
   setCollapsed(id: string, collapsed: boolean): void {
+    // Before the fold, because releasing the tile is what makes the answer `null`.
+    const wasActive = this.host.activeTabId()
+
     this.host.book.setCollapsed(id, collapsed)
-    for (const tabId of tabsHiddenByCollapse(this.groups())) {
-      this.host.unassign(tabId)
-    }
+
+    /*
+      Every hidden tab in the window, not just this group's, and one call rather than a loop.
+
+      Every hidden tab because the set is what must be true afterwards rather than a diff of this one
+      change, and a member of another folded group that has somehow acquired a tile is a bug either
+      way. One call because the grid should not be observable half-released; see `releaseTiles`.
+    */
+    const hidden = tabsHiddenByCollapse(this.groups())
+    if (this.host.releaseTiles(hidden)) this.host.shrinkTiles()
+
     this.#settle()
+
+    if (wasActive === null || !hidden.includes(wasActive)) return
+    const visible = this.displayOrder().find((tabId) => !hidden.includes(tabId))
+    if (visible !== undefined) this.host.activateTab(visible)
   }
 
   dissolve(id: string): void {

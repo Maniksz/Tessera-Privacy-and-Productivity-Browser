@@ -144,9 +144,25 @@ async function harness(options: {
       if (tileIndex === null) split.assignTab(tabId, null)
       else split.assignTab(tabId, tileIndex)
     },
+    releaseTiles: (tabIds) => {
+      const held = tabIds.filter((tabId) => split.tileOfTab(tabId) !== null)
+      for (const tabId of held) split.assignTab(tabId, null)
+      return held.length > 0
+    },
     closeTab: (tabId) => {
       order = order.filter((id) => id !== tabId)
       split.forgetTab(tabId)
+    },
+    activateTab: (tabId) => {
+      const tile = split.tileOfTab(tabId)
+      if (tile !== null) {
+        split.setActiveTile(tile)
+        return
+      }
+      seams.arrangements.restoreFor(tabId)
+      if (split.tileOfTab(tabId) === null) {
+        split.assignTab(tabId, seams.occupancy.claimTileForNewTab())
+      }
     },
     setActiveTile: (tileIndex) => split.setActiveTile(tileIndex),
     openFiller: (tileIndex) => {

@@ -225,7 +225,9 @@ export class BrowserWindowController {
         this.#tabOrder = [...order]
       },
       assignTabToTile: (tabId, tileIndex) => this.assignTabToTile(tabId, tileIndex),
+      releaseTiles: (tabIds) => this.releaseTiles(tabIds),
       closeTab: (tabId) => this.closeTab(tabId),
+      activateTab: (tabId) => this.activateTab(tabId),
       setActiveTile: (tileIndex) => this.setActiveTile(tileIndex),
       openFiller: (tileIndex) => {
         this.createTab({ tileIndex, background: true, ephemeral: true })
@@ -824,6 +826,37 @@ export class BrowserWindowController {
     if (tileIndex !== null) this.#tabs.get(tabId)?.loadIfDeferred()
     this.relayout()
     this.#scheduleBroadcast()
+  }
+
+  /**
+   * Takes several tabs off the grid at once, closing none of them, and redraws once.
+   *
+   * The plural is the point, and so is reaching `this.split`. Folding a group away used to release
+   * each member with `Tab.setTileIndex(null)`, which updates the field the strip draws from and
+   * leaves `SplitController` holding the tab in its tile — and `relayout()` decides what is on screen
+   * from `split.tabIdAt`, so the page stayed up with nothing in the strip left to close, mute or
+   * switch away from it. Which tile is free is the split's fact to record, not a tab's.
+   *
+   * One redraw for the whole set rather than one per tab, and no half-released grid in between for
+   * anything downstream to read. Answers whether anything actually moved, so a caller knows whether
+   * there is a layout to shrink; naming a tab that already holds no tile is ordinary rather than an
+   * error, because the caller passes every hidden member and most of them usually are.
+   */
+  releaseTiles(tabIds: readonly string[]): boolean {
+    const held = tabIds.filter((tabId) => this.split.tileOfTab(tabId) !== null)
+    if (held.length === 0) return false
+
+    // Same reason as `assignTabToTile`: both bars' bounds belong to a tile whose content is about to
+    // change or leave.
+    this.#overlay.dismissKind('tile-bar')
+    this.#overlay.dismissKind('find-bar')
+    for (const tabId of held) {
+      this.split.assignTab(tabId, null)
+      this.#tabs.get(tabId)?.setTileIndex(null)
+    }
+    this.relayout()
+    this.#scheduleBroadcast()
+    return true
   }
 
   /** The fullscreen key. Which of the two fullscreens it means is decided in the seam. */

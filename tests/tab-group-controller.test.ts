@@ -21,17 +21,32 @@ import { mkdtemp, rm } from 'node:fs/promises'
  * There used to be a third coupling here — the arrangement a multi-view is — and the cases that went
  * with it are gone rather than moved: the recording no longer lives on a group, and what replaced it is
  * covered by `tests/arrangement-controller.test.ts` against a host that cannot reach a group at all.
+ *
+ * ## What this file deliberately does not prove
+ *
+ * That releasing a tile actually reaches the split grid. The host below is a fake, so "the tiles were
+ * released" here means "the seam was called" — and that is exactly how the wiring shipped a fold that
+ * told a `Tab` its tile index was `null` and told `SplitController` nothing, leaving the page on
+ * screen. `tests/window-seams.test.ts` drives the real `createWindowSeams` and asserts on the split
+ * itself. What is left here is what this controller alone decides: which tabs are released, in how
+ * many calls, and which tab is activated afterwards.
  */
 
 interface Harness {
   controller: TabGroupController
   order: () => string[]
-  unassigned: () => string[]
+  released: () => string[]
+  releaseCalls: () => string[][]
+  shrinks: () => number
+  activated: () => string[]
   broadcasts: () => number
   cleanup: () => Promise<void>
 }
 
-async function harness(initialOrder: string[]): Promise<Harness> {
+async function harness(
+  initialOrder: string[],
+  options: { tiled?: string[]; activeTab?: string } = {}
+): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), 'tessera-groups-'))
   // A real store rather than a fake book: the interesting behaviour is the *interaction* between the
   // store's rules and the window's state, and a fake would let the controller pass while disagreeing
@@ -40,7 +55,11 @@ async function harness(initialOrder: string[]): Promise<Harness> {
 
   let order = [...initialOrder]
   const liveTabs = [...initialOrder]
-  const unassigned: string[] = []
+  const tiled = new Set(options.tiled ?? initialOrder)
+  let activeTab: string | null = options.activeTab ?? null
+  const releaseCalls: string[][] = []
+  const activated: string[] = []
+  let shrinks = 0
   let broadcasts = 0
 
   const host: TabGroupHost = {
@@ -49,7 +68,25 @@ async function harness(initialOrder: string[]): Promise<Harness> {
     setTabOrder: (next) => {
       order = [...next]
     },
-    unassign: (tabId) => unassigned.push(tabId),
+    releaseTiles: (tabIds) => {
+      releaseCalls.push([...tabIds])
+      const held = tabIds.filter((tabId) => tiled.has(tabId))
+      for (const tabId of held) {
+        tiled.delete(tabId)
+        // A released tab cannot be the one in the active tile any more; the split answers `null`
+        // for an empty tile, and that emptiness is what R10's activation exists to repair.
+        if (activeTab === tabId) activeTab = null
+      }
+      return held.length > 0
+    },
+    shrinkTiles: () => {
+      shrinks += 1
+    },
+    activeTabId: () => activeTab,
+    activateTab: (tabId) => {
+      activated.push(tabId)
+      activeTab = tabId
+    },
     liveTabIds: () => liveTabs,
     broadcast: () => {
       broadcasts += 1
@@ -59,7 +96,10 @@ async function harness(initialOrder: string[]): Promise<Harness> {
   return {
     controller: new TabGroupController(host),
     order: () => order,
-    unassigned: () => unassigned,
+    released: () => releaseCalls.flat(),
+    releaseCalls: () => releaseCalls,
+    shrinks: () => shrinks,
+    activated: () => activated,
     broadcasts: () => broadcasts,
     cleanup: async () => {
       await store.flush()
@@ -184,8 +224,9 @@ describe('folding a group away', () => {
     const group = h.controller.create({ tabIds: ['t1', 't2'] })
     h.controller.setCollapsed(group.id, true)
 
-    expect(h.unassigned()).toContain('t1')
-    expect(h.unassigned()).toContain('t2')
+    // One call carrying both, not one call each: the grid must never be observable half-released,
+    // and the whole fold is a single redraw (KTD5).
+    expect(h.releaseCalls()).toEqual([['t1', 't2']])
     await h.cleanup()
   })
 
@@ -193,7 +234,25 @@ describe('folding a group away', () => {
     const h = await harness(['t1', 't2', 't3'])
     const group = h.controller.create({ tabIds: ['t1'] })
     h.controller.setCollapsed(group.id, true)
-    expect(h.unassigned()).not.toContain('t3')
+    expect(h.released()).not.toContain('t3')
+    await h.cleanup()
+  })
+
+  it('asks for the emptied panes to go once the tiles are back (R9)', async () => {
+    const h = await harness(['t1', 't2', 't3'])
+    const group = h.controller.create({ tabIds: ['t1', 't2'] })
+    h.controller.setCollapsed(group.id, true)
+    expect(h.shrinks()).toBe(1)
+    await h.cleanup()
+  })
+
+  it('leaves the layout alone when no member held a tile', async () => {
+    // Nothing was emptied, so there is nothing to take away — and a shrink here would remove a pane
+    // the user is still using.
+    const h = await harness(['t1', 't2', 't3'], { tiled: ['t3'] })
+    const group = h.controller.create({ tabIds: ['t1', 't2'] })
+    h.controller.setCollapsed(group.id, true)
+    expect(h.shrinks()).toBe(0)
     await h.cleanup()
   })
 
@@ -233,10 +292,55 @@ describe('folding a group away', () => {
     const h = await harness(['t1', 't2'])
     const group = h.controller.create({ tabIds: ['t1'] })
     h.controller.setCollapsed(group.id, true)
-    const afterCollapse = h.unassigned().length
+    const shrinksAfterCollapse = h.shrinks()
 
     h.controller.setCollapsed(group.id, false)
-    expect(h.unassigned()).toHaveLength(afterCollapse)
+
+    // Nothing to release — no tab is hidden any more — so nothing shrinks and no tile is handed
+    // back out. `ArrangementController` holds the way back and a click is what applies it (R11).
+    expect(h.releaseCalls().at(-1)).toEqual([])
+    expect(h.shrinks()).toBe(shrinksAfterCollapse)
+    expect(h.activated()).toEqual([])
+    await h.cleanup()
+  })
+
+  it('moves the selection to the first tab still in the strip (R10)', async () => {
+    /*
+      Without this the window is left with nothing active at all: `SplitController.activeTabId()` is
+      `tabIdAt(activeTile)`, so releasing the tile the active tab was in makes it `null`, and from
+      then on every toolbar command reads no active tab and silently does nothing.
+
+      "First still in the strip" is the published order, not the raw one — grouping gathers a group's
+      members into one run, and that run is what the user sees.
+    */
+    const h = await harness(['t1', 't2', 't3'], { activeTab: 't2' })
+    const group = h.controller.create({ tabIds: ['t1', 't2'] })
+
+    h.controller.setCollapsed(group.id, true)
+
+    expect(h.activated()).toEqual(['t3'])
+    await h.cleanup()
+  })
+
+  it('leaves an active tab that was not folded away alone (R10)', async () => {
+    const h = await harness(['t1', 't2', 't3'], { activeTab: 't3' })
+    const group = h.controller.create({ tabIds: ['t1', 't2'] })
+
+    h.controller.setCollapsed(group.id, true)
+
+    expect(h.activated()).toEqual([])
+    await h.cleanup()
+  })
+
+  it('activates nothing when the fold leaves no tab in the strip', async () => {
+    // Every remaining tab is hidden, so there is nothing to make active and no honest fallback —
+    // activating a hidden tab would recreate the very state the fold exists to clear.
+    const h = await harness(['t1', 't2'], { activeTab: 't1' })
+    const group = h.controller.create({ tabIds: ['t1', 't2'] })
+
+    h.controller.setCollapsed(group.id, true)
+
+    expect(h.activated()).toEqual([])
     await h.cleanup()
   })
 })
@@ -278,7 +382,7 @@ describe('renaming and recolouring', () => {
     expect(updated?.name).toBe('Reading')
     expect(updated?.color).toBe('green')
     expect(h.order()).toEqual(orderBefore)
-    expect(h.unassigned()).toEqual([])
+    expect(h.releaseCalls()).toEqual([])
     await h.cleanup()
   })
 })
@@ -292,7 +396,7 @@ describe('dissolving a group', () => {
 
     expect(h.controller.groups()).toEqual([])
     expect([...h.order()].sort()).toEqual(['t1', 't2'])
-    expect(h.unassigned()).toEqual([])
+    expect(h.releaseCalls()).toEqual([])
     await h.cleanup()
   })
 })

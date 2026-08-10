@@ -72,7 +72,32 @@ export interface WindowInternals {
   setTabOrder(order: readonly string[]): void
 
   assignTabToTile(tabId: string, tileIndex: number | null): void
+  /**
+   * Takes several tabs out of the grid at once, closing none of them, and redraws once.
+   *
+   * A deliberate widening of this interface rather than a controller reaching into the window, which
+   * is what the note at the top of this file asks of anything new here (KTD5). What it buys is
+   * correctness before economy: folding a group away used to go through `Tab.setTileIndex(null)`,
+   * which writes a field the strip draws from and tells `SplitController` nothing — so `relayout()`,
+   * which reads `split.tabIdAt`, went on showing the page with no tab left in the strip to close,
+   * mute or switch away from it. Releasing a tile is a fact about the grid, so only the window can
+   * state it.
+   *
+   * Plural because a group is released as a group. One redraw for the whole fold rather than one per
+   * member, and — the part a loop cannot have — no intermediate grid state that anything downstream
+   * could act on.
+   *
+   * Returns whether any of them actually held a tile, which is what tells the collapse whether there
+   * is a layout to shrink. Naming a tab that is already off the grid is normal rather than an error:
+   * the caller passes every hidden member, and most folds happen with some of them already untiled.
+   */
+  releaseTiles(tabIds: readonly string[]): boolean
   closeTab(tabId: string): void
+  /**
+   * Makes a tab the active one, by the same path a click in the strip takes — including the way back
+   * to a recorded tiling for a tab that holds no tile.
+   */
+  activateTab(tabId: string): void
   setActiveTile(tileIndex: number): void
   /** Opens a start-page tab for an empty tile, marked as a filler. */
   openFiller(tileIndex: number): void
@@ -167,21 +192,25 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     Before `occupancy`, and that is the second ordering constraint in this file.
 
     The occupancy controller asks the groups one question: whether a tab is folded away, which decides
-    whether it may be pulled back into a pane. The dependency runs one way, and unlike
-    `drag`/`occupancy` the construction order can satisfy it directly: nothing here needs the
-    occupancy controller.
+    whether it may be pulled back into a pane. That edge is satisfied directly by the construction
+    order. The one below it — `shrinkTiles`, a fold asking the panes it has just emptied to go away —
+    runs the other way and is therefore read through the same lazy `occupancy` as `drag`'s. It is
+    reached only from `setCollapsed`, so nothing calls it during construction.
 
-    It used to ask a second one — `keepArrangement`, the tiling on its way out — and that edge is the
-    defect this wiring was rebuilt for. A group was the only place a layout could be written down, so
-    the tiling automation reached into the book of groups, and reaching into it meant creating a group
-    and pulling loose tabs into it. Membership changed because panes moved. That edge now goes to
-    `arrangements` below, whose host has no book of groups to reach (R1, R2, R3).
+    The groups used to ask a third thing — `keepArrangement`, the tiling on its way out — and that edge
+    is the defect this wiring was rebuilt for. A group was the only place a layout could be written
+    down, so the tiling automation reached into the book of groups, and reaching into it meant creating
+    a group and pulling loose tabs into it. Membership changed because panes moved. That edge now goes
+    to `arrangements` below, whose host has no book of groups to reach (R1, R2, R3).
   */
   const groups = new TabGroupController({
     book: internals.tabGroups,
     tabOrder: () => internals.tabOrder(),
     setTabOrder: (order) => internals.setTabOrder(order),
-    unassign: (tabId) => internals.tab(tabId)?.setTileIndex(null),
+    releaseTiles: (tabIds) => internals.releaseTiles(tabIds),
+    shrinkTiles: () => occupancy?.shrinkAfterRelease(),
+    activeTabId: () => internals.split.activeTabId(),
+    activateTab: (tabId) => internals.activateTab(tabId),
     liveTabIds: () => internals.tabIds(),
     broadcast: () => internals.broadcast()
   })
