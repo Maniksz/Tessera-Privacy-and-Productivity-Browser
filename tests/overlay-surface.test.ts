@@ -23,6 +23,7 @@ import {
 } from '@shared/overlay/surface.js'
 import { TILE_BAR_HEIGHT } from '@shared/split/tile-bar.js'
 import { FIND_BAR_HEIGHT, FIND_BAR_WIDTH } from '@shared/find/bar.js'
+import { PICKER_BAR_HEIGHT, PICKER_BAR_WIDTH } from '@shared/overlay/picker-bar.js'
 import { MIN_MASTER_PASSWORD_LENGTH } from '@shared/passwords/vault.js'
 
 /**
@@ -124,6 +125,26 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
     query: 'needle',
     matches: 3,
     activeMatch: 2
+  },
+  /** The picker's own bar; what it is and how it is ranked lives in `tests/picker-bar.test.ts`. */
+  'picker-bar': {
+    kind: 'picker-bar',
+    sessionId: 'pick-1',
+    tileIndex: 1,
+    bounds: {
+      x: 1440 - PICKER_BAR_WIDTH - 8,
+      y: 96,
+      width: PICKER_BAR_WIDTH,
+      height: PICKER_BAR_HEIGHT
+    },
+    tabId: 't2',
+    mode: 'frozen',
+    selector: '.ad-slot',
+    matches: 3,
+    canWiden: true,
+    canNarrow: true,
+    outcome: null,
+    canUndo: false
   }
 }
 
@@ -326,9 +347,18 @@ describe('two claims on one layer', () => {
 })
 
 describe('surfaces whose departure is not free', () => {
-  it('marks the page for exactly one kind', () => {
+  it('marks the page for exactly the two surfaces that reach into a document', () => {
+    /*
+      Driven off the set rather than off one name, which is what the second entry cost.
+
+      This asserted `kind === 'find-bar'` while the find bar was the only surface that changed anything in
+      a page. The picker's confirmation bar is the second, and a worse case: it leaves a provisional rule
+      *injected* into the document rather than a highlight, so its unannounced departure hides part of a
+      page with nothing on disk to remove and nothing on screen to explain it.
+    */
+    const marking = new Set(['find-bar', 'picker-bar'])
     for (const kind of OVERLAY_KINDS) {
-      expect(OVERLAY_MARKS_THE_PAGE[kind], kind).toBe(kind === 'find-bar')
+      expect(OVERLAY_MARKS_THE_PAGE[kind], kind).toBe(marking.has(kind))
     }
   })
 

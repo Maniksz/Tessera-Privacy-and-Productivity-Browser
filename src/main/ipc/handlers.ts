@@ -277,6 +277,41 @@ export function registerIpcHandlers(deps: {
   })
 
   /*
+    One press on the confirmation bar, resolved against the *sender's* window like everything else here.
+
+    `cancel` is answered in full and it is answered here, because ending the bar is not a decision about a
+    selection: every route out of this surface is the same route — the bar leaves the layer, the layer
+    announces the departure, and the session that owns the provisional rule takes it back off the page. So
+    Escape in the page, this button, a resize and a consent dialogue claiming the layer all end a session
+    the one way, and none of them needs the session to be asked.
+
+    By kind rather than `dismissOverlay()`, which takes down whatever is up: a cancel that arrived a moment
+    after something else had claimed the layer would otherwise take *that* down, and a departed consent
+    dialogue is settled as a refusal nobody gave.
+
+    The other five words are decisions about a selection — what to write, how wide it should be, whether to
+    take it back — and they belong to the picking session in the core, which does not exist yet. Until it
+    does they are answered `taken: false` rather than `ok`: the answer says nothing happened instead of
+    letting the caller assume that something did, which is the exact silence this feature is being rebuilt
+    to remove.
+  */
+  handle('picker:barAction', ({ sessionId, action }, event) => {
+    const window = windows.resolve(event)
+    if (window === undefined) return { taken: false }
+    /*
+      Checked against the bar actually on the layer, exactly as a permission answer is checked against the
+      prompt actually on screen. The ways a picking session ends are mostly not clicks — a navigation, a
+      closed tab, a displaced bar — so a press that raced one of them would otherwise act on whichever
+      session came next.
+    */
+    const presented = window.overlayPresentation()
+    if (presented?.kind !== 'picker-bar' || presented.sessionId !== sessionId)
+      return { taken: false }
+    if (action !== 'cancel') return { taken: false }
+    return { taken: window.dismissOverlayKind('picker-bar') }
+  })
+
+  /*
     Opened by the core because it is a native menu.
 
     Everything it needs is read at open time rather than passed in: the blocked count belongs to the tab that

@@ -25,6 +25,7 @@ import {
   PERMISSION_DEVICES,
   PERMISSION_SUBJECTS
 } from '../overlay/permission.js'
+import { PICKER_BAR_ACTIONS, PICKER_BAR_MODES } from '../overlay/picker-bar.js'
 import {
   mediaCancelRequestSchema,
   mediaCancelResponseSchema,
@@ -234,6 +235,39 @@ const overlayPresentationSchema = z.discriminatedUnion('kind', [
     navigationKind: z.enum(['popup', 'navigation']),
     url: z.string().min(1),
     host: z.string()
+  }),
+  /**
+   * "Block this element": the confirmation bar, on the layer rather than in the page.
+   *
+   * The whole of what the bar shows is in the message, for the permission prompt's reason and one of its
+   * own: this surface is the *only* place a picked element's fate is reported, so a bar that had to ask a
+   * second channel what became of the attempt would be a version of the silence this feature exists to end.
+   *
+   * `outcome` is a string rather than an enum, deliberately. The outcomes belong to the picking session,
+   * which is where they are produced and held to being exhaustive; restating the set here would be a second
+   * list of the same names, and the way that fails is that a new outcome validates as an unknown key on one
+   * side and renders as nothing on the other. What this schema does guarantee is that the bar never receives
+   * a selector it did not ask for and never a rule text at all.
+   */
+  z.object({
+    kind: z.literal('picker-bar'),
+    /** Identity of the picking session: an update carries the same one, a second session a new one. */
+    sessionId: z.string().min(1),
+    tileIndex: z.number().int().nonnegative(),
+    bounds: rectSchema,
+    /** Never empty: there is no picking session without a document to pick in. */
+    tabId: z.string().min(1),
+    mode: z.enum(PICKER_BAR_MODES),
+    selector: z.string(),
+    /** `null` while nothing has been measured yet; `0` is a finding, not an absence of one. */
+    matches: z.number().int().nonnegative().nullable(),
+    /** False at the ends of the ancestor chain, so a control that can do nothing says so. */
+    canWiden: z.boolean(),
+    canNarrow: z.boolean(),
+    /** The key of a named outcome, or `null` while the attempt is still going on. */
+    outcome: z.string().nullable(),
+    /** Whether a rule was actually written, which is the one thing Undo may act on. */
+    canUndo: z.boolean()
   })
 ])
 
@@ -611,6 +645,36 @@ export const invokeContract = {
     response: z.object({ started: z.boolean() })
   },
   'picker:stop': { request: z.object({ tabId: z.string().optional() }), response: ok },
+  /**
+   * One press on the confirmation bar, as one word.
+   *
+   * ## Why the payload is a word and a session, and nothing else
+   *
+   * The selector is not here, and neither is the rule text. The core proposed the selector, the core holds
+   * the selection, and the core is what will write the rule — so a message that carried any of those would
+   * let the *sender* choose what gets written into the user's own filter list. The sender is a renderer.
+   * `permissions:answer` settled this shape for the same reason: the answer is an enum and the question is
+   * the core's.
+   *
+   * `sessionId` is echoed back on the precedent of every other answering channel on this layer — a reply may
+   * only ever resolve the question it was shown for. It matters here even though at most one picking session
+   * exists at a time, because the ways a session ends are numerous and mostly not clicks: a navigation, a
+   * displaced bar, a closed tab. A Confirm that raced any of those would otherwise land on whatever session
+   * came next and write a rule for an element nobody chose.
+   *
+   * ## Why the answer is `taken` rather than `ok`
+   *
+   * Because this whole feature exists because a picker used to end without saying anything. A word that
+   * arrives for a session that is no longer running is an ordinary event rather than an error, and the
+   * caller is told that nothing happened instead of being left to assume that something did.
+   */
+  'picker:barAction': {
+    request: z.object({
+      sessionId: z.string().min(1),
+      action: z.enum(PICKER_BAR_ACTIONS)
+    }),
+    response: z.object({ taken: z.boolean() })
+  },
   /**
    * The user's own rules, and the words the editor renders them with.
    *

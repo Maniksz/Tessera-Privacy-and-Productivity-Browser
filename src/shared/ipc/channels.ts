@@ -145,6 +145,22 @@ export const INVOKE_CHANNELS = [
   'blocker:menu',
   'picker:start',
   'picker:stop',
+  /**
+   * Confirm, cancel, wider, narrower, undo, or "take me to my rules" — from the picker's confirmation bar.
+   *
+   * Chrome-only, and on no internal page's allowlist. Classified rather than inherited from the two lines
+   * above it, although it lands in the same place they do and for a related reason: `picker:start` is
+   * chrome-only because a page that could start the picker in itself could then propose and commit rules
+   * for its own site, and this channel is the *commit*. A document that could reach it would not need to
+   * start anything — it could confirm a selection the user was still looking at, or take back one they had
+   * just made, on a bar it cannot see.
+   *
+   * What keeps that narrow is not the allowlist alone. The message carries a word and the id of the session
+   * it was shown for, never a selector and never a rule text, so the most a call that got through could do
+   * is press one of six buttons on a bar that is actually on screen — and the core checks the session id
+   * against the one it is running, so a stale or invented one presses nothing.
+   */
+  'picker:barAction',
   /** The user's own rules, for the settings page and the blocker menu. */
   'userrules:list',
   'userrules:add',

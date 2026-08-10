@@ -108,6 +108,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(tab-drop)',
       'overlay.dismissKind(tile-bar)',
       'overlay.dismissKind(find-bar)',
+      'overlay.dismissKind(picker-bar)',
       'relayout'
     ])
   })
@@ -122,6 +123,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(tab-drop)',
       'overlay.dismissKind(tile-bar)',
       'overlay.dismissKind(find-bar)',
+      'overlay.dismissKind(picker-bar)',
       'broadcastWindowState'
     ])
   })
@@ -170,15 +172,20 @@ describe('window event wiring', () => {
     /*
       The other half, and the reason the fix is a filter rather than an exemption for two kinds: the
       protection must not spread. A menu left hanging over a window the user has resized is the
-      original complaint, and both tile surfaces carry the rectangle of a tile that a resize has just
+      original complaint, and all three tile surfaces carry the rectangle of a tile that a resize has just
       moved — kept, they would sit over a neighbour's page.
+
+      The picker's confirmation bar joined the list by being declared, which is the property this filter was
+      built for: it awaits no answer, so an interruption may take it, and what its departure *does* cost —
+      the provisional rule it leaves in the document — is undone by the vacancy report rather than by
+      keeping the bar on a window the user has just resized.
     */
     const window = harness()
     window.emit('resize')
     const dismissed = window.calls
       .filter((call) => call.startsWith('overlay.dismissKind('))
       .map((call) => call.slice('overlay.dismissKind('.length, -1))
-    expect(dismissed).toEqual(['layout-menu', 'tab-drop', 'tile-bar', 'find-bar'])
+    expect(dismissed).toEqual(['layout-menu', 'tab-drop', 'tile-bar', 'find-bar', 'picker-bar'])
   })
 
   it('tells the chrome UI about maximise, unmaximise and focus, and nothing else', () => {

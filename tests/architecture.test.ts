@@ -1313,7 +1313,17 @@ describe('IPC discipline', () => {
       'overlay:present',
       'drag:start',
       'devtools:toggle',
-      'nav:navigate'
+      'nav:navigate',
+      /*
+        The element picker, both halves of it.
+
+        `picker:start` has to be chrome-only because a document that could start the picker in itself
+        could then propose rules for its own site, and `picker:barAction` is the other end of the same
+        act: it is the press that *commits* one. A page that could reach it could confirm a selection the
+        user was still looking at, or take back one they had just made, on a bar it cannot see.
+      */
+      'picker:start',
+      'picker:barAction'
     ]
     const reachable = anyInternalInvokeChannels() as readonly string[]
     for (const channel of chromeOnly) {
