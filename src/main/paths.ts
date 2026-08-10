@@ -108,6 +108,22 @@ export function tabGroupsFile(): string {
 }
 
 /**
+ * Put-away tile arrangements.
+ *
+ * User data rather than cache, and it is the same call as the file above even though nothing here has a
+ * name the user typed. A recording is the only way back to a set of panes somebody built by dragging;
+ * losing it costs work, and `cacheDir()` is the directory whose contents a disk cleaner, a cache clear
+ * or a profile reset may remove at any time.
+ *
+ * Its own file rather than a field of `tab-groups.json` or of `session.json` (KTD3): the session
+ * document describes the tiling that is *in force*, this one the tiling that was taken away, and holding
+ * both in one file would merge two meanings back together — the very defect this rebuild separates.
+ */
+export function arrangementsFile(): string {
+  return join(userDataDir(), 'arrangements.json')
+}
+
+/**
  * Per-site permission answers.
  *
  * User data, not cache. A disk cleaner emptying this would mean every site asking for the camera again —

@@ -28,6 +28,7 @@ import { openLocalDataProtection } from './data/local-data-protection.js'
 import { applySecureDns } from './session/hardening.js'
 import { registerAsDefaultBrowser, registerInternalProtocol, registerInternalSchemePrivileges } from './protocol.js'
 import {
+  arrangementsFile,
   currentPlatform,
   extensionsFile,
   bookmarksFile,
@@ -56,6 +57,7 @@ import { HistoryStore } from './data/HistoryStore.js'
 import { FaviconStore } from './data/FaviconStore.js'
 import { ThumbnailStore } from './data/ThumbnailStore.js'
 import { TabGroupStore } from './data/TabGroupStore.js'
+import { ArrangementStore } from './data/ArrangementStore.js'
 import { SessionStore } from './data/SessionStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
 import { DownloadStore } from './data/DownloadStore.js'
@@ -127,6 +129,7 @@ let history: HistoryStore | null = null
 let favicons: FaviconStore | null = null
 let thumbnails: ThumbnailStore | null = null
 let tabGroups: TabGroupStore | null = null
+let arrangements: ArrangementStore | null = null
 let sessionStore: SessionStore | null = null
 let bookmarks: BookmarkStore | null = null
 let downloads: DownloadStore | null = null
@@ -296,6 +299,18 @@ async function main(): Promise<void> {
   flushOnExit.push(() => tabGroups?.flush() ?? Promise.resolve())
   if (tabGroups.recoveredFromInvalidFile) {
     console.warn('[tabgroups] file could not be used; started with no groups')
+  }
+
+  // The codec is not optional here however optional the parameter is: a recording names which
+  // pages sat beside which and when, the same kind of data as the group file, and `JsonStore`
+  // falls back to plain text without a word if it is left out (KTD9).
+  arrangements = await ArrangementStore.open({
+    filePath: arrangementsFile(),
+    codec: protection.codec
+  })
+  flushOnExit.push(() => arrangements?.flush() ?? Promise.resolve())
+  if (arrangements.recoveredFromInvalidFile) {
+    console.warn('[arrangements] file could not be used; started with no arrangements')
   }
   /*
     The session, opened before the first window so the plan can be read before anything exists.
