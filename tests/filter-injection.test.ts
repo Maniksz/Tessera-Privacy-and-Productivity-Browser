@@ -1,9 +1,40 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { WebContents } from 'electron'
+import { CosmeticInjector } from '@main/privacy/CosmeticInjector.js'
 import { FilterEngine } from '@main/privacy/FilterEngine.js'
 import type { DocumentFeatures } from '@shared/filters/features.js'
+import { COSMETIC_SPECIFIC_CHANNEL } from '@shared/filters/injection.js'
 import { cosmeticRuleFor } from '@shared/filters/picker.js'
 import { viewStylesheet } from '@shared/filters/preview-styles.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
+
+/**
+ * The one Electron symbol `CosmeticInjector` imports as a value, replaced so the class can be
+ * constructed here at all.
+ *
+ * The file is on `vitest.config.ts`'s coverage exclude list and stays there: nothing below moves it
+ * off, because what is asserted is the *wiring* — which view is told what, and which view is not —
+ * and every judgement about the text itself is asserted against `viewStylesheet` above. But wiring
+ * that can send a preview into the wrong tab is worth a fake application object, and `app.on` is the
+ * whole of what has to be faked to get one.
+ */
+const electronApp = vi.hoisted(() => {
+  const created: Array<(event: unknown, contents: unknown) => void> = []
+  return {
+    on(_event: string, handler: (event: unknown, contents: unknown) => void): void {
+      created.push(handler)
+    },
+    /** Dropped between tests, so a previous test's injector cannot answer this test's view. */
+    reset(): void {
+      created.length = 0
+    },
+    open(contents: unknown): void {
+      for (const handler of [...created]) handler({}, contents)
+    }
+  }
+})
+
+vi.mock('electron', () => ({ app: electronApp }))
 
 /**
  * The engine's cosmetic half as the injector sees it: a per-document feed of generic
@@ -428,5 +459,217 @@ describe('what a view’s addition is not allowed to be', () => {
     const result = viewStylesheet({ documentUrl: DOCUMENT, hostStyles: HOST_STYLES, session: '' })
     expect(result.css).toBe(HOST_STYLES)
     expect(result.session).toEqual({ css: null, refused: [] })
+  })
+})
+
+/**
+ * A view, reduced to what the injector actually speaks to.
+ *
+ * Four members and a listener table. The injector holds the object itself rather than an id
+ * (`webContents.fromId` can answer a *different* view once an id has been reused), so a fake that is
+ * merely the id would not exercise the path that matters.
+ */
+class FakeView {
+  readonly id: number
+  url: string
+  readonly sent: Array<{ readonly channel: string; readonly payload: unknown }> = []
+  readonly #listeners = new Map<string, Array<(...args: unknown[]) => void>>()
+  #destroyed = false
+
+  constructor(id: number, url: string) {
+    this.id = id
+    this.url = url
+  }
+
+  on(event: string, handler: (...args: unknown[]) => void): this {
+    const existing = this.#listeners.get(event) ?? []
+    existing.push(handler)
+    this.#listeners.set(event, existing)
+    return this
+  }
+
+  once(event: string, handler: (...args: unknown[]) => void): this {
+    return this.on(event, handler)
+  }
+
+  getURL(): string {
+    return this.url
+  }
+
+  isDestroyed(): boolean {
+    return this.#destroyed
+  }
+
+  send(channel: string, payload: unknown): void {
+    this.sent.push({ channel, payload })
+  }
+
+  /** The `document-start` question, answered synchronously — the path a page really takes. */
+  ask(url = this.url): unknown {
+    const event: { returnValue: unknown } = { returnValue: undefined }
+    this.#emit('ipc-message-sync', event, COSMETIC_SPECIFIC_CHANNEL, url)
+    return event.returnValue
+  }
+
+  destroy(): void {
+    this.#destroyed = true
+    this.#emit('destroyed')
+  }
+
+  /** The last host-specific stylesheet pushed at this view, or `undefined` for none. */
+  lastStyles(): unknown {
+    const pushes = this.sent.filter((entry) => entry.channel === COSMETIC_SPECIFIC_CHANNEL)
+    return pushes.at(-1)?.payload
+  }
+
+  #emit(event: string, ...args: unknown[]): void {
+    for (const handler of this.#listeners.get(event) ?? []) handler(...args)
+  }
+}
+
+function injectorFor(
+  options: {
+    settings?: Partial<SettingsSnapshot>
+    sessionStyles?: (id: number) => string | null
+  } = {}
+): CosmeticInjector {
+  const engine = engineFor()
+  const settings = { ...defaultSettings(), ...options.settings }
+  const sessionStyles = options.sessionStyles
+  const injector = new CosmeticInjector({
+    getSettings: () => settings,
+    stylesFor: (documentUrl) => engine.cosmeticStylesFor(documentUrl),
+    openFeed: (documentUrl) => engine.openCosmeticFeed(documentUrl),
+    scriptletsFor: () => [],
+    proceduralFor: () => [],
+    ...(sessionStyles === undefined
+      ? {}
+      : { sessionStylesFor: (contents: WebContents) => sessionStyles(contents.id) })
+  })
+  injector.install()
+  return injector
+}
+
+function viewOn(url = DOCUMENT, id = 1): FakeView {
+  const view = new FakeView(id, url)
+  electronApp.open(view)
+  return view
+}
+
+/**
+ * The other half of the view-bound delivery: which view is told, and which view is not.
+ *
+ * Everything the addition *is* — which lines survive, in what order, what a revocation restores —
+ * is asserted against `viewStylesheet` above, and nothing here repeats it. What is left in
+ * `CosmeticInjector` is a map from view to addition and a send, and both can be wrong in a way no
+ * pure test can see: a preview that reaches the tab beside the one being picked in is R20 broken,
+ * and a re-serve of every view that drops the additions is the picker's preview vanishing because
+ * somebody edited a rule in another window.
+ */
+describe('the injector’s view-bound delivery', () => {
+  beforeEach(() => {
+    electronApp.reset()
+  })
+
+  it('serves a view’s preview to that view', () => {
+    const injector = injectorFor()
+    const view = viewOn()
+    view.ask()
+    injector.setPreview(view.id, cosmeticRuleFor('example.com', '.sponsored-row'))
+    expect(view.lastStyles()).toBe(`${HOST_STYLES}\n.sponsored-row { display: none !important; }`)
+  })
+
+  it('leaves a second view on the same host untouched', () => {
+    // AE9, and the reason the delivery became view-bound at all: the global engine slot would have
+    // hidden this element in every window that happened to be on the same site.
+    const injector = injectorFor()
+    const picking = viewOn(DOCUMENT, 1)
+    const bystander = viewOn(DOCUMENT, 2)
+    picking.ask()
+    bystander.ask()
+    injector.setPreview(picking.id, 'example.com##.sponsored-row')
+    expect(bystander.lastStyles()).toBeUndefined()
+    expect(bystander.ask()).toBe(HOST_STYLES)
+  })
+
+  it('keeps every view’s addition when all of them are re-served', () => {
+    // `refresh` runs whenever the user's own rules change, which is a thing that happens *while* a
+    // preview is up — the picker's own commit does it. Losing the addition here would look like the
+    // preview flickering out for no reason anybody could connect to what they just did.
+    const injector = injectorFor()
+    const view = viewOn()
+    view.ask()
+    injector.setPreview(view.id, 'example.com##.sponsored-row')
+    injector.refresh()
+    expect(view.lastStyles()).toBe(`${HOST_STYLES}\n.sponsored-row { display: none !important; }`)
+  })
+
+  it('takes a preview back and leaves exactly what the engine said', () => {
+    // R5: revoked before the commit is measured, and revoking is the same call with no text.
+    const injector = injectorFor()
+    const view = viewOn()
+    view.ask()
+    injector.setPreview(view.id, 'example.com##.sponsored-row')
+    injector.setPreview(view.id, null)
+    expect(view.lastStyles()).toBe(HOST_STYLES)
+  })
+
+  it('says nothing to a view that has never asked for styles', () => {
+    // A view enters the map only by asking, and a picker can be pointed at a window whose page never
+    // did — an internal page, or any page at all while the blocker was off. Nothing to send to, and
+    // nothing to throw about.
+    const injector = injectorFor()
+    const silent = viewOn()
+    expect(() => {
+      injector.setPreview(silent.id, 'example.com##.sponsored-row')
+      injector.refreshView(999)
+    }).not.toThrow()
+    expect(silent.sent).toEqual([])
+  })
+
+  it('serves a window’s session rules to a view that opened after they were written', () => {
+    /*
+      Pulled per serve rather than pushed per view, and this is the case that decides it: a private
+      window's second tab is created, loads, and asks — all after the rule was written. Anything that
+      had to be told about the new view would have to be told by somebody, and R20 would hold only for
+      as long as nobody forgot.
+    */
+    injectorFor({ sessionStyles: (id) => (id === 1 ? 'example.com##.private' : null) })
+    const inPrivateWindow = viewOn(DOCUMENT, 1)
+    const inNormalWindow = viewOn(DOCUMENT, 2)
+    expect(inPrivateWindow.ask()).toBe(`${HOST_STYLES}\n.private { display: none !important; }`)
+    expect(inNormalWindow.ask()).toBe(HOST_STYLES)
+  })
+
+  it('lets no addition past a blocker the user switched off', () => {
+    // The gates come first and the addition is composed after them, so this is structural rather
+    // than a second check — but it is the one that would be a security-shaped bug if it inverted.
+    const injector = injectorFor({
+      settings: { 'privacy.blockerEnabled': false },
+      sessionStyles: () => 'example.com##.private'
+    })
+    const view = viewOn()
+    injector.setPreview(view.id, 'example.com##.sponsored-row')
+    expect(view.ask()).toBeNull()
+  })
+
+  it('lets no addition past a site the user exempted', () => {
+    const injector = injectorFor({ settings: { 'privacy.blockerOffForSites': ['example.com'] } })
+    const view = viewOn()
+    injector.setPreview(view.id, 'example.com##.sponsored-row')
+    expect(view.ask()).toBeNull()
+  })
+
+  it('drops a view’s preview when the view goes', () => {
+    // The map is keyed by a number and cleaned up on `destroyed` rather than left to be collected;
+    // an addition held by id has to be dropped at the same moment, or a long session accumulates
+    // rule text for every tab that ever previewed anything.
+    const injector = injectorFor()
+    const view = viewOn()
+    view.ask()
+    injector.setPreview(view.id, 'example.com##.sponsored-row')
+    view.destroy()
+    const reused = viewOn(DOCUMENT, view.id)
+    expect(reused.ask()).toBe(HOST_STYLES)
   })
 })
