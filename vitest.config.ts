@@ -223,6 +223,23 @@ export default defineConfig({
         'src/shared/favicons/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/history/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/tabgroups/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          The arrangement model, entered the moment the directory appeared, which is what the
+          paragraph above asks for.
+
+          It carries more than its size suggests. Three protections that used to come free from a
+          recording living inside exactly one group are now rules in this module and nowhere else:
+          a recording is applied whole or not at all (R14), one a collapsed group still needs
+          cannot be evicted for a newer one (R15), and one window's tilings do not reach another's
+          (R16). Each is a refusal, and a refusal that stops being taken looks exactly like the
+          feature working.
+        */
+        'src/shared/arrangements/**': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         'src/shared/session/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/find/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/thumbnails/**': { lines: 100, functions: 100, branches: 100, statements: 100 },

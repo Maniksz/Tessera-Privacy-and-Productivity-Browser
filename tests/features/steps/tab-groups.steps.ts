@@ -1,0 +1,195 @@
+import { expect } from 'vitest'
+import { Given, Then, When } from 'quickpickle'
+import { SplitController } from '@main/browser/SplitController.js'
+import {
+  createWindowSeams,
+  type WindowInternals,
+  type WindowSeams
+} from '@main/browser/window-seams.js'
+import type { OverlayLayer } from '@main/browser/OverlayLayer.js'
+import { ArrangementStore } from '@main/data/ArrangementStore.js'
+import { TabGroupStore } from '@main/data/TabGroupStore.js'
+import { defaultSettings } from '@shared/settings/definitions.js'
+import { stripItems } from '@shared/tabgroups/strip.js'
+import type { Rect } from '@shared/split/layout.js'
+import { scope, tempFile } from './world.js'
+
+/**
+ * Steps for `tab-groups.feature`.
+ *
+ * A window's real seams, over real stores, because that is where the reported defect lived. Neither
+ * controller was wrong: `TabGroupController.dissolve` dissolved, and the pass that keeps the tiling
+ * written down wrote it down — into the book of groups, because a group was the only place a layout
+ * could live, so it made one to write into. The bug was in `createWindowSeams`, and a scenario
+ * driving either controller alone would pass while a user watched the chip come back.
+ *
+ * So the whole seam is built here and driven the way `BrowserWindowController` drives it: "the
+ * window settles" is that class's `#maintainArrangement`, one coalesced broadcast round. What is
+ * asserted at the end is the *strip* — `stripItems` is what the tab bar draws from — because "the
+ * chip is gone" is the sentence the defect was reported in.
+ *
+ * `BrowserWindowController` itself cannot be here: it needs a browser process, which is why it is on
+ * the coverage exclude list and why the defect survived. `WindowInternals` is the entire surface it
+ * offers its seams, so a literal satisfying that interface is a complete stand-in for a window.
+ */
+
+const CONTENT: Rect = { x: 0, y: 88, width: 1200, height: 800 }
+
+interface GroupedWindow {
+  seams: WindowSeams
+  split: SplitController
+  /** The strip's order, which the fake window rewrites as a real one does. */
+  order: () => readonly string[]
+}
+
+/**
+ * Kept in the scenario's `scratch` rather than as a field of `Scope`.
+ *
+ * The shape is this file's alone — no other step file has a window's seams to share — and a typed
+ * field in `world.ts` would mean `world.ts` importing a type from a module that imports it back.
+ */
+const KEY = 'groupedWindow'
+
+function groupedWindow(state: unknown): GroupedWindow {
+  const held = scope(state).scratch[KEY]
+  if (held === undefined) throw new Error('this scenario has no window; add a Given for it')
+  return held as GroupedWindow
+}
+
+function tabList(list: string): string[] {
+  return list.split(',').map((name) => name.trim())
+}
+
+/** Builds a window around these tabs and seats each one in the tile of the same index. */
+async function openWindow(state: unknown, tabIds: readonly string[]): Promise<void> {
+  const groupStore = await TabGroupStore.open({
+    filePath: tempFile('tab-groups', 'tab-groups.json')
+  })
+  const arrangementStore = await ArrangementStore.open({
+    filePath: tempFile('tab-groups', 'arrangements.json'),
+    debounceMs: 0
+  })
+
+  const split = new SplitController({ layout: '1x2' })
+  let order = [...tabIds]
+
+  /*
+    Never reached by anything this scenario does, and cast rather than built because building one
+    means an Electron `WebContentsView`. The seams that use it — the drag and the tile bar — are
+    constructed and asked nothing.
+  */
+  const overlayStub: unknown = {}
+  const overlay = overlayStub as OverlayLayer
+
+  /*
+    Read lazily for the same reason `createWindowSeams` reads its own occupancy controller lazily:
+    the window hands the seams a way back into itself, and the seams do not exist until the window
+    has described itself. Nothing calls any of it during construction.
+  */
+  let seams: WindowSeams | null = null
+
+  const internals: WindowInternals = {
+    split,
+    overlay,
+    isDestroyed: () => false,
+    getSettings: () => defaultSettings(),
+    contentBounds: () => CONTENT,
+    contentRect: () => CONTENT,
+    setFullScreenable: () => {},
+    exitWindowFullscreen: () => {},
+    enterWindowFullscreen: () => {},
+    toggleWindowFullscreen: () => {},
+    // No `Tab` objects: `SplitController` is the authority on tile assignment, so a window with
+    // none settles exactly as one with them.
+    tab: () => undefined,
+    tabIds: () => order,
+    tabOrder: () => order,
+    setTabOrder: (next) => {
+      order = [...next]
+    },
+    assignTabToTile: (tabId, tileIndex) => {
+      split.assignTab(tabId, tileIndex)
+    },
+    releaseTiles: (released) => {
+      const held = released.filter((tabId) => split.tileOfTab(tabId) !== null)
+      for (const tabId of held) split.assignTab(tabId, null)
+      return held.length > 0
+    },
+    closeTab: (tabId) => {
+      order = order.filter((id) => id !== tabId)
+      split.forgetTab(tabId)
+    },
+    activateTab: (tabId) => {
+      const tile = split.tileOfTab(tabId)
+      if (tile !== null) split.setActiveTile(tile)
+      else seams?.arrangements.restoreFor(tabId)
+    },
+    setActiveTile: (tileIndex) => split.setActiveTile(tileIndex),
+    openFiller: (tileIndex) => {
+      const id = `filler-${order.length}`
+      order.push(id)
+      split.assignTab(id, tileIndex)
+    },
+    applyLayout: (layout, options) => {
+      seams?.occupancy.afterLayoutChange(split.setLayout(layout), options)
+    },
+    presentOverlay: () => {},
+    relayout: () => {},
+    broadcast: () => {},
+    onOverlayPresentationChanged: () => {},
+    tabGroups: groupStore.bookFor('normal'),
+    arrangements: arrangementStore.bookFor('normal')
+  }
+
+  seams = createWindowSeams(internals)
+  tabIds.forEach((tabId, index) => split.assignTab(tabId, index))
+
+  scope(state).scratch[KEY] = { seams, split, order: () => order } satisfies GroupedWindow
+}
+
+// --- given -------------------------------------------------------------------
+
+Given('a window tiling tabs {string} side by side', async (state: unknown, list: string) => {
+  const tabIds = tabList(list)
+  // The layout is two panes, so a scenario naming three tabs would seat one nowhere and then
+  // assert about a strip it never described.
+  expect(tabIds.length, 'a side-by-side window holds exactly two tabs').toBe(2)
+  await openWindow(state, tabIds)
+})
+
+Given('the tabs {string} are grouped as {string}', (state: unknown, list: string, name: string) => {
+  groupedWindow(state).seams.groups.create({ tabIds: tabList(list), name })
+})
+
+// --- when --------------------------------------------------------------------
+
+/** One coalesced broadcast round — `BrowserWindowController.#maintainArrangement`. */
+When('the window settles', (state: unknown) => {
+  groupedWindow(state).seams.arrangements.keep()
+})
+
+When('I dissolve the group {string}', (state: unknown, name: string) => {
+  const groups = groupedWindow(state).seams.groups
+  const group = groups.groups().find((held) => held.name === name)
+  if (group === undefined) throw new Error(`no group called ${name}`)
+  groups.dissolve(group.id)
+})
+
+// --- then --------------------------------------------------------------------
+
+Then('the tab strip shows no group chip', (state: unknown) => {
+  const window = groupedWindow(state)
+  const chips = stripItems(window.order(), window.seams.groups.groups()).filter(
+    (item) => item.kind === 'group'
+  )
+  expect(chips, 'the strip still draws a group chip').toEqual([])
+})
+
+Then('the tab strip still shows tabs {string}', (state: unknown, list: string) => {
+  const window = groupedWindow(state)
+  const shown = stripItems(window.order(), window.seams.groups.groups())
+    .filter((item) => item.kind === 'tab')
+    .map((item) => item.tabId)
+  // Dissolving a group must not cost a tab: the members go on being ordinary tabs (R4).
+  expect(shown).toEqual(tabList(list))
+})

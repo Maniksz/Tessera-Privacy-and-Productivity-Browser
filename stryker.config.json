@@ -138,6 +138,10 @@
     "src/main/startup-flags.ts",
     "src/shared/media/**/*.ts",
     "src/main/media/**/*.ts",
+    "src/shared/arrangements/model.ts",
+    "src/shared/arrangements/schema.ts",
+    "src/main/data/ArrangementStore.ts",
+    "src/main/browser/ArrangementController.ts",
     "!**/*.d.ts"
   ],
   "checkers": [
