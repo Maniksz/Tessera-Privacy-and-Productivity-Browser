@@ -8,6 +8,7 @@ import {
   injectableDocumentUrl
 } from '@shared/filters/injection.js'
 import type { ScriptletCall } from '@shared/filters/scriptlets.js'
+import { viewStylesheet } from '@shared/filters/preview-styles.js'
 import type { ProceduralSelector } from '@shared/filters/procedural.js'
 import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
@@ -31,6 +32,21 @@ import type { CosmeticFeedHandle } from './FilterEngine.js'
  * selectors that are new each time, instead of the same stylesheet five times over. The handle is per
  * *document*, so it is dropped and reopened when a view navigates — otherwise the second page on a
  * site would be told "nothing new" about selectors it had never received.
+ *
+ * ## Why one view can be served something no other view is
+ *
+ * The host-specific half is otherwise keyed by document address alone, so every view on a site gets
+ * the same text. Two things need a rule to reach exactly one place: the element picker's **preview**,
+ * which has to show in the tab being picked in and nowhere else, and the **session rules** of a
+ * private window, which must not leak into the normal windows sharing the same engine. Neither can
+ * use `FilterEngine.replaceUserRules` — that is one slot for the whole program, fed from the rule
+ * store on disk (KTD3, R20).
+ *
+ * So a view may carry an *addition*, and what it composes to is `viewStylesheet` in
+ * `shared/filters/preview-styles.ts` rather than anything here. This file holds the map from view to
+ * addition and the send; every question that can be answered wrongly — which lines are honoured,
+ * where they are appended, what a revocation restores — is over there, where a test can hold it. A
+ * branch about rule *content* appearing in this file is a branch in the wrong file.
  *
  * ## Why not through the IPC contract
  *
@@ -66,6 +82,25 @@ export interface CosmeticInjectorOptions {
    * exemption — and all three halves of a filter list have to get the same answer.
    */
   readonly proceduralFor: (documentUrl: string) => readonly ProceduralSelector[]
+  /**
+   * The rules this view's *window* is showing on top of everyone else's — a private window's session
+   * rules — as one rule text, or `null` for a window that has none.
+   *
+   * Asked per serve rather than set per view, and the asymmetry with the preview below is the point.
+   * A window's session rules outlive its tabs: the rule is written in one tab and a second tab is
+   * created, loads and asks for its stylesheet long afterwards. Anything the injector had to be
+   * *told* about that new view would have to be told by somebody, on a path nobody exercises until a
+   * private window opens its second tab — and R20 would hold only for as long as that call was
+   * remembered. Asked instead, a view that belongs to the window is covered by existing to ask.
+   *
+   * Which views those are is deliberately not knowable here: this file has web contents, and the
+   * mapping from a view to the window and browsing mode it belongs to lives with the window registry.
+   * The caller closes over it; the injector only asks.
+   *
+   * Optional because the wiring that answers it is a layer this class does not depend on. Absent, no
+   * view has session rules, which is exactly the answer for a program with no private window open.
+   */
+  readonly sessionStylesFor?: (contents: WebContents) => string | null
 }
 
 /** What one view is currently being served, so a navigation can be noticed. */
@@ -93,6 +128,19 @@ export class CosmeticInjector {
    * hold a feed, and therefore a set of served selector strings, for every view that ever existed.
    */
   readonly #documents = new Map<number, OpenDocument>()
+  /**
+   * The provisional rule one view is being shown, while somebody picks in it.
+   *
+   * Kept beside `#documents` rather than inside an `OpenDocument`, because a preview can be set for a
+   * view that has no open document — the entry appears only once a page has *asked* for host styles,
+   * and one is created from a URL and a feed, neither of which a preview brings with it. Keyed by the
+   * same web-contents id and deleted in the same `destroyed` handler, so it cannot outlive the view
+   * whose id it stands for.
+   *
+   * Nothing here enforces "one preview at a time"; the picker session does (KTD4), and duplicating
+   * that invariant in a map would be a second place for it to be true.
+   */
+  readonly #previews = new Map<number, string>()
 
   constructor(options: CosmeticInjectorOptions) {
     this.#options = options
@@ -133,13 +181,56 @@ export class CosmeticInjector {
 
       contents.once('destroyed', () => {
         this.#documents.delete(contents.id)
+        this.#previews.delete(contents.id)
       })
     })
   }
 
-  /** Drops a view's feed, so the next request opens a fresh one. Called on navigation. */
+  /**
+   * Drops a view's feed, so the next request opens a fresh one. Called on navigation.
+   *
+   * The view's preview is deliberately *not* dropped with it. Ending a picker session is one event
+   * with eleven causes (R11) and it is held in one place; a second half-cleanup here would be a
+   * twelfth cause that nobody knows about, and the two would disagree the first time they were
+   * called in the wrong order. What a navigation does to a preview on its own is already benign:
+   * the addition is scoped to a host, so `viewStylesheet` refuses it as `other-host` on the next
+   * site. A navigation *within* the same site would carry it over, and that is what the session
+   * ending — which the same navigation triggers — is for.
+   */
   forget(webContentsId: number): void {
     this.#documents.delete(webContentsId)
+  }
+
+  /**
+   * Shows one view a provisional rule, or takes it back. `null` is the revocation.
+   *
+   * Delivered immediately rather than left for the caller to deliver, and R5 is why: the preview has
+   * to be gone *before* the written rule is measured, and a revocation that only changed a map would
+   * be a revocation the page had not heard about yet. One call, one state of the page — there is no
+   * second route back to forget.
+   *
+   * A view that has never asked for host styles is served nothing, which is not a failure: it has no
+   * stylesheet of ours to replace. That covers an internal page, a `file:` document, and any page at
+   * all while the blocker was switched off — the entry point checks the same precondition and
+   * refuses before it gets this far.
+   */
+  setPreview(webContentsId: number, ruleText: string | null): void {
+    if (ruleText === null) this.#previews.delete(webContentsId)
+    else this.#previews.set(webContentsId, ruleText)
+    this.refreshView(webContentsId)
+  }
+
+  /**
+   * Re-serves exactly one view, because *its* addition changed.
+   *
+   * Beside `refresh` rather than instead of it. `refresh` answers "the rules changed under every
+   * page"; this answers "this window's session rules changed" and "this tab's preview changed",
+   * where restyling every open document would be visible work for a change that concerns one of
+   * them. A view with no open document is silently nothing to do.
+   */
+  refreshView(webContentsId: number): void {
+    const open = this.#documents.get(webContentsId)
+    if (open !== undefined) this.#serve(open)
   }
 
   /**
@@ -164,6 +255,10 @@ export class CosmeticInjector {
    * makes an over-eager rule recoverable. An empty string is therefore sent rather than skipped — it is
    * the instruction to stop hiding, and skipping it would leave the last stylesheet in place.
    *
+   * What it does *not* undo is a view's addition. Every view is re-served through the same path a
+   * request takes, so a preview stays up across a rule change somewhere else — which is the case
+   * that happens constantly, because committing a picked rule is itself a rule change.
+   *
    * It would carry a blocker switched off or a site exempted just as well, and nothing calls it for
    * either today: both are settings, and a settings change already restyles differently. Worth knowing
    * before somebody adds a second mechanism for it.
@@ -173,13 +268,22 @@ export class CosmeticInjector {
    * the matcher wrote `display: none` onto an element, and the core does not know which one.
    */
   refresh(): void {
-    for (const open of this.#documents.values()) {
-      const { contents } = open
-      if (contents.isDestroyed()) continue
-      contents.send(COSMETIC_SPECIFIC_CHANNEL, this.#specificStyles(contents, open.url) ?? '')
-      const selectors = this.#procedural(contents, open.url)
-      if (selectors.length > 0) contents.send(PROCEDURAL_CHANNEL, selectors)
-    }
+    for (const open of this.#documents.values()) this.#serve(open)
+  }
+
+  /**
+   * Pushes one open document's current answer at its view.
+   *
+   * The one route out for an unasked-for re-serve, so `refresh` and `refreshView` cannot come to
+   * differ — in particular they cannot come to differ about the additions, which is the failure that
+   * would look like a preview flickering out because somebody edited a rule in another window.
+   */
+  #serve(open: OpenDocument): void {
+    const { contents } = open
+    if (contents.isDestroyed()) return
+    contents.send(COSMETIC_SPECIFIC_CHANNEL, this.#specificStyles(contents, open.url) ?? '')
+    const selectors = this.#procedural(contents, open.url)
+    if (selectors.length > 0) contents.send(PROCEDURAL_CHANNEL, selectors)
   }
 
   #specificStyles(contents: WebContents, reportedUrl: unknown): string | null {
@@ -190,7 +294,20 @@ export class CosmeticInjector {
     // and a later generic report for the same page continues rather than restarts. It is also what
     // puts the view in the map at all, which is what `refresh` walks.
     this.#documentFor(contents, url)
-    return this.#options.stylesFor(url)
+    /*
+      The additions are composed after the gates and never around them.
+
+      Both gates return above: a switched-off blocker and an exempted site answer `null`, and there is
+      no path from here back to them. That is what keeps an addition from being a way to filter a page
+      the user has said not to filter — the picker's own entry point refuses on the same two
+      conditions, and this is the layer that would have to be wrong for that refusal to be bypassable.
+    */
+    return viewStylesheet({
+      documentUrl: url,
+      hostStyles: this.#options.stylesFor(url),
+      preview: this.#previews.get(contents.id) ?? null,
+      session: this.#options.sessionStylesFor?.(contents) ?? null
+    }).css
   }
 
   /**

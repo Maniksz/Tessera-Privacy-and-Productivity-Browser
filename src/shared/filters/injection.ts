@@ -23,6 +23,21 @@ import type { ProceduralSelector } from './procedural.js'
  * again when a single-page application builds more of itself — which makes it asynchronous, repeated,
  * and incremental.
  *
+ * ## Why the specific channel is a replacement, and why that now matters more
+ *
+ * The page *replaces* its host-specific stylesheet whenever this channel speaks, rather than
+ * appending to it. That was already what made a rule written now apply to the page in front of the
+ * person who wrote it — and what made deleting one un-hide, which is the half that makes an
+ * over-eager rule recoverable.
+ *
+ * It is also the whole of what the view-bound delivery needed. The text on this channel is no longer
+ * a function of the address alone: two views on the same site can be sent different stylesheets,
+ * because one of them may be showing an element picker's provisional rule or the session rules of a
+ * private window (KTD3, R20). Nothing about the channel changed for that, and nothing needs to —
+ * but an appending receiver would turn every re-serve into an accumulation, so the replacement is
+ * now load-bearing rather than merely convenient. The generic channel is the opposite by design and
+ * stays that way: it is incremental, and what it sends is a function of the document's features.
+ *
  * ## Why these are not bridge channels
  *
  * Neither goes through `shared/ipc/channels.ts`. A visited page has no bridge at all (spec 6) and
