@@ -113,6 +113,10 @@ export class UserRuleStore {
   readonly #store: JsonStore<UserRuleDocument>
   readonly #generateId: () => string
   readonly #now: () => number
+  /** The one editor a normal window gets; see `editorFor`. */
+  readonly #stored: UserRuleEditor
+  /** The one editor a private window gets, and the state of the private session; see `editorFor`. */
+  readonly #session: SessionUserRuleEditor
 
   private constructor(
     store: JsonStore<UserRuleDocument>,
@@ -122,6 +126,19 @@ export class UserRuleStore {
     this.#store = store
     this.#generateId = generateId
     this.#now = now
+    this.#stored = {
+      add: (input) => this.#add(input),
+      setEnabled: (id, enabled) => this.#setEnabled(id, enabled),
+      remove: (id) => this.#remove(id),
+      list: () => this.rules(),
+      forHost: (hostname) => userRulesForHost(this.rules(), hostname),
+      enabledText: () => enabledUserRuleText(this.rules()),
+      onChange: (listener) => this.onChange(listener)
+    }
+    this.#session = new SessionUserRuleEditor(
+      () => this.rules(),
+      () => this.#now()
+    )
   }
 
   static async open(options: UserRuleStoreOptions): Promise<UserRuleStore> {
@@ -155,25 +172,67 @@ export class UserRuleStore {
    * vanish; a hiding rule is meant to hide something, and an editor that accepted the
    * rule and did nothing would make the picker appear broken in exactly the window
    * where a user is most likely to be trying it. So the private editor is an overlay:
-   * it reads the stored rules through, keeps its own additions and its own disabling in
-   * memory, and dies with the session. The rule works, the file is untouched.
+   * it reads the stored rules through and keeps its own additions and its own disabling
+   * in memory. The rule works, the file is untouched.
+   *
+   * ## Why the same object comes back every time
+   *
+   * This used to construct the private editor per call, and that made it useless: a
+   * rule added through one IPC call was gone by the next one, so blocking an element in
+   * a private window did nothing and the rule was in no list the user could open. An
+   * editor whose state lasts one call also cannot be listened to — `onChange` had no
+   * subscriber anywhere in the core, because there was no object to subscribe to that
+   * would still exist when it fired. Both are held now (KTD5).
+   *
+   * ## Why per mode rather than per private window (OQ3)
+   *
+   * Both answers satisfy R16, and they differ in what happens when the first of two
+   * private windows closes: per mode, the rules stay for the second; per window, they
+   * go with the first. Per mode was chosen for two reasons.
+   *
+   * The first is that this seam is *named* by mode. `editorFor('private')` returning
+   * the held editor makes "a private window's rules survive" a property of the object
+   * every call site already asks for, rather than a convention that each of the three
+   * callers — the picker, the IPC handlers and the injector's pull — has to honour by
+   * routing through a window. A per-window editor would have to be handed out at window
+   * creation and looked up from a controller, and any call site that asked the store
+   * directly would silently get a rule set nobody sees. That is the difference between
+   * an invariant and a convention this file keeps everywhere else.
+   *
+   * The second is delivery. These rules reach a page through a single subscription made
+   * once at startup (KTD3): `onChange` re-serves the views of the private windows. One
+   * held editor means one subscription that cannot be forgotten for a window opened
+   * later — and being forgotten is exactly the defect being repaired here.
+   *
+   * The cost is real and is not hidden: two private windows open at once share their
+   * session rules, so one of them lists — and applies — a line the user wrote in the
+   * other. `TabGroupStore.bookFor` refused precisely that sharing for tab groups, and
+   * was right to, because a group carries a name the user typed for a set of open tabs.
+   * A rule is a narrower thing: one line about one site's markup, never sent anywhere,
+   * never written down, and gone from both windows the moment the mode ends. Weighed
+   * against a picker that would stop working in a window opened from a private window,
+   * the sharing is the smaller surprise. If that ever stops being true, the change is to
+   * key the held editor by window here — the callers already resolve one.
    */
   editorFor(mode: BrowsingMode): UserRuleEditor {
-    if (mode === 'private') {
-      return new SessionUserRuleEditor(
-        () => this.rules(),
-        () => this.#now()
-      )
-    }
-    return {
-      add: (input) => this.#add(input),
-      setEnabled: (id, enabled) => this.#setEnabled(id, enabled),
-      remove: (id) => this.#remove(id),
-      list: () => this.rules(),
-      forHost: (hostname) => userRulesForHost(this.rules(), hostname),
-      enabledText: () => enabledUserRuleText(this.rules()),
-      onChange: (listener) => this.onChange(listener)
-    }
+    return mode === 'private' ? this.#session : this.#stored
+  }
+
+  /**
+   * The private session is over: everything it held goes.
+   *
+   * Called when the last private window closes, which is what "the life of the session"
+   * means for an editor held per mode. Without it a private window opened later in the
+   * same run of the browser would inherit the rules of an earlier one — a private
+   * session leaving something behind in memory, which is the one thing it promises not
+   * to do.
+   *
+   * The editor object itself survives, and that is the point: it is what the delivery
+   * subscription is attached to. What is dropped is its contents, and the listeners are
+   * told, so the views of a window still open are re-served without the rules.
+   */
+  endPrivateSession(): void {
+    this.#session.endSession()
   }
 
   /** Every stored rule, oldest first. Readable from any session. */
@@ -250,6 +309,10 @@ export class UserRuleStore {
  * Ids are local to the session and prefixed, so an interface listing them can tell the
  * user which rules will not survive the window closing — a rule that silently vanishes
  * is worse than one that was never accepted.
+ *
+ * One of these exists per browsing mode and outlives every window; `endSession` is what
+ * ends a session, and `UserRuleStore.editorFor` argues why the object is the long-lived
+ * one and the session is not.
  */
 class SessionUserRuleEditor implements UserRuleEditor {
   readonly #stored: () => UserRule[]
@@ -321,6 +384,27 @@ class SessionUserRuleEditor implements UserRuleEditor {
     return () => {
       this.#listeners.delete(listener)
     }
+  }
+
+  /**
+   * Everything this session did, undone: its own rules, its switching off and its
+   * hiding of stored ones.
+   *
+   * The listeners are kept — they belong to the wiring, not to the session — and are
+   * told, because a private window that is still open (the mode ends with the *last*
+   * one) has views showing rules that no longer exist. Silent when there was nothing to
+   * undo, which is the ordinary case: a private window in which the user never wrote a
+   * rule must not cost every open page a re-serve on its way out.
+   *
+   * The id counter deliberately keeps running: an interface holding `session-3` from
+   * the last session must not find it pointing at a different rule in the next one.
+   */
+  endSession(): void {
+    if (this.#added.length === 0 && this.#disabled.size === 0 && this.#removed.size === 0) return
+    this.#added.length = 0
+    this.#disabled.clear()
+    this.#removed.clear()
+    this.#notify()
   }
 
   #notify(): void {

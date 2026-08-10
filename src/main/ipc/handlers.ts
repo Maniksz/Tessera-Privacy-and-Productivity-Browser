@@ -83,7 +83,13 @@ export function registerIpcHandlers(deps: {
 }): void {
   const { settings, windows, quickLinks, extensions, history, bookmarks, passwords } = deps
 
-  /** The rule editor for the sending window's browsing mode; a private window's discards. */
+  /**
+   * The rule editor for the sending window's browsing mode.
+   *
+   * One object per mode, held by the store, so what a private window writes here is what it reads
+   * back here and reaches nothing else — not the file, not the normal profile, not the engine's
+   * global slot. Every `userrules:*` channel goes through this, reads included (R16).
+   */
   const editorFor = (event: IpcMainInvokeEvent): UserRuleEditor =>
     deps.userRules.editorFor(windows.resolve(event)?.privateMode === true ? 'private' : 'normal')
 
@@ -384,7 +390,11 @@ export function registerIpcHandlers(deps: {
     buildBlockerMenu({
       locale: activeLocale(settings.get('appearance.uiLanguage')),
       blockedOnPage: state.blockedRequests,
-      userRules: deps.userRules.rules(),
+      // Read through the same editor the two items below write through (R16). It used to read the
+      // store: in a private window the menu then offered to switch off rules from the normal
+      // profile while hiding the ones the picker had just written in this window — the list and the
+      // switch disagreeing about what "my rules" are.
+      userRules: editor.list(),
       blockerEnabled: settings.get('privacy.blockerEnabled'),
       host,
       blockerEnabledOnSite: !filteringExemptFor(state.url, exemptSites),
@@ -449,7 +459,15 @@ export function registerIpcHandlers(deps: {
     text: userRulesText(activeLocale(settings.get('appearance.uiLanguage')))
   })
 
-  handle('userrules:list', () => userRulesAnswer(deps.userRules.rules()))
+  /*
+    Through the mode-bound editor, like the three channels that write (R16).
+
+    It read the store, and that made the rule manager unreachable from the window that most needs it:
+    a private window's picker writes into its session editor, so the page it sends the user to listed
+    everything except the rule they had just made — and offered to delete rules belonging to a profile
+    that window is not allowed to touch. One editor per mode, read and written through the same seam.
+  */
+  handle('userrules:list', (_request, event) => userRulesAnswer(editorFor(event).list()))
   /*
     Through the mode-bound editor like the other two, so a private window's settings page writes nothing
     into the rules the normal profile keeps.
@@ -779,7 +797,6 @@ export function registerIpcHandlers(deps: {
     extensions.remove(id)
     return OK
   })
-
 
   // --- browsing history ----------------------------------------------------
   handle('history:query', (criteria) => {

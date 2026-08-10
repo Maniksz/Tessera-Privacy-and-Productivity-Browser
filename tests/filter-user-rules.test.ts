@@ -700,6 +700,112 @@ describe('a private window', () => {
     expect(editor.remove('missing')).toBe(false)
   })
 
+  it('is the same editor on the next call, not a fresh one', async () => {
+    /*
+      The characterisation of the reported defect, and the reason it is stated as identity rather
+      than as behaviour: `editorFor` used to construct a `SessionUserRuleEditor` per call, so a
+      private window's rules lived exactly as long as one IPC call and no listener could be wired to
+      an object that was gone before the answer came back.
+    */
+    const { store } = await storeAt('user-rules.json')
+    expect(store.editorFor('private')).toBe(store.editorFor('private'))
+  })
+
+  it('still has the rule it wrote when the next call asks for the list', async () => {
+    // The same defect from the user's side, which is how it was reported: block an element in a
+    // private window, open the rule manager, and the rule is not there.
+    const { store } = await storeAt('user-rules.json')
+    store.editorFor('private').add({ text: 'example.com##.ad', origin: 'picker' })
+    expect(
+      store
+        .editorFor('private')
+        .list()
+        .map((rule) => rule.text)
+    ).toEqual(['example.com##.ad'])
+    expect(store.editorFor('private').enabledText()).toBe('example.com##.ad')
+  })
+
+  it('keeps that rule out of the normal profile and off the disk', async () => {
+    // AE8's second half, and the half a shared editor would break: what the private window wrote
+    // must reach neither the stored list nor the text the engine's global slot is fed from.
+    const { path, store } = await storeAt('user-rules.json')
+    store.editorFor('private').add({ text: 'example.com##.ad', origin: 'picker' })
+    await store.flush()
+    expect(store.editorFor('normal').list()).toEqual([])
+    expect(store.rules()).toEqual([])
+    expect(store.enabledText()).toBe('')
+    expect(await readRules(path)).toEqual({ version: 1, rules: [] })
+  })
+
+  it('is one editor for the mode, so the normal one is stable too', async () => {
+    const { store } = await storeAt('user-rules.json')
+    expect(store.editorFor('normal')).toBe(store.editorFor('normal'))
+    expect(store.editorFor('normal')).not.toBe(store.editorFor('private'))
+  })
+
+  it('loses its rules when the private session ends', async () => {
+    // R5. The editor is held for the life of the process, so the rules have to be let go at the
+    // moment the last private window closes — otherwise a later private window would open onto the
+    // rules of an earlier one, which is precisely what a private session promises not to do.
+    const { store } = await storeAt('user-rules.json')
+    const editor = store.editorFor('private')
+    editor.add({ text: 'example.com##.ad', origin: 'picker' })
+    store.endPrivateSession()
+    expect(editor.list()).toEqual([])
+    expect(store.editorFor('private').enabledText()).toBe('')
+  })
+
+  it('lets go of what the session did to the stored rules as well', async () => {
+    const { store } = await storeAt('user-rules.json')
+    const stored = store
+      .editorFor('normal')
+      .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    const editor = store.editorFor('private')
+    editor.setEnabled(stored.id, false)
+    editor.remove(stored.id)
+    store.endPrivateSession()
+    expect(editor.list()).toEqual([stored])
+  })
+
+  it('keeps the listeners the wiring attached across the end of a session', async () => {
+    /*
+      The editor object outlives the session it holds, and this is why: the delivery of these rules
+      into a private window's views is one subscription made once at startup. Handing out a fresh
+      editor for the next private window would leave that subscription pointing at a dead object —
+      the same shape as the defect this unit exists to remove.
+    */
+    const { store } = await storeAt('user-rules.json')
+    const seen: number[] = []
+    store.editorFor('private').onChange((rules) => seen.push(rules.length))
+    store.editorFor('private').add({ text: 'example.com##.ad', origin: 'picker' })
+    store.endPrivateSession()
+    store.editorFor('private').add({ text: 'example.com##.promo', origin: 'picker' })
+    expect(seen).toEqual([1, 0, 1])
+  })
+
+  it('says nothing when a session that wrote nothing ends', async () => {
+    // Every window close would otherwise re-serve every view in the browser for no change at all.
+    const { store } = await storeAt('user-rules.json')
+    const seen: number[] = []
+    store.editorFor('private').onChange((rules) => seen.push(rules.length))
+    store.endPrivateSession()
+    expect(seen).toEqual([])
+  })
+
+  it('does not reuse an id after the session ended', async () => {
+    // A surface holding a rule id across the end of a session — an open rule manager, a picker
+    // result — must not find that id pointing at a different rule afterwards.
+    const { store } = await storeAt('user-rules.json')
+    const first = store
+      .editorFor('private')
+      .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    store.endPrivateSession()
+    const second = store
+      .editorFor('private')
+      .add({ text: 'example.com##.promo', origin: 'picker' }).rule!
+    expect(second.id).not.toBe(first.id)
+  })
+
   it('tells its own listeners, and stops when asked', async () => {
     const { editor } = await privateEditor()
     const seen: number[] = []
