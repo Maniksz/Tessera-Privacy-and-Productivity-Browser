@@ -534,6 +534,38 @@ export const en = {
   'picker.outcome.not-filterable':
     'Nothing can be blocked on this page. Either it is not a website, or filtering is switched off here.',
 
+  /*
+    The confirmation bar's own chrome.
+
+    Every one of these is a *state said out loud*, and that is the point rather than politeness: the
+    defect being repaired here is a picker that closed without saying anything, so a bar that showed
+    controls and no sentence would reproduce it with better furniture. The three waiting lines below
+    exist because the two states between a press and an answer are the ones that look like a hang.
+
+    Wider and narrower are named for what happens to the *selection*, not for the direction of the key
+    that does it: "up" and "down" describe a tree the user cannot see.
+  */
+  'picker.bar.label': 'Block an element in tile {index}',
+  'picker.bar.choosing': 'Move over the element you want to hide, then click it.',
+  /* Not counted *yet* — distinct from a count of zero, which is a finding and worded below. */
+  'picker.bar.counting': 'Counting what this would hide…',
+  'picker.bar.matchesNone': 'This matches nothing on this page.',
+  'picker.bar.matchesOne': 'This would hide 1 element on this page.',
+  'picker.bar.matches': 'This would hide {count} elements on this page.',
+  'picker.bar.writing': 'Saving the rule…',
+  'picker.bar.measuring': 'Checking whether the rule works here…',
+  'picker.bar.widen': 'Select more',
+  'picker.bar.narrow': 'Select less',
+  'picker.bar.confirm': 'Block it',
+  'picker.bar.cancel': 'Cancel',
+  /*
+    The same action as Cancel, worded for a bar that has an answer on it. "Cancel" beside a rule that
+    was just saved reads as an offer to take it back — which is the button next to it.
+  */
+  'picker.bar.close': 'Close',
+  'picker.bar.undo': 'Undo',
+  'picker.bar.openRules': 'My rules',
+
   // page context menu
   'page.openLinkInNewTab': 'Open link in new tab',
   'page.copyLinkAddress': 'Copy link address',

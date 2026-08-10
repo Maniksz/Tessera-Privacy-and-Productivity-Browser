@@ -1,0 +1,141 @@
+/*
+  The element picker's confirmation bar, for one tile.
+
+  No `@import` of the tokens: the overlay entry's own stylesheet already pulls them in, and custom
+  properties are document-wide once declared. Importing them again would inline the whole token file a
+  second time into the one stylesheet this entry emits, which is measured against a size budget in
+  `tests/architecture.test.ts`.
+
+  The layer is sized to the box the bar occupies, so this fills it exactly: `100%` of a view that is
+  already the right shape, rather than a size that would have to agree with `PICKER_BAR_WIDTH` in a
+  second place. Everything outside the box belongs to the page, which is what keeps the document being
+  picked in scrollable and clickable while a selection is being judged.
+
+  Three rows rather than the find bar's one row, because this surface has to *say* things: the selector
+  it would write, what that would hide, and — at the end — a sentence naming what became of the attempt.
+*/
+.pickerbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /*
+    Opaque, and floating: a shadow rather than a seam.
+
+    The bar sits over live page content in the corner of a tile, so it has to read as an object in front
+    of the page instead of as part of it — a translucent panel over an arbitrary document is unreadable
+    in the one case that matters, which is a light page behind light text.
+  */
+  background: var(--bg-elevated);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  color: var(--fg);
+}
+
+/*
+  The bar takes focus for its four keys, and says so in the ordinary way.
+
+  Without this the ring would be invisible on the container and a keyboard user would have no way to
+  tell that Return and the arrows are going anywhere.
+*/
+.pickerbar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+  The selector, monospaced and on one line.
+
+  Elided rather than wrapped: wrapped, a long selector would take the height the outcome sentence needs,
+  and the sentence is the part that cannot be guessed from the rest of the screen. The full text is in
+  the element's `title` and in the DOM, so nothing is lost — only shortened.
+*/
+.pickerbar__selector {
+  flex: 0 0 auto;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--fg);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+  The status line: the count, the waiting words, or the answer.
+
+  It takes the slack and scrolls, because it is the one part whose length is not the browser's to choose
+  — the outcome sentences name a next step, and a sentence clipped before its next step is half an
+  answer. `min-height: 0` is what lets a flex child scroll at all.
+*/
+.pickerbar__status {
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pickerbar__controls {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.pickerbar__button {
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.pickerbar__button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/*
+  The one the bar exists to offer, marked as such.
+
+  Confirm is the press that writes into the user's own rules, and a row of four identical buttons makes
+  the destructive-ish one indistinguishable from the two that merely adjust a highlight.
+*/
+.pickerbar__button--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+}
+
+/*
+  Dimmed, not hidden.
+
+  A control that disappears at the end of the ancestor chain — or while the core is writing — would
+  change the bar's shape under a pointer already moving towards it, and would leave the user pressing at
+  a target that moved.
+*/
+.pickerbar__button:disabled {
+  border-color: var(--border);
+  background: none;
+  color: var(--fg-dim);
+  opacity: 0.45;
+}
+
+.pickerbar__button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
