@@ -10,7 +10,12 @@ import { chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { decideAutomaticNavigation } from './automatic-navigation.js'
 import { AutomaticNavigationPrompt } from './AutomaticNavigationPrompt.js'
 import { HOME_URL, resolveOmniboxInput } from '@shared/url/omnibox.js'
-import type { OverlayPresentation, OverlayState } from '@shared/overlay/surface.js'
+import {
+  TILE_BOUND_KINDS,
+  type OverlayKind,
+  type OverlayPresentation,
+  type OverlayState
+} from '@shared/overlay/surface.js'
 import { Tab, adoptTabId, nextTabId, type TabWiring } from './Tab.js'
 // The seams' *types* only: what each one is, and what it may reach, both live in `window-seams.ts`.
 import { createWindowSeams, type WindowSeams } from './window-seams.js'
@@ -729,14 +734,11 @@ export class BrowserWindowController {
       *accelerator* while a permission prompt is up would take the prompt down, and a prompt that leaves the
       layer is settled the safe way, which is `block`. A consent dialogue answered by an unrelated keystroke.
 
-      The tile bar goes too, for the reason below: its bounds belong to a tile that is about to move.
+      Every tile surface goes too, for the reason `#dismissTileBoundSurfaces` gives: their bounds belong to
+      tiles that are about to move.
     */
     this.#overlay.dismissKind('layout-menu')
-    this.#overlay.dismissKind('tile-bar')
-    // Same reason, and one more: a find bar's bounds are a tile's corner, captured when it was presented, so a
-    // moved tile leaves the bar over the wrong page. Dropped rather than recomputed — the departure clears the
-    // page's highlight, and the shortcut restores the term.
-    this.#overlay.dismissKind('find-bar')
+    this.#dismissTileBoundSurfaces()
     const changed = this.split.setLayout(layout)
     /*
       Re-clamp the dividers, because a fraction carried over from another layout is correct alone and wrong
@@ -759,17 +761,9 @@ export class BrowserWindowController {
   }
 
   setFractions(fractions: Fractions): void {
-    /*
-      The bar's bounds are a tile's top strip, captured when it was presented. Dragging a divider moves that
-      tile, and `relayout()` repositions the layer from the stored rectangle — so an open bar would sit over a
-      tile that is no longer there. Dropped rather than recomputed: the pointer is already inside a tile and
-      re-reveals it on the next move, which is one frame away.
-    */
-    this.#overlay.dismissKind('tile-bar')
-    // Same reason, and one more: a find bar's bounds are a tile's corner, captured when it was presented, so a
-    // moved tile leaves the bar over the wrong page. Dropped rather than recomputed — the departure clears the
-    // page's highlight, and the shortcut restores the term.
-    this.#overlay.dismissKind('find-bar')
+    // Dragging a divider moves the tiles a `tile` surface's captured rectangle belongs to; see
+    // `#dismissTileBoundSurfaces`.
+    this.#dismissTileBoundSurfaces()
     this.split.setFractions(fractions, this.#contentRect())
     this.relayout()
     this.#scheduleBroadcast()
@@ -791,12 +785,9 @@ export class BrowserWindowController {
   }
 
   assignTabToTile(tabId: string, tileIndex: number | null): void {
-    // Same reason as `setFractions`: the tab under an open bar may be about to change or leave.
-    this.#overlay.dismissKind('tile-bar')
-    // Same reason, and one more: a find bar's bounds are a tile's corner, captured when it was presented, so a
-    // moved tile leaves the bar over the wrong page. Dropped rather than recomputed — the departure clears the
-    // page's highlight, and the shortcut restores the term.
-    this.#overlay.dismissKind('find-bar')
+    // Same reason as `setFractions`, and one more: the tab under an open tile surface may be about to
+    // change or leave, and a bar naming a tab that is no longer in that tile acts on the wrong page.
+    this.#dismissTileBoundSurfaces()
     // Whatever used to occupy the target tile becomes unassigned rather than
     // closed (spec 2).
     if (tileIndex !== null) {
@@ -820,11 +811,7 @@ export class BrowserWindowController {
 
   toggleTileMaximized(tileIndex?: number): void {
     // Same reason as `setFractions`: every tile's rectangle changes, including the one under an open bar.
-    this.#overlay.dismissKind('tile-bar')
-    // Same reason, and one more: a find bar's bounds are a tile's corner, captured when it was presented, so a
-    // moved tile leaves the bar over the wrong page. Dropped rather than recomputed — the departure clears the
-    // page's highlight, and the shortcut restores the term.
-    this.#overlay.dismissKind('find-bar')
+    this.#dismissTileBoundSurfaces()
     this.split.toggleTileMaximized(tileIndex)
     this.relayout()
     this.#scheduleBroadcast()
@@ -932,6 +919,36 @@ export class BrowserWindowController {
 
   dismissOverlay(): void {
     this.#overlay.dismiss()
+  }
+
+  /**
+   * Takes the layer down only if it is showing the kind named; `false` means it was not.
+   *
+   * What anything acting on one particular surface has to use. `dismissOverlay` takes down whatever
+   * happens to be up, which is right for a click on a surface's own close button — the surface is on
+   * screen, or the button could not have been pressed — and wrong for everything that arrives a moment
+   * later than it meant to. A message aimed at a bar that a consent dialogue has since displaced would
+   * take the dialogue down, and a departed dialogue is settled as a refusal nobody gave.
+   */
+  dismissOverlayKind(kind: OverlayKind): boolean {
+    return this.#overlay.dismissKind(kind)
+  }
+
+  /**
+   * Drops every surface whose rectangle belongs to a tile, because the tiles have moved.
+   *
+   * Called from each site that changes the geometry. The bounds of a `tile` surface are captured when it
+   * is presented and the layer is repositioned from that stored rectangle, so a bar kept across a layout
+   * change, a dragged divider or a maximised tile ends up over a page it has nothing to do with. Dropped
+   * rather than recomputed, because each of them comes back cheaply: the tile bar re-reveals itself on
+   * the next pointer move, the find bar's term is remembered by the core, and a picking session that
+   * loses its bar is told through the layer's vacancy report and takes its preview back off the page.
+   *
+   * By kind, never wholesale, and derived from the region table rather than written out here; see
+   * `TILE_BOUND_KINDS`.
+   */
+  #dismissTileBoundSurfaces(): void {
+    for (const kind of TILE_BOUND_KINDS) this.#overlay.dismissKind(kind)
   }
 
   /**

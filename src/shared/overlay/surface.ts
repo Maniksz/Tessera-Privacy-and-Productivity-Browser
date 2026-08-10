@@ -7,6 +7,7 @@ import type {
 } from '../passwords/prompt.js'
 import type { Rect, Size } from '../ui/anchor.js'
 import type { PermissionDevice, PermissionSubject } from './permission.js'
+import type { PickerBarMode } from './picker-bar.js'
 
 /**
  * What the chrome UI can put on the window's topmost layer.
@@ -41,7 +42,8 @@ export const OVERLAY_KINDS = [
   'tile-bar',
   'find-bar',
   'master-password',
-  'navigation-request'
+  'navigation-request',
+  'picker-bar'
 ] as const
 
 export type OverlayKind = (typeof OVERLAY_KINDS)[number]
@@ -122,7 +124,20 @@ export const OVERLAY_REGION = {
    * each of those takes the prompt down, which the safe default turns into a refusal of something the
    * user was in the middle of allowing.
    */
-  'navigation-request': 'window'
+  'navigation-request': 'window',
+  /**
+   * A box in the corner of the tile being picked in, and nothing else in the window.
+   *
+   * The find bar's region for the find bar's reason, with one addition of its own. While this bar is up a
+   * provisional rule is hiding something in the page behind it, and the point of the whole exercise is
+   * that the user can *look at the page* and decide whether the right thing disappeared. A surface over
+   * the content area would cover the evidence it exists to present; a surface over the window would take
+   * the toolbar and the tab strip with it, in a mode the user is expected to sit in for a moment.
+   *
+   * Which tile it belongs to is known only to the session that raised it, so the rectangle travels with
+   * the presentation; see `pickerBarBounds` and `overlayBounds`.
+   */
+  'picker-bar': 'tile'
 } as const satisfies Record<OverlayKind, OverlayRegion>
 
 /** The layout menu carries the current layout so it can render its radio state at once. */
@@ -391,6 +406,96 @@ export interface NavigationRequestPresentation {
   host: string
 }
 
+/**
+ * "Block this element": what has been chosen, what it would hide, and what became of it.
+ *
+ * ## Why the result appears here rather than in the page
+ *
+ * The picker used to draw its own bar into the document it was picking in, and that is the reason a
+ * click could fail five different ways without anybody finding out: the surface that would have carried
+ * the news tore itself down in the same breath as the message that asked for the rule. It also cannot
+ * work everywhere it is needed — a document that carries no picker surface at all is exactly the kind
+ * of document a refusal has to be reported on.
+ *
+ * So the news arrives on the window's own layer, where the browser can always speak, and the page is
+ * left to do the one thing only it can do: show what disappeared.
+ *
+ * ## Why the whole visible state is one message
+ *
+ * The bar holds no opinion of its own. Every field below is the core's answer to "what should be on
+ * screen right now", and the surface renders it — the find bar's rule, for the find bar's reason: two
+ * places accumulating the same state eventually disagree, and the one that is wrong is always the one
+ * the user is looking at. The cost is that the presentation is re-sent as the selection is refined and
+ * as measurements arrive, which is what `sessionId` is for; see `surfaceIdentity`.
+ */
+export interface PickerBarPresentation {
+  kind: 'picker-bar'
+  /**
+   * Identity of the *picking session*, not of the bar.
+   *
+   * Two jobs, both load-bearing, and both taken from the find bar. The layer tells an update from a
+   * departure by it, so a new match count does not read as the bar leaving — which here would end the
+   * session the moment it had something to report. And the session that owns a departed bar is found by
+   * it, which is how a bar the layer took down for reasons of its own still gets its provisional rule
+   * lifted off the page.
+   */
+  sessionId: string
+  /** The tile picked in. Also its label: "block an element in tile 2" is what a screen reader reads. */
+  tileIndex: number
+  /** The box, in window coordinates — the bounds the layer takes while this is up. */
+  bounds: Rect
+  /** The tab picked in. Never empty: there is no picker session without a document to pick in. */
+  tabId: string
+  mode: PickerBarMode
+  /**
+   * The selector that would be written, in the form the user is being asked to accept.
+   *
+   * Shown at every stage rather than only once frozen: a person cannot judge "wider" and "narrower"
+   * without seeing what changed, and a confirmation that hides what it confirms is not one.
+   */
+  selector: string
+  /**
+   * How many elements the selector hits in the open document, or `null` while nothing has been measured.
+   *
+   * `null` rather than `0`, and the difference is the whole point of measuring at all: zero means "this
+   * rule changes nothing here", which is a real and reportable finding, while "not yet counted" is the
+   * absence of a finding. Collapsed into one value, a measurement in flight would announce the finding
+   * before it was made.
+   */
+  matches: number | null
+  /**
+   * Whether the selection can still be pulled outwards, and inwards.
+   *
+   * Carried rather than left for the surface to guess, because the core is the only side that holds the
+   * ancestor chain — and because a control that silently does nothing at the end of the chain is the
+   * defect this feature is being rebuilt to remove, reproduced in miniature. `canWiden` is false once the
+   * selection has reached the outermost element the chain allows, which stops below `body`: a step past
+   * that selects the document itself, and a rule for it empties the page.
+   */
+  canWiden: boolean
+  canNarrow: boolean
+  /**
+   * What became of the attempt, as a key, or `null` while it is still going on.
+   *
+   * A key rather than a sentence: the wording belongs to the core, which has the language. A key rather
+   * than an enum declared here, too, and that is deliberate — the set of outcomes belongs to the picking
+   * session, which is where they are produced and where they are held to being exhaustive. Two lists of
+   * the same eight names in two modules is how a ninth outcome comes to render as nothing at all; the
+   * surface renders the key itself if it does not recognise it, which is a name on screen instead of an
+   * empty bar.
+   */
+  outcome: string | null
+  /**
+   * Whether there is a written rule to take back.
+   *
+   * The one thing about an outcome the bar cannot work out from an opaque key, and the difference
+   * matters: "already there, disabled" and "saved but it changes nothing here" both name a rule that
+   * exists, while "no host" and "limit reached" name one that was never written. Offering Undo for the
+   * second pair would be a button that removes something the user never added.
+   */
+  canUndo: boolean
+}
+
 export type OverlayPresentation =
   | LayoutMenuPresentation
   | TabDropPresentation
@@ -399,6 +504,7 @@ export type OverlayPresentation =
   | FindBarPresentation
   | MasterPasswordPresentation
   | NavigationRequestPresentation
+  | PickerBarPresentation
 
 /** Nothing presented is a first-class state, not an absent one. */
 export type OverlayState = OverlayPresentation | null
@@ -443,7 +549,16 @@ export const OVERLAY_AWAITS_ANSWER = {
    * page is holding a promise — a popup that does not open simply does not — so a vanished dialogue
    * refuses, and refusing is also exactly what was asked for. *"Sonst bleiben wir auf der seite."*
    */
-  'navigation-request': true
+  'navigation-request': true,
+  /**
+   * Nothing is holding a promise for a picked element, and that is worth stating rather than assuming.
+   *
+   * The bar does ask a question — confirm or discard — but nobody is *blocked* on the answer: no page
+   * call is pending, and a session that ends without one has written nothing, which is the state the
+   * user was in before they started. What its departure does cost is a provisional rule left in a
+   * document; that is the other table.
+   */
+  'picker-bar': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function awaitsAnswer(presentation: OverlayPresentation): boolean {
@@ -479,7 +594,17 @@ export const OVERLAY_MARKS_THE_PAGE = {
   /** A dialogue over a page changes nothing in it, and this one does not even read it. */
   'master-password': false,
   /** Nothing is written into the page: the navigation was stopped before it started. */
-  'navigation-request': false
+  'navigation-request': false,
+  /**
+   * The strongest case on this table, and the reason it is a table rather than a find-bar special case.
+   *
+   * A find bar leaves a highlight behind. This one leaves *a provisional rule injected into the
+   * document* and an outline around an element — so a bar taken down by a resize, a lost focus or a
+   * consent dialogue would leave part of a page hidden by a rule that was never saved, with nothing on
+   * screen to say what happened or how to get it back, and nothing on disk to remove. Announced, the
+   * session lifts the preview at the one place it is lifted from.
+   */
+  'picker-bar': true
 } as const satisfies Record<OverlayKind, boolean>
 
 export function marksThePage(presentation: OverlayPresentation): boolean {
@@ -532,6 +657,14 @@ export function surfaceIdentity(presentation: OverlayPresentation): string {
       return `master-password:${presentation.requestId}`
     case 'navigation-request':
       return `navigation-request:${presentation.requestId}`
+    /*
+      By session, and never by kind. The bar is re-presented on every step of the picking — a click that
+      freezes the selection, a widening, an arriving match count, the outcome — and keyed by kind alone
+      each of those would read as a departure, which for this surface means "lift the preview and end the
+      session". The bar would take itself down the moment it had something to report.
+    */
+    case 'picker-bar':
+      return `picker-bar:${presentation.sessionId}`
   }
 }
 
@@ -565,7 +698,17 @@ export const OVERLAY_CAPTURES_KEYBOARD = {
   'find-bar': false,
   'master-password': true,
   /** Two buttons, reached by Tab and answered by Return, in the renderer — as a dialogue should be. */
-  'navigation-request': false
+  'navigation-request': false,
+  /**
+   * Its keys are its own, because none of them is a secret and all of them are ordinary controls.
+   *
+   * Up and down widen and narrow the selection, Return confirms, Escape cancels — four keys that map
+   * onto buttons the bar already draws. Taking them in the core would mean the main process
+   * hand-implementing the keyboard half of a surface whose mouse half the renderer implements anyway,
+   * for no gain: there is nothing here that must never reach a renderer, and the renderer is already
+   * being told the selector.
+   */
+  'picker-bar': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function capturesKeyboard(presentation: OverlayPresentation): boolean {
@@ -635,6 +778,22 @@ export function capturesKeyboard(presentation: OverlayPresentation): boolean {
 export const OVERLAY_PRECEDENCE = {
   'tile-bar': 0,
   'find-bar': 1,
+  /**
+   * Level with the find bar, and the tie is the answer to a question the plan left open rather than an
+   * oversight: which of the two wins when a picking session and a search want the same tile.
+   *
+   * The rank itself is the find bar's argument applied unchanged. Both hold something a person built —
+   * a typed term, a chosen element — so neither may be destroyed by a *hovered* tile bar, which is the
+   * one claim on this layer that nobody makes on purpose. And both yield to a menu, to a tab drag and to
+   * every dialogue above them, because those cannot function without the layer at all.
+   *
+   * Between the two of them, equal replaces, which means the most recent deliberate request wins. That
+   * is the right answer in both directions here and it is the only one that is symmetrical: pressing
+   * Ctrl+F during a pick and starting a pick during a search are the same act, and neither loses
+   * anything that cannot be had again — the search term is remembered by the core, and a displaced
+   * picking session lifts its preview and leaves the page exactly as it was found.
+   */
+  'picker-bar': 1,
   'layout-menu': 2,
   'tab-drop': 2,
   'permission-request': 3,
@@ -674,6 +833,13 @@ export function mayPresentOver(incoming: OverlayKind, current: OverlayState): bo
  * while this view has the keyboard. Without focus the prompt would draw a field that swallows nothing
  * and count zero bullets for ever, while the characters went to whatever did have focus.
  *
+ * The picker's confirmation bar needs it because the keyboard is half of what it offers: up and down
+ * widen and narrow the selection, Return confirms, Escape cancels. A bar that did not hold the focus
+ * would advertise those four keys and receive none of them — they would go to the page underneath,
+ * where Return and the arrows mean something else entirely. Taking the focus is safe here for the same
+ * reason it is safe for a menu: no drifting pointer can raise this surface, and no page can either. It
+ * exists only because somebody chose "block an element" in the browser's own interface.
+ *
  * A tile bar revealed by the pointer must not, and that is the whole reason this function exists.
  * The layer's renderer is a real web contents; focusing it takes focus away from the page. A bar
  * that appears because the pointer drifted towards the top of a tile would therefore interrupt
@@ -700,6 +866,7 @@ export function takesFocus(presentation: OverlayPresentation): boolean {
       behaviour.
     */
     case 'navigation-request':
+    case 'picker-bar':
       return true
     case 'tile-bar':
       return presentation.invokedBy === 'keyboard'
@@ -729,17 +896,26 @@ export function overlayRegionRect(
  * so there is a single answer to "how big is the layer right now" — two call sites deciding it
  * separately is how a surface ends up drawn in one place and hit-tested in another.
  *
- * The two `tile` surfaces carry their own rectangle rather than being handed a tile index to resolve.
- * Both are computed where the tiles are: the tile bar's from the same function that positions the
- * views, the find bar's from the searched view's own bounds. A second resolution here would be a
- * second opinion about where a tile is, and the two eventually disagree.
+ * The `tile` surfaces carry their own rectangle rather than being handed a tile index to resolve. Each is
+ * computed where the tiles are: the tile bar's from the same function that positions the views, the find
+ * bar's from the searched view's own bounds, the picker bar's from the picked view's. A second resolution
+ * here would be a second opinion about where a tile is, and the two eventually disagree.
+ *
+ * A kind left out of the list below does not fall through to a wrong rectangle: `overlayRegionRect` takes
+ * a `OverlayWindowRegion`, so a `tile` kind that is not narrowed away first fails the build. The check is
+ * written as a union of names rather than as a lookup because that is what narrows the type — but which
+ * names belong in it is the compiler's answer, not a list somebody has to remember.
  */
 export function overlayBounds(
   presentation: OverlayPresentation,
   windowSize: Size,
   contentRect: Rect
 ): Rect {
-  if (presentation.kind === 'tile-bar' || presentation.kind === 'find-bar') {
+  if (
+    presentation.kind === 'tile-bar' ||
+    presentation.kind === 'find-bar' ||
+    presentation.kind === 'picker-bar'
+  ) {
     return presentation.bounds
   }
   return overlayRegionRect(OVERLAY_REGION[presentation.kind], windowSize, contentRect)
@@ -748,3 +924,21 @@ export function overlayBounds(
 export function regionOf(kind: OverlayKind): OverlayRegion {
   return OVERLAY_REGION[kind]
 }
+
+/**
+ * The surfaces whose rectangle belongs to a tile, and which therefore cannot survive the tiles moving.
+ *
+ * A `tile` surface's bounds are captured when it is presented, and `layout()` repositions the layer from
+ * that stored rectangle — so a layout change, a dragged divider, a reassigned tab or a maximised tile
+ * leaves the surface hanging over a page it has nothing to do with. Every one of those sites therefore
+ * takes them down, by kind and never wholesale: an unconditional `dismiss()` there would answer a consent
+ * dialogue that happened to be up.
+ *
+ * Derived from the regions rather than written out at each site, for the reason `DISMISSED_ON_INTERRUPTION`
+ * is: the four call sites each listed two kinds by name, so a third tile surface would have been correct in
+ * the region table, correct in every other table, and still left sitting over the wrong page four times
+ * over — with the comment beside each list saying it was handled.
+ */
+export const TILE_BOUND_KINDS: readonly OverlayKind[] = OVERLAY_KINDS.filter(
+  (kind) => OVERLAY_REGION[kind] === 'tile'
+)
