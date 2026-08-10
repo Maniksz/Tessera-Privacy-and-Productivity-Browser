@@ -201,45 +201,6 @@ describe('TabGroupStore basics', () => {
     expect(await storedGroups(filePath)).toEqual([])
   })
 
-  it('writes down the arrangement a group is in, and can clear it again', async () => {
-    /*
-      The arrangement has to reach the disk, because that is the difference between "remembered until you
-      quit" and remembered. It is also the only field whose value is a pair of facts that have to agree —
-      the layout and one entry per its tiles — so a store that flattened or reordered it would restore the
-      panes in the wrong places rather than fail.
-
-      Both directions, although only one has a caller now. `null` used to be the other half of the feature
-      — a restore spent the recording it used — and stopped being that when the arrangement became
-      something maintained on every settle. It is still the single gate for clearing the field, so it is
-      still asserted to reach the disk as an *absent* key rather than a present `undefined` one.
-    */
-    const { store, filePath } = await openStore()
-    store.create({ tabIds: ['tab-1', 'tab-2'] })
-
-    store.setLayout('g1', { id: '2x2', tiles: ['tab-1', null, 'tab-2', null] })
-    await store.flush()
-    expect((await storedGroups(filePath))[0]?.layout).toEqual({
-      id: '2x2',
-      tiles: ['tab-1', null, 'tab-2', null]
-    })
-
-    store.setLayout('g1', null)
-    await store.flush()
-    const cleared = (await storedGroups(filePath))[0]!
-    expect(Object.hasOwn(cleared, 'layout')).toBe(false)
-  })
-
-  it('hands out an arrangement a caller cannot write into', async () => {
-    // `tiles` is the second array on a group and needs what `tabIds` gets, or a window holding a snapshot
-    // could reseat the panes of a stored arrangement without going through a rule.
-    const { store } = await openStore()
-    store.create({ tabIds: ['tab-1', 'tab-2'], layout: { id: '1x2', tiles: ['tab-1', 'tab-2'] } })
-
-    store.list()[0]!.layout!.tiles[0] = 'smuggled'
-    store.group('g1')!.layout!.tiles[1] = 'smuggled'
-
-    expect(store.group('g1')?.layout).toEqual({ id: '1x2', tiles: ['tab-1', 'tab-2'] })
-  })
 
   it('leaves the document untouched when an operation is refused', async () => {
     const { store } = await openStore()
@@ -510,78 +471,59 @@ describe('TabGroupStore repairing a damaged file', () => {
     expect(store.recoveredFromInvalidFile).toBe(false)
   })
 
-  it('reads a file written before arrangements existed', async () => {
-    // Every file on disk today. The field arrived after them, so its absence is the normal case and the
-    // schema must not treat it as damage — this is the assertion that would have caught a `layout` declared
-    // without `.optional()`, which would have replaced every user's groups with nothing on first launch.
-    const { store } = await openStore({
-      seed: { version: 1, groups: [stored('g-a', ['tab-1', 'tab-2'])] }
-    })
-    expect(store.group('g-a')?.tabIds).toEqual(['tab-1', 'tab-2'])
-    expect(store.group('g-a')?.layout).toBeUndefined()
-    expect(store.recoveredFromInvalidFile).toBe(false)
-  })
-
-  it('heals an arrangement of the wrong shape instead of discarding the groups', async () => {
+  it('keeps every group of a file still carrying an arrangement, and drops only the arrangement', async () => {
     /*
-      A layout id the build no longer has, tiles that are not an array, half an arrangement. The field is
-      pure convenience: losing it costs the user one layout they can rebuild with a drag, and rejecting the
-      document over it would cost them every group they have.
+      R12 / AE7: the migration off `TabGroup.layout`, and the only proof that it needs no migration code.
+
+      The claim being tested is KTD7's: the storage schema is a plain `z.object`, zod strips the keys it
+      does not know, and `JsonStore` parses before `repair` ever sees the document — so once `layout` is
+      gone from the schema the field is simply absent on load. Nothing was written to make that happen,
+      which is exactly why it has to be asserted: a silent behaviour has no other witness.
+
+      Both kinds of stored group are here on purpose. An unnamed group carrying an arrangement is
+      indistinguishable from an artefact the old automation created — and KD5 says it stays a group anyway,
+      because the user may well have made it by hand and never named it. A named, coloured group proves the
+      other half: nothing the user chose is touched on the way through.
     */
     const { store } = await openStore({
       seed: {
         version: 1,
         groups: [
-          stored('g-a', ['tab-1', 'tab-2'], { layout: { id: '9x9', tiles: ['tab-1', 'tab-2'] } }),
-          stored('g-b', ['tab-3', 'tab-4'], { layout: { id: '1x2', tiles: 'both of them' } }),
-          stored('g-c', ['tab-5', 'tab-6'], { layout: { tiles: ['tab-5', 'tab-6'] } })
+          stored('g-a', ['tab-1', 'tab-2'], {
+            layout: { id: '1x2', tiles: ['tab-1', 'tab-2'] }
+          }),
+          stored('g-b', ['tab-3', 'tab-4'], {
+            name: 'Steuererklärung 2026',
+            color: 'pink',
+            layout: { id: '2x2', tiles: ['tab-3', null, 'tab-4', null] }
+          })
         ]
       }
     })
 
-    expect(store.list().map((group) => [group.id, group.layout])).toEqual([
-      ['g-a', undefined],
-      ['g-b', undefined],
-      ['g-c', undefined]
+    expect(store.list()).toEqual([
+      {
+        id: 'g-a',
+        name: '',
+        color: 'blue',
+        collapsed: false,
+        tabIds: ['tab-1', 'tab-2'],
+        createdAt: T0
+      },
+      {
+        id: 'g-b',
+        name: 'Steuererklärung 2026',
+        color: 'pink',
+        collapsed: false,
+        tabIds: ['tab-3', 'tab-4'],
+        createdAt: T0
+      }
     ])
-    expect(store.list().map((group) => group.tabIds.length)).toEqual([2, 2, 2])
+    // Stated separately from the deep equality above, because `toEqual` ignores a key whose value is
+    // `undefined` and would pass on a group that still carried the field.
+    expect(store.list().every((group) => !Object.hasOwn(group, 'layout'))).toBe(true)
+    // A document losing a field it no longer has is not damage, so nothing warns the user about it.
     expect(store.recoveredFromInvalidFile).toBe(false)
-  })
-
-  it('drops an arrangement the repaired group can no longer honour', async () => {
-    /*
-      Where the schema stops and `repairGroups` starts. This arrangement is a valid shape — a real layout id,
-      four entries for four tiles — and still unusable: `tab-9` is not a member, and honouring it would evict
-      whatever is in that tile on the way back to seat a tab that does not exist.
-    */
-    const { store } = await openStore({
-      seed: {
-        version: 1,
-        groups: [
-          stored('g-a', ['tab-1', 'tab-2'], {
-            layout: { id: '2x2', tiles: ['tab-1', 'tab-9', 'tab-2', null] }
-          })
-        ]
-      }
-    })
-    expect(store.group('g-a')?.layout).toBeUndefined()
-    expect(store.group('g-a')?.tabIds).toEqual(['tab-1', 'tab-2'])
-  })
-
-  it('brings back an arrangement that still describes its group', async () => {
-    // The counterpart of the three rejections above: a repair pass that dropped every arrangement would pass
-    // all of them and leave the feature quietly dead after the first restart.
-    const { store } = await openStore({
-      seed: {
-        version: 1,
-        groups: [
-          stored('g-a', ['tab-1', 'tab-2'], {
-            layout: { id: '1+2', tiles: ['tab-1', null, 'tab-2'] }
-          })
-        ]
-      }
-    })
-    expect(store.group('g-a')?.layout).toEqual({ id: '1+2', tiles: ['tab-1', null, 'tab-2'] })
   })
 
   it('trims a file with more groups than the cap', async () => {

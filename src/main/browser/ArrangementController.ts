@@ -189,10 +189,11 @@ export class ArrangementController {
    * Reconciles the recordings with the tabs that actually exist.
    *
    * The ids are a parameter rather than `host.liveTabIds()` on purpose, and it is the same limit
-   * `TabGroupController.retainLiveTabs` documents from the other side: one document holds every
-   * ordinary window's recordings, so a pass that took *this* window's tabs would delete every
-   * other window's. The caller hands in the union — session restore has it, and a tab closing in
-   * a single-window session is the degenerate case of the same union.
+   * `TabGroupBook.retainTabs` carries on the group side: one document holds every ordinary window's
+   * recordings, so a pass that took *this* window's tabs would delete every other window's. The
+   * caller hands in the union — session restore has it, and a tab closing in a single-window
+   * session is the degenerate case of the same union. `TabGroupController` had a per-window wrapper
+   * around the group equivalent; it was dead and is gone, so this shape is the only one left.
    *
    * Nothing is published afterwards. A recording is invisible to the renderer, there is no IPC
    * channel carrying one (KTD6), and so there is nothing for a broadcast to say.

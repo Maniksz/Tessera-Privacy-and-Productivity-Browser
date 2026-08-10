@@ -200,19 +200,34 @@ Runde, die auch den Tab-Streifen auffrischt. Eine Aufnahme, die nie veraltet, ka
 wiederherstellen — also braucht sie auch nicht verbraucht zu werden. Der zweite Begriff wurde damit
 überflüssig, statt gebaut zu werden.
 
+> **Zurückgenommen am 10.08.2026 — die drei Entscheidungen unten gelten nicht mehr.** Der Plan
+> `docs/plans/2026-08-09-001-fix-tabgruppen-eigentum-plan.md` kippt sie mit KD1 („eine Gruppe gehört
+> ausschließlich dem Benutzer") und KD4 („Absorption durch Gruppen entfällt ersatzlos"). Die Kosten, die
+> hier als akzeptiert notiert sind, waren in der Benutzung teurer als beim Beschluss: die Kachel-Automatik
+> legte Gruppen an, ohne dass jemand eine wollte, und trug in eine benannte Gruppe Mitglieder ein, die der
+> Benutzer nie hinzugefügt hatte — für ihn nicht von seinen eigenen Änderungen zu unterscheiden und nicht
+> rückgängig zu machen. Der Gedanke bleibt stehen, weil er nicht falsch war, sondern zu teuer: **eine
+> Aufnahme, die nie veraltet, ist richtig — sie an die Gruppe zu binden, war es nicht.** Die Anordnung hat
+> jetzt einen eigenen, unsichtbaren Träger (`src/shared/arrangements/`, `ArrangementController`), auf den
+> nur die Automatik schreibt, und `src/shared/tabgroups/` trägt kein `layout` mehr. Was hier folgt, ist
+> Vorgeschichte.
+
 Drei Entscheidungen des Benutzers, mit ihren Kosten:
 
 - **Eine Gruppe entsteht, sobald gekachelt ist** — nicht nur beim Teilen, auch nach einer
   Sitzungswiederherstellung. Kosten: ab zwei belegten Kacheln steht ein Farbchip im Streifen, auch wenn
-  niemand eine Gruppe wollte.
+  niemand eine Gruppe wollte. *(Überholt durch KD1/R1: Kacheln legt keine Gruppe mehr an.)*
 - **Gemischte Herkunft nimmt immer die bestehende Gruppe** und die losen Tabs treten ihr bei. Das kehrt
   die alte Verweigerung um. Kosten, ausdrücklich akzeptiert: eine benannte Gruppe bekommt Mitglieder, die
   der Benutzer nicht selbst hinzugefügt hat, und der Streifen sortiert sich um. Das alte Argument ist im
-  Code stehen geblieben statt gelöscht zu werden — es war nicht falsch, es wurde überstimmt.
+  Code stehen geblieben statt gelöscht zu werden — es war nicht falsch, es wurde überstimmt. *(Überholt
+  durch KD4/R3: die Absorption ist ersatzlos entfallen, das alte Argument gilt wieder. Ein Tab, der neben
+  Gruppenmitglieder gekachelt wird, bleibt gruppenlos.)*
 - **Zwei verschiedene Gruppen unter den Kacheln nehmen weiterhin nichts auf.** Das ist die eine Stelle,
   an der die konservative Lesart gewählt wurde: die Entscheidung des Benutzers betraf Gruppenmitglieder
   gemischt mit *losen* Tabs. Zwei selbstgebaute Gruppen zu verschmelzen zerstört eine davon
-  (`addTabToGroup` löst eine leergeräumte Quellgruppe auf) und hat kein Zurück.
+  (`addTabToGroup` löst eine leergeräumte Quellgruppe auf) und hat kein Zurück. *(Gegenstandslos: keine
+  Kachelung nimmt mehr etwas auf, was eine Gruppe wäre.)*
 
 **Die Idempotenz ist kein Detail, sondern die Bedingung.** Der Pass läuft in derselben Runde, die bei
 jeder Titeländerung feuert; ohne eine „nichts geändert"-Antwort schreibt er ein Dokument pro Ereignis auf
@@ -647,7 +662,7 @@ Code auf sie verweist.
 | ~~**Kachelleiste nur im Kachelmodus**~~ **erledigt** | `tileBarStep` gibt bei `rects.length <= 1` jetzt `hide` zurück. Die Entscheidung liegt dort und nicht in der Oberfläche, weil ein Renderer, der eine vom Kern gebaute und eingemessene Darstellung nicht zeichnet, die Schicht mit einer unsichtbaren Fläche zurücklässt, die Zeigerereignisse schluckt |
 | ~~**Leiste früher ausfahren**~~ **erledigt** | `TILE_BAR_REVEAL_WITHIN` von 6 auf **16 px**. Die Invariante ist im Kommentar festgehalten: strikt unter `TILE_BAR_HEIGHT`, das strikt unter `TILE_BAR_POINTER_AWAY` liegt — treffen sich die beiden Schwellen, beantworten Ausfahren und Einfahren dieselbe Position auf aufeinanderfolgenden Messungen verschieden, und genau das Flackern soll das Paar verhindern. Ein Test heftet die Reihenfolge fest |
 | ~~**Neuer Tab soll ein neuer Tab sein**~~ **erledigt, beide Hälften** | Widersprach dem damaligen Verhalten: `TileOccupancyController` füllte leere Kacheln absichtlich, weil drei Kacheln mit „zieh einen Tab hierher" eine Anweisung statt eines Browsers waren. Umgekehrt wie gewünscht — `claimTileForNewTab` legt die Kacheln weg und gibt die eine zurück, die bleibt. Die zweite Hälfte ist die Zeile darunter: ohne Aufnahme der Anordnung wäre die Umkehr ein Verlust gewesen |
-| **…aber die Anordnung darf dabei nicht verloren gehen** | Nachtrag des Benutzers: „er soll die layout gruppe der anderen tabs nicht auflösen, daher brauchen wir ja die tab gruppen." Die weggelegten Kacheln blieben geladen und im Streifen, aber *welches Layout* und *welche Kachel je Tab* war weg — es gab keinen Weg zurück. Die Anordnung gehört damit auf die **Tab-Gruppe**: beim Wegräumen aufnehmen (bestehende Gruppe wiederverwenden, sonst eine anlegen), beim Zurückkehren auf einen Gruppen-Tab wiederherstellen. Ohne die zweite Hälfte ist es eine Erinnerung, die niemand lesen kann. **Gebaut und in der echten App belegt** — `TabGroup.layout` trägt Layout-Id und einen Eintrag je Kachel, `keepArrangement` nimmt beim Wegräumen auf, `takeArrangementFor` gibt beim Anklicken zurück — und *verbrauchte* die Aufnahme dabei, damit eine zweite Aktivierung nicht spätere Arbeit zurücknimmt. **Das gilt seit dem zweiten Durchgang des 29.07.2026 nicht mehr:** die Anordnung wird bei jedem Settle neu geschrieben, kann also nicht veralten, und wird deshalb nicht mehr verbraucht. Der Smoke-Test fährt die Schleife, die ein Benutzer fährt: zurück zur verdrängten Seite → Anordnung ist da; ein Tab **ohne** Aufnahme → weiterhin ganzes Fenster; zweite Verdrängung → Anordnung kommt wieder |
+| **…aber die Anordnung darf dabei nicht verloren gehen** | Nachtrag des Benutzers: „er soll die layout gruppe der anderen tabs nicht auflösen, daher brauchen wir ja die tab gruppen." Die weggelegten Kacheln blieben geladen und im Streifen, aber *welches Layout* und *welche Kachel je Tab* war weg — es gab keinen Weg zurück. Die Anordnung gehört damit auf die **Tab-Gruppe**: beim Wegräumen aufnehmen (bestehende Gruppe wiederverwenden, sonst eine anlegen), beim Zurückkehren auf einen Gruppen-Tab wiederherstellen. Ohne die zweite Hälfte ist es eine Erinnerung, die niemand lesen kann. **Gebaut und in der echten App belegt** — `TabGroup.layout` trägt Layout-Id und einen Eintrag je Kachel, `keepArrangement` nimmt beim Wegräumen auf, `takeArrangementFor` gibt beim Anklicken zurück — und *verbrauchte* die Aufnahme dabei, damit eine zweite Aktivierung nicht spätere Arbeit zurücknimmt. **Das gilt seit dem zweiten Durchgang des 29.07.2026 nicht mehr:** die Anordnung wird bei jedem Settle neu geschrieben, kann also nicht veralten, und wird deshalb nicht mehr verbraucht. Der Smoke-Test fährt die Schleife, die ein Benutzer fährt: zurück zur verdrängten Seite → Anordnung ist da; ein Tab **ohne** Aufnahme → weiterhin ganzes Fenster; zweite Verdrängung → Anordnung kommt wieder. **Der Träger ist am 10.08.2026 gewechselt (KD1, KD2):** das Bedürfnis war richtig und die Schleife bleibt, aber die Anordnung gehört *nicht* auf die Tab-Gruppe. Sie an die Gruppe zu binden hieß, die Automatik zur zweiten Schreiberin an einer Struktur zu machen, die dem Benutzer gehört — sie legte Gruppen an und änderte Mitgliedschaften, ohne dass er etwas getan hätte. Die Aufnahme liegt jetzt auf einem eigenen, unsichtbaren Träger (`src/shared/arrangements/`, `ArrangementController`, `arrangements.json`); `TabGroup.layout`, `keepArrangement` und `takeArrangementFor` gibt es nicht mehr |
 | ~~**Ziehen auf die mittlere Kachel geht nicht**~~ **erledigt** | Der Verdacht traf zu und war zweiteilig. Geometrie: eine Lücke gehört *einer* Spalte, eine mittlere Spalte kann also nicht von beiden Seiten gleichzeitig beschnitten werden — beide Bänder der Mittelspalte waren Duplikate und nahmen zusammen 60 % der Fläche, sodass nur 40 % einen einfachen Ablegevorgang annahmen. Verhalten: `applyDrop` macht den Layoutwechsel jetzt mit `rehome: false`, weil das Nachrücken die neu entstandene Kachel mit dem erstbesten geladenen Tab füllte und die verdrängte Seite damit vom Schirm nahm. Geprüft über `LAYOUT_IDS` erschöpfend, plus benannte Tests für die Mittelkachel von `1x3` und beide von `1x4`. Und weil die Meldung aus der Benutzung kam, auch dort: `runEveryDragCheck` in `scripts/smoke.mjs` zieht in der echten App mit synthetischer Maus **jede** Zone **jedes** Layouts an, gezielt auf die Mitte ihrer eigenen Trefferfläche — und prüft zwei Dinge, von denen das zweite das interessante ist: dass die Seite dort landet, wo der Indikator es versprach, *und* dass keine bereits sichtbare Seite dabei verschwindet. Achtzehn der vierundzwanzig Teilungszonen fielen bei der zweiten Prüfung durch, beide Zonen der Mittelspalte darunter |
 
 ## Stand zum Wiederaufnehmen
