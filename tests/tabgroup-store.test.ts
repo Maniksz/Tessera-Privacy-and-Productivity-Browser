@@ -526,6 +526,41 @@ describe('TabGroupStore repairing a damaged file', () => {
     expect(store.recoveredFromInvalidFile).toBe(false)
   })
 
+  it('writes a loaded file back once, so the dropped arrangement leaves the disk at the first start', async () => {
+    /*
+      R12, the other half. The test above proves the field is gone from the *document*; this one is
+      about the *file*. Nothing in `JsonStore` writes a document it merely loaded — the encoding
+      migration is the one exception — so without a rewrite here the `layout` object would sit in
+      `tab-groups.json` until the user next renamed, recoloured or dissolved a group, which for a
+      profile whose groups are settled may be never.
+
+      Asserted on the raw text rather than on the parsed groups, because parsing is what hides the
+      leftover: `storedGroups` reading the file back through `JSON.parse` finds a `layout` key that
+      `store.list()` would never show. And no `flush()` is called first — the claim is that opening
+      the store is enough, since a start is the only moment this is known to be needed.
+    */
+    const { filePath } = await openStore({
+      seed: {
+        version: 1,
+        groups: [
+          stored('g-a', ['tab-1', 'tab-2'], { layout: { id: '1x2', tiles: ['tab-1', 'tab-2'] } })
+        ]
+      }
+    })
+
+    expect(await readFile(filePath, 'utf8')).not.toContain('layout')
+    expect(await storedGroups(filePath)).toEqual([
+      {
+        id: 'g-a',
+        name: '',
+        color: 'blue',
+        collapsed: false,
+        tabIds: ['tab-1', 'tab-2'],
+        createdAt: T0
+      }
+    ])
+  })
+
   it('trims a file with more groups than the cap', async () => {
     const groups = Array.from({ length: MAX_TAB_GROUPS + 3 }, (_, index) =>
       stored(`g${index}`, [`tab-${index}`])

@@ -71,6 +71,21 @@ export interface JsonStoreOptions<T> {
   /** Last chance to fix a document that validates but is internally inconsistent. */
   repair?: (document: T) => T
   codec?: DocumentCodec
+  /**
+   * Writes the document back once, at the end of a load that read a file.
+   *
+   * For the store whose schema has just stopped knowing a field. Parsing strips it from the
+   * document, so nothing is wrong in memory and no `repair` has anything to do — but the key
+   * stays in the file until the user's next change to it, which for a settled profile may be
+   * never. Turning this on is the whole of that migration: the field is gone from the schema,
+   * and one write at startup takes it off the disk as well.
+   *
+   * Only after a file was read *and* accepted, which is the rule `migratedEncodingOnLoad`
+   * already follows below and for the same two reasons: writing over a document that fell back
+   * to defaults would destroy a file the user might still have recovered something from, and
+   * writing when there was no file would create one for a profile that has nothing to store.
+   */
+  rewriteOnLoad?: boolean
   /** Milliseconds to coalesce writes; 0 writes on every change. */
   debounceMs?: number
 }
@@ -116,6 +131,7 @@ export class JsonStore<T> {
     }
     const codec = options.codec ?? plainJsonDocumentCodec
     let document = options.fallback()
+    let loadedFromFile = false
 
     try {
       const bytes = await readFile(options.filePath)
@@ -123,6 +139,7 @@ export class JsonStore<T> {
       const parsed = options.schema.safeParse(raw)
       if (parsed.success) {
         document = parsed.data
+        loadedFromFile = true
         // Only a document that actually loaded is rewritten. Migrating one that
         // fell back to defaults would encrypt the defaults over a file the user
         // might still have wanted to look at.
@@ -152,7 +169,7 @@ export class JsonStore<T> {
     }
 
     const store = new JsonStore<T>({ ...options, codec }, document, diagnostics)
-    if (diagnostics.migratedEncodingOnLoad) {
+    if (diagnostics.migratedEncodingOnLoad || (options.rewriteOnLoad === true && loadedFromFile)) {
       // Awaited, so a caller that reads the file straight after `open` sees the new
       // form. `flush` reports a failed write rather than throwing, which is right
       // here too: a migration that cannot be written leaves the old file readable

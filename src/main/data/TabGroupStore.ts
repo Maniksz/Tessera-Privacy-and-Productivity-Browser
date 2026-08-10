@@ -186,6 +186,16 @@ export class TabGroupStore implements TabGroupBook {
       // not leave an empty group, a tab in two groups or a tab twice in one — the write
       // path and the tab strip both rely on none of those existing.
       repair: (document) => ({ ...document, groups: repairGroups(document.groups) }),
+      /*
+        The whole of the migration off `TabGroup.layout` (R12, KTD7).
+
+        The schema above no longer knows the field, so zod strips it on load and every group comes
+        back a group — nothing had to be written to make that happen. What one line does have to
+        answer is the file: a document that merely loaded is never written back, so the dead
+        `layout` object would sit in `tab-groups.json` until the user next renamed, recoloured or
+        dissolved something. On a profile whose groups are settled, that is indefinitely.
+      */
+      rewriteOnLoad: true,
       ...(options.codec === undefined ? {} : { codec: options.codec }),
       ...(options.debounceMs === undefined ? {} : { debounceMs: options.debounceMs })
     })

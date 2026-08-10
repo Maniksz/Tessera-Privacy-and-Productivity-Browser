@@ -61,7 +61,7 @@ import { ArrangementStore } from './data/ArrangementStore.js'
 import { SessionStore } from './data/SessionStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
 import { DownloadStore } from './data/DownloadStore.js'
-import { applySessionRestore } from './session-restore/apply.js'
+import { applySessionRestore, type RestoreHost } from './session-restore/apply.js'
 import { restoreSettingsFrom } from './session-restore/settings.js'
 import { FilterSubscription } from './privacy/FilterSubscription.js'
 import { CosmeticInjector } from './privacy/CosmeticInjector.js'
@@ -810,49 +810,56 @@ async function main(): Promise<void> {
   })
 
   /*
-    The session, and the tab-group reconciliation that depends on it.
+    The session, and the two reconciliations that depend on it.
 
     `beginRun` reads the plan out of the file and opens a fresh run in one call — the crash-loop counter is on
     disk before this line returns, which is what makes it a counter of launches that *started* a restore rather
-    than of ones that finished. `retainTabs` is then called once, with every id that actually came back.
+    than of ones that finished. The group book and the arrangement book are then each reconciled once, with
+    every id that actually came back.
   */
   const plan = await sessionStore.beginRun(restoreSettingsFrom(settings.snapshot()))
+  const registry = windows
+  const groups = tabGroups
+  const tilings = arrangements
+  const restoreHost: RestoreHost = {
+    openWindow: (layout, fractions) => {
+      const controller = registry.createWindow({
+        privateMode: false,
+        initialSplit: { layout, fractions: { ...fractions } }
+      })
+      return {
+        openTab: (tab) => {
+          controller.createTab({
+            id: tab.id,
+            url: tab.url,
+            tileIndex: tab.tileIndex,
+            // The pane comes back at the zoom it had, passed at creation rather than set
+            // afterwards: nothing applies zoom before the first paint but `Tab`'s `zoomFactor`.
+            zoomPercent: tab.zoomPercent,
+            // Every restored tab opens in the background; the active tile is chosen once, afterwards, by the
+            // plan — otherwise each tab would steal focus from the last on its way in.
+            background: true,
+            ...(tab.load === 'now' ? {} : { deferred: { url: tab.url, title: tab.title } })
+          })
+          if (tab.pinned) controller.setTabPinned(tab.id, true)
+        },
+        setActiveTile: (index) => controller.setActiveTile(index)
+      }
+    },
+    retainTabs: (ids) => groups.retainTabs(ids),
+    retainArrangementTabs: (ids) => tilings.retainTabs(ids)
+  }
   if (plan.kind === 'skip') {
     // Worth saying rather than shrugging at: a user who asked for their session and did not get it has no other
     // way to find out why, and `restore-keeps-crashing` is the reason they would most want to know.
     console.warn(`[session] not restoring the previous session: ${plan.reason}`)
-    tabGroups.retainTabs([])
+    // A restore that is off or refused says the same thing an empty plan says — no tab came back — so it is
+    // answered by the same call rather than by clearing each document here. That is what empties the stored
+    // arrangements alongside the group memberships (R8); `openWindow` is never reached with no windows.
+    applySessionRestore([], restoreHost)
     windows.createWindow({ privateMode: false }).createTab({})
   } else {
-    const registry = windows
-    const groups = tabGroups
-    applySessionRestore(plan.windows, {
-      openWindow: (layout, fractions) => {
-        const controller = registry.createWindow({
-          privateMode: false,
-          initialSplit: { layout, fractions: { ...fractions } }
-        })
-        return {
-          openTab: (tab) => {
-            controller.createTab({
-              id: tab.id,
-              url: tab.url,
-              tileIndex: tab.tileIndex,
-              // The pane comes back at the zoom it had, passed at creation rather than set
-              // afterwards: nothing applies zoom before the first paint but `Tab`'s `zoomFactor`.
-              zoomPercent: tab.zoomPercent,
-              // Every restored tab opens in the background; the active tile is chosen once, afterwards, by the
-              // plan — otherwise each tab would steal focus from the last on its way in.
-              background: true,
-              ...(tab.load === 'now' ? {} : { deferred: { url: tab.url, title: tab.title } })
-            })
-            if (tab.pinned) controller.setTabPinned(tab.id, true)
-          },
-          setActiveTile: (index) => controller.setActiveTile(index)
-        }
-      },
-      retainTabs: (ids) => groups.retainTabs(ids)
-    })
+    applySessionRestore(plan.windows, restoreHost)
   }
 
   /*

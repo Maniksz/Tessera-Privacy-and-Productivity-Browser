@@ -423,10 +423,11 @@ describe('reading the settings', () => {
 interface Recorded {
   calls: string[]
   retained: string[]
+  retainedArrangements: string[]
 }
 
 function fakeHost(): { host: Parameters<typeof applySessionRestore>[1]; log: Recorded } {
-  const log: Recorded = { calls: [], retained: [] }
+  const log: Recorded = { calls: [], retained: [], retainedArrangements: [] }
   const target = (index: number): RestoreTarget => ({
     openTab: (entry: PlannedTab) =>
       log.calls.push(
@@ -449,6 +450,10 @@ function fakeHost(): { host: Parameters<typeof applySessionRestore>[1]; log: Rec
       retainTabs: (ids) => {
         log.calls.push(`retain=${ids.join(',')}`)
         log.retained = [...ids]
+      },
+      retainArrangementTabs: (ids) => {
+        log.calls.push(`retain-arrangements=${ids.join(',')}`)
+        log.retainedArrangements = [...ids]
       }
     },
     log
@@ -504,7 +509,8 @@ describe('carrying a plan out', () => {
       'w1:tab=tab-3@0/now/zoom=175',
       'w1:tab=tab-7@null/on-activation/zoom=null',
       'w1:active=1',
-      'retain=tab-3,tab-7'
+      'retain=tab-3,tab-7',
+      'retain-arrangements=tab-3,tab-7'
     ])
   })
 
@@ -536,6 +542,40 @@ describe('carrying a plan out', () => {
     expect(restored).toEqual(['tab-3', 'tab-7', 'tab-9'])
   })
 
+  it('reconciles the arrangements the same way: once, with every id from every window', () => {
+    /*
+      The arrangement document is shared between ordinary windows exactly as the group document is
+      — one file holds every window's recordings, which is why `ArrangementBook.retainTabs` takes
+      every live id rather than one window's. So the failure is the same failure: a call per window
+      would have the second window's restore empty the arrangements of the first, and a user whose
+      two windows both came back tiled would find one of them unable to bring its panes back.
+    */
+    const second: PlannedWindow = {
+      ...planned,
+      tabs: [
+        {
+          id: 'tab-9',
+          url: 'https://c.example/',
+          title: 'C',
+          pinned: false,
+          tileIndex: 0,
+          zoomPercent: null,
+          load: 'now'
+        }
+      ]
+    }
+    const { host, log } = fakeHost()
+    applySessionRestore([planned, second], host)
+
+    expect(log.calls.filter((call) => call.startsWith('retain-arrangements=')).length).toBe(1)
+    expect(log.retainedArrangements).toEqual(['tab-3', 'tab-7', 'tab-9'])
+    // After the tabs, for the reason the groups are: a recording naming a tab that does not exist
+    // yet would have that seat emptied, and a recording emptied far enough is dropped outright.
+    const retain = log.calls.indexOf('retain-arrangements=tab-3,tab-7,tab-9')
+    const lastTab = log.calls.map((call) => call.includes(':tab=')).lastIndexOf(true)
+    expect(retain).toBeGreaterThan(lastTab)
+  })
+
   it('reconciles after every tab exists, never before', () => {
     // A group naming a tab that has not been created yet would be emptied, which is
     // precisely the loss this feature exists to stop.
@@ -547,10 +587,18 @@ describe('carrying a plan out', () => {
   })
 
   it('still reconciles when the plan turns out to hold no windows', () => {
-    // Otherwise a launch that restored nothing would leave the stored groups untouched and
-    // the next one would find members that never existed in this run.
+    /*
+      Otherwise a launch that restored nothing would leave the stored groups untouched and the next
+      one would find members that never existed in this run.
+
+      This is also the shape of a launch with session restore switched *off* (R8): the entry point
+      hands the plan's emptiness to the same call rather than clearing the two documents by hand,
+      so "no ids came back" means one thing and is settled in one place. Both documents come out
+      empty — the arrangement one because a recording whose tabs are all gone is nothing to bring
+      back, the group one as it always did.
+    */
     const { host, log } = fakeHost()
     expect(applySessionRestore([], host)).toEqual([])
-    expect(log.calls).toEqual(['retain='])
+    expect(log.calls).toEqual(['retain=', 'retain-arrangements='])
   })
 })
