@@ -108,6 +108,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(tab-drop)',
       'overlay.dismissKind(tile-bar)',
       'overlay.dismissKind(find-bar)',
+      'overlay.dismissKind(autofill-suggest)',
       'relayout'
     ])
   })
@@ -122,6 +123,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(tab-drop)',
       'overlay.dismissKind(tile-bar)',
       'overlay.dismissKind(find-bar)',
+      'overlay.dismissKind(autofill-suggest)',
       'broadcastWindowState'
     ])
   })
@@ -170,15 +172,20 @@ describe('window event wiring', () => {
     /*
       The other half, and the reason the fix is a filter rather than an exemption for two kinds: the
       protection must not spread. A menu left hanging over a window the user has resized is the
-      original complaint, and both tile surfaces carry the rectangle of a tile that a resize has just
-      moved — kept, they would sit over a neighbour's page.
+      original complaint, and the tile surfaces carry the rectangle of a tile that a resize has just
+      moved — kept, they would sit over a neighbour's page. The account picker is the strongest case of
+      that: it is anchored to a field whose position a resize has just changed, and closing on a resize
+      is what its own design asks for rather than something it merely tolerates.
+
+      Derived from the table, like the test above and for the same reason: a surface nobody waits on
+      that somebody forgot to list here would be a menu left hanging, found by a user rather than here.
     */
     const window = harness()
     window.emit('resize')
     const dismissed = window.calls
       .filter((call) => call.startsWith('overlay.dismissKind('))
       .map((call) => call.slice('overlay.dismissKind('.length, -1))
-    expect(dismissed).toEqual(['layout-menu', 'tab-drop', 'tile-bar', 'find-bar'])
+    expect(dismissed).toEqual(OVERLAY_KINDS.filter((kind) => !OVERLAY_AWAITS_ANSWER[kind]))
   })
 
   it('tells the chrome UI about maximise, unmaximise and focus, and nothing else', () => {
