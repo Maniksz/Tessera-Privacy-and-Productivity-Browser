@@ -459,6 +459,40 @@ export const en = {
   'passwords.dismissAction': 'Not now',
 
   /*
+    The account picker the badge in a password field opens (R5, R8).
+
+    Drawn in the chrome rather than in the page, so unlike the six above these strings are rendered
+    by a renderer and never travel to a preload — which is also why the refusal wordings can live
+    here at all. There are eight of them, they are the longest sentences in this file, and a wordlist
+    that size in a bundle parsed before every page is a cost paid on every site the user visits.
+
+    Every one of these is an answer to "I pressed the key and nothing happened". So each says what
+    was *not* done and why, in a sentence somebody can act on: not "unavailable", not "no match", and
+    never the same wording for two different reasons — "this page is not encrypted" and "this is not
+    the site the password was saved for" are different facts about the world and the user can only
+    fix one of them.
+  */
+  'autofill.suggest.label': 'Saved passwords for tile {index}',
+  'autofill.suggest.accounts': 'Saved accounts',
+  /** Some sites sign in on a password alone; the row still has to be a thing you can point at. */
+  'autofill.suggest.noUsername': 'No user name saved',
+  'autofill.suggest.locked': 'The vault is locked, so nothing can be filled in yet.',
+  'autofill.suggest.empty': 'Nothing is saved for this site.',
+  'autofill.suggest.disabled': 'Filling in passwords is switched off in the settings.',
+  'autofill.refusal.noUserGesture': 'Nothing was filled in: that did not come from a key or a click.',
+  'autofill.refusal.unsupportedScheme': 'Passwords are never filled in on a page of this kind.',
+  'autofill.refusal.insecurePage':
+    'This page is not encrypted, so the password was not filled in — anyone on the way could read it.',
+  'autofill.refusal.schemeDowngrade':
+    'This password was saved for an encrypted page, and this one is not.',
+  'autofill.refusal.differentSite': 'This is not the site that password was saved for.',
+  'autofill.refusal.crossOriginFrame':
+    'This form belongs to another site embedded in this page, so nothing was filled in.',
+  'autofill.refusal.crossOriginFormAction':
+    'This form sends what you type to another site, so nothing was filled in.',
+  'autofill.refusal.noPasswordField': 'There is no password field here to fill in.',
+
+  /*
     Permission prompts (spec 4).
 
     Each subject is named as the thing the *user* recognises rather than as the Chromium permission it

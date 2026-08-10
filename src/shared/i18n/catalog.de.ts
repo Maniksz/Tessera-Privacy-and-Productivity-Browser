@@ -347,6 +347,26 @@ export const de = {
   'passwords.neverAction': 'Hier nie',
   'passwords.dismissAction': 'Jetzt nicht',
 
+  'autofill.suggest.label': 'Gespeicherte Passwörter für Kachel {index}',
+  'autofill.suggest.accounts': 'Gespeicherte Konten',
+  'autofill.suggest.noUsername': 'Kein Benutzername gespeichert',
+  'autofill.suggest.locked': 'Der Tresor ist gesperrt, es lässt sich noch nichts ausfüllen.',
+  'autofill.suggest.empty': 'Für diese Seite ist nichts gespeichert.',
+  'autofill.suggest.disabled': 'Das Ausfüllen von Passwörtern ist in den Einstellungen ausgeschaltet.',
+  'autofill.refusal.noUserGesture':
+    'Es wurde nichts ausgefüllt: Das kam nicht von einer Taste oder einem Klick.',
+  'autofill.refusal.unsupportedScheme': 'Auf einer solchen Seite werden nie Passwörter ausgefüllt.',
+  'autofill.refusal.insecurePage':
+    'Diese Seite ist nicht verschlüsselt, deshalb wurde das Passwort nicht ausgefüllt — unterwegs könnte es jeder mitlesen.',
+  'autofill.refusal.schemeDowngrade':
+    'Dieses Passwort wurde für eine verschlüsselte Seite gespeichert, diese hier ist es nicht.',
+  'autofill.refusal.differentSite': 'Das ist nicht die Seite, für die das Passwort gespeichert wurde.',
+  'autofill.refusal.crossOriginFrame':
+    'Dieses Formular gehört zu einer anderen Seite, die hier eingebettet ist — es wurde nichts ausgefüllt.',
+  'autofill.refusal.crossOriginFormAction':
+    'Dieses Formular schickt Eingaben an eine andere Seite — es wurde nichts ausgefüllt.',
+  'autofill.refusal.noPasswordField': 'Hier gibt es kein Passwortfeld zum Ausfüllen.',
+
   'permission.title': 'Berechtigungsanfrage',
   'permission.asking': '{origin} möchte Zugriff auf {subject}',
   'permission.allowOnce': 'Dieses Mal erlauben',
