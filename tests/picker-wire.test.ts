@@ -2,8 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   MAX_ANCESTOR_DEPTH,
   MAX_ATTRIBUTES,
+  MAX_PICKER_CHAIN,
   asElementDescription,
   asPickerChrome,
+  asPickerEscape,
+  asPickerFreezeReport,
+  asPickerMeasureRequest,
+  asPickerMeasurement,
+  asPickerSelectRequest,
+  asPickerStart,
   asSelectorProposal,
   describeElement,
   type PickerElement
@@ -266,5 +273,144 @@ describe('the chrome the core builds', () => {
     // The picker lives inside a shadow root for exactly this reason; an empty stylesheet would leave the bar
     // to whatever the site says about unstyled elements.
     expect(pickerChromeFor('en').styles.length).toBeGreaterThan(100)
+  })
+})
+
+/**
+ * The session's own messages, in both directions.
+ *
+ * Everything below crosses a process boundary, and in one direction it crosses it from a renderer —
+ * which is why each one is total over `unknown` rather than typed and trusted. What a bad message
+ * costs is not abstract: a chain with a hole in it answers "wider" with the wrong ancestor, a
+ * fractional match count reaches the confirmation bar as the number of things about to disappear,
+ * and a measurement naming the wrong attempt reports one document's state as another's.
+ */
+describe('the message that starts an attempt', () => {
+  const chrome = {
+    styles: '.box { border: 1px solid }',
+    hint: 'Click to hide',
+    noRule: 'No rule for this element',
+    warnings: {}
+  }
+
+  it('carries the identity every answer is matched against', () => {
+    expect(asPickerStart({ ...chrome, sessionId: 'picker-7' })?.sessionId).toBe('picker-7')
+  })
+
+  it('refuses a start with no session to answer for', () => {
+    for (const sessionId of [undefined, '', 7, null]) {
+      expect(asPickerStart({ ...chrome, sessionId }), JSON.stringify(sessionId)).toBeNull()
+    }
+  })
+
+  it('refuses a start that is not usable chrome either', () => {
+    expect(asPickerStart({ sessionId: 'picker-1' })).toBeNull()
+  })
+
+  it('is still readable as chrome by a preload built before it existed', () => {
+    /*
+      The compatibility this shape was chosen for. The page half of the picker lands in a later unit,
+      so for one step of the plan an older preload runs against this core — and it hands the whole
+      payload to `asPickerChrome`, which checks the four fields it needs and ignores the rest. An
+      envelope would have made that preload refuse to start at all, which is a worse browser in the
+      middle of repairing one.
+    */
+    expect(asPickerChrome({ ...chrome, sessionId: 'picker-1' })).not.toBeNull()
+  })
+})
+
+describe('the click, as the page reports it', () => {
+  const proposal = { selector: '.ad', estimatedMatches: 1, strategy: 'id', warnings: [] }
+  const rung = { tag: 'div', proposal, matches: 3 }
+
+  it('accepts a chain of measured rungs', () => {
+    const report = asPickerFreezeReport({ sessionId: 'picker-1', chain: [rung, rung] })
+    expect(report?.chain).toHaveLength(2)
+    expect(report?.chain[0]?.matches).toBe(3)
+  })
+
+  it('refuses a click that names no attempt', () => {
+    expect(asPickerFreezeReport({ chain: [rung] })).toBeNull()
+  })
+
+  it('refuses an empty chain, because there is nothing there to freeze on', () => {
+    expect(asPickerFreezeReport({ sessionId: 'picker-1', chain: [] })).toBeNull()
+    expect(asPickerFreezeReport({ sessionId: 'picker-1', chain: 'div' })).toBeNull()
+  })
+
+  it('refuses a chain longer than an element and its ancestors', () => {
+    // Every rung is presented, previewed and measured. Without a bound, a renderer sending ten
+    // thousand of them is a great deal of work in the core for a gesture that produced eight.
+    const chain = Array.from({ length: MAX_PICKER_CHAIN + 1 }, () => rung)
+    expect(asPickerFreezeReport({ sessionId: 'picker-1', chain })).toBeNull()
+  })
+
+  it('refuses the whole click for one unreadable rung rather than skipping it', () => {
+    /*
+      The rungs are *positions*: index 0 is the clicked element and widening counts outwards. A chain
+      with a hole quietly closed would answer "wider" with an ancestor two steps away, which is the
+      one mistake in this feature a person cannot see before they confirm it.
+    */
+    for (const bad of [
+      { tag: '', proposal, matches: 1 },
+      { tag: 'div', proposal, matches: -1 },
+      { tag: 'div', proposal, matches: 1.5 },
+      { tag: 'div', proposal, matches: Number.NaN },
+      { tag: 'div', matches: 1 },
+      { tag: 'div', proposal: { selector: '', estimatedMatches: 1 }, matches: 1 },
+      null,
+      'div'
+    ]) {
+      expect(
+        asPickerFreezeReport({ sessionId: 'picker-1', chain: [rung, bad] }),
+        JSON.stringify(bad)
+      ).toBeNull()
+    }
+  })
+})
+
+describe('the correction and the measurement', () => {
+  it('accepts a rung index, including the clicked element itself', () => {
+    expect(asPickerSelectRequest({ sessionId: 'picker-1', index: 0 })?.index).toBe(0)
+  })
+
+  it('refuses an index that is not a position', () => {
+    for (const index of [-1, 1.5, '2', undefined, Number.POSITIVE_INFINITY]) {
+      expect(asPickerSelectRequest({ sessionId: 'picker-1', index }), String(index)).toBeNull()
+    }
+  })
+
+  it('asks for a selector and never for rule text', () => {
+    expect(asPickerMeasureRequest({ sessionId: 'picker-1', selector: '.ad' })?.selector).toBe('.ad')
+    expect(asPickerMeasureRequest({ sessionId: 'picker-1', selector: '' })).toBeNull()
+    expect(asPickerMeasureRequest({ sessionId: 'picker-1' })).toBeNull()
+  })
+
+  it('accepts two counts and no verdict', () => {
+    // "It worked" is a decision, and decisions belong to the session module: a hidden element still
+    // matches its selector, so a count alone proves nothing either way.
+    const measured = asPickerMeasurement({ sessionId: 'picker-1', matches: 3, visible: 0 })
+    expect(measured).toEqual({ sessionId: 'picker-1', matches: 3, visible: 0 })
+  })
+
+  it('refuses a measurement with a missing or unusable field', () => {
+    for (const value of [
+      { sessionId: 'picker-1', matches: 3 },
+      { sessionId: 'picker-1', visible: 0 },
+      { sessionId: '', matches: 3, visible: 0 },
+      { sessionId: 'picker-1', matches: -1, visible: 0 },
+      { sessionId: 'picker-1', matches: 3, visible: 1.5 },
+      { sessionId: 'picker-1', matches: '3', visible: 0 },
+      null,
+      42
+    ]) {
+      expect(asPickerMeasurement(value), JSON.stringify(value)).toBeNull()
+    }
+  })
+
+  it('takes an Escape only from a page that names the attempt it is escaping', () => {
+    expect(asPickerEscape({ sessionId: 'picker-1' })?.sessionId).toBe('picker-1')
+    expect(asPickerEscape({})).toBeNull()
+    expect(asPickerEscape(null)).toBeNull()
   })
 })

@@ -1,6 +1,5 @@
 import { ipcRenderer } from 'electron'
 import {
-  PICKER_COMMIT_CHANNEL,
   PICKER_PROPOSE_CHANNEL,
   PICKER_START_CHANNEL,
   PICKER_STOP_CHANNEL,
@@ -210,13 +209,14 @@ function start(chrome: PickerChrome): void {
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
-    if (proposal !== null) {
-      try {
-        ipcRenderer.send(PICKER_COMMIT_CHANNEL, proposal.selector)
-      } catch {
-        // Nothing to do here; the core is the only thing that can store a rule.
-      }
-    }
+    /*
+      The click no longer writes anything, and that is the point of the rebuild rather than an
+      omission here: a click that stored a rule was a click whose five ways of failing nobody could
+      tell apart. Its new job — freezing the selection and handing the core the walkable ancestor
+      chain on `PICKER_FREEZE_CHANNEL` — belongs to the unit that rewrites this file, together with
+      the ancestor walk and the measurement it needs. Until then the press only ends the mode, which
+      is the one thing it can do here without pretending to have done the other.
+    */
     stop()
   }
 

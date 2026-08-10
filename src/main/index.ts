@@ -77,6 +77,7 @@ import { PasswordVault } from './passwords/PasswordVault.js'
 import { AutofillService } from './passwords/AutofillService.js'
 import { installAutofill } from './passwords/install-autofill.js'
 import { MasterPasswordPrompt } from './passwords/MasterPasswordPrompt.js'
+import { internalUrl } from '@shared/product.js'
 import { installUpdateChecks } from './updates/install-updates.js'
 import type { UpdateService } from './updates/UpdateService.js'
 
@@ -645,10 +646,59 @@ async function main(): Promise<void> {
     // Read per call and through `uiLocale`, so the picker's own labels follow the language the rest of
     // the interface is in — including the `'system'` default, which the raw setting does not answer.
     chrome: () => pickerChromeFor(uiLocale(settings)),
+    getSettings: () => settings?.snapshot() ?? defaultSettings(),
     editorFor: (webContentsId) => {
       const controller = windows?.controllerForWebContents(webContentsId)
       if (controller === undefined) return null
       return userRules?.editorFor(controller.privateMode ? 'private' : 'normal') ?? null
+    },
+    /*
+      The provisional rule, into one view and no other (R4, R20).
+
+      Through the injector's per-view addition rather than the engine's user-rule slot, which is one
+      slot for the whole program: a preview put there would hide the element in every window that
+      happened to be on the same site, including the ones nobody is picking in. Delivered on the call
+      rather than on a later refresh, because the revocation has to be a state of the page by the time
+      the measurement runs.
+    */
+    preview: (webContentsId, ruleText) => {
+      cosmeticInjector.setPreview(webContentsId, ruleText)
+    },
+    /*
+      Where the bar goes, resolved once when a session starts.
+
+      A tab with no tile has no rectangle to hang a bar off, and a bar is where every answer of this
+      feature is delivered — so a view that is loaded but off screen is not a view a picker can start
+      in. The window is held for the life of the session rather than looked up again: a tab closed
+      under an open bar has to be able to take that bar down, and by then the view it was resolved
+      from is gone.
+    */
+    hostFor: (webContentsId) => {
+      const controller = windows?.controllerForWebContents(webContentsId)
+      if (controller === undefined) return null
+      const tab = controller.tabs.find(
+        (candidate) =>
+          !candidate.view.webContents.isDestroyed() &&
+          candidate.view.webContents.id === webContentsId
+      )
+      const tileIndex = tab?.tileIndex
+      if (tab === undefined || tileIndex === null || tileIndex === undefined) return null
+      return {
+        windowId: controller.window.id,
+        tabId: tab.id,
+        tileIndex,
+        tileRect: () => tab.view.getBounds(),
+        presentOverlay: (presentation) => {
+          controller.presentOverlay(presentation)
+        },
+        dismissOverlayKind: (kind) => controller.dismissOverlayKind(kind),
+        overlayPresentation: () => controller.overlayPresentation(),
+        // The same call the blocker menu and the application menu make, so "my rules" is one place
+        // rather than three spellings of one.
+        openRules: () => {
+          controller.createTab({ url: internalUrl('settings') })
+        }
+      }
     }
   })
   elementPicker.install()

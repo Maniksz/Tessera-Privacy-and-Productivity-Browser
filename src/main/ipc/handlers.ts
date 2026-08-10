@@ -285,36 +285,24 @@ export function registerIpcHandlers(deps: {
   /*
     One press on the confirmation bar, resolved against the *sender's* window like everything else here.
 
-    `cancel` is answered in full and it is answered here, because ending the bar is not a decision about a
-    selection: every route out of this surface is the same route — the bar leaves the layer, the layer
-    announces the departure, and the session that owns the provisional rule takes it back off the page. So
-    Escape in the page, this button, a resize and a consent dialogue claiming the layer all end a session
-    the one way, and none of them needs the session to be asked.
+    Two checks and then the session, which is the division this handler is for. The sender's window and the
+    bar actually on its layer are questions about *this call* — the same pair a permission answer is checked
+    against, and the reason a press that raced a navigation cannot land on whichever session came next. What
+    the word then means is the picking session's, and every one of the six is answered there: the core holds
+    the selection, the proposed selector and the rule text, so nothing that arrives here could be allowed to
+    decide any of them.
 
-    By kind rather than `dismissOverlay()`, which takes down whatever is up: a cancel that arrived a moment
-    after something else had claimed the layer would otherwise take *that* down, and a departed consent
-    dialogue is settled as a refusal nobody gave.
-
-    The other five words are decisions about a selection — what to write, how wide it should be, whether to
-    take it back — and they belong to the picking session in the core, which does not exist yet. Until it
-    does they are answered `taken: false` rather than `ok`: the answer says nothing happened instead of
-    letting the caller assume that something did, which is the exact silence this feature is being rebuilt
-    to remove.
+    `taken: false` rather than a rejected promise for a word that reached no session. A press arriving for an
+    attempt that is over is an ordinary event — the ways a session ends are mostly not clicks — and the
+    caller is told that nothing happened instead of being left to assume that something did.
   */
   handle('picker:barAction', ({ sessionId, action }, event) => {
     const window = windows.resolve(event)
     if (window === undefined) return { taken: false }
-    /*
-      Checked against the bar actually on the layer, exactly as a permission answer is checked against the
-      prompt actually on screen. The ways a picking session ends are mostly not clicks — a navigation, a
-      closed tab, a displaced bar — so a press that raced one of them would otherwise act on whichever
-      session came next.
-    */
     const presented = window.overlayPresentation()
     if (presented?.kind !== 'picker-bar' || presented.sessionId !== sessionId)
       return { taken: false }
-    if (action !== 'cancel') return { taken: false }
-    return { taken: window.dismissOverlayKind('picker-bar') }
+    return { taken: deps.picker.barAction(sessionId, action) }
   })
 
   /*

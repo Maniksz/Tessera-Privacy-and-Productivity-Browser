@@ -140,8 +140,15 @@ export function blockerMenuTemplate(deps: BlockerMenuDeps): MenuItemConstructorO
     A host is needed because a picked rule is `host##selector` and there is nothing to key one on without
     it; the blocker being on is needed because a rule written while it is off applies to nothing, and
     offering to write one would be offering to do nothing. The per-site switch is deliberately *not* a
-    condition: hiding one more element on a site you have stopped filtering is a coherent thing to want,
-    and the rule will apply again the moment filtering comes back.
+    condition here: hiding one more element on a site you have stopped filtering is a coherent thing to
+    want, and the rule would apply again the moment filtering came back.
+
+    What the item cannot promise is that the picker will run. `ElementPicker.start` refuses on an
+    exempted site — nothing would be delivered while the exemption stands, so a preview would not appear
+    and a stored rule would measure as having no effect — and it says so on the confirmation bar, which
+    is R19's whole point: one precondition, named where it fails, rather than three entries each with
+    their own opinion. The item stays offered because a person choosing it there learns why, which is
+    more use than an item that is not there.
   */
   if (deps.blockerEnabled && deps.host !== null) {
     items.push({ label: t('page.blockElement'), click: () => deps.onBlockElement() })
