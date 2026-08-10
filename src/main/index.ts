@@ -561,7 +561,28 @@ async function main(): Promise<void> {
     stylesFor: (documentUrl) => filterSubscription.engine.cosmeticStylesFor(documentUrl),
     openFeed: (documentUrl) => filterSubscription.engine.openCosmeticFeed(documentUrl),
     scriptletsFor: (documentUrl) => filterSubscription.engine.scriptletsFor(documentUrl),
-    proceduralFor: (documentUrl) => filterSubscription.engine.proceduralSelectorsFor(documentUrl)
+    proceduralFor: (documentUrl) => filterSubscription.engine.proceduralSelectorsFor(documentUrl),
+    /*
+      The rules of a private window's session, and this is the whole of how they reach a page (KTD3).
+
+      Not through `FilterEngine.replaceUserRules`: that is one slot for the entire program, fed from
+      the store on disk, so a rule put there would hide the element in every window on the same site —
+      including the ordinary ones this window's user is keeping it away from (R20, AE8).
+
+      Pulled per serve rather than pushed per view, deliberately. These rules outlive the tab that
+      wrote them: a private window's second tab is created, loads and asks long afterwards, and
+      anything push-shaped would hold only for as long as somebody remembered to tell it about a new
+      view. Asking the window each time cannot be forgotten.
+
+      `null` for an ordinary window, and not because it has nothing to say — its rules are the stored
+      ones, which every view already gets from the engine. Answering with them here would serve them
+      twice.
+    */
+    sessionStylesFor: (contents) => {
+      const controller = windows?.controllerForWebContents(contents.id)
+      if (controller?.privateMode !== true) return null
+      return userRules?.editorFor('private').enabledText() ?? null
+    }
   })
   cosmeticInjector.install()
 
@@ -585,12 +606,40 @@ async function main(): Promise<void> {
   })
 
   /*
+    The same thing for a private window, and neither half is the pair above.
+
+    No `reloadUserRules`: the engine's user-rule slot is fed from the store and must stay that way, or a
+    rule written in a private window would hide the element in every ordinary window too (R20, AE8). The
+    delivery is `sessionStylesFor` above, which reads these rules per serve — so all that is owed here is
+    a re-serve of the views that are already open, which `refreshView` does one view at a time and only
+    for the windows of this mode.
+
+    Wired to the *held* editor, and this subscription is why it is held: it is made once, at startup, and
+    goes on being right for every private window opened afterwards. Until now `SessionUserRuleEditor`
+    had no subscriber anywhere in the core — there was no object to subscribe to that would still exist
+    when it fired — and that was one of the three reasons blocking an element in a private window did
+    nothing at all.
+  */
+  userRules.editorFor('private').onChange(() => {
+    for (const controller of windows?.controllers ?? []) {
+      if (!controller.privateMode) continue
+      for (const tab of controller.tabs) {
+        // A snapshot of the tabs can outlive one of them by a tick, and a destroyed view has no id to
+        // ask for.
+        if (tab.view.webContents.isDestroyed()) continue
+        cosmeticInjector.refreshView(tab.view.webContents.id)
+      }
+    }
+  })
+
+  /*
     The element picker, which is the "and I want to block things myself, like uBlock Origin" half.
 
     Its rules go into `UserRuleStore` bound to the sending window's browsing mode, so a private window's
-    picker writes nothing — and that is a property of the editor it is handed rather than a check anywhere
-    in the picker. A picked rule may only ever *hide*: `describeUserRule` refuses anything that would block
-    a request, because hiding a banner and cutting a site off must not sit behind one click.
+    picker writes nothing to disk — and that is a property of the editor it is handed rather than a check
+    anywhere in the picker. What it does write reaches that window's own views, and only those, through
+    the two blocks above. A picked rule may only ever *hide*: `describeUserRule` refuses anything that
+    would block a request, because hiding a banner and cutting a site off must not sit behind one click.
   */
   elementPicker = new ElementPicker({
     // Read per call and through `uiLocale`, so the picker's own labels follow the language the rest of
@@ -666,6 +715,9 @@ async function main(): Promise<void> {
     tabGroups,
     filters: filterSubscription,
     sessionStore,
+    // For one call and one only: the last private window closing is what ends the rules its picker
+    // wrote, and this is the layer that knows when that happens.
+    userRules,
     // Bound to a browsing mode where the session is created, so a private window holds a recorder
     // that discards rather than a flag somebody has to remember to check.
     downloads: downloadManager,

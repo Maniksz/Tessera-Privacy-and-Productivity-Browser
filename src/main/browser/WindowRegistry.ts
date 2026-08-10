@@ -49,6 +49,18 @@ export interface DownloadSubscriber {
   releaseSession(session: Session): void
 }
 
+/**
+ * The user's own rules, as far as this class needs them. `UserRuleStore` satisfies it.
+ *
+ * Structural for the same reason `DownloadSubscriber` is, and one method wide on purpose: this class
+ * neither reads a rule nor writes one. It owns exactly one fact nobody else has — whether any private
+ * window is still open — and that fact is what ends a private session's rules.
+ */
+export interface SessionRuleKeeper {
+  /** Drops the rules a private session kept in memory; see `UserRuleStore.endPrivateSession`. */
+  endPrivateSession(): void
+}
+
 export interface WindowRegistryDeps {
   settings: SettingsStore
   /**
@@ -83,6 +95,14 @@ export interface WindowRegistryDeps {
    * and it is bound once, in `#prepareSession`.
    */
   downloads: DownloadSubscriber
+  /**
+   * The user's own rules, for one call: the end of the private session.
+   *
+   * Held here rather than reached through the picker or the IPC layer because the end of a private
+   * session is a window-lifetime event, and window lifetimes are this class's subject. The rules
+   * themselves travel nowhere near it.
+   */
+  userRules: SessionRuleKeeper
   /**
    * The user right-clicked a page.
    *
@@ -236,6 +256,18 @@ export class WindowRegistry {
             closed would drop the live downloads of every other one.
           */
           this.#deps.downloads.releaseSession(session)
+          /*
+            And the rules the picker wrote in that window, which are the third thing a private session
+            leaves in memory rather than on disk.
+
+            Only when the *last* private window goes, because the editor holding them is bound to the
+            browsing mode rather than to one window — `UserRuleStore.editorFor` argues that choice out.
+            While another private window is open they are still its rules, and dropping them here would
+            make a rule vanish from a window nobody touched.
+          */
+          if (![...this.#controllers].some((open) => open.privateMode)) {
+            this.#deps.userRules.endPrivateSession()
+          }
         }
       },
       onPageContextMenu: (tab, target) => {

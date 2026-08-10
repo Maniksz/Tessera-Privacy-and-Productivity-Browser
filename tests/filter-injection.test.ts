@@ -1,5 +1,9 @@
+import { mkdtemp, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WebContents } from 'electron'
+import { UserRuleStore } from '@main/data/UserRuleStore.js'
 import { CosmeticInjector } from '@main/privacy/CosmeticInjector.js'
 import { FilterEngine } from '@main/privacy/FilterEngine.js'
 import type { DocumentFeatures } from '@shared/filters/features.js'
@@ -660,6 +664,28 @@ describe('the injector’s view-bound delivery', () => {
     expect(view.ask()).toBeNull()
   })
 
+  it('re-serves only the views it is asked about when the session’s rules change', () => {
+    /*
+      The half of the wiring `src/main/index.ts` performs on the held editor's `onChange`: the views of
+      the windows of *that mode*, one at a time, and no `refresh()` — a full re-serve would be harmless
+      here but would be the moment a private window's rule reached a normal window's view if
+      `sessionStylesFor` ever answered by mode rather than by window.
+    */
+    let sessionText: string | null = null
+    const injector = injectorFor({ sessionStyles: (id) => (id === 1 ? sessionText : null) })
+    const inPrivateWindow = viewOn(DOCUMENT, 1)
+    const inNormalWindow = viewOn(DOCUMENT, 2)
+    inPrivateWindow.ask()
+    inNormalWindow.ask()
+
+    sessionText = 'example.com##.private'
+    injector.refreshView(inPrivateWindow.id)
+    expect(inPrivateWindow.lastStyles()).toBe(
+      `${HOST_STYLES}\n.private { display: none !important; }`
+    )
+    expect(inNormalWindow.lastStyles()).toBeUndefined()
+  })
+
   it('drops a view’s preview when the view goes', () => {
     // The map is keyed by a number and cleaned up on `destroyed` rather than left to be collected;
     // an addition held by id has to be dropped at the same moment, or a long session accumulates
@@ -671,5 +697,104 @@ describe('the injector’s view-bound delivery', () => {
     view.destroy()
     const reused = viewOn(DOCUMENT, view.id)
     expect(reused.ask()).toBe(HOST_STYLES)
+  })
+})
+
+/**
+ * AE8, with the real rule store in the loop rather than a lambda standing in for it.
+ *
+ * Everything above holds the injector against a `sessionStyles` function somebody wrote for the test;
+ * what is left unproven by that is the join — that the object `UserRuleStore.editorFor('private')`
+ * hands back is the same one on the next call, that what it holds is what a view is served, and that
+ * the same write reaches neither the file nor the text `FilterSubscription.reloadUserRules` feeds into
+ * the engine's one global slot. Those three are the defect this unit exists for, and they are only
+ * visible together.
+ *
+ * The wiring below is copied from `src/main/index.ts` on purpose, down to the shape of the callback:
+ * that file cannot be tested — it builds Electron — so the closest a test gets is holding the same
+ * arrangement of the same objects.
+ */
+describe('a private window’s own rules, through the store the core uses', () => {
+  beforeEach(() => {
+    electronApp.reset()
+  })
+
+  async function storeInTemp(): Promise<{ path: string; store: UserRuleStore }> {
+    const directory = await mkdtemp(join(tmpdir(), 'tessera-session-rules-'))
+    const path = join(directory, 'user-rules.json')
+    return { path, store: await UserRuleStore.open({ filePath: path, debounceMs: 0 }) }
+  }
+
+  /** `index.ts`'s injector, with its `sessionStylesFor` and a set standing in for "is this window private". */
+  function injectorOver(
+    engine: FilterEngine,
+    store: UserRuleStore,
+    privateViews: ReadonlySet<number>
+  ): CosmeticInjector {
+    const settings = defaultSettings()
+    const injector = new CosmeticInjector({
+      getSettings: () => settings,
+      stylesFor: (documentUrl) => engine.cosmeticStylesFor(documentUrl),
+      openFeed: (documentUrl) => engine.openCosmeticFeed(documentUrl),
+      scriptletsFor: () => [],
+      proceduralFor: () => [],
+      sessionStylesFor: (contents) =>
+        privateViews.has(contents.id) ? store.editorFor('private').enabledText() : null
+    })
+    injector.install()
+    return injector
+  }
+
+  it('hides the element where it was blocked, in no other window, and on no disk', async () => {
+    const { path, store } = await storeInTemp()
+    const engine = engineFor()
+    const injector = injectorOver(engine, store, new Set([1]))
+    const inPrivateWindow = viewOn(DOCUMENT, 1)
+    const inNormalWindow = viewOn(DOCUMENT, 2)
+    inPrivateWindow.ask()
+    inNormalWindow.ask()
+
+    expect(
+      store.editorFor('private').add({ text: 'example.com##.sponsored-row', origin: 'picker' })
+        .outcome
+    ).toBe('added')
+    // What `index.ts` does on the held editor's `onChange`, for this window's views only.
+    injector.refreshView(inPrivateWindow.id)
+
+    expect(inPrivateWindow.lastStyles()).toBe(
+      `${HOST_STYLES}\n.sponsored-row { display: none !important; }`
+    )
+    // The normal window is not merely un-pushed: it asks again — a reload — and still gets the list's
+    // answer and nothing else.
+    expect(inNormalWindow.lastStyles()).toBeUndefined()
+    expect(inNormalWindow.ask()).toBe(HOST_STYLES)
+
+    // And the two places a session rule must never turn up: the global slot's source text, and the file.
+    expect(store.enabledText()).toBe('')
+    engine.replaceUserRules(store.enabledText())
+    expect(engine.cosmeticStylesFor('https://example.com/')).toBe(HOST_STYLES)
+    expect(engine.userRuleCount).toBe(0)
+    await store.flush()
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ version: 1, rules: [] })
+  })
+
+  it('serves them to a tab opened later, and takes them back when the session ends', async () => {
+    const { store } = await storeInTemp()
+    const injector = injectorOver(engineFor(), store, new Set([1, 3]))
+    const firstTab = viewOn(DOCUMENT, 1)
+    firstTab.ask()
+    store.editorFor('private').add({ text: 'example.com##.sponsored-row', origin: 'picker' })
+
+    // The tab that did not exist when the rule was written, asking for the first time.
+    const laterTab = viewOn(DOCUMENT, 3)
+    expect(laterTab.ask()).toBe(`${HOST_STYLES}\n.sponsored-row { display: none !important; }`)
+
+    // R5: the last private window closes, and what it held goes with it.
+    store.endPrivateSession()
+    injector.refreshView(firstTab.id)
+    injector.refreshView(laterTab.id)
+    expect(firstTab.lastStyles()).toBe(HOST_STYLES)
+    expect(laterTab.lastStyles()).toBe(HOST_STYLES)
+    expect(laterTab.ask()).toBe(HOST_STYLES)
   })
 })
