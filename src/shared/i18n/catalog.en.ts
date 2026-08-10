@@ -502,6 +502,38 @@ export const en = {
   'picker.warning.positional': 'Depends on position — may stop working when the page changes',
   'picker.warning.noStableFeature': 'This element has no stable name to match on',
 
+  /*
+    The eight named answers of R1, on the confirmation bar.
+
+    Keyed by the outcome itself rather than by a camel-cased alias, so the bar resolves
+    `picker.outcome.${outcome}` with no table in between — and an outcome added later renders its own
+    name instead of an empty bar, which is visible in testing and never a reassuring blank.
+
+    Two rules run through all eight. Each says what *happened*, not what the machinery did: "saved, and
+    nothing on this page changed" is something a person can act on, "the injection reported zero matches"
+    is not. And each that has a next step names it, because a refusal a person can do nothing about is
+    only half an answer — which of the eight has one is the difference between a list that is full and a
+    list the user chose to leave as it is.
+  */
+  'picker.outcome.saved-effective': 'Blocked. The rule is saved and this element is gone.',
+  /*
+    Two facts, kept apart on purpose: the saving worked and the hiding did not. Collapsed into one
+    sentence they read as a failure of the browser, and the commonest cause is neither — an element that
+    loads a moment later can still be caught by the very same rule.
+  */
+  'picker.outcome.saved-ineffective':
+    'Saved, but nothing on this page changed. The element may load again later, or the site may build it another way.',
+  'picker.outcome.invalid': 'This is not a rule this browser can apply.',
+  'picker.outcome.duplicate-active': 'You already have this rule, and it is switched on.',
+  'picker.outcome.duplicate-disabled':
+    'You already have this rule, and it is switched off. Turn it back on in your rules.',
+  'picker.outcome.limit-reached':
+    'You have as many rules as this browser will keep. Delete one you no longer need, then block this again.',
+  'picker.outcome.no-host':
+    'This document belongs to no site, so there is nothing to write a rule for.',
+  'picker.outcome.not-filterable':
+    'Nothing can be blocked on this page. Either it is not a website, or filtering is switched off here.',
+
   // page context menu
   'page.openLinkInNewTab': 'Open link in new tab',
   'page.copyLinkAddress': 'Copy link address',

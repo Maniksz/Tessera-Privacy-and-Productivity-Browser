@@ -377,6 +377,20 @@ export const de = {
   'picker.warning.positional': 'Hängt von der Position ab — kann bei Änderungen der Seite ausfallen',
   'picker.warning.noStableFeature': 'Dieses Element hat keinen stabilen Namen zum Anknüpfen',
 
+  'picker.outcome.saved-effective': 'Geblockt. Die Regel ist gespeichert und das Element ist weg.',
+  'picker.outcome.saved-ineffective':
+    'Gespeichert, aber auf dieser Seite hat sich nichts geändert. Das Element kann später noch nachladen, oder die Seite baut es anders auf.',
+  'picker.outcome.invalid': 'Das ist keine Regel, die dieser Browser anwenden kann.',
+  'picker.outcome.duplicate-active': 'Diese Regel haben Sie bereits, und sie ist eingeschaltet.',
+  'picker.outcome.duplicate-disabled':
+    'Diese Regel haben Sie bereits, und sie ist ausgeschaltet. Schalten Sie sie in Ihren Regeln wieder ein.',
+  'picker.outcome.limit-reached':
+    'Sie haben so viele Regeln, wie dieser Browser behält. Löschen Sie eine, die Sie nicht mehr brauchen, und blocken Sie das hier erneut.',
+  'picker.outcome.no-host':
+    'Dieses Dokument gehört zu keiner Website, es gibt also nichts, wofür sich eine Regel schreiben ließe.',
+  'picker.outcome.not-filterable':
+    'Auf dieser Seite lässt sich nichts blocken. Entweder ist es keine Website, oder das Filtern ist hier abgeschaltet.',
+
   'page.openLinkInNewTab': 'Link in neuem Tab öffnen',
   'page.copyLinkAddress': 'Linkadresse kopieren',
   'page.copyImageAddress': 'Bildadresse kopieren',
