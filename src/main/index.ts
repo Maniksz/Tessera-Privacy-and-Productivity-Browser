@@ -679,6 +679,7 @@ async function main(): Promise<void> {
     favicons,
     thumbnails,
     tabGroups,
+    arrangements,
     filters: filterSubscription,
     sessionStore,
     // Bound to a browsing mode where the session is created, so a private window holds a recorder

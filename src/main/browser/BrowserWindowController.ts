@@ -23,6 +23,7 @@ import { decideZoomTarget } from '@shared/gestures/wheel-zoom.js'
 import type { PaneZoom } from '@shared/zoom/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
+import type { ArrangementBook } from '../data/ArrangementStore.js'
 import type { SessionRecorder } from '@shared/session/model.js'
 import type { SplitSnapshotForPersistence } from './SplitController.js'
 import { OverlayLayer } from './OverlayLayer.js'
@@ -50,6 +51,12 @@ export interface WindowControllerOptions {
   wiring: TabWiring
   /** This window's groups, already bound to its browsing mode; see `TabGroupStore.bookFor`. */
   tabGroups: TabGroupBook
+  /**
+   * This window's recorded tilings, already bound to its browsing mode; see
+   * `ArrangementStore.bookFor`. A private window's keeps them in a variable, so there is no flag
+   * here to forget.
+   */
+  arrangements: ArrangementBook
   /**
    * This window's slot in the saved session, already bound to its browsing mode; see
    * `SessionStore.recorderFor`. A private window's discards, so there is no flag here to forget.
@@ -228,7 +235,8 @@ export class BrowserWindowController {
       relayout: () => this.relayout(),
       broadcast: () => this.#scheduleBroadcast(),
       onOverlayPresentationChanged: (presentation) => this.emit('overlay:presented', { presentation }),
-      tabGroups: this.options.tabGroups
+      tabGroups: this.options.tabGroups,
+      arrangements: this.options.arrangements
     })
 
     this.#seams = seams
@@ -577,25 +585,30 @@ export class BrowserWindowController {
       this.split.setActiveTile(tile)
     } else {
       /*
-        A tab with no tile has two ways back, and which one applies is a question only its group can
-        answer.
+        A tab with no tile has two ways back, and which one applies is a question about recordings
+        rather than about groups.
 
-        If its group is carrying an arrangement, that arrangement comes back: the layout it was, every
-        member in the tile it had. That is the point of keeping it — a new tab takes the window, and
+        If a recording seats this tab and may be applied, it comes back: the layout it was, every tab
+        in the tile it had. That is the point of keeping it — a new tab takes the window, and
         returning to what you were looking at is one click on any of the tabs that were in it. The
-        group keeps it afterwards, so the fourth return works exactly like the first; the round below
-        rewrites it from whatever the panes then hold.
+        recording survives being applied, so the fourth return works exactly like the first; the round
+        below rewrites it from whatever the panes then hold.
 
-        Otherwise it becomes visible the same way a newly created one does: it gets the window. It used
-        to take over the active tile, which is the complaint one step removed — opening a tab out of a
-        folded group replaced the page in front of the user, because a folded group releases its
-        members' tiles and every one of them comes back through here.
+        Otherwise the tab becomes visible the same way a newly created one does: it gets the window.
+        It used to take over the active tile, which is the complaint one step removed — opening a tab
+        out of a folded group replaced the page in front of the user, because a folded group releases
+        its members' tiles and every one of them comes back through here.
+
+        Which of the two happened is read off the split rather than reported back by `restoreFor`,
+        and that is what keeps every reason to decline in one place. `arrangementOfTab` declines for
+        four of them — no recording, another window's tabs (R16), a tab a collapsed group is hiding
+        (R14), and a recording that is already on screen — and a boolean threaded back here would be
+        a second, coarser account of the same decision. If the tab has a tile now, a recording was
+        applied; if it has none, nothing was.
       */
-      const arrangement = this.#seams.groups.takeArrangementFor(tabId)
-      if (arrangement === null) {
+      this.#seams.arrangements.restoreFor(tabId)
+      if (this.split.tileOfTab(tabId) === null) {
         this.assignTabToTile(tabId, this.#seams.occupancy.claimTileForNewTab())
-      } else {
-        this.#seams.occupancy.restoreArrangement(tabId, arrangement)
       }
     }
     this.#focusActiveTab()
@@ -1106,49 +1119,43 @@ export class BrowserWindowController {
   }
 
   /**
-   * A multi-view is a tab group, kept true on every settle rather than at one moment.
+   * The tiling this window is showing, written down on every settle rather than at one moment.
    *
    * ## Why here
    *
-   * The arrangement used to be written at exactly one point — the collapse a new tab causes
+   * The arrangement used to be recorded at exactly one point — the collapse a new tab causes
    * (`TileOccupancyController.claimTileForNewTab`) — so a split made by dragging a tab into an edge,
-   * one chosen from the layout menu and one brought back by session restore were all multi-views no
-   * group knew about. Every one of them settles *here*, in the round that already exists for
-   * "something about this window changed"; `refreshTileBar` below is in it for the same reason.
-   * Hooking each cause instead would mean finding all of them, and that list has grown twice already.
+   * one chosen from the layout menu and one brought back by session restore had no recording at all.
+   * Every one of them settles *here*, in the round that already exists for "something about this
+   * window changed"; `refreshTileBar` below is in it for the same reason. Hooking each cause instead
+   * would mean finding all of them, and that list has grown twice already.
    *
    * Writing it every time is also what makes the way back safe: a recording that is always current
-   * cannot describe a state the user has moved on from, so `takeArrangementFor` no longer spends it
-   * and the third return to a multi-view works like the first.
+   * cannot describe a state the user has moved on from, so applying one need not spend it and the
+   * third return to a multi-view works like the first.
    *
-   * ## The two rules that keep it from eating itself
+   * ## What it no longer does
    *
-   * **Below `MIN_ARRANGED_TILES` seated tabs nothing is written** — `groupToHoldArrangement`'s own
-   * floor, not a second copy of it here. That is exactly what makes displacement work: a new tab
-   * collapses the window to one seated tab, this pass finds nothing worth holding, and the group
-   * keeps the arrangement the user is about to click their way back to. A pass that wrote "the window
-   * is now a single view" would erase the feature on the way into it.
+   * It used to write into a tab group, because a group was the only structure carrying a layout — so
+   * this round created groups and pulled loose tabs into them, and a user who dissolved a group in a
+   * tiled window watched it come back on the next tick. `ArrangementController` has no book of groups
+   * to reach; the whole of the fix is which object this line names (R1, R2, R3).
    *
-   * **An arrangement that has not changed is not written** — `arrangementIsCurrent`. Without it every
-   * navigation event hands the debounced store a document.
+   * ## No re-entrancy guard, and its absence is the point
    *
-   * ## Re-entrancy
+   * There was one: `keepArrangement` published when it changed something, and this runs from inside a
+   * publish, so `#broadcastScheduled` was held down across the call to keep the round from scheduling
+   * itself. A recording is invisible to the renderer and carries no IPC channel (KTD6), so
+   * `ArrangementController.keep` publishes nothing and there is nothing left to guard against.
+   * Carrying the flag anyway would suppress a *genuine* request arriving during the round from
+   * anywhere else in it.
    *
-   * `keepArrangement` publishes when it changes something, and it is being called from inside a
-   * publish. So the flag is held down across the call: a request arriving during the round is a
-   * request for the message this round is about to send, which is what the flag is *for* rather than
-   * a suppression. Restored afterwards, so a change made later in the round still schedules the next.
+   * The two rules that keep the pass affordable moved with the write and are stated in
+   * `ArrangementController.keep`: nothing below `MIN_ARRANGED_TILES` seated tabs, and nothing that
+   * `arrangementIsCurrent` says is already recorded.
    */
   #maintainArrangement(): void {
-    this.#broadcastScheduled = true
-    try {
-      this.#seams.groups.keepArrangement({
-        id: this.split.layout,
-        tiles: this.split.toState().tileTabIds
-      })
-    } finally {
-      this.#broadcastScheduled = false
-    }
+    this.#seams.arrangements.keep()
   }
 
   /**
