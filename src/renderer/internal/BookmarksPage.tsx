@@ -15,6 +15,7 @@ import { readableUrl } from '@shared/history/presentation.js'
 import { bookmarksApi, internalBridgeAvailable } from './internal-calls.js'
 import { BOOKMARK_MESSAGES, pendingTranslator, type BookmarkMessageKey } from './pending-messages.js'
 import { useInternalI18n } from './useInternalI18n.js'
+import { Icon } from '../shared/Icon.js'
 
 /**
  * `tessera://bookmarks`.
@@ -372,7 +373,7 @@ export function BookmarksPage(): React.ReactNode {
                 onClick={() => (node.kind === 'folder' ? setFolderId(node.id) : openBookmark(node))}
               >
                 <span className="bookmarks__entryTitle">
-                  {node.kind === 'folder' ? '📁 ' : ''}
+                  {node.kind === 'folder' && <Icon name="folder" />}
                   {label}
                 </span>
                 {showAddress && <span className="bookmarks__entryUrl">{readable}</span>}
@@ -393,7 +394,7 @@ export function BookmarksPage(): React.ReactNode {
                     disabled={index === 0}
                     onClick={() => moveBy(node, -1)}
                   >
-                    ↑
+                    <Icon name="arrow-up" />
                   </button>
                   <button
                     type="button"
@@ -402,7 +403,7 @@ export function BookmarksPage(): React.ReactNode {
                     disabled={index === rows.length - 1}
                     onClick={() => moveBy(node, 1)}
                   >
-                    ↓
+                    <Icon name="arrow-down" />
                   </button>
                 </>
               )}
@@ -416,7 +417,7 @@ export function BookmarksPage(): React.ReactNode {
                 }
                 onClick={() => moveToRoot(node, otherRoot)}
               >
-                ⇄
+                <Icon name="swap" />
               </button>
               <button
                 type="button"
@@ -424,7 +425,7 @@ export function BookmarksPage(): React.ReactNode {
                 aria-label={tp('bookmarks.edit', { title: label })}
                 onClick={() => setEditing({ id: node.id, title: node.title, url: node.url })}
               >
-                ✎
+                <Icon name="edit" />
               </button>
               <button
                 type="button"
@@ -436,7 +437,7 @@ export function BookmarksPage(): React.ReactNode {
                 }
                 onClick={() => removeNode(node)}
               >
-                ×
+                <Icon name="close" />
               </button>
             </li>
           )

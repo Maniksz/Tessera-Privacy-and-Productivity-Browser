@@ -6,6 +6,7 @@ import { bridgeAvailable, invoke, subscribe } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
 import { QuickLinkTile } from './QuickLinkTile.js'
 import { QuickLinkDialog, type DialogState } from './QuickLinkDialog.js'
+import { Icon } from '../shared/Icon.js'
 
 /**
  * The start page: quick links that can be created, opened, renamed, reordered,
@@ -156,7 +157,7 @@ export function StartPage(): React.ReactNode {
       {openFolder !== null && (
         <nav className="start__breadcrumb" aria-label={t('start.breadcrumb')}>
           <button type="button" className="start__crumb" onClick={() => setOpenFolderId(null)}>
-            ← {t('start.allTiles')}
+            <Icon name="arrow-left" /> {t('start.allTiles')}
           </button>
           <span className="start__crumbCurrent">{openFolder.title}</span>
         </nav>
@@ -237,7 +238,7 @@ export function StartPage(): React.ReactNode {
               className="start__add start__add--folder"
               onClick={() => setDialog({ mode: 'create', kind: 'folder', title: '', url: '' })}
             >
-              <span aria-hidden="true">🗀</span>
+              <Icon name="folder" />
               {t('start.addFolder')}
             </button>
           )}

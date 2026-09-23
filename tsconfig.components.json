@@ -40,7 +40,9 @@
     */
     "src/preload/picker.ts",
     // The cosmetic preload, for the same reason: when its host sheet lands is a question about a document.
-    "src/preload/cosmetic.ts"
+    "src/preload/cosmetic.ts",
+    // The swipe arrow, whose lifetime in the page is a question about a document too.
+    "src/preload/swipe-indicator.ts"
   ],
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

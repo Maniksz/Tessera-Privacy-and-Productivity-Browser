@@ -64,7 +64,8 @@ function harness(): Harness {
     },
     relayout: () => calls.push('relayout'),
     broadcastWindowState: () => calls.push('broadcastWindowState'),
-    scheduleBroadcast: () => calls.push('scheduleBroadcast')
+    scheduleBroadcast: () => calls.push('scheduleBroadcast'),
+    rememberPlacement: () => calls.push('rememberPlacement')
   }
 
   wireWindowEvents(host)
@@ -78,7 +79,7 @@ function harness(): Harness {
 }
 
 describe('window event wiring', () => {
-  it('subscribes to exactly the nine events, and to each one once', () => {
+  it('subscribes to exactly the ten events, and to each one once', () => {
     /*
       Written out rather than counted. A count passes while the list is wrong, and the failure this
       guards against is a specific one: `app-command` and `swipe` are the same feature on two platforms,
@@ -86,6 +87,7 @@ describe('window event wiring', () => {
     */
     expect(harness().registered).toEqual([
       'resize',
+      'move',
       'maximize',
       'unmaximize',
       'focus',
@@ -110,7 +112,8 @@ describe('window event wiring', () => {
       'overlay.dismissKind(find-bar)',
       'overlay.dismissKind(picker-bar)',
       'overlay.dismissKind(downloads-panel)',
-      'relayout'
+      'relayout',
+      'rememberPlacement'
     ])
   })
 
@@ -200,12 +203,21 @@ describe('window event wiring', () => {
     ])
   })
 
-  it('tells the chrome UI about maximise, unmaximise and focus, and nothing else', () => {
+  it('tells the chrome UI about maximise, unmaximise and focus, and remembers the placement', () => {
+    // Focus included on purpose: the window the user was last *in* is the one the next window should
+    // open like, whether or not it was the last one dragged.
     for (const event of ['maximize', 'unmaximize', 'focus']) {
       const window = harness()
       window.emit(event)
-      expect(window.calls, event).toEqual(['broadcastWindowState'])
+      expect(window.calls, event).toEqual(['broadcastWindowState', 'rememberPlacement'])
     }
+  })
+
+  it('only remembers a move, because nothing inside the window changed', () => {
+    // No relayout and no drag cancel: a moved window keeps every rectangle relative to itself.
+    const window = harness()
+    window.emit('move')
+    expect(window.calls).toEqual(['rememberPlacement'])
   })
 
   it('records window fullscreen on the way in without touching the tile policy', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react'
-import type { TabState } from '@shared/model.js'
+import type { SecurityState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import {
   SEARCH_ENGINES,
@@ -9,6 +9,7 @@ import {
 import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
+import { Icon, type IconName } from '../../shared/Icon.js'
 
 /**
  * Address bar (spec 1).
@@ -18,6 +19,14 @@ import { useI18n } from '../i18n.js'
  * uses to resolve the navigation. The label can therefore never promise
  * something different from what pressing Enter does.
  */
+
+/** What the badge in front of the address draws, per state. The label says it in words. */
+const SECURITY_ICONS: Readonly<Record<SecurityState, IconName>> = {
+  secure: 'lock',
+  insecure: 'warning',
+  'invalid-certificate': 'blocked',
+  internal: 'internal'
+}
 
 interface OmniboxProps {
   tab: TabState | undefined
@@ -141,7 +150,7 @@ export function Omnibox({
         title={securityLabel}
         aria-label={securityLabel}
       >
-        {security === 'secure' ? '🔒' : security === 'insecure' ? '⚠' : security === 'invalid-certificate' ? '⛔' : '◆'}
+        <Icon name={SECURITY_ICONS[security]} size={13} />
       </span>
 
       {privateMode && (

@@ -4,6 +4,7 @@ import type { SettingDescriptor } from '@shared/settings/control.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { useCoreCall } from './useCoreCall.js'
 import { UserRulesEditor, type UserRulesHost } from './UserRulesEditor.js'
+import { Icon } from './Icon.js'
 
 /**
  * The settings surface, rendered by `tessera://settings` and by nothing else.
@@ -484,7 +485,7 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
                         void run(() => host.reset(descriptor.key))
                       }}
                     >
-                      ↺
+                      <Icon name="reset" />
                     </button>
                   </div>
                 )

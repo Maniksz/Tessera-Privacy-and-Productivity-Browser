@@ -25,6 +25,7 @@ import { installCosmeticFiltering } from './cosmetic.js'
 import { installElementPicker } from './picker.js'
 import { installAutofill } from './autofill.js'
 import { installZoomGesture } from './zoom.js'
+import { installSwipeNavigation } from './swipe.js'
 
 /**
  * The preload for tab views: everything a *document* gets, and nothing the browser's own interface
@@ -230,6 +231,12 @@ if (role === 'content') {
     First, and cheaply — one listener, no message until something is actually zoomed.
   */
   installZoomGesture()
+  /*
+    Back and forward by two-finger swipe, for every tab view for the same reason as the zoom: it is
+    an input device, and swiping back from the start page to the site before it has to work too.
+    One listener; a timer only for sideways scrolling, a message only when a swipe completes.
+  */
+  installSwipeNavigation()
 }
 
 if (role === 'content' && internalPage === null) {

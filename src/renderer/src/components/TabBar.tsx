@@ -8,6 +8,7 @@ import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { useTabDrag } from '../useTabDrag.js'
+import { Icon } from '../../shared/Icon.js'
 
 /**
  * Tab strip.
@@ -306,7 +307,7 @@ export function TabBar({
                     }
                   }}
                 >
-                  {tab.muted ? '🔇' : '🔊'}
+                  <Icon name={tab.muted ? 'volume-off' : 'volume'} size={13} />
                 </button>
               )}
 
@@ -326,7 +327,7 @@ export function TabBar({
                   void invoke('tabs:close', { tabId: tab.id })
                 }}
               >
-                ×
+                <Icon name="close" size={12} />
               </button>
             </div>
           )

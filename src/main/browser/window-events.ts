@@ -6,7 +6,7 @@ import { OVERLAY_AWAITS_ANSWER, OVERLAY_KINDS, type OverlayKind } from '@shared/
  *
  * ## Why this is a file and not a method
  *
- * Nine subscriptions, and not one of them is plumbing. A resize cancels the drag in progress rather than
+ * Ten subscriptions, and not one of them is plumbing. A resize cancels the drag in progress rather than
  * silently retargeting its drop zones. A blur cancels it too, because a pointer released outside the window
  * leaves no `pointerup` behind for either renderer to see. Leaving fullscreen is the single moment at which
  * the tile confinement can be put back without trapping the user. Every one of those is a decision with a
@@ -14,7 +14,7 @@ import { OVERLAY_AWAITS_ANSWER, OVERLAY_KINDS, type OverlayKind } from '@shared/
  * resize cancels the drag before it relayouts, or that leaving fullscreen restores the policy before the
  * relayout rather than after it, meant opening a window.
  *
- * Once the subscription itself is the only thing left that needs Electron — and it arrives as `on` — all nine
+ * Once the subscription itself is the only thing left that needs Electron — and it arrives as `on` — all of them
  * can be driven from a test with an object literal.
  *
  * ## What belongs here, and what does not
@@ -35,7 +35,7 @@ import { OVERLAY_AWAITS_ANSWER, OVERLAY_KINDS, type OverlayKind } from '@shared/
  */
 
 /**
- * The window, as narrowly as these nine handlers see it.
+ * The window, as narrowly as these handlers see it.
  *
  * ## Why not `WindowInternals`
  *
@@ -87,6 +87,14 @@ export interface WindowEventHost {
   broadcastWindowState(): void
   /** The coalesced everything-else broadcast: tabs, groups, split. One message per tick. */
   scheduleBroadcast(): void
+  /**
+   * Stores where this window is, for the next one to open there; see `@shared/window-placement/model.ts`.
+   *
+   * Called on every move, resize, maximise and focus — the last so that "where the window was" means
+   * the one the user was using, not the one that happened to be dragged last. Cheap to call often: the
+   * store ignores an unchanged placement and coalesces the writes.
+   */
+  rememberPlacement(): void
 }
 
 /**
@@ -117,7 +125,7 @@ const DISMISSED_ON_INTERRUPTION: readonly OverlayKind[] = OVERLAY_KINDS.filter(
 )
 
 /**
- * Subscribes the window to the nine events it reacts to.
+ * Subscribes the window to the ten events it reacts to.
  *
  * Returns nothing on purpose. Every subscription goes through `host.on`, which is already the pairing of a
  * listener with its removal — a disposer handed back from here would be a second, parallel way to unsubscribe,
@@ -141,8 +149,12 @@ export function wireWindowEvents(host: WindowEventHost): void {
     host.drag.cancel()
     dismissInterrupted()
     host.relayout()
+    host.rememberPlacement()
   }
-  const onWindowState = (): void => host.broadcastWindowState()
+  const onWindowState = (): void => {
+    host.broadcastWindowState()
+    host.rememberPlacement()
+  }
   const onBlur = (): void => {
     // Covers the drag that ended somewhere neither renderer could see — a pointer
     // released outside the window leaves no pointerup behind.
@@ -177,6 +189,8 @@ export function wireWindowEvents(host: WindowEventHost): void {
   }
 
   host.on('resize', onResize)
+  // A move changes nothing on screen inside the window, so it only has to be remembered.
+  host.on('move', () => host.rememberPlacement())
   host.on('maximize', onWindowState)
   host.on('unmaximize', onWindowState)
   host.on('focus', onWindowState)

@@ -1,6 +1,7 @@
 import { useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { cardImageSequence, type QuickLinkCard } from '@shared/quicklinks/cards.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
+import { Icon } from '../shared/Icon.js'
 
 /**
  * One Speed Dial tile.
@@ -128,7 +129,7 @@ export function QuickLinkTile({
       }}
     >
       <div className="tile__icon" aria-hidden="true">
-        {isFolder ? '🗀' : <TilePicture card={link} />}
+        {isFolder ? <Icon name="folder" size={28} /> : <TilePicture card={link} />}
       </div>
 
       <div className="tile__body">
@@ -148,7 +149,7 @@ export function QuickLinkTile({
             onEdit()
           }}
         >
-          ✎
+          <Icon name="edit" />
         </button>
         <button
           type="button"
@@ -159,7 +160,7 @@ export function QuickLinkTile({
             onRemove()
           }}
         >
-          ×
+          <Icon name="close" />
         </button>
       </div>
 

@@ -14,6 +14,7 @@ import {
   ZOOM_GESTURE_CHANNEL,
   pinchInputPhase
 } from '@shared/gestures/wheel-zoom.js'
+import { SWIPE_GESTURE_CHANNEL } from '@shared/gestures/wheel-swipe.js'
 import {
   MAX_VISUAL_ZOOM,
   MIN_VISUAL_ZOOM,
@@ -425,6 +426,21 @@ export class Tab {
       if (channel !== ZOOM_GESTURE_CHANNEL) return
       if (direction !== 'in' && direction !== 'out') return
       this.callbacks.onZoomGesture(this, direction)
+    })
+
+    /*
+      The two-finger swipe, as the same preload read it — see `shared/gestures/wheel-swipe.ts`.
+
+      Applied here rather than reported up, unlike the zoom above, because there is nothing left to
+      decide: the sender is the page under the pointer, which is the tile the user meant, and back and
+      forward are this tab's own. The same trust argument as the zoom channel holds, and the same
+      defensive read of the value.
+    */
+    on('ipc-message', (...args: unknown[]) => {
+      const [, channel, intent] = args
+      if (channel !== SWIPE_GESTURE_CHANNEL) return
+      if (intent === 'back') this.goBack()
+      else if (intent === 'forward') this.goForward()
     })
 
 

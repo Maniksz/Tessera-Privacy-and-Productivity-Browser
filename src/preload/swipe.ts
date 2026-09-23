@@ -2,13 +2,18 @@ import { ipcRenderer } from 'electron'
 import {
   IDLE_SWIPE,
   SWIPE_GESTURE_CHANNEL,
+  SWIPE_GESTURE_GAP_MS,
+  endSwipe,
   hasRoomToScroll,
   isHorizontalWheel,
   stepSwipe,
+  swipeIndicatorOf,
   swipeWheelSample,
   type ScrollBox,
-  type SwipeSample
+  type SwipeSample,
+  type SwipeStep
 } from '@shared/gestures/wheel-swipe.js'
+import { createSwipeIndicator } from './swipe-indicator.js'
 
 /**
  * The two-finger swipe back and forward, read where the page can still claim the wheel.
@@ -28,15 +33,50 @@ import {
  *
  * Vertical events skip both: they only ever latch a run as a scroll, which needs neither fact — and a
  * timer per ordinary scroll event, in every tab, is the tax `zoom.ts` refuses to pay too.
+ *
+ * ## When it navigates, and when the arrow goes
+ *
+ * Both on the silence that ends the gesture (`SWIPE_GESTURE_GAP_MS`), because nothing else says the
+ * fingers have lifted: `endSwipe` navigates if the swipe is still armed then, and the arrow slides out
+ * either way. The arrow goes at once on `pagehide`: a page left by the swipe it drew may be frozen
+ * into the back-forward cache, and coming forward again must not bring the arrow back with it.
  */
 export function installSwipeNavigation(): void {
   let tracker = IDLE_SWIPE
+  const indicator = createSwipeIndicator()
+  let showing = false
+  let ending: ReturnType<typeof setTimeout> | undefined
 
-  const feed = (sample: SwipeSample): void => {
-    const step = stepSwipe(tracker, sample)
+  const apply = (step: SwipeStep): void => {
     tracker = step.state
     if (step.intent !== null) ipcRenderer.send(SWIPE_GESTURE_CHANNEL, step.intent)
   }
+
+  const feed = (sample: SwipeSample): void => {
+    apply(stepSwipe(tracker, sample))
+
+    const shown = swipeIndicatorOf(tracker)
+    // Ordinary scrolling reaches here on every event; with no arrow up it must cost nothing more.
+    if (shown === null && !showing) return
+    showing = shown !== null
+    indicator.show(shown)
+    clearTimeout(ending)
+    if (showing) {
+      // The arrow is up exactly while a swipe is past the edge, so this is also every run that can navigate.
+      ending = setTimeout(() => {
+        showing = false
+        indicator.show(null)
+        apply(endSwipe(tracker))
+      }, SWIPE_GESTURE_GAP_MS)
+    }
+  }
+
+  window.addEventListener('pagehide', () => {
+    clearTimeout(ending)
+    showing = false
+    tracker = IDLE_SWIPE
+    indicator.dispose()
+  })
 
   window.addEventListener(
     'wheel',
@@ -46,37 +86,46 @@ export function installSwipeNavigation(): void {
       const at = event.timeStamp
 
       if (!isHorizontalWheel(deltas.deltaX, deltas.deltaY)) {
-        feed({ at, ...deltas, pageCanScroll: false, refused: false })
+        feed({ at, ...deltas, innerCanScroll: false, viewportCanScroll: false, refused: false })
         return
       }
 
-      const pageCanScroll = somethingScrollsSideways(event, deltas.deltaX < 0 ? -1 : 1)
-      setTimeout(() => feed({ at, ...deltas, pageCanScroll, refused: event.defaultPrevented }), 0)
+      const room = roomSideways(event, deltas.deltaX < 0 ? -1 : 1)
+      setTimeout(() => feed({ at, ...deltas, ...room, refused: event.defaultPrevented }), 0)
     },
     { capture: true, passive: true }
   )
 }
 
 /**
- * Whether any box the event passes through, or the viewport, can still scroll its way.
+ * Whether a box the event passes through, and separately the viewport, can still scroll its way.
+ *
+ * Two answers because they mean different things — see `stepSwipe`: an element that scrolled keeps
+ * the whole gesture, while the page itself hands it over to the swipe at its edge.
  *
  * `composedPath` rather than walking `parentElement`, so a scroller inside an open shadow root — a
  * web component's carousel — is found as well. A closed one is invisible from here, and a swipe over
  * it behaves as if it were not scrollable: the same as over any element this cannot see into.
  */
-function somethingScrollsSideways(event: WheelEvent, towards: -1 | 1): boolean {
+function roomSideways(
+  event: WheelEvent,
+  towards: -1 | 1
+): { innerCanScroll: boolean; viewportCanScroll: boolean } {
   const root = document.scrollingElement
   for (const node of event.composedPath()) {
     if (!(node instanceof Element) || node === root) continue
     const style = getComputedStyle(node)
     if (!/^(auto|scroll|overlay)$/.test(style.overflowX)) continue
-    if (hasRoomToScroll(boxOf(node, style), towards)) return true
+    // The viewport is not asked: an element that scrolls claims the gesture whatever the page does.
+    if (hasRoomToScroll(boxOf(node, style), towards)) {
+      return { innerCanScroll: true, viewportCanScroll: false }
+    }
   }
-  return (
+  const viewportCanScroll =
     root !== null &&
     viewportScrolls() &&
     hasRoomToScroll(boxOf(root, getComputedStyle(root)), towards)
-  )
+  return { innerCanScroll: false, viewportCanScroll }
 }
 
 /**

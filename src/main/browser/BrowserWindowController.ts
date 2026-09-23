@@ -37,6 +37,8 @@ import type { PermissionHost } from '../permissions/PermissionArbiter.js'
 import type { PermissionTabChange } from '../permissions/model.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SessionRecorder } from '@shared/session/model.js'
+import { storablePlacement, type OpeningPlacement } from '@shared/window-placement/model.js'
+import type { PlacementRecorder } from '../data/WindowPlacementStore.js'
 import type { SplitSnapshotForPersistence } from './SplitController.js'
 import { OverlayLayer } from './OverlayLayer.js'
 import { SplitController, type TileDirection } from './SplitController.js'
@@ -71,6 +73,13 @@ export interface WindowControllerOptions {
    * Named `sessionSlot` and not `session`: that name is already the Electron `Session` above.
    */
   sessionSlot: SessionRecorder
+  /** Where this window opens; see `placeNewWindow`. */
+  placement: OpeningPlacement
+  /**
+   * Where this window's placement is remembered, already bound to its browsing mode; see
+   * `WindowPlacementStore.recorderFor`. A private window's keeps nothing.
+   */
+  placementRecorder: PlacementRecorder
   /** The layout a restored window opens in, dividers included. Omitted for a fresh window. */
   initialSplit?: Partial<SplitSnapshotForPersistence>
   privateMode: boolean
@@ -238,7 +247,8 @@ export class BrowserWindowController implements PermissionHost {
         privateMode: options.privateMode,
         platform: currentPlatform(),
         preload: preloadFile('chrome'),
-        roleArgument: preloadRoleArgument('chrome')
+        roleArgument: preloadRoleArgument('chrome'),
+        bounds: options.placement.bounds
       })
     )
 
@@ -307,7 +317,7 @@ export class BrowserWindowController implements PermissionHost {
     })
 
     /*
-      What the OS tells this window and what it does about it: nine handlers, in `window-events.ts`, where
+      What the OS tells this window and what it does about it: ten handlers, in `window-events.ts`, where
       they can be run by a test rather than only read. Which of them belong there and which stayed — `closed`
       and `did-finish-load` — is argued in that file and in `#wireLifecycle` below.
     */
@@ -320,7 +330,8 @@ export class BrowserWindowController implements PermissionHost {
       tileInput: this.#seams.tileInput,
       relayout: () => this.relayout(),
       broadcastWindowState: () => this.#broadcastWindowState(),
-      scheduleBroadcast: () => this.#scheduleBroadcast()
+      scheduleBroadcast: () => this.#scheduleBroadcast(),
+      rememberPlacement: () => this.#rememberPlacement()
     })
     this.#wireLifecycle()
     this.#guardChrome()
@@ -445,7 +456,11 @@ export class BrowserWindowController implements PermissionHost {
       whatever the user has since put over it.
     */
     const show = (): void => {
-      if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show()
+      if (this.window.isDestroyed() || this.window.isVisible()) return
+      // Maximised here rather than at construction: `maximize` shows a hidden window on Windows and
+      // Linux, which before the first paint would be the empty frame this whole function avoids.
+      if (this.options.placement.maximized) this.window.maximize()
+      this.window.show()
     }
     this.window.once('ready-to-show', show)
     this.window.webContents.once('did-finish-load', show)
@@ -480,6 +495,23 @@ export class BrowserWindowController implements PermissionHost {
 
   destroy(): void {
     if (!this.window.isDestroyed()) this.window.destroy()
+  }
+
+  /**
+   * Hands where this window is to the placement recorder.
+   *
+   * The *normal* bounds, so a maximised window stores the size it returns to beside the flag. Nothing
+   * while fullscreen or minimised: the first is not a place to reopen in, and the second reports a
+   * rectangle — or on some platforms a position far off screen — that says nothing about where the
+   * window will be once it is restored. Hidden too, which is a window still waiting for its first
+   * paint and not yet anywhere the user put it.
+   */
+  #rememberPlacement(): void {
+    const window = this.window
+    if (window.isDestroyed() || !window.isVisible()) return
+    if (window.isFullScreen() || window.isMinimized()) return
+    const placement = storablePlacement(window.getNormalBounds(), window.isMaximized())
+    if (placement !== null) this.options.placementRecorder.record(placement)
   }
 
   // --- tabs ----------------------------------------------------------------

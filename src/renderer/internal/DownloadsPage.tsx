@@ -8,7 +8,6 @@ import {
   type DownloadEntry
 } from '@shared/downloads/model.js'
 import {
-  DOWNLOAD_ACTION_GLYPHS,
   DOWNLOAD_STATE_LABELS,
   downloadNumberFormat,
   downloadProgressText
@@ -16,6 +15,8 @@ import {
 import { downloadsApi, internalBridgeAvailable, type DownloadListing } from './internal-calls.js'
 import { DOWNLOAD_MESSAGES, pendingTranslator, type DownloadMessageKey } from './pending-messages.js'
 import { useInternalI18n } from './useInternalI18n.js'
+import { Icon } from '../shared/Icon.js'
+import { DOWNLOAD_ACTION_ICONS } from '../shared/download-icons.js'
 
 /**
  * `tessera://downloads`.
@@ -217,14 +218,14 @@ export function DownloadsPage(): React.ReactNode {
                       aria-label={tp('downloads.open', { name: entry.fileName })}
                       onClick={() => openEntry(entry)}
                     >
-                      {DOWNLOAD_ACTION_GLYPHS.open}
+                      <Icon name={DOWNLOAD_ACTION_ICONS.open} />
                     </button>
                     <button
                       type="button"
                       aria-label={tp('downloads.reveal', { name: entry.fileName })}
                       onClick={() => revealEntry(entry)}
                     >
-                      {DOWNLOAD_ACTION_GLYPHS.reveal}
+                      <Icon name={DOWNLOAD_ACTION_ICONS.reveal} />
                     </button>
                   </>
                 )}
@@ -239,7 +240,7 @@ export function DownloadsPage(): React.ReactNode {
                       })
                     }
                   >
-                    {DOWNLOAD_ACTION_GLYPHS.pause}
+                    <Icon name={DOWNLOAD_ACTION_ICONS.pause} />
                   </button>
                 )}
 
@@ -257,7 +258,7 @@ export function DownloadsPage(): React.ReactNode {
                       })
                     }
                   >
-                    {DOWNLOAD_ACTION_GLYPHS.resume}
+                    <Icon name={DOWNLOAD_ACTION_ICONS.resume} />
                   </button>
                 )}
 
@@ -272,7 +273,7 @@ export function DownloadsPage(): React.ReactNode {
                       })
                     }
                   >
-                    {DOWNLOAD_ACTION_GLYPHS.cancel}
+                    <Icon name={DOWNLOAD_ACTION_ICONS.cancel} />
                   </button>
                 )}
 
@@ -286,7 +287,7 @@ export function DownloadsPage(): React.ReactNode {
                     })
                   }
                 >
-                  {DOWNLOAD_ACTION_GLYPHS.remove}
+                  <Icon name={DOWNLOAD_ACTION_ICONS.remove} />
                 </button>
               </span>
             </li>

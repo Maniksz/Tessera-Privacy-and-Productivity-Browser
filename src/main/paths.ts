@@ -44,6 +44,16 @@ export function sessionStateFile(): string {
 }
 
 /**
+ * Where the last window was, so the next one opens there.
+ *
+ * User data rather than cache, if only just: nothing is lost with it but a size and a position, yet a
+ * cache clear that reset the window every time would read as the browser forgetting.
+ */
+export function windowPlacementFile(): string {
+  return join(userDataDir(), 'window-placement.json')
+}
+
+/**
  * The two Chromium switches that must be known before the application is ready.
  *
  * A separate, unencrypted file on purpose — see `src/main/startup-flags.ts` for why the settings

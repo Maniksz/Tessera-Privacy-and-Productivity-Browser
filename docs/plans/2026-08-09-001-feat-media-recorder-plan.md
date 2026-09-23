@@ -41,6 +41,7 @@ Bezahlt wird das heute mit Erweiterungen, die den Netzwerkverkehr beobachten und
 - **Verschlüsselte Quellen bleiben abgelehnt — aus zwei verschiedenen Gründen.** Widevine, PlayReady und FairPlay sind ohne castlabs-Build technisch nicht erreichbar. AES-128 wäre erreichbar und wird als Haltung abgelehnt: dass ein Player den Schlüssel holen darf, heißt nicht, dass der Benutzer eine Kopie behalten darf. *Governs R21.*
 - **Funde bleiben flüchtig.** Beobachtete Medienadressen samt Anfragekontext sind Browserverlauf unter anderem Namen; in einem Privacy-Browser gehören sie nicht auf die Platte. *Governs R5, R7.*
 - **Kein Bildschirmmitschnitt.** Eine skalierte Kachel abzufilmen kostet genau die Qualität, um derentwillen dieses Feature existiert.
+- **Medien-Transfers laufen durch die gewöhnliche Download-Anzeige.** Keine eigene Fortschrittsanzeige im Medien-Panel; Fortschritt, Abbruch und Ergebnis zeigt die Download-Anzeige aus `docs/plans/2026-09-23-001-feat-download-indicator-plan.md`, die jedem Download dient. (session-settled: user-directed — chosen over „Anzeige in den Medien-Plan aufnehmen": normale Downloads sollen nicht auf den Recorder warten) *Governs R19.*
 - **Unfreiwilliges Ende behält, absichtlicher Abbruch verwirft.** Endet ein Transfer, weil der Tab geschlossen wird, der Platz ausgeht oder die Anwendung abstürzt, bleibt das Geschriebene erhalten — für Mitschnitt und Download gleichermaßen. Nur der Stopp-Knopf verwirft; sonst wäre er keiner. *Governs R19, R20.*
 - **Ausgelieferte Texte nennen Verfahren, nicht Dienste.** Release-Notes und Oberfläche sprechen von unverschlüsseltem HLS und DASH; Twitch, Vimeo und YouTube bleiben interne Abnahmefälle in Plan und Tests. Der Update-Kanal des Projekts hängt an derselben Plattform, auf der Werkzeuge dieser Klasse schon entfernt wurden.
 - **Dieses Paket kommt vor V3 und V5 des Verbesserungsplans.** Es ist das, woran als Nächstes gearbeitet wird; die dort beschriebenen Lücken warten. V1 wartet nicht — Kamera und Mikrofon bleiben bewusst unangetastet.
@@ -96,7 +97,7 @@ Durchgezogene Kanten sind vorhanden, gestrichelte fehlen.
 - R16. Ein laufender Stream kann mitgeschnitten werden; der Browser folgt der wachsenden Segmentliste, bis der Benutzer stoppt oder der Stream endet. Für Live-Quellen mit getrennten Bild- und Tonspuren gilt R12 zusätzlich.
 - R17. Die Zieldatei ist nach jedem geschriebenen Segment abspielbar.
 - R18. Ein Unterbruch in der Segmentfolge beendet den Mitschnitt nicht, solange er die Initialisierungsparameter unverändert lässt.
-- R19. Ein laufender Mitschnitt und ein laufender Download sind im Panel mit ihrem Fortschritt und ihrer bisherigen Größe sichtbar und dort abbrechbar; ein Abbruch über diesen Weg hinterlässt kein Teilergebnis im Zielverzeichnis.
+- R19. Medien-Downloads und Mitschnitte sind gewöhnliche Downloads: sie erscheinen in der Download-Anzeige der Werkzeugleiste und auf der Downloads-Seite, mit Fortschritt, bisheriger Größe und denselben Aktionen wie jeder andere Download; ein Abbruch dort hinterlässt kein Teilergebnis im Zielverzeichnis.
 - R20. Endet ein Mitschnitt oder Download unfreiwillig — der Tab wird geschlossen, der Platz auf dem Datenträger geht zur Neige, die Anwendung endet unerwartet —, bleibt das bisher Geschriebene als abspielbare Datei erhalten, mit einem benannten Grund.
 
 **Grenzen und Ablage**
@@ -176,16 +177,16 @@ Durchgezogene Kanten sind vorhanden, gestrichelte fehlen.
   - **Gegeben:** Ein laufender Twitch-Stream mit serverseitig eingefügter Werbung, die die Codec-Parameter wechselt.
   - **Wenn:** Der Benutzer den Mitschnitt startet, die Werbung läuft, und er später stoppt.
   - **Dann:** Der Mitschnitt verhält sich wie in Q4 entschieden — und in keinem Fall entsteht eine Datei, die ein Player nach der Unterbrechung abbricht.
-- AE12. Tab wird während eines Transfers geschlossen
-  - **Deckt ab:** R4, R20
-  - **Gegeben:** In einem Tab läuft ein Mitschnitt oder ein Download.
-  - **Wenn:** Der Benutzer schließt diesen Tab.
-  - **Dann:** Das bisher Geschriebene bleibt als abspielbare Datei liegen, mit einem Grund, der das Schließen benennt.
 - AE11. YouTube-VOD, abgelaufener Kontext
   - **Deckt ab:** R22
   - **Gegeben:** Ein YouTube-Video, dessen signierte Adressen abgelaufen sind und deren Kontext nicht mehr angenommen wird.
   - **Wenn:** Der Benutzer es zu sichern versucht.
   - **Dann:** Es entsteht keine Datei, und der Grund benennt den nicht mehr genügenden Anfragekontext statt eines allgemeinen Fehlers.
+- AE12. Tab wird während eines Transfers geschlossen
+  - **Deckt ab:** R4, R20
+  - **Gegeben:** In einem Tab läuft ein Mitschnitt oder ein Download.
+  - **Wenn:** Der Benutzer schließt diesen Tab.
+  - **Dann:** Das bisher Geschriebene bleibt als abspielbare Datei liegen, mit einem Grund, der das Schließen benennt.
 
 ### Scope Boundaries
 
@@ -216,9 +217,9 @@ Durchgezogene Kanten sind vorhanden, gestrichelte fehlen.
 
 **Vor der Planung zu klären**
 
-- Q1. Führt eine JavaScript-ISOBMFF-Bibliothek getrennte Bild- und Tonfragmente zu einer abspielbaren Datei zusammen, in vertretbarem Aufwand? Ein Spike an einer realen Quelle entscheidet zwischen dem JavaScript-Weg und dem ffmpeg-Rückfall — und damit über Installergröße, Signierung und Plattform-Builds. Er beantwortet zugleich, ob WebM auf demselben Weg mitgeht oder eine zweite Bibliothek verlangt.
-- Q2. Dürfen mehrere Mitschnitte gleichzeitig laufen, und wie bleibt einer auf einer nicht aktiven Kachel des Split-View sichtbar und abbrechbar (R19)?
-- Q3. Was geschieht mit einer WebM-Stufe: Rückfall auf die höchste ISOBMFF-Stufe, Ablehnung mit benanntem Grund, oder Zusammenführen auch für WebM? Die ersten beiden Antworten deckeln YouTube unter der Zusage aus dem Goal Capsule (R15).
+- Q1. Führt eine JavaScript-Bibliothek getrennte Bild- und Tonfragmente zu einer abspielbaren Datei zusammen, in vertretbarem Aufwand? Der Spike liegt unter `scripts/spike-mux/` und ist an einer realen Quelle auszuführen; er entscheidet zwischen dem JavaScript-Weg und dem ffmpeg-Rückfall — und damit über Installergröße, Signierung und Plattform-Builds. Sein Zusammenführungspfad ist gegen synthetische Einspur-Dateien geprüft; offen ist, ob er echte Segmente der Zielquellen trägt.
+- Q2. Dürfen mehrere Mitschnitte gleichzeitig laufen? Sichtbar und abbrechbar bleibt einer auf einer nicht aktiven Kachel über die Download-Anzeige des Fensters (R19).
+- Q3. Was geschieht mit einer WebM-Stufe: Rückfall auf die höchste ISOBMFF-Stufe, Ablehnung mit benanntem Grund, oder Zusammenführen auch für WebM? Die ersten beiden Antworten deckeln YouTube unter der Zusage aus dem Goal Capsule (R15). Der Spike unter `scripts/spike-mux/` deckt WebM als Ein- und Ausgabe mit ab, auch containerübergreifend.
 - Q4. Wie eine Diskontinuität mit geänderten Codec-Parametern behandelt wird — Segmente überspringen, neue Initialisierung schreiben oder mit Grund enden (R18). Bei Twitch ist das der Regelfall, nicht die Ausnahme.
 
 **Ergebnis der ersten Stufe, nicht ihre Vorbedingung**
@@ -230,7 +231,7 @@ Durchgezogene Kanten sind vorhanden, gestrichelte fehlen.
 
 - Q7. Wie eine abgelaufene Adresse neu aufgelöst wird, ohne den Mitschnitt zu unterbrechen (R10).
 - Q8. Ob der Mitschnitt fortlaufend in eine Datei schreibt oder in Segmentdateien mit abschließendem Zusammenführen (R17).
-- Q9. Wo Start und Stopp im Panel sitzen und wie ein laufender Mitschnitt beim Tabwechsel dargestellt wird (R19).
+- Q9. Wie der Start im Medien-Panel und der Verlauf in der Download-Anzeige zusammenspielen — etwa ob das Medien-Panel einen laufenden Mitschnitt seines Tabs selbst noch anzeigt (R19).
 - Q10. Ob R23 über die vorhandene Zielpfad-Behandlung der Downloads läuft oder über eine gemeinsam genutzte Hilfsfunktion.
 - Q11. In welchem Takt eine Live-Playlist neu geladen wird und wann ein stehengebliebener Stream als beendet gilt (R16).
 - Q12. Wie Weiterleitungen beim Abruf hop-by-hop aufgelöst werden, damit die Herkunftsbindung aus R9 auch für das Ziel einer Weiterleitung gilt (R9, R25).
@@ -248,3 +249,14 @@ Durchgezogene Kanten sind vorhanden, gestrichelte fehlen.
 - `src/main/session/hardening.ts` — die Header-Härtung; hier liegen die Anfrage-Header, die R6 braucht, und hier hängt bereits der Antwort-Haken.
 - `docs/IMPROVEMENT-PLAN.md`, Abschnitte V2 und Q3 — Verdrahtung und die daran hängenden Lecks.
 - `tests/architecture.test.ts` — der vorhandene Ort für Fitness-Funktionen, etwa für die Herkunftsbindung aus R9 und die Regel, dass Medienbytes nur über die session-gebundene Schnittstelle fließen.
+
+---
+
+<!-- ce-section: work-relationships -->
+## How This Work Fits Together
+
+Dieser Plan besitzt den Medien-Recorder. Die Aufteilung unten ist das aktuelle Verständnis, keine zugesagte Reihenfolge.
+
+- Download-Anzeige in der Werkzeugleiste, `docs/plans/2026-09-23-001-feat-download-indicator-plan.md`
+  - **Enables** R19 dieses Plans: Medien-Transfers werden dort sichtbar und steuerbar.
+  - **Can proceed independently of** diesem Plan und nützt jedem Download sofort.

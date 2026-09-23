@@ -21,6 +21,7 @@ import { totalSkipped } from '@shared/passwords/chrome-import.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { bridgeAvailable, invoke } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
+import { Icon } from '../shared/Icon.js'
 
 /**
  * `tessera://passwords`.
@@ -793,7 +794,7 @@ export function PasswordsPage(): React.ReactNode {
                 aria-label={t('passwords.remove', { site: entry.origin })}
                 onClick={() => remove(entry)}
               >
-                ×
+                <Icon name="close" />
               </button>
             </li>
           )
@@ -815,7 +816,7 @@ export function PasswordsPage(): React.ReactNode {
                   aria-label={t('passwords.forgetNeverSaved', { site: origin })}
                   onClick={() => forgetNeverSaved(origin)}
                 >
-                  ×
+                  <Icon name="close" />
                 </button>
               </li>
             ))}

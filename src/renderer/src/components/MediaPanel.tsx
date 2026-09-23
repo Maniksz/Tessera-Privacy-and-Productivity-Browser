@@ -7,6 +7,7 @@ import type {
   MediaManifestReport
 } from '@shared/media/wire.js'
 import { useI18n } from '../i18n.js'
+import { Icon } from '../../shared/Icon.js'
 
 /**
  * What the page is playing, and what can be done about it.
@@ -170,7 +171,7 @@ export function MediaPanel({
             aria-label={mt('media.panel.close')}
             onClick={onClose}
           >
-            ×
+            <Icon name="close" />
           </button>
         </header>
 

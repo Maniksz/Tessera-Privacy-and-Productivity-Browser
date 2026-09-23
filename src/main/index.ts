@@ -59,7 +59,8 @@ import {
   tabGroupsFile,
   thumbnailCacheDir,
   unencryptedDataNoticeFile,
-  userRulesFile
+  userRulesFile,
+  windowPlacementFile
 } from './paths.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
 import { QuickLinkStore } from './data/QuickLinkStore.js'
@@ -69,6 +70,7 @@ import { FaviconStore } from './data/FaviconStore.js'
 import { ThumbnailStore } from './data/ThumbnailStore.js'
 import { TabGroupStore } from './data/TabGroupStore.js'
 import { SessionStore } from './data/SessionStore.js'
+import { WindowPlacementStore } from './data/WindowPlacementStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
 import { DownloadStore } from './data/DownloadStore.js'
 import { removeTempFilesOf, writeFileAtomically } from './data/atomic-write.js'
@@ -215,6 +217,7 @@ let favicons: FaviconStore | null = null
 let thumbnails: ThumbnailStore | null = null
 let tabGroups: TabGroupStore | null = null
 let sessionStore: SessionStore | null = null
+let windowPlacement: WindowPlacementStore | null = null
 let bookmarks: BookmarkStore | null = null
 let downloads: DownloadStore | null = null
 let passwords: PasswordVault | null = null
@@ -681,6 +684,14 @@ async function main(): Promise<void> {
     console.warn('[session] file could not be used; started with no session to restore')
   }
 
+  // Where the last window was, for the next one to open there. Kept apart from the session because it
+  // has to hold when restore is off; see `@shared/window-placement/model.ts`.
+  windowPlacement = await WindowPlacementStore.open({
+    filePath: windowPlacementFile(),
+    codec: protection.codec
+  })
+  flushOnExit.push(() => windowPlacement?.flush() ?? Promise.resolve(), 'window placement')
+
   /*
     The blocker, wired at last.
 
@@ -948,6 +959,7 @@ async function main(): Promise<void> {
     tabGroups,
     filters: filterSubscription,
     sessionStore,
+    windowPlacement,
     // For one call and one only: the last private window closing is what ends the rules its picker
     // wrote, and this is the layer that knows when that happens.
     userRules,

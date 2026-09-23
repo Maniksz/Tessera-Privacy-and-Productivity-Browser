@@ -3,6 +3,7 @@ import type { LayoutId } from '@shared/split/layout.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import { LAYOUT_LABELS, LayoutIcon } from './LayoutIcon.js'
+import { Icon } from '../../shared/Icon.js'
 
 /**
  * One toolbar button for the split layout.
@@ -68,7 +69,7 @@ export function LayoutMenu({
     >
       <LayoutIcon layout={current} />
       <span className="iconbutton__caret" aria-hidden="true">
-        ▾
+        <Icon name="chevron-down" size={10} />
       </span>
     </button>
   )

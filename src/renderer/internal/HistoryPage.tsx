@@ -6,6 +6,7 @@ import { registrableDomainOfUrl } from '@shared/url/domain.js'
 import { DAY_GROUPS, dayGroupOf, readableUrl, type DayGroup } from '@shared/history/presentation.js'
 import { bridgeAvailable, invoke } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
+import { Icon } from '../shared/Icon.js'
 
 /**
  * `tessera://history`.
@@ -232,7 +233,7 @@ export function HistoryPage(): React.ReactNode {
                       })}
                       onClick={() => removeDomain(entry)}
                     >
-                      ⌦
+                      <Icon name="trash" />
                     </button>
                     <button
                       type="button"
@@ -240,7 +241,7 @@ export function HistoryPage(): React.ReactNode {
                       aria-label={t('history.remove', { title })}
                       onClick={() => removeVisit(entry)}
                     >
-                      ×
+                      <Icon name="close" />
                     </button>
                   </li>
                 )

@@ -3,6 +3,7 @@ import type { ExtensionInfo } from '@shared/extensions/model.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { usePanelDismiss } from './usePanelDismiss.js'
 import { useCoreCall } from './useCoreCall.js'
+import { Icon } from './Icon.js'
 
 /**
  * The extensions surface, hosted by either the chrome UI or the `tessera://extensions` page.
@@ -109,7 +110,7 @@ export function ExtensionsView({ host, onClose }: ExtensionsViewProps): React.Re
             aria-label={t('extensions.close')}
             onClick={onClose}
           >
-            ×
+            <Icon name="close" />
           </button>
         )}
       </header>
@@ -141,7 +142,7 @@ export function ExtensionsView({ host, onClose }: ExtensionsViewProps): React.Re
                   aria-label={t('extensions.remove', { name: item.name })}
                   onClick={() => void remove(item)}
                 >
-                  ×
+                  <Icon name="close" />
                 </button>
               </li>
             ))}

@@ -29,14 +29,31 @@ import type { NavigationIntent } from './navigation.js'
  *
  * The DOM gives a wheel event no phase — no "fingers down", no "fingers up", no "momentum". So a
  * gesture is a run of wheel events with no gap longer than `SWIPE_GESTURE_GAP_MS` between them, and
- * the momentum macOS keeps sending after the fingers lift is part of the same run. That is what makes
- * one flick navigate once rather than once per threshold's worth of momentum.
+ * the momentum macOS keeps sending after the fingers lift is part of the same run.
  *
- * Each run is decided once, at its first event, and kept: Chrome latches a scroll to what it started
- * as, and so does this. A run that began vertically stays a scroll however far it drifts sideways;
- * a run that began by scrolling something in the page stays the page's even after that something hits
- * its edge — which is what lets a carousel be flicked to its end without the browser leaving the page
- * on the last pixel.
+ * ## Why it navigates at the end and not at the threshold
+ *
+ * *"das zurück sollte erst triggern, wenn ich loslasse, falls ich mich umentscheide"*. Crossing the
+ * threshold only **arms** the swipe; the navigation waits for the gesture to end, and a swipe brought
+ * back below the threshold before then is disarmed and does nothing. Chrome does the same on the
+ * fingers leaving the pad.
+ *
+ * The end of the run is the nearest thing to that the DOM offers, and the difference is the momentum:
+ * the navigation comes when the momentum has run out rather than the instant the fingers lift. Nothing
+ * is lost by it — momentum only ever carries a swipe further the way it was going, so it cannot
+ * change the decision the fingers left behind; it can only delay hearing it.
+ *
+ * Each run is latched to what it started as, the way Chrome latches a scroll to the box it began in.
+ * A run that began vertically stays a scroll however far it drifts sideways. A run that began inside
+ * a scrollable *element* — a carousel, a wide table — stays that element's even after it hits its
+ * edge, which is what lets a carousel be flicked to its end without the browser leaving the page on
+ * the last pixel.
+ *
+ * The page itself is the exception, and deliberately: scrolling a wide page sideways and carrying on
+ * past its edge in the same movement is how Chrome's gesture is used — *"mit zwei fingern kann man bei
+ * chrome ja auch scrollen, bis man den rand trifft, dann kann man weiter wischen"*. So a run that began
+ * by scrolling the viewport scrolls it for as long as it has room and becomes a swipe from the first
+ * event that finds none. Only the distance past the edge counts towards the threshold.
  */
 
 /** Preload -> core: one completed swipe, already reduced to a direction. */
@@ -47,7 +64,7 @@ export const SWIPE_GESTURE_CHANNEL = 'tessera:swipe-gesture'
  *
  * A feel value, not a derived one. A deliberate two-finger swipe on a Mac trackpad, momentum
  * included, travels several hundred pixels; a sideways brush while reading travels a few dozen. Two
- * hundred sits between them, and there is no visual feedback yet to make a lower one forgiving.
+ * hundred sits between them.
  */
 export const SWIPE_THRESHOLD_PX = 200
 
@@ -133,11 +150,11 @@ export function hasRoomToScroll(box: ScrollBox, towards: -1 | 1): boolean {
  *
  *   - `none`: nothing yet — the next event decides.
  *   - `scroll`: it began vertically.
- *   - `page`: something in the page scrolled it or refused it.
- *   - `swipe`: it began sideways at an edge and is travelling towards the threshold.
- *   - `spent`: it already navigated; the rest of it, momentum included, is ignored.
+ *   - `page`: an element in the page scrolled it, or the page refused it.
+ *   - `viewport`: it is scrolling the page itself, which still has room; at the edge it becomes a swipe.
+ *   - `swipe`: it is travelling past an edge of the page — armed once `travelled` reaches the threshold.
  */
-export type SwipeLatch = 'none' | 'scroll' | 'page' | 'swipe' | 'spent'
+export type SwipeLatch = 'none' | 'scroll' | 'page' | 'viewport' | 'swipe'
 
 export interface SwipeTracker {
   readonly latch: SwipeLatch
@@ -161,62 +178,124 @@ export interface SwipeSample {
   readonly at: number
   readonly deltaX: number
   readonly deltaY: number
-  /** Whether something under the pointer could still scroll this event's way before it arrived. */
-  readonly pageCanScroll: boolean
+  /** Whether an element under the pointer could still scroll this event's way before it arrived. */
+  readonly innerCanScroll: boolean
+  /** Whether the page itself — the viewport — could, measured at the same moment. */
+  readonly viewportCanScroll: boolean
   /** Whether the page called `preventDefault` on it. */
   readonly refused: boolean
 }
 
+export interface SwipeStep {
+  readonly state: SwipeTracker
+  /** A navigation the run just *ended* with; never one the run in progress has merely armed. */
+  readonly intent: NavigationIntent | null
+}
+
+/** Whether the run is past the threshold, so that ending it now would navigate. */
+export function isArmed(state: SwipeTracker): boolean {
+  return state.latch === 'swipe' && state.travelled >= SWIPE_THRESHOLD_PX
+}
+
 /**
- * Feeds one wheel event into the run it belongs to, and says whether the run just became a
- * navigation.
+ * Ends the run: the navigation it was armed for, if it still is, and a clean slate either way.
+ *
+ * Called by the preload on the silence that ends a gesture. It is also what `stepSwipe` does itself
+ * when an event arrives after that silence, so a timer that ran late — a busy page can starve one —
+ * delays the navigation instead of losing it.
+ */
+export function endSwipe(state: SwipeTracker): SwipeStep {
+  if (!isArmed(state)) return { state: IDLE_SWIPE, intent: null }
+  return { state: IDLE_SWIPE, intent: state.direction < 0 ? 'back' : 'forward' }
+}
+
+/**
+ * Feeds one wheel event into the run it belongs to.
  *
  * Negative `deltaX` is scrolling leftwards, which is back — the same in Chrome, and independent of
  * the "natural scrolling" setting, because that setting has already been applied to the delta by the
  * time a page sees it. Leftwards past the left edge uncovers what came before, as `navigation.ts`
  * says of the three-finger swipe.
  *
- * Travel back towards the start shortens the swipe but cannot turn it around. Chrome does the same,
- * and the alternative is worse than it sounds: a swipe begun at the left edge and reversed would
- * scroll the page rightwards *and* count towards going forward, both at once.
+ * Travel back towards the start shortens the swipe, below the threshold disarms it, and it cannot
+ * turn it around. Chrome does the same, and the alternative is worse than it sounds: a swipe begun at
+ * the left edge and reversed would scroll the page rightwards *and* count towards going forward, both
+ * at once. On a page that does scroll back that way, a swipe undone completely is scrolling again,
+ * and the edge is found afresh.
  */
-export function stepSwipe(
-  state: SwipeTracker,
-  sample: SwipeSample
-): { state: SwipeTracker; intent: NavigationIntent | null } {
-  const current = sample.at - state.lastAt > SWIPE_GESTURE_GAP_MS ? IDLE_SWIPE : state
+export function stepSwipe(state: SwipeTracker, sample: SwipeSample): SwipeStep {
+  const ended = sample.at - state.lastAt > SWIPE_GESTURE_GAP_MS ? endSwipe(state) : null
+  const current = ended?.state ?? state
+  const intent = ended?.intent ?? null
   // Never backwards: events are read in two passes (see the preload), so they can land out of order.
   const lastAt = Math.max(current.lastAt, sample.at)
-  const settle = (
-    next: Partial<SwipeTracker>
-  ): { state: SwipeTracker; intent: NavigationIntent | null } => ({
+  const settle = (next: Partial<SwipeTracker>): SwipeStep => ({
     state: { ...current, ...next, lastAt },
-    intent: null
+    intent
+  })
+  const travel = (from: SwipeTracker): SwipeStep => ({
+    state: {
+      ...from,
+      lastAt,
+      travelled: Math.max(0, from.travelled + sample.deltaX * from.direction)
+    },
+    intent
   })
 
+  const sideways = isHorizontalWheel(sample.deltaX, sample.deltaY)
+  const beginSwipe = (): SwipeStep =>
+    travel({ latch: 'swipe', travelled: 0, direction: sample.deltaX < 0 ? -1 : 1, lastAt })
+
   if (current.latch === 'none') {
-    if (!isHorizontalWheel(sample.deltaX, sample.deltaY)) return settle({ latch: 'scroll' })
-    if (sample.pageCanScroll || sample.refused) return settle({ latch: 'page' })
-    return advance(
-      { latch: 'swipe', travelled: 0, direction: sample.deltaX < 0 ? -1 : 1, lastAt },
-      sample.deltaX
-    )
+    if (!sideways) return settle({ latch: 'scroll' })
+    if (sample.innerCanScroll || sample.refused) return settle({ latch: 'page' })
+    if (sample.viewportCanScroll) return settle({ latch: 'viewport' })
+    return beginSwipe()
+  }
+
+  // A page that takes the wheel over halfway through gets it. It asked; the user is inside its widget.
+  if ((current.latch === 'viewport' || current.latch === 'swipe') && sample.refused) {
+    return settle({ latch: 'page', travelled: 0 })
+  }
+
+  if (current.latch === 'viewport') {
+    // Still room, or an event that drifted vertical: the page scrolls and nothing counts yet.
+    if (sample.viewportCanScroll || !sideways) return settle({})
+    return beginSwipe()
   }
 
   if (current.latch !== 'swipe') return settle({})
-  // A page that takes the wheel over halfway through gets it. It asked; the user is inside its widget.
-  if (sample.refused) return settle({ latch: 'page' })
-  return advance({ ...current, lastAt }, sample.deltaX)
+  const step = travel(current)
+  if (step.state.travelled === 0 && sample.viewportCanScroll) {
+    return settle({ latch: 'viewport', travelled: 0 })
+  }
+  return step
 }
 
-function advance(
-  state: SwipeTracker,
-  deltaX: number
-): { state: SwipeTracker; intent: NavigationIntent | null } {
-  const travelled = Math.max(0, state.travelled + deltaX * state.direction)
-  if (travelled < SWIPE_THRESHOLD_PX) return { state: { ...state, travelled }, intent: null }
+/**
+ * What the swipe looks like on screen at this moment, or `null` for nothing.
+ *
+ * The indicator is the answer to *"sollte aber eher eine animation haben"*: without it the gesture
+ * is invisible until the page is suddenly gone, and a user who stops short has no way to learn how
+ * far "far enough" is. It follows the fingers past the edge and fills at the threshold, which is
+ * what Chrome's arrow does — and since the navigation now waits for the end of the gesture, it is
+ * also the only way to see that letting go *now* will navigate, and that coming back will not.
+ */
+export interface SwipeIndicator {
+  /** The edge it comes in from: the left for back, where the fingers are heading. */
+  readonly side: 'left' | 'right'
+  /** `0` just past the edge, `1` at the threshold. */
+  readonly progress: number
+  /** Past the threshold: ending the gesture now navigates. */
+  readonly armed: boolean
+}
+
+export function swipeIndicatorOf(state: SwipeTracker): SwipeIndicator | null {
+  // Nothing past the edge yet — a swipe scrolled back to where it began — is nothing to show.
+  if (state.latch !== 'swipe' || state.travelled === 0) return null
   return {
-    state: { ...state, latch: 'spent', travelled },
-    intent: state.direction < 0 ? 'back' : 'forward'
+    side: state.direction < 0 ? 'left' : 'right',
+    progress: Math.min(1, state.travelled / SWIPE_THRESHOLD_PX),
+    armed: isArmed(state)
   }
 }

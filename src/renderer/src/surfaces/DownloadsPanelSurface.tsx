@@ -7,7 +7,6 @@ import {
   type DownloadEntry
 } from '@shared/downloads/model.js'
 import {
-  DOWNLOAD_ACTION_GLYPHS,
   DOWNLOAD_STATE_LABELS,
   downloadNumberFormat,
   downloadProgressText,
@@ -20,6 +19,8 @@ import { internalUrl } from '@shared/product.js'
 import { anchorSurface, type Rect } from '@shared/ui/anchor.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
+import { Icon } from '../../shared/Icon.js'
+import { DOWNLOAD_ACTION_ICONS } from '../../shared/download-icons.js'
 
 /**
  * The toolbar's downloads panel, drawn on the overlay layer.
@@ -372,7 +373,7 @@ export function DownloadsPanelSurface({
                       title={t(ACTION_LABELS[action], { name: entry.fileName })}
                       onClick={() => perform(action, entry)}
                     >
-                      {DOWNLOAD_ACTION_GLYPHS[action]}
+                      <Icon name={DOWNLOAD_ACTION_ICONS[action]} />
                     </button>
                   ))}
                 </span>

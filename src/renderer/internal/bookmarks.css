@@ -156,6 +156,12 @@ body {
   white-space: nowrap;
 }
 
+/* The folder mark in front of a folder's name, quieter than the name itself. */
+.bookmarks__entryTitle .icon {
+  margin-right: 6px;
+  color: var(--fg-dim);
+}
+
 .bookmarks__entryUrl {
   overflow: hidden;
   color: var(--fg-dim);

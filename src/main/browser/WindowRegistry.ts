@@ -1,4 +1,4 @@
-import { session as electronSession, type Session } from 'electron'
+import { screen, session as electronSession, type Session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import type { SettingsStore } from '../settings/SettingsStore.js'
 import type { QuickLinkStore } from '../data/QuickLinkStore.js'
@@ -7,6 +7,8 @@ import type { FaviconStore } from '../data/FaviconStore.js'
 import type { ThumbnailStore } from '../data/ThumbnailStore.js'
 import type { TabGroupStore } from '../data/TabGroupStore.js'
 import type { SessionStore } from '../data/SessionStore.js'
+import type { WindowPlacementStore } from '../data/WindowPlacementStore.js'
+import { placeNewWindow, type OpeningPlacement } from '@shared/window-placement/model.js'
 import type { SplitSnapshotForPersistence } from './SplitController.js'
 import type { FilterSubscription } from '../privacy/FilterSubscription.js'
 import type { FilterStatus } from '@shared/filters/status.js'
@@ -148,6 +150,8 @@ export interface WindowRegistryDeps {
   tabGroups: TabGroupStore
   /** The saved session. One store for every window; each window gets its own slot. */
   sessionStore: SessionStore
+  /** Where the last window was, for each new one to open there. One store for every window. */
+  windowPlacement: WindowPlacementStore
   /**
    * The blocker's rules, already loaded from cache and refreshing in the background.
    *
@@ -333,6 +337,9 @@ export class WindowRegistry {
       tabGroups: this.#deps.tabGroups.bookFor(mode),
       // Bound the same way and for the same reason: a private window's recorder discards, and takes no slot.
       sessionSlot: this.#deps.sessionStore.recorderFor(mode),
+      // Read by every window, written only by normal ones; see `WindowPlacementStore.recorderFor`.
+      placement: this.#placementForNewWindow(),
+      placementRecorder: this.#deps.windowPlacement.recorderFor(mode),
       ...(options.initialSplit === undefined ? {} : { initialSplit: options.initialSplit }),
       getSettings: () => this.#deps.settings.snapshot(),
       onClosed: (closed) => {
@@ -436,6 +443,28 @@ export class WindowRegistry {
     }
     controller.window.on('focus', onFocus)
     return controller
+  }
+
+  /**
+   * Where a window about to be created opens.
+   *
+   * The displays and the open windows are asked here, at creation, rather than remembered: a monitor
+   * can be plugged in or out between two windows, and the rule in `placeNewWindow` is only as good as
+   * the screens it is given. The primary display goes first, because that is the one it falls back to.
+   */
+  #placementForNewWindow(): OpeningPlacement {
+    const primary = screen.getPrimaryDisplay()
+    const workAreas = [
+      primary.workArea,
+      ...screen
+        .getAllDisplays()
+        .filter((display) => display.id !== primary.id)
+        .map((display) => display.workArea)
+    ]
+    const occupied = [...this.#controllers]
+      .filter((controller) => !controller.window.isDestroyed())
+      .map((controller) => controller.window.getBounds())
+    return placeNewWindow(this.#deps.windowPlacement.last(), workAreas, occupied)
   }
 
   /** Every open window, as the downloads channels address them; one object per window, for its life. */

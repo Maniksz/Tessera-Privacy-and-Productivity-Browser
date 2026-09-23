@@ -3,9 +3,11 @@ import {
   IDLE_SWIPE,
   SWIPE_GESTURE_GAP_MS,
   SWIPE_THRESHOLD_PX,
+  endSwipe,
   hasRoomToScroll,
   isHorizontalWheel,
   stepSwipe,
+  swipeIndicatorOf,
   swipeWheelSample,
   type SwipeSample,
   type SwipeTracker,
@@ -38,12 +40,18 @@ function wheel(overrides: Partial<WheelSwipeEvent> = {}): WheelSwipeEvent {
   }
 }
 
-/** A run of events 16 ms apart, the way a trackpad delivers one, fed from `start`. */
+/**
+ * A run of events 16 ms apart, the way a trackpad delivers one, fed from `start` — and then, unless
+ * told otherwise, let go: `endSwipe`, which is what the preload calls on the silence after it.
+ *
+ * `state` is the run as it stood *before* letting go, so a test can ask what the arrow showed.
+ */
 function run(
   deltas: ReadonlyArray<Partial<SwipeSample>>,
   start: SwipeTracker = IDLE_SWIPE,
-  from = 1000
-): { state: SwipeTracker; intents: string[] } {
+  from = 1000,
+  release = true
+): { state: SwipeTracker; intents: string[]; after: SwipeTracker } {
   let state = start
   const intents: string[] = []
   deltas.forEach((overrides, index) => {
@@ -51,14 +59,18 @@ function run(
       at: from + index * 16,
       deltaX: 0,
       deltaY: 0,
-      pageCanScroll: false,
+      innerCanScroll: false,
+      viewportCanScroll: false,
       refused: false,
       ...overrides
     })
     state = step.state
     if (step.intent !== null) intents.push(step.intent)
   })
-  return { state, intents }
+  if (!release) return { state, intents, after: state }
+  const end = endSwipe(state)
+  if (end.intent !== null) intents.push(end.intent)
+  return { state, intents, after: end.state }
 }
 
 const sideways = (deltaX: number, count: number, extra: Partial<SwipeSample> = {}) =>
@@ -153,7 +165,7 @@ describe('a swipe at the edge of the page', () => {
     const first = run(sideways(-20, enough))
     const second = run(
       sideways(-20, enough),
-      first.state,
+      first.after,
       1000 + enough * 16 + SWIPE_GESTURE_GAP_MS + 1
     )
     expect([...first.intents, ...second.intents]).toEqual(['back', 'back'])
@@ -180,9 +192,9 @@ describe('what must not navigate', () => {
     expect(run([{ deltaY: 30 }, ...sideways(-20, plenty)]).intents).toEqual([])
   })
 
-  it('a carousel flicked to its end: the page scrolled first, so the whole run is the page’s', () => {
+  it('a carousel flicked to its end: the element scrolled first, so the whole run is the element’s', () => {
     // Room for the first events, none after — the edge arriving mid-gesture must not become a swipe.
-    const flick = [...sideways(-20, 3, { pageCanScroll: true }), ...sideways(-20, plenty)]
+    const flick = [...sideways(-20, 3, { innerCanScroll: true }), ...sideways(-20, plenty)]
     expect(run(flick).intents).toEqual([])
   })
 
@@ -199,22 +211,162 @@ describe('what must not navigate', () => {
 
   it('but a latch ends with its gesture: the next swipe is judged afresh', () => {
     const scrolled = run([{ deltaY: 30 }])
-    const later = run(sideways(-20, plenty), scrolled.state, 1000 + SWIPE_GESTURE_GAP_MS + 1)
+    const later = run(sideways(-20, plenty), scrolled.after, 1000 + SWIPE_GESTURE_GAP_MS + 1)
     expect(later.intents).toEqual(['back'])
+  })
+})
+
+describe('changing your mind before letting go', () => {
+  const enough = Math.ceil(SWIPE_THRESHOLD_PX / 20) + 1
+
+  it('does not navigate while the fingers are still on the pad, however far past the threshold', () => {
+    expect(run(sideways(-20, enough * 3), IDLE_SWIPE, 1000, false).intents).toEqual([])
+  })
+
+  it('does nothing when brought back below the threshold before letting go', () => {
+    expect(run([...sideways(-20, enough), ...sideways(20, 3)]).intents).toEqual([])
+  })
+
+  it('navigates after all when pushed past it again', () => {
+    expect(
+      run([...sideways(-20, enough), ...sideways(20, 3), ...sideways(-20, 3)]).intents
+    ).toEqual(['back'])
+  })
+
+  it('does not navigate when the page takes the wheel over while armed', () => {
+    expect(run([...sideways(-20, enough), ...sideways(-20, 1, { refused: true })]).intents).toEqual(
+      []
+    )
+  })
+
+  it('still navigates when the release timer ran late and the next gesture arrived first', () => {
+    // A busy page can starve a timer. The late navigation beats a lost one.
+    const armed = run(sideways(-20, enough), IDLE_SWIPE, 1000, false)
+    const next = stepSwipe(armed.state, {
+      at: armed.state.lastAt + SWIPE_GESTURE_GAP_MS + 1,
+      deltaX: 0,
+      deltaY: 30,
+      innerCanScroll: false,
+      viewportCanScroll: false,
+      refused: false
+    })
+    expect(next.intent).toBe('back')
+    expect(next.state.latch).toBe('scroll')
+  })
+
+  it('ends with a clean slate, armed or not', () => {
+    expect(endSwipe(run(sideways(-20, enough), IDLE_SWIPE, 1000, false).state).state).toEqual(
+      IDLE_SWIPE
+    )
+    expect(endSwipe(run(sideways(-20, 2), IDLE_SWIPE, 1000, false).state)).toEqual({
+      state: IDLE_SWIPE,
+      intent: null
+    })
+  })
+})
+
+describe('scrolling the page itself up to its edge, then on', () => {
+  const enough = Math.ceil(SWIPE_THRESHOLD_PX / 20) + 1
+  const scrolling = (count: number) => sideways(-20, count, { viewportCanScroll: true })
+
+  it('goes back in the same movement once the page has no room left', () => {
+    // How Chrome's gesture is used on a wide page: scroll to the edge, keep going.
+    expect(run([...scrolling(10), ...sideways(-20, enough)]).intents).toEqual(['back'])
+  })
+
+  it('counts only the distance past the edge', () => {
+    const short = Math.floor(SWIPE_THRESHOLD_PX / 20) - 1
+    expect(run([...scrolling(30), ...sideways(-20, short)]).intents).toEqual([])
+  })
+
+  it('does nothing while the page still has room, however far it scrolls', () => {
+    expect(run(scrolling(100)).intents).toEqual([])
+  })
+
+  it('does not start a swipe from an event that drifted vertical at the edge', () => {
+    const drift = Array.from({ length: 40 }, () => ({ deltaX: -5, deltaY: 12 }))
+    expect(run([...scrolling(3), ...drift]).intents).toEqual([])
+  })
+
+  it('finds the edge afresh after the swipe is undone by scrolling back', () => {
+    const near = Math.floor(SWIPE_THRESHOLD_PX / 20) - 1
+    const { intents } = run([
+      ...sideways(-20, near),
+      // Back the other way, where the page has room: this is scrolling again, not a shorter swipe.
+      ...sideways(20, near + 5, { viewportCanScroll: true }),
+      ...scrolling(near + 5),
+      // At the edge once more: only what comes now counts.
+      ...sideways(-20, near)
+    ])
+    expect(intents).toEqual([])
+  })
+
+  it('yields to a page that refuses the wheel on the way to the edge', () => {
+    expect(run([...scrolling(3), ...sideways(-20, enough * 3, { refused: true })]).intents).toEqual(
+      []
+    )
   })
 })
 
 describe('events that arrive out of order', () => {
   it('does not move the clock backwards, so a late event cannot end a gesture early', () => {
-    const { state } = run([{ deltaY: 30 }], IDLE_SWIPE, 5000)
+    const { state } = run([{ deltaY: 30 }], IDLE_SWIPE, 5000, false)
     const late = stepSwipe(state, {
       at: 4990,
       deltaX: -20,
       deltaY: 0,
-      pageCanScroll: false,
+      innerCanScroll: false,
+      viewportCanScroll: false,
       refused: false
     })
     expect(late.state.lastAt).toBe(5000)
     expect(late.state.latch).toBe('scroll')
+  })
+})
+
+describe('what the arrow shows', () => {
+  const at = (latch: SwipeTracker['latch'], travelled: number, direction: -1 | 1 = -1) => ({
+    ...IDLE_SWIPE,
+    latch,
+    travelled,
+    direction
+  })
+
+  it('shows nothing while scrolling, in an element, or before the edge', () => {
+    for (const latch of ['none', 'scroll', 'page', 'viewport'] as const) {
+      expect(swipeIndicatorOf(at(latch, 50)), latch).toBeNull()
+    }
+    // A swipe undone to where it began.
+    expect(swipeIndicatorOf(at('swipe', 0))).toBeNull()
+  })
+
+  it('comes in from the left for back and from the right for forward', () => {
+    expect(swipeIndicatorOf(at('swipe', 50, -1))?.side).toBe('left')
+    expect(swipeIndicatorOf(at('swipe', 50, 1))?.side).toBe('right')
+  })
+
+  it('follows the distance past the edge up to the threshold, and no further', () => {
+    expect(swipeIndicatorOf(at('swipe', SWIPE_THRESHOLD_PX / 2))).toEqual({
+      side: 'left',
+      progress: 0.5,
+      armed: false
+    })
+    expect(swipeIndicatorOf(at('swipe', SWIPE_THRESHOLD_PX * 3))?.progress).toBe(1)
+  })
+
+  it('is armed from the threshold on, which is when letting go would navigate', () => {
+    expect(swipeIndicatorOf(at('swipe', SWIPE_THRESHOLD_PX - 1))?.armed).toBe(false)
+    expect(swipeIndicatorOf(at('swipe', SWIPE_THRESHOLD_PX))).toEqual({
+      side: 'left',
+      progress: 1,
+      armed: true
+    })
+  })
+
+  it('says armed exactly when letting go navigates', () => {
+    for (const count of [5, 9, 10, 11, 30]) {
+      const { state, intents } = run(sideways(-20, count))
+      expect(swipeIndicatorOf(state)?.armed, `${count} steps`).toBe(intents.length === 1)
+    }
   })
 })

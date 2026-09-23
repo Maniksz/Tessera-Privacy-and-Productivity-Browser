@@ -1,5 +1,10 @@
 import type { BrowserWindowConstructorOptions } from 'electron'
 import type { Platform } from '@shared/model.js'
+import {
+  DEFAULT_WINDOW_SIZE,
+  MIN_WINDOW_SIZE,
+  type OpeningPlacement
+} from '@shared/window-placement/model.js'
 
 /**
  * How a browser window is built.
@@ -27,6 +32,13 @@ export interface ChromeWindowOptions {
   preload: string
   /** `preloadRoleArgument('chrome')` — the role the chrome bundle checks itself against. */
   roleArgument: string
+  /**
+   * Where the window opens; `placeNewWindow` decides it. Absent, it is the default size, centred.
+   *
+   * Only the rectangle: whether it opens maximised is applied when it is shown, because maximising
+   * a hidden window shows it on some platforms before the chrome has painted.
+   */
+  bounds?: OpeningPlacement['bounds']
 }
 
 /** Private windows get their own colour so the two are never confused (spec 4). */
@@ -40,10 +52,9 @@ export function chromeWindowOptions(
   const background = options.privateMode ? PRIVATE_BACKGROUND : NORMAL_BACKGROUND
 
   return {
-    width: 1440,
-    height: 900,
-    minWidth: 720,
-    minHeight: 480,
+    ...(options.bounds ?? DEFAULT_WINDOW_SIZE),
+    minWidth: MIN_WINDOW_SIZE.width,
+    minHeight: MIN_WINDOW_SIZE.height,
     // Shown once the chrome UI has painted, so the first frame is never an empty white rectangle.
     show: false,
     backgroundColor: background,
