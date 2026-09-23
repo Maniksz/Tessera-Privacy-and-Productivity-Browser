@@ -331,6 +331,18 @@ describe('an offer is built from the frame the core read, not from the message',
     expect(reads.lists, 'a locked vault was asked for its summaries').toBe(0)
   })
 
+  it('offers without an input event, and a fill still refuses without one', () => {
+    // The press that focused the field is never heard (see the wiring suite), so the offer cannot
+    // wait for it. The gesture rule moves to where it protects something: the fill.
+    const { service, view, reads } = harness()
+
+    expect(service.offerFor(view, frame(), formPayload())?.entries).toEqual([
+      { id: STORED.id, username: STORED.username }
+    ])
+    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(reads.secrets).toEqual([])
+  })
+
   it('offers nothing to a view this browser cannot place in a window', () => {
     // A devtools window, or something being torn down. Anything unaccounted for has to mean no.
     const { service, view } = harness({ mode: null })
@@ -1374,26 +1386,42 @@ describe('the chain from a focused form to an authorised fill', () => {
     return { ...built, host }
   }
 
-  it('turns a reported form, a press and a click into a filled credential', () => {
+  it('turns a first focus, a press on the list and a pick into a filled credential', () => {
     /*
-      AE7, and the regression this unit exists for. Every step is one the browser performs: the
-      preload says a fillable field has focus, Electron dispatches a press into the view, the preload
-      asks what could be filled, and the user's choice comes back on the fill channel. Before the
-      change, the second offer was as null as the first, for ever, because the listener that would
-      have recorded the press was itself waiting on an offer.
+      AE7, in the order the preload really sends things. The press that moves focus into the field
+      reaches the core *before* the preload's focus handler reports the field — Electron emits
+      `input-event` before the renderer dispatches the event — so nobody is listening for it. The
+      handler then reports the field and asks for the offer at once, with nothing in between. The
+      offer has to be there all the same, or the first focus of every field draws nothing and there
+      is no list to press on.
     */
     const { host } = wired()
 
-    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer, 'offered before any input').toBeNull()
-
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
     host.press()
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    expect(
+      host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer,
+      'the first focus of a field drew no list'
+    ).not.toBeNull()
 
-    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).not.toBeNull()
+    // The press on one of our entries, which the listener attached above does hear.
+    host.press()
     expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toEqual({
       username: STORED.username,
       password: SECRET
     })
+  })
+
+  it('fills nothing from an offer nobody pressed on', () => {
+    // The list may be drawn on a focus the page caused, which is why it carries no password. What it
+    // cannot be is spent without a press the core saw: a page that clicks the entry itself dispatches
+    // nothing Electron reports.
+    const { host } = wired()
+
+    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).not.toBeNull()
+
+    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toBeNull()
   })
 
   it('hears nothing at all until a view reports a fillable form', () => {
@@ -1404,7 +1432,7 @@ describe('the chain from a focused form to an authorised fill', () => {
     host.press()
 
     expect(host.listening).toBe(false)
-    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).toBeNull()
+    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toBeNull()
   })
 
   it('stops listening once the field is gone, and a press afterwards buys nothing', () => {
@@ -1415,7 +1443,7 @@ describe('the chain from a focused form to an authorised fill', () => {
     host.press()
 
     expect(host.listening).toBe(false)
-    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).toBeNull()
+    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toBeNull()
   })
 
   it('never listens while autofill is switched off', () => {

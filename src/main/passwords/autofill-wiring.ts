@@ -78,10 +78,10 @@ export interface AutofillHost {
  * `AUTOFILL_FILLABLE_CHANNEL` — the page reporting that a fillable password field has focus — and
  * that report is answered by the service, which refuses it outright when the feature is switched off.
  *
- * It has to be that report and not the offer. The offer is decided by `decideFill`, whose first rule
- * demands the gesture this listener exists to record, so gating the listener on it was a circle with
- * no way in. What gates it now is a fact the page can state before any rule has been applied, and
- * stating it falsely buys a listener and nothing else.
+ * It has to be that report and not the offer. The offer used to be decided by `decideFill`, whose
+ * first rule demands the gesture this listener exists to record, so gating the listener on it was a
+ * circle with no way in. What gates it now is a fact the page can state before any rule has been
+ * applied, and stating it falsely buys a listener and nothing else.
  */
 export function wireAutofillView(service: AutofillService, host: AutofillHost): void {
   const view = host.view

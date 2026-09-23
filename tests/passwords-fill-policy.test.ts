@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { FILL_GESTURE_WINDOW_MS, type FillConsent } from '@shared/passwords/consent.js'
 import {
   decideFill,
+  decideOffer,
   decidePageFill,
   fillableSubjects,
+  offerableSubjects,
   originMayReceiveCredentials,
   type FillContext,
   type FillRefusal
@@ -446,8 +448,27 @@ describe('the offer list and the fill decision cannot disagree', () => {
     }
   })
 
-  it('offers nothing at all when the situation itself is refused', () => {
+  it('fills nothing at all when the situation itself is refused', () => {
     expect(fillableSubjects(goodContext({ consent: null }), [SUBJECT])).toEqual([])
+  })
+
+  it('offers without a consent, and nothing a fill would refuse for any other reason', () => {
+    // The offer is `decideFill` without its first rule. With no press, the same subjects are offered
+    // and none of them is fillable; every other rule still narrows the list exactly as before.
+    const subjects = [
+      { origin: 'https://example.com' },
+      { origin: 'https://evil.example' },
+      { origin: 'https://example.com.evil.com' }
+    ]
+    const unconsented = goodContext({ consent: null })
+
+    expect(offerableSubjects(unconsented, subjects)).toEqual([{ origin: 'https://example.com' }])
+    expect(fillableSubjects(unconsented, subjects)).toEqual([])
+    expect(offerableSubjects(goodContext({ consent: null, isTopLevelFrame: false }), subjects)).toEqual([])
+    expect(decideOffer(goodContext({ consent: null, formAction: 'https://evil.example/x' }), SUBJECT)).toEqual({
+      allowed: false,
+      reason: 'cross-origin-form-action'
+    })
   })
 })
 

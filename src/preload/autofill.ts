@@ -243,6 +243,16 @@ function showSuggestion(anchor: HTMLInputElement, offer: FillOffer, fill: (id: s
     })
     panel.appendChild(item)
   }
+  /*
+    The press on an entry must not take focus from the field.
+
+    The entries are buttons, and a press on a button focuses it — which moves focus off the field,
+    and the field's `focusout` takes the list down before the click that was meant to pick from it
+    arrives. Cancelling the press's default keeps focus where it was, the way every autocomplete list
+    does. The press is still the one the core records as the gesture: that is taken from the browser
+    process before this handler runs, and cancelling the default does not take it back.
+  */
+  panel.addEventListener('mousedown', (event) => event.preventDefault())
   surface.root.appendChild(panel)
 
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -419,9 +429,9 @@ function performFill(anchor: HTMLInputElement, id: string): void {
  * A field took focus. Offers what may be filled into it.
  *
  * Only for a field the user could see and type into, and only for a form that has a password in it.
- * A page can cause focus at will, so this being reachable is not a privilege — the core refuses an
- * offer it saw no real input event for, and nothing is filled without a click on one of our own
- * entries.
+ * A page can cause focus at will, so this being reachable is not a privilege — the offer carries
+ * usernames only, drawn where the page cannot read them, and nothing is filled without a real press
+ * on one of our own entries, which the core checks for itself.
  */
 function onFocusIn(event: FocusEvent): void {
   const target = event.target
@@ -433,7 +443,8 @@ function onFocusIn(event: FocusEvent): void {
     This is the message the core attaches its input listener on, so it has to be sent for a focus
     that qualifies *before* the offer is asked for — the press that authorises a fill is the one the
     user is about to make on the list this focus draws, and a listener attached afterwards would
-    miss it.
+    miss it. The press that caused this focus is already gone by now, which is why the offer is not
+    gated on one.
   */
   reportFillable(focused !== null)
   if (focused === null) return
@@ -527,8 +538,19 @@ export function installAutofill(): void {
     const options = { capture: true } as const
     window.addEventListener('focusin', onFocusIn, options)
     window.addEventListener('submit', onSubmit, options)
-    // A form the user has moved away from should not leave a list of their accounts on screen.
-    window.addEventListener('focusout', () => hideSuggestion(), options)
+    /*
+      A form the user has moved away from should not leave a list of their accounts on screen, and
+      the core should stop hearing this tab's input.
+
+      Reported here as well as on the next focus, because there may be no next focus: a press on
+      blank page space, a field removed after a submit, or focus leaving the document entirely fires
+      this and nothing else. Moving to another field fires this and then `focusin`, which reports the
+      new field — so the listener goes and comes back between two events with no input in between.
+    */
+    window.addEventListener('focusout', () => {
+      hideSuggestion()
+      reportFillable(false)
+    }, options)
     // Both surfaces belong to the document that asked for them. A new document gets new ones.
     window.addEventListener('pagehide', () => {
       hideSuggestion()

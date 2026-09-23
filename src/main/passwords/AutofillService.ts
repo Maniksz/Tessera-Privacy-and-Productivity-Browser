@@ -2,7 +2,7 @@ import type { Locale } from '@shared/i18n/catalog.js'
 import { registrableDomainOfUrl } from '@shared/url/domain.js'
 import { consentFor } from '@shared/passwords/consent.js'
 import { chooseFillTargets, type FormDescriptor } from '@shared/passwords/fields.js'
-import { decideFill, fillableSubjects, type FillContext } from '@shared/passwords/fill-policy.js'
+import { decideFill, offerableSubjects, type FillContext } from '@shared/passwords/fill-policy.js'
 import { isFillGestureInput } from '@shared/passwords/gesture.js'
 import {
   passwordOriginOf,
@@ -285,6 +285,12 @@ export class AutofillService {
    * The offer carries usernames and no passwords. That is not an optimisation: a focus event is
    * something a page can cause at will, so this is the one message on these channels that an
    * attacker can make fire repeatedly, and it has to be worthless when it does.
+   *
+   * It is decided without the gesture, by `offerableSubjects`, and that is what makes the first focus
+   * of a field work at all. The press that moved focus into the field reached the core before the
+   * page reported the field, so it was never recorded; demanding it here refused the list the user
+   * was about to press on. The gesture is demanded where it protects something — by `fillFor`, for
+   * the press on one of our entries.
    */
   offerFor(view: AutofillView, frame: AutofillFrame, reported: unknown): FillOffer | null {
     // Before the vault is even asked. A user who switched autofill off must not have a suggestion
@@ -300,7 +306,7 @@ export class AutofillService {
     if (form === null) return null
 
     const context = this.#fillContext(view.id, frame, form)
-    const fillable = fillableSubjects(context, this.#options.vault.list())
+    const fillable = offerableSubjects(context, this.#options.vault.list())
     const [first] = fillable
     if (first === undefined) return null
 

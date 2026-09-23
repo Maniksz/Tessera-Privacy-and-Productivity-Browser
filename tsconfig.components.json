@@ -22,7 +22,9 @@
     "src/renderer/shared/**/*",
     "src/shared/**/*",
     "src/preload/api.d.ts",
-    "src/preload/internal-api.d.ts"
+    "src/preload/internal-api.d.ts",
+    // Autofill's content-preload half, whose focus handling is tested in a document.
+    "src/preload/autofill.ts"
   ],
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

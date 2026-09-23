@@ -292,7 +292,32 @@ export function decideFill(context: FillContext, subject: FillSubject): FillDeci
     dispatched, the other is a request the core opened from its own chrome and still holds.
   */
   if (!consentHolds(context.consent, context)) return refuse('no-user-gesture')
+  return decideOffer(context, subject)
+}
 
+/**
+ * What an offer needs to know: the fill's situation without its consent.
+ *
+ * The consent fields are left out of the type rather than ignored at runtime, so nothing can build
+ * an offer from a context that looks as if it carried one.
+ */
+export type OfferContext = Omit<FillContext, 'consent' | 'openRequestId' | 'now'>
+
+/**
+ * Whether a saved credential may be *offered* here: every rule of `decideFill` except the gesture.
+ *
+ * Not a second opinion. `decideFill` is this function with the consent check in front of it, so an
+ * offer can never name a credential a fill would then refuse for any reason other than the missing
+ * press. Its own reason for existing is that press: the list is what the user presses *on*, so
+ * gating the list on a press that has to have happened already refused the first focus of every
+ * field. The press that moved focus there reaches the core before the page has said a fillable
+ * field has focus, which is when the core starts listening.
+ *
+ * What makes an offer without consent safe to give is what it carries: usernames, never a password,
+ * drawn in a closed shadow root the page cannot read. The fill is still decided by `decideFill`,
+ * against a press on our own entry.
+ */
+export function decideOffer(context: OfferContext, subject: FillSubject): FillDecision {
   /*
     RULE no-password-field — do not put a username into a search box.
 
@@ -394,15 +419,23 @@ export function decideFill(context: FillContext, subject: FillSubject): FillDeci
   return ALLOWED
 }
 
-/**
- * The subjects that may be filled here, in the order they were given.
- *
- * The offer list is built from exactly this, so it can never be wider than what
- * `decideFill` would authorise a moment later.
- */
+/** The subjects that may be filled here, in the order they were given. */
 export function fillableSubjects<T extends FillSubject>(
   context: FillContext,
   subjects: readonly T[]
 ): T[] {
   return subjects.filter((subject) => decideFill(context, subject).allowed)
+}
+
+/**
+ * The subjects that may be offered here, in the order they were given.
+ *
+ * The offer list is built from exactly this, so it can never be wider than what `decideFill` would
+ * authorise a moment later, once the user has pressed one of its entries.
+ */
+export function offerableSubjects<T extends FillSubject>(
+  context: OfferContext,
+  subjects: readonly T[]
+): T[] {
+  return subjects.filter((subject) => decideOffer(context, subject).allowed)
 }
