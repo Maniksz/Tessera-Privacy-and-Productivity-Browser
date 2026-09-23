@@ -225,7 +225,8 @@ export function lookupScriptlet(payload: string): ScriptletLookup {
   if (inner === null) return { kind: 'none' }
 
   const args = parseScriptletArgs(inner)
-  const rawName = args[0] ?? ''
+  // `parseScriptletArgs` always yields at least one argument, even for an empty payload.
+  const rawName = args[0]!
   if (rawName === '') return { kind: 'unimplemented', name: '' }
 
   const name = canonicalScriptletName(rawName)

@@ -180,7 +180,8 @@ export function runScriptlets(calls: readonly ScriptletCall[]): void {
 
   /** The value `set-constant` was asked for. Its vocabulary is fixed, so an unknown word is a refusal. */
   const constantValue = (raw: string | undefined): { ok: boolean; value: unknown } => {
-    switch ((raw ?? '').trim()) {
+    const text = (raw ?? '').trim()
+    switch (text) {
       case 'true':
         return { ok: true, value: true }
       case 'false':
@@ -204,7 +205,6 @@ export function runScriptlets(calls: readonly ScriptletCall[]): void {
       case "''":
         return { ok: true, value: '' }
       default: {
-        const text = (raw ?? '').trim()
         // A number, positive or negative, integer or not. uBO also accepts a bare string here, and this
         // deliberately does not: a page reading an unexpected string is harder to reason about than a
         // scriptlet that declined, and declining is counted.

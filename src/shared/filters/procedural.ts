@@ -301,12 +301,21 @@ function matchingBracket(text: string, start: number, open: string, close: strin
   return -1
 }
 
-const ACTION_OPERATORS: ReadonlySet<string> = new Set([
-  'style',
-  'remove',
-  'remove-attr',
-  'remove-class'
-])
+const ACTION_OPERATOR_NAMES = ['style', 'remove', 'remove-attr', 'remove-class'] as const
+type ActionOperator = (typeof ACTION_OPERATOR_NAMES)[number]
+const ACTION_OPERATORS: ReadonlySet<string> = new Set<string>(ACTION_OPERATOR_NAMES)
+
+const STEP_OPERATOR_NAMES = [
+  'has-text',
+  'contains',
+  '-abp-contains',
+  '-ext-contains',
+  'min-text-length',
+  'upward',
+  'matches-css'
+] as const
+type StepOperator = (typeof STEP_OPERATOR_NAMES)[number]
+type ImplementedOperator = StepOperator | ActionOperator
 
 /**
  * The operators this build can actually evaluate.
@@ -316,16 +325,24 @@ const ACTION_OPERATORS: ReadonlySet<string> = new Set([
  * all" has to include the unimplemented ones or a `:xpath()` rule would be handed to the CSS parser, and "can
  * this be honoured" must not.
  */
-const IMPLEMENTED_OPERATORS: ReadonlySet<string> = new Set([
-  'has-text',
-  'contains',
-  '-abp-contains',
-  '-ext-contains',
-  'min-text-length',
-  'upward',
-  'matches-css',
-  ...ACTION_OPERATORS
+const IMPLEMENTED_OPERATORS: ReadonlySet<string> = new Set<string>([
+  ...STEP_OPERATOR_NAMES,
+  ...ACTION_OPERATOR_NAMES
 ])
+
+/*
+  Type guards rather than bare `Set.has`, so the switches in `parseStep` and `parseAction` see a closed
+  union and need no `default`. The defaults they used to have could not be reached — every name reaching
+  them had already passed these sets — and an unreachable branch is one a coverage floor can only be met
+  by pretending.
+*/
+function isImplementedOperator(name: string): name is ImplementedOperator {
+  return IMPLEMENTED_OPERATORS.has(name)
+}
+
+function isActionOperator(name: ImplementedOperator): name is ActionOperator {
+  return ACTION_OPERATORS.has(name)
+}
 
 /**
  * A procedural selector, or the reason it cannot be honoured.
@@ -374,23 +391,25 @@ export function parseProceduralSelector(
     The counters exist so the next thing worth building is a number somebody can read, and a wrong name
     defeats that more thoroughly than a missing one.
   */
+  const implemented: Array<{ name: ImplementedOperator; argument: string }> = []
   for (const operator of operators) {
-    if (!IMPLEMENTED_OPERATORS.has(operator.name)) {
+    if (!isImplementedOperator(operator.name)) {
       return { problem: `procedural-unimplemented:${operator.name}` }
     }
+    implemented.push({ name: operator.name, argument: operator.argument })
   }
 
   const prefix = css.join('').trim()
   if (prefix === '') return { problem: 'procedural-no-css-prefix' }
-  if (operators.length === 0) return { problem: 'procedural-no-css-prefix' }
+  if (implemented.length === 0) return { problem: 'procedural-no-css-prefix' }
 
   const steps: ProceduralStep[] = []
   let action: ProceduralAction = { kind: 'hide' }
 
-  for (const [position, operator] of operators.entries()) {
-    const isLast = position === operators.length - 1
+  for (const [position, operator] of implemented.entries()) {
+    const isLast = position === implemented.length - 1
 
-    if (ACTION_OPERATORS.has(operator.name)) {
+    if (isActionOperator(operator.name)) {
       /*
         Both implementations require an action last, and this enforces it rather than tolerating it. An
         action in the middle would have to mean "restyle these, then keep filtering from them", which
@@ -405,9 +424,6 @@ export function parseProceduralSelector(
     }
 
     const step = parseStep(operator.name, operator.argument)
-    if (step === null) {
-      return { problem: `procedural-unimplemented:${operator.name}` }
-    }
     if (step === 'bad-argument') return { problem: 'procedural-bad-argument' }
     steps.push(step)
   }
@@ -415,8 +431,8 @@ export function parseProceduralSelector(
   return { css: prefix, steps, action }
 }
 
-/** A step, `null` for an operator this build does not implement, or the sentinel for a bad argument. */
-function parseStep(name: string, argument: string): ProceduralStep | null | 'bad-argument' {
+/** A step, or the sentinel for a bad argument. */
+function parseStep(name: StepOperator, argument: string): ProceduralStep | 'bad-argument' {
   switch (name) {
     // AdGuard writes `:contains()` where uBO writes `:has-text()`. The same operator; a user pasting a
     // rule should not have to know which list it came from.
@@ -445,16 +461,14 @@ function parseStep(name: string, argument: string): ProceduralStep | null | 'bad
       return { op: 'upward', levels: null, selector: text }
     }
 
-    case 'matches-css':
-    case 'matches-css-before':
-    case 'matches-css-after': {
+    case 'matches-css': {
       /*
         `:matches-css(position: fixed)`. Only the plain form is implemented: the `-before` and `-after`
         variants test a *pseudo-element's* computed style, which is a different call, and there is one use
-        of the whole family in the three default lists. Refused by name rather than silently treated as
-        the plain form, which would test the wrong element.
+        of the whole family in the three default lists. They are absent from `IMPLEMENTED_OPERATORS` and so
+        refused by name before reaching here, rather than silently treated as the plain form, which would
+        test the wrong element.
       */
-      if (name !== 'matches-css') return null
       const separator = argument.indexOf(':')
       if (separator <= 0) return 'bad-argument'
       const property = argument.slice(0, separator).trim()
@@ -462,13 +476,10 @@ function parseStep(name: string, argument: string): ProceduralStep | null | 'bad
       if (property === '' || value === '') return 'bad-argument'
       return { op: 'matches-css', property, value }
     }
-
-    default:
-      return null
   }
 }
 
-function parseAction(name: string, argument: string): ProceduralAction | null {
+function parseAction(name: ActionOperator, argument: string): ProceduralAction | null {
   switch (name) {
     case 'style': {
       const declarations = argument.trim()
@@ -506,7 +517,5 @@ function parseAction(name: string, argument: string): ProceduralAction | null {
         ? { kind: 'remove-attr', names, pattern: null }
         : { kind: 'remove-class', names, pattern: null }
     }
-    default:
-      return null
   }
 }
