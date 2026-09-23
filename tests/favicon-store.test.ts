@@ -677,6 +677,52 @@ describe('bounding the cache', () => {
 })
 
 describe('on disk', () => {
+  it('removes the temporaries a crash left behind when it opens, and keeps the icons', async () => {
+    // An icon half-written when the browser went down sits under a name nothing refers to, so
+    // nothing would ever remove it; the same for the index. Unique names (`atomic-write.ts`) mean
+    // one per interrupted write, plus the fixed `.tmp` of an older build.
+    const h = await harness()
+    await h.store.cacheFor('normal').ensure(PAGE, [ICON])
+    await h.store.flush()
+    const icon = iconPath(h.directory, 'example.com')
+    await writeFile(`${icon}.4242-0a1b2c3d4e5f.tmp`, 'interrupted')
+    await writeFile(`${icon}.tmp`, 'interrupted')
+    await writeFile(join(h.directory, 'index.json.7-ff.tmp'), 'interrupted')
+    const before = (await readdir(h.directory)).filter((name) => !name.endsWith('.tmp')).sort()
+
+    const restarted = await FaviconStore.open({
+      directory: h.directory,
+      fetch: () => Promise.reject(new Error('nothing to fetch')),
+      debounceMs: 0
+    })
+
+    expect((await readdir(h.directory)).sort()).toEqual(before)
+    expect(restarted.find('example.com')).not.toBeNull()
+  })
+
+  it('still opens when the cache directory cannot be looked through', async () => {
+    // A file where the directory belongs. The cache is discardable, and a sweep of it must not be the
+    // reason the browser does not start.
+    const root = await mkdtemp(join(tmpdir(), 'tessera-favicons-'))
+    const directory = join(root, 'favicons')
+    await writeFile(directory, 'not a directory')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = await FaviconStore.open({
+        directory,
+        fetch: () => Promise.reject(new Error('nothing to fetch')),
+        debounceMs: 0
+      })
+      expect(store.list()).toEqual([])
+      expect(warn).toHaveBeenCalledWith(
+        '[favicons] could not remove temporary files from the cache:',
+        expect.anything()
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('reads back what a previous run wrote, and asks for nothing', async () => {
     const h = await harness()
     await h.store.cacheFor('normal').ensure(PAGE, [ICON])

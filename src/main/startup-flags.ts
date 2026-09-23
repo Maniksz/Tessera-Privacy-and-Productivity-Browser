@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
+import { writeFileAtomically } from './data/atomic-write.js'
 
 /**
  * The two settings that have to be known *before* the application is ready.
@@ -114,15 +115,14 @@ export function startupFlagsFrom(settings: SettingsSnapshot): StartupFlags {
 /**
  * Writes the flags for the next launch.
  *
- * Write-then-rename, so a crash mid-write cannot leave a half-written file that the next startup
- * would read as "no usable flags" — the one failure mode that would make this file worse than the
- * problem it solves.
+ * Atomically, so a crash mid-write cannot leave a half-written file that the next startup would read
+ * as "no usable flags" — the one failure mode that would make this file worse than the problem it
+ * solves. The caller does not serialise these writes (every settings change starts one), which the
+ * helper's unique temporary name is what makes safe.
  */
 export async function writeStartupFlags(filePath: string, flags: StartupFlags): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true })
-  const temp = `${filePath}.tmp`
-  await writeFile(temp, `${JSON.stringify(flags, null, 2)}\n`, { mode: 0o600 })
-  await rename(temp, filePath)
+  await writeFileAtomically(filePath, `${JSON.stringify(flags, null, 2)}\n`, { mode: 0o600 })
 }
 
 /*

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { writeFileAtomically } from '../data/atomic-write.js'
 
 /**
  * Filter lists on disk, with a refresh that runs rarely.
@@ -95,11 +96,11 @@ function cacheFileName(url: string): string {
 }
 
 async function writeAtomically(path: string, contents: string): Promise<void> {
-  // Write then rename: a crash mid-write leaves the previous list intact rather
-  // than a truncated one that would parse into a blocker with holes in it.
-  const temporary = `${path}.tmp`
-  await writeFile(temporary, contents, 'utf8')
-  await rename(temporary, path)
+  // A crash mid-write leaves the previous list intact rather than a truncated one
+  // that would parse into a blocker with holes in it. No mode: this is a public
+  // list in a cache directory. A leftover temporary needs no sweep of its own,
+  // because `#prune` removes every file the manifest does not name.
+  await writeFileAtomically(path, contents)
 }
 
 export class FilterListStore {

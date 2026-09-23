@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type { SafeStorage } from 'electron'
@@ -312,6 +312,18 @@ describe('local data key', () => {
     await loadOrCreateLocalDataKey({ safeStorage: fakeKeystore(), keyFilePath })
     const info = await stat(keyFilePath)
     expect(info.mode & 0o777).toBe(0o600)
+  })
+
+  it('removes what a crash while creating the key left behind', async () => {
+    // A wrapped key under a name nothing reads, and — with unique temporary names — nothing would
+    // ever guess either.
+    const keyFilePath = await tempPath('local-data.key')
+    await writeFile(`${keyFilePath}.4242-0a1b2c3d4e5f.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${keyFilePath}.tmp`, 'interrupted', 'utf8')
+
+    await loadOrCreateLocalDataKey({ safeStorage: fakeKeystore(), keyFilePath })
+
+    expect(await readdir(dirname(keyFilePath))).toEqual([basename(keyFilePath)])
   })
 
   it('returns the same key on the next start', async () => {

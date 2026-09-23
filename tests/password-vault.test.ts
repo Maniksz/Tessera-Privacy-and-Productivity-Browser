@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -345,6 +345,21 @@ describe('a vault on a fresh profile', () => {
 })
 
 describe('a locked vault', () => {
+  it('removes the key temporaries a crash left behind, even though it stays locked', async () => {
+    // Copies of the key under names nothing reads. The vault is opened locked, so nobody may be about
+    // to unlock it and the document's store — which cleans up after itself — may never open.
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    await seedMasterProtected({ profile: where, safeStorage, masterPassword: MASTER })
+    await writeFile(`${where.keyFilePath}.4242-0a1b2c3d4e5f.tmp`, await readFile(where.keyFilePath))
+    await writeFile(`${where.keyFilePath}.tmp`, await readFile(where.keyFilePath))
+
+    const { vault } = await openVault({ profile: where, safeStorage })
+
+    expect(vault.isUnlocked()).toBe(false)
+    expect(await readdir(where.dir)).toEqual(['passwords.key'])
+  })
+
   it('has no store at all, so every answer is the empty one', async () => {
     const { vault, ...where } = await openVault()
     expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
@@ -923,13 +938,19 @@ describe('resetting the vault', () => {
     expect(vault.list()).toHaveLength(1)
   })
 
-  it('destroys the document, its temporary and the key, then opens an empty vault', async () => {
-    const { vault, keyFilePath, documentPath } = await openVault()
+  it('destroys the document, its temporaries and the key, then opens an empty vault', async () => {
+    const { vault, dir, keyFilePath, documentPath } = await openVault()
     expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
     await vault.flush()
-    // What a crash mid-write leaves behind: a file full of credentials that a "delete everything"
-    // which ignored it would have left in the profile directory.
+    /*
+      What crashes mid-write leave behind: files full of credentials, and copies of the key that opens
+      them, that a "delete everything" which ignored them would have left in the profile directory.
+      Uniquely named, as `atomic-write.ts` names them, plus the fixed `.tmp` an older build used — a
+      reset that only knew one name would miss the rest.
+    */
+    await writeFile(`${documentPath}.4242-0a1b2c3d4e5f.tmp`, await readFile(documentPath))
     await writeFile(`${documentPath}.tmp`, await readFile(documentPath))
+    await writeFile(`${keyFilePath}.4242-abcdef012345.tmp`, await readFile(keyFilePath))
     const keyBefore = await readFile(keyFilePath)
 
     const ran: string[] = []
@@ -950,7 +971,8 @@ describe('resetting the vault', () => {
     }
 
     await expect(readFile(documentPath)).rejects.toThrow(/ENOENT/)
-    await expect(readFile(`${documentPath}.tmp`)).rejects.toThrow(/ENOENT/)
+    // Only the new key is left: no document yet, and no temporary of either.
+    expect(await readdir(dir)).toEqual(['passwords.key'])
     // A new key, so a surviving copy of the old document stays as unopenable as it was.
     expect((await readFile(keyFilePath)).equals(keyBefore)).toBe(false)
 
@@ -963,6 +985,34 @@ describe('resetting the vault', () => {
     expect(vault.list()).toEqual([])
     // Usable rather than wedged: this is a user starting again, not a user giving up.
     expect(vault.create({ url: SITE, username: 'bob', password: 'a-new-one' })).toBe('created')
+  })
+
+  it('leaves no credentials behind even when the new vault cannot be made', async () => {
+    /*
+      The deletion must not lean on the fresh vault's store sweeping up after it: that store is only
+      opened if the new key can be wrapped, and a key store failing at exactly that moment would leave
+      every temporary copy of the old credentials in the profile.
+    */
+    const keystore = fakeKeystore()
+    let refuse = false
+    const safeStorage: SafeStorageLike = {
+      isEncryptionAvailable: () => keystore.isEncryptionAvailable(),
+      encryptString: (plainText: string) => {
+        if (refuse) throw new Error('the key store went away')
+        return keystore.encryptString(plainText)
+      },
+      decryptString: (encrypted: Buffer) => keystore.decryptString(encrypted)
+    }
+    const { vault, dir, documentPath } = await openVault({ safeStorage })
+    expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+    await vault.flush()
+    await writeFile(`${documentPath}.4242-0a1b2c3d4e5f.tmp`, await readFile(documentPath))
+    await writeFile(`${documentPath}.tmp`, await readFile(documentPath))
+
+    refuse = true
+    await expect(vault.resetVault(RESET_VAULT_CONFIRMATION)).rejects.toThrow(/went away/)
+
+    expect(await readdir(dir)).toEqual([])
   })
 
   it('leaves the key file alone when the document cannot be deleted', async () => {

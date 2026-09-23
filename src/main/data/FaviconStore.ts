@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
@@ -26,6 +26,7 @@ import {
   type FaviconOutcome,
   type FaviconRejection
 } from '@shared/favicons/model.js'
+import { removeTempFilesIn, writeFileAtomically } from './atomic-write.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { BrowsingMode } from './HistoryStore.js'
 import { createHash } from 'node:crypto'
@@ -171,6 +172,12 @@ export class FaviconStore {
   }
 
   static async open(options: FaviconStoreOptions): Promise<FaviconStore> {
+    // Before anything is written: an icon half-written when the browser went down is a file under a
+    // name nothing refers to, and so a file nothing would ever remove. The index's own temporaries go
+    // with it; every file in this directory is the store's.
+    await removeTempFilesIn(options.directory).catch((error: unknown) => {
+      console.warn('[favicons] could not remove temporary files from the cache:', error)
+    })
     const store = await JsonStore.open<FaviconIndex>({
       filePath: join(options.directory, INDEX_FILE_NAME),
       schema: faviconIndexSchema,
@@ -369,9 +376,7 @@ export class FaviconStore {
     const target = this.#pathFor(domain)
     try {
       await mkdir(this.#directory, { recursive: true })
-      const temp = `${target}.tmp`
-      await writeFile(temp, bytes, { mode: 0o600 })
-      await rename(temp, target)
+      await writeFileAtomically(target, bytes, { mode: 0o600 })
       return true
     } catch (error) {
       console.warn(`[favicons] could not store the icon for ${domain}:`, error)

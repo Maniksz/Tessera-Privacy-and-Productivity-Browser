@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { removeTempFilesOf, writeFileAtomically } from '../data/atomic-write.js'
 import type { DocumentCodec } from '../data/JsonStore.js'
 import { dirname } from 'node:path'
 import {
@@ -157,6 +158,11 @@ export class SettingsStore {
 
     let quarantined: string | null = null
 
+    // Before the first write, as in `JsonStore.open`, and for the same reason.
+    await removeTempFilesOf(filePath).catch((error: unknown) => {
+      console.warn(`[settings] could not remove temporary files beside ${filePath}:`, error)
+    })
+
     try {
       const bytes = await readFile(filePath)
       const stored = asSettingsObject(await codec.decode(bytes))
@@ -296,11 +302,9 @@ export class SettingsStore {
       try {
         await mkdir(dirname(this.filePath), { recursive: true })
         const bytes = await this.codec.encode(data)
-        // Write-then-rename: a crash mid-write leaves the previous file intact
-        // instead of a truncated one.
-        const temp = `${this.filePath}.tmp`
-        await writeFile(temp, bytes, { mode: 0o600 })
-        await rename(temp, this.filePath)
+        // A crash mid-write leaves the previous file intact instead of a
+        // truncated one. See `atomic-write.ts`.
+        await writeFileAtomically(this.filePath, bytes, { mode: 0o600 })
       } catch (error) {
         console.error('[settings] write failed:', error)
       }

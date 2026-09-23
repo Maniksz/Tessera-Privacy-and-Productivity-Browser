@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { z } from 'zod'
+import { removeTempFilesOf, writeFileAtomically } from './atomic-write.js'
 
 /**
  * A validated JSON document on disk, with atomic writes and change notification.
@@ -117,6 +118,13 @@ export class JsonStore<T> {
     const codec = options.codec ?? plainJsonDocumentCodec
     let document = options.fallback()
 
+    // Before the first write, which is the only moment nothing of this store can be mid-rename. A
+    // leftover is a copy of the document from before a crash, and nothing else will ever remove it.
+    // Not a reason to refuse to start: a profile this broken fails the read below as well.
+    await removeTempFilesOf(options.filePath).catch((error: unknown) => {
+      console.warn(`[store] could not remove temporary files beside ${options.filePath}:`, error)
+    })
+
     try {
       const bytes = await readFile(options.filePath)
       const raw = await codec.decode(bytes)
@@ -229,11 +237,9 @@ export class JsonStore<T> {
       try {
         await mkdir(dirname(this.options.filePath), { recursive: true })
         const bytes = await codec.encode(snapshot)
-        // Write-then-rename: a crash mid-write leaves the previous file intact
-        // instead of a truncated one.
-        const temp = `${this.options.filePath}.tmp`
-        await writeFile(temp, bytes, { mode: 0o600 })
-        await rename(temp, this.options.filePath)
+        // A crash mid-write leaves the previous file intact instead of a
+        // truncated one. See `atomic-write.ts`.
+        await writeFileAtomically(this.options.filePath, bytes, { mode: 0o600 })
       } catch (error) {
         console.error(`[store] write to ${this.options.filePath} failed:`, error)
       }

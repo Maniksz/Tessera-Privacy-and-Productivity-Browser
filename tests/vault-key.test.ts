@@ -1,7 +1,7 @@
 import type * as NodeCrypto from 'node:crypto'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOCUMENT_KEY_BYTES, isSealedDocument } from '@main/crypto/envelope.js'
 import type { SafeStorageLike } from '@main/crypto/local-data-key.js'
@@ -568,12 +568,14 @@ describe('writing and deleting the key file', () => {
         masterPassword: null
       })
     )
-    await expect(stat(`${path}.tmp`)).rejects.toThrow(/ENOENT/)
+    // The listing, not one guessed name: temporaries are uniquely named (`atomic-write.ts`).
+    expect(await readdir(dirname(path))).toEqual([basename(path)])
   })
 
-  it('removes the key and the half-written temporary beside it', async () => {
-    // Only ever called together with the document it protects. A temporary surviving the reset
-    // would be read as a key file on the next start, over a document that is already gone.
+  it('removes the key and every half-written temporary beside it', async () => {
+    // Only ever called together with the document it protects. Every temporary is a working copy of
+    // the key, and with unique names a crash during each of several rewraps leaves one each. The
+    // fixed `.tmp` is what a build from before the names became unique left.
     const path = await keyPath()
     await writeVaultKeyFile(
       path,
@@ -584,10 +586,11 @@ describe('writing and deleting the key file', () => {
       })
     )
     await writeFile(`${path}.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${path}.4242-0a1b2c3d4e5f.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${path}.7-ff.tmp`, 'interrupted', 'utf8')
 
     await deleteVaultKeyFile(path)
-    await expect(stat(path)).rejects.toThrow(/ENOENT/)
-    await expect(stat(`${path}.tmp`)).rejects.toThrow(/ENOENT/)
+    expect(await readdir(dirname(path))).toEqual([])
     expect(await readVaultKeyFile(path)).toBeNull()
   })
 

@@ -39,6 +39,7 @@ import {
   writeVaultKeyFile,
   type VaultKeyFile
 } from '../crypto/vault-key.js'
+import { removeTempFilesOf } from '../data/atomic-write.js'
 import { UnreadableDocumentError, type DocumentCodec } from '../data/JsonStore.js'
 import { PasswordStore } from '../data/PasswordStore.js'
 import type { AutofillVault } from './AutofillService.js'
@@ -167,6 +168,11 @@ export class PasswordVault implements AutofillVault, ImportTarget {
   }
 
   async #load(): Promise<void> {
+    // What a crash during a key rewrap left behind: a copy of the key under a name nothing reads or
+    // would ever remove. Only the key's own: the document's go when its store opens, and a locked
+    // vault's document is never written, so nothing of it can be mid-rename. A failure is let out,
+    // like every error here that is not about the vault.
+    await removeTempFilesOf(this.#options.keyFilePath)
     let file: VaultKeyFile | null
     try {
       file = await readVaultKeyFile(this.#options.keyFilePath)
@@ -559,9 +565,10 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     this.#unreadable = false
 
     await rm(this.#options.documentPath, { force: true })
-    // The store writes through a temporary beside the document; a leftover one would be picked up by
-    // nothing, but leaving a file full of credentials behind a "delete everything" is not on.
-    await rm(`${this.#options.documentPath}.tmp`, { force: true })
+    // The store writes through temporaries beside the document, each with a unique name; a leftover
+    // one would be picked up by nothing, but leaving a file full of credentials behind a "delete
+    // everything" is not on.
+    await removeTempFilesOf(this.#options.documentPath)
     await deleteVaultKeyFile(this.#options.keyFilePath)
 
     await this.#createFreshVault()

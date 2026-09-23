@@ -1,7 +1,8 @@
 import { randomBytes, scrypt } from 'node:crypto'
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { vaultKeyProtection, type VaultKeyProtection } from '@shared/passwords/vault.js'
+import { removeTempFilesOf, writeFileAtomically } from '../data/atomic-write.js'
 import { DOCUMENT_KEY_BYTES, isSealedDocument, openDocument, sealDocument } from './envelope.js'
 import type { SafeStorageLike } from './local-data-key.js'
 
@@ -253,20 +254,21 @@ function isPositiveInteger(value: unknown): value is number {
  */
 export async function writeVaultKeyFile(keyFilePath: string, file: VaultKeyFile): Promise<void> {
   await mkdir(dirname(keyFilePath), { recursive: true })
-  const temp = `${keyFilePath}.tmp`
-  await writeFile(temp, JSON.stringify(file), { mode: 0o600 })
-  await rename(temp, keyFilePath)
+  await writeFileAtomically(keyFilePath, JSON.stringify(file), { mode: 0o600 })
 }
 
 /**
- * Removes the key file and any half-written temporary beside it.
+ * Removes the key file and every half-written temporary beside it.
+ *
+ * Every one, not a fixed `.tmp`: temporaries carry a unique name (see `atomic-write.ts`), so a crash
+ * during each of several rewraps leaves one each, and every one of them is a working copy of the key.
  *
  * Only ever called together with the document it protects — see `RESET_VAULT_CONFIRMATION`. Removing
  * one without the other leaves either a sealed document nothing can open or a key for nothing.
  */
 export async function deleteVaultKeyFile(keyFilePath: string): Promise<void> {
   await rm(keyFilePath, { force: true })
-  await rm(`${keyFilePath}.tmp`, { force: true })
+  await removeTempFilesOf(keyFilePath)
 }
 
 export interface WrapVaultKeyOptions {

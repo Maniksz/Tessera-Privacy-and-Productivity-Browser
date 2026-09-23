@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, writeFile, access } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
@@ -184,8 +184,42 @@ describe('JsonStore', () => {
     await store.flush()
 
     // A crash mid-write must leave the previous file intact rather than a
-    // truncated one, which is what write-then-rename buys.
-    await expect(access(`${filePath}.tmp`)).rejects.toThrow()
+    // truncated one, which is what write-then-rename buys. The listing, not one
+    // guessed name: temporaries are uniquely named now (`atomic-write.ts`).
+    expect(await readdir(dirname(filePath))).toEqual([basename(filePath)])
+  })
+
+  it('removes the temporaries a crash left behind when it opens', async () => {
+    // Two, because a unique name per write means every interrupted write leaves its own, and a fixed
+    // `.tmp` from before the names became unique. Each is a copy of the document nothing would ever
+    // remove otherwise.
+    const filePath = await tempPath()
+    await writeFile(filePath, JSON.stringify({ version: 1, items: ['kept'] }), 'utf8')
+    await writeFile(`${filePath}.4242-0a1b2c3d4e5f.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${filePath}.tmp`, 'interrupted', 'utf8')
+
+    const store = await open(filePath)
+
+    expect(store.get().items).toEqual(['kept'])
+    expect(await readdir(dirname(filePath))).toEqual([basename(filePath)])
+  })
+
+  it('still opens when the temporaries cannot be looked for', async () => {
+    // A parent that is a file: neither the listing nor the read can work. The read already falls back
+    // to defaults for that, and cleaning up must not be what stops the browser from starting instead.
+    const parent = await tempPath('not-a-directory')
+    await writeFile(parent, 'a file', 'utf8')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = await open(join(parent, 'doc.json'))
+      expect(store.get()).toEqual(fallback())
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('could not remove temporary files beside'),
+        expect.anything()
+      )
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('coalesces debounced writes and still resolves on flush', async () => {

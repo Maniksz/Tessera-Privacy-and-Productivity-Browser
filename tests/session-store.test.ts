@@ -378,7 +378,10 @@ describe('a run beginning', () => {
     await store.beginRun(RESTORE)
     expect((await stored(filePath)).pendingRestores).toBe(1)
 
+    // The timer fires after a millisecond; its write goes through the fsyncing helper, which under a
+    // loaded run can take longer than any fixed wait. Flushing waits for that write itself.
     await settle()
+    await store.flush()
     expect((await stored(filePath)).pendingRestores).toBe(0)
   })
 

@@ -350,6 +350,17 @@ export default defineConfig({
           acted for the focused window, and a private window's settings page wrote into the normal
           profile. A floor below all of it would leave room for exactly that branch to go untested again.
         */
+        /*
+          The one place a file is replaced on disk. Every store's promise that a crash leaves the old
+          file or the new one, never half of each, is this module's promise, and every branch in it is
+          a failure stage: a floor below all of it would leave room for exactly the stage nobody tested.
+        */
+        'src/main/data/atomic-write.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         'src/main/browser/sender-window.ts': {
           lines: 100,
           functions: 100,

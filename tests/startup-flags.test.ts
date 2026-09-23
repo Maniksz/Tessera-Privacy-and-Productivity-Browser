@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   ExternalAddressInbox,
@@ -118,7 +118,18 @@ describe('writing the flags', () => {
     // problem it solves.
     const filePath = await tempFile()
     await writeStartupFlags(filePath, DEFAULTS)
-    await expect(readFile(`${filePath}.tmp`, 'utf8')).rejects.toThrow()
+    // The listing, not one guessed name: temporaries are uniquely named (`atomic-write.ts`).
+    expect(await readdir(dirname(filePath))).toEqual([basename(filePath)])
+  })
+
+  it('survives two writes at once, which is how every settings change calls it', async () => {
+    // Nothing serialises these calls. With one fixed temporary name the second write truncated what
+    // the first was about to rename, and one rename then found nothing to move.
+    const filePath = await tempFile()
+    const flags: StartupFlags = { hardwareAcceleration: false, throttleBackgroundContent: false }
+    await Promise.all([writeStartupFlags(filePath, DEFAULTS), writeStartupFlags(filePath, flags)])
+    expect([DEFAULTS, flags]).toContainEqual(readStartupFlags(filePath, DEFAULTS))
+    expect(await readdir(dirname(filePath))).toEqual([basename(filePath)])
   })
 
   it('creates the directory when it is missing', async () => {

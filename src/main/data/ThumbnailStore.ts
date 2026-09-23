@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
@@ -31,6 +31,7 @@ import {
   type ThumbnailRequest,
   type ThumbnailSize
 } from '@shared/thumbnails/model.js'
+import { removeTempFilesIn, writeFileAtomically } from './atomic-write.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { BrowsingMode } from './HistoryStore.js'
 
@@ -256,6 +257,11 @@ export class ThumbnailStore {
   }
 
   static async open(options: ThumbnailStoreOptions): Promise<ThumbnailStore> {
+    // Before anything is written, as in `FaviconStore.open`: a picture half-written when the browser
+    // went down is a copy of the user's screen under a name nothing refers to.
+    await removeTempFilesIn(options.directory).catch((error: unknown) => {
+      console.warn('[thumbnails] could not remove temporary files from the cache:', error)
+    })
     const store = await JsonStore.open<ThumbnailIndex>({
       filePath: join(options.directory, INDEX_FILE_NAME),
       schema: thumbnailIndexSchema,
@@ -525,9 +531,7 @@ export class ThumbnailStore {
     const target = this.#pathFor(key)
     try {
       await mkdir(this.#directory, { recursive: true })
-      const temp = `${target}.tmp`
-      await writeFile(temp, bytes, { mode: 0o600 })
-      await rename(temp, target)
+      await writeFileAtomically(target, bytes, { mode: 0o600 })
       return true
     } catch (error) {
       console.warn(`[thumbnails] could not store the picture for ${key}:`, error)
