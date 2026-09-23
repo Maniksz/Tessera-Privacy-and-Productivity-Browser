@@ -4,6 +4,8 @@
 
 **Revision 2** nach zwei technischen Reviews (Machbarkeit der Fixes / Belegprüfung). Die Belegprüfung ergab ~96 % korrekte Verweise; die drei gefundenen Fehler sind eingearbeitet. Die Machbarkeitsprüfung hat sechs Maßnahmen als technisch fehlerhaft widerlegt — R1, R2, R5, W2, W3 und H4 sind daraufhin neu geschrieben, zehn fehlende Maßnahmen (N1–N10) sind ergänzt und die Aufwände korrigiert. Belege, die in dieser Revision gegen `node_modules/electron/electron.d.ts` (Electron 43.2.0) geprüft wurden, sind als solche markiert.
 
+**Nachtrag 2026-09-23:** Der Härtungsplan `docs/plans/2026-09-23-002-fix-review-hardening-plan.md` (Branch `fix/review-hardening`) hat **V1 ohne die Kamera/Mikrofon-Teile** erledigt und die hohe Zeile zu „ask" in Q5 geschlossen; Q2 ist berührt. Markiert ist das jeweils an Ort und Stelle. Seine übrigen Befunde (Store-Datenverlust, Public Suffix List, Release-Härtung, PR-CI und weitere) standen nicht in diesem Plan und sind in `docs/STATUS.md` unter „Härtung nach dem Projekt-Review" geführt. Offen aus jenem Plan: **U18**, die einmalige Prettier-Umformatierung, die erst nach dem Mergen der offenen Branches läuft.
+
 ---
 
 ## 1. Zielbild und Maßstab
@@ -273,6 +275,15 @@ Damit ist ein System von ~400 Zeilen mit eigener Warteschlange, Coalescing, Cap,
 4. Ein Berechtigungs-Indikator in der Omnibox, wenn eine Seite etwas angefragt hat.
 
 **Aufwand** korrigiert: **1 Tag** (statt halber). **Risiko** niedrig — fail-closed bleibt der Fallback.
+
+> **Stand 2026-09-23 — erledigt, ohne die Kamera/Mikrofon-Teile.** Umgesetzt im Härtungsplan `docs/plans/2026-09-23-002-fix-review-hardening-plan.md` als U13 (`51f4369`) und U19 (`a519a98`).
+>
+> - **Punkt 1 erledigt.** `WindowRegistry` reicht `requestFromUser` an `applySessionHardening`; `PermissionArbiter.ask()` hat damit einen Produktionsaufrufer.
+> - **Punkt 3 erledigt.** Der Check-Handler beantwortet „Fragen" aus den gemerkten Antworten des Fenstermodus (`PermissionArbiter.check`), auch ohne `webContents`. Ob Chromium in manchen Pfaden trotzdem am Check abbricht (Abschnitt 13), vor allem bei Benachrichtigungen, prüft der Benutzer in der laufenden App.
+> - **Punkt 2 bewusst nicht umgesetzt.** Alle Standardwerte bleiben „Verweigern". Kamera, Mikrofon und Bildschirmfreigabe verhalten sich genau wie vorher; für sie bleibt „Fragen" ein stilles Nein. Das ist die Haltung des Benutzers, keine offene Lücke.
+> - **Punkt 4 offen.** Einen Berechtigungs-Indikator in der Omnibox gibt es nicht.
+>
+> Über V1 hinaus: Gemerkt wird nur eine Antwort, die der Nutzer selbst gibt; Fenster zu, volle Warteschlange oder verdrängter Dialog lehnen einmalig ab. Eine Anfrage erscheint nur über ihrem eigenen, aktiven Tab, und die Knöpfe nehmen erst nach etwa 500 ms Eingaben an.
 
 ### V2 — Medien-Erkennung anschließen
 
@@ -687,6 +698,8 @@ Von ~61.000 Quellzeilen sind rund **15.600 (≈25 %) außerhalb jeder Coverage-M
 
 **Fix.** Nach M0.1 entscheiden: entweder der Smoke-Test wird zur belastbaren Sicherung ausgebaut (dann gehört er in CI und muss die Verdrahtung prüfen, nicht nur den Start), oder die Ausschlussliste schrumpft. Der Status quo — Ausschluss mit Verweis auf eine nie gelaufene Sicherung — ist die schlechteste der drei Optionen. **Aufwand** 1 Tag Entscheidung plus Umsetzung nach Wahl.
 
+> **Stand 2026-09-23 — berührt, nicht erledigt.** Die Coverage-Floors laufen jetzt bei jedem Push und PR in CI (`.github/workflows/gates.yml`, Härtungsplan U1, `340110a`). `ipc/router.ts` ist von der Ausschlussliste genommen und hat einen 100-%-Floor (U17; Tests in `d37930e`, Floor in `832481a`). Die Entscheidung zwischen Smoke-Test in CI und kürzerer Ausschlussliste steht weiter aus.
+
 ### Q3 — Speicherlecks schließen
 
 | Befund | Ort |
@@ -735,7 +748,7 @@ Zur Ehrenrettung: **die Beschreibungstexte sagen die Wahrheit** (`settings-text.
 
 | Schwere | Befund | Maßnahme |
 |---|---|---|
-| hoch | Berechtigung „ask" = stilles „deny" | V1 |
+| hoch | ~~Berechtigung „ask" = stilles „deny"~~ **erledigt 2026-09-23** außer Kamera, Mikrofon und Bildschirmfreigabe, die bewusst so bleiben | V1 (U13, U19) |
 | hoch | `network.killSwitch` verspricht Schutz und implementiert nichts | Q4 |
 | hoch | Kein Weg an einem Zertifikatsfehler vorbei → Nutzer wechselt den Browser, was das schlechtere Sicherheitsergebnis ist | W1 |
 | mittel | Fingerprint-Maskierung erreicht **iframes und Worker nicht** — ein Drittanbieter-iframe liest ungemaskte Canvas/WebGL/Audio-Werte. Ehrlich dokumentiert, bleibt eine reale Umgehung. | bewerten: `nodeIntegrationInSubFrames`-freier Weg über einen `document-start`-Injektor für alle Frames |

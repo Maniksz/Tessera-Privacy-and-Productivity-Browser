@@ -188,6 +188,7 @@ bis ein Download gelingt.
 | 7.8 | In `history.json` die Version auf `2` setzen (unverschlüsseltes Profil), starten, Seiten besuchen, beenden | Log meldet „newer version … changes made in this run are discarded“; die Datei ist danach byte-gleich |
 | 7.9 | Dasselbe mit `bookmarks.json`, dann ein Lesezeichen anlegen | Vorhandene Lesezeichen sichtbar; Anlegen schlägt mit Fehler fehl; Datei byte-gleich |
 | 7.10 | Neben `history.json` eine `history.json.v1.bak` und eine `history.json.unreadable` ablegen, im Verlauf „Alles löschen“ | Beide Kopien sind danach weg; ebenso für Downloads („Liste leeren“) und den Tresor („Tresor zurücksetzen“) |
+| 7.11 | Windows: Tresor entsperren, ein Passwort ändern, das letzte Fenster per X schließen, neu starten | Die Änderung ist da; der Prozess ist nach dem Schließen ohne Hänger beendet |
 
 ### Wiederherstellen aus einer Sicherung oder Quarantäne-Kopie
 

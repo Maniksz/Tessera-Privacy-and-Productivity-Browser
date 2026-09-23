@@ -99,6 +99,58 @@ beschädigte Datei darf niemanden aus dem eigenen Browser aussperren.
 
 Schreibvorgänge laufen über Write-Then-Rename, damit ein Absturz mitten im
 Schreiben die vorherige Datei intakt lässt statt eine abgeschnittene zu hinterlassen.
+Alle Stores nutzen dafür denselben Helfer, `writeFileAtomically` in
+`main/data/atomic-write.ts`: eine Temp-Datei mit eindeutigem Namen (Prozess-Id plus
+Zufall), `sync` auf der Datei vor dem Umbenennen, `sync` auf dem Verzeichnis danach
+(unter Windows nach Möglichkeit). Weil feste Temp-Namen damit nicht mehr zu erraten
+sind, entfernt der Helfer auch die Reste einer Zieldatei; das läuft beim Öffnen jedes
+Stores und in jedem Löschpfad.
+
+## Stores laden
+
+`main/data/store-load.ts` entscheidet pur und ohne Dateisystem, was eine gelesene
+Store-Datei ist; `JsonStore.open` liest, kopiert und schreibt danach. Nach `decode`
+läuft auf `unknown` zuerst die Migrationskette des Stores (`StoreMigrations`, älteste
+zuerst; die geschriebene Version ist `migrations.length + 1`, keine zweite Zahl daneben),
+dann das Schema. Vier Ausgänge:
+
+- **`current`** — die Version dieses Builds. Wird benutzt.
+- **`migrated`** — eine ältere Version, von der Kette angehoben. Vor dem Schreiben legt
+  der Store die Originalbytes als `<datei>.v<N>.bak` ab (gleicher Codec, gleiche
+  Verschlüsselung, höchstens eine je Version). Scheitert die Sicherung, bleibt der Store
+  migriert im Speicher und nur-lesen, die Datei unberührt.
+- **`newer`** — eine unbekannte Version. Der Store ist für diesen Lauf nur-lesen,
+  `flush()` schreibt nichts. Kritische Stores (Passwörter, Lesezeichen) zeigen, was das
+  aktuelle Schema davon lesen kann, und lehnen jeden Schreibpfad mit `ReadOnlyStoreError`
+  ab, bevor die Oberfläche Erfolg meldet. Degradierbare Stores (alle übrigen) laufen mit
+  Standardwerten und warnen, dass Änderungen dieses Laufs verworfen werden.
+- **`invalid`** — kaputtes JSON, falsche Hülle oder eine Migration, die wirft. Erst eine
+  Quarantäne-Kopie `<datei>.unreadable` (eine inhaltsgleiche wird nicht erneut angelegt),
+  dann Standardwerte. Scheitert die Kopie, läuft der Store nur-lesen mit Standardwerten,
+  statt den Start zu blockieren.
+
+Dazu gilt:
+
+- `UnreadableDocumentError` aus dem verschlüsselten Codec bleibt ein harter Fehler; die
+  Datei wird nicht angefasst.
+- Unbekannte Felder bleiben erhalten und werden zurückgeschrieben, damit eine ältere
+  Version die Felder einer neueren nicht verliert.
+- Passwörter und Lesezeichen parsen ihre Einträge einzeln: die Hülle bleibt streng, ein
+  ungültiger Eintrag bleibt roh mit seinem Index erhalten und wird so zurückgeschrieben.
+  Rohe Einträge erscheinen nie in Autofill, Export oder Suche; die beiden Seiten nennen
+  ihre Zahl.
+- Eine Reparatur beim Öffnen (`repairPasswords`, `repairBookmarks`) löst allein keinen
+  Schreibvorgang aus, weil sie Daten verwerfen kann. Was das Öffnen sonst entschieden
+  hat (Migration, neue Kodierung, Standardwerte nach der Quarantäne), geht in genau
+  einen Flush.
+- `SettingsStore` hat keine Version und behält sein eigenes Verhalten, auch den
+  Startabbruch, wenn die Quarantäne-Kopie scheitert; er teilt nur den Kopier-Helfer aus
+  `main/data/quarantine.ts`.
+- Sicherungen, Quarantäne-Kopien und Temp-Reste gehören zu ihrer Datenkategorie:
+  Verlauf löschen, Downloads-Liste leeren und Tresor zurücksetzen entfernen sie mit
+  (`removeCopiesOf`). „Beim Beenden löschen" leert Verlauf und Downloads noch nicht.
+
+Wie ein Nutzer eine Kopie zurückspielt, steht in `docs/QA.md`, Abschnitt 7.
 
 ## Split View
 
@@ -271,12 +323,44 @@ Eine nicht zugeordnete Berechtigung wird abgelehnt. Neue Chromium-Versionen brin
 neue Berechtigungen mit; der Standard für alles, worüber nicht nachgedacht wurde,
 muss „nein" sein.
 
+„Fragen" geht über den `PermissionArbiter`, den `WindowRegistry` jeder Session für
+Anfrage und Prüfung übergibt. Kamera, Mikrofon und Bildschirmfreigabe fragen nie; für
+sie bleibt „Fragen" ein stilles Nein. Gemerkt wird nur eine Antwort, die der Nutzer
+selbst gibt (Knopf oder Escape); Fenster zu, volle Warteschlange oder verdrängter Dialog
+lehnen einmalig ab. Eine Anfrage gehört zu ihrem Tab und erscheint nur, solange er aktiv
+ist.
+
 ## Herunterfahren
 
 Löschen beim Beenden muss *abgeschlossen* sein, bevor der Prozess endet — sonst
 läuft es ins Leere. `before-quit` bricht den ersten Beenden-Versuch ab, erledigt die
 Arbeit asynchron und beendet dann wirklich. Dasselbe gilt für ungeschriebene
 Einstellungen: `store.flush()` wird abgewartet.
+
+Der Ablauf ist ein Zustandsautomat in `main/shutdown.ts` (`ShutdownSequence`), ohne
+Electron und mit eingereichten Zeitgebern testbar; `index.ts` verdrahtet nur.
+
+- **`idle → running → done`.** Das erste `before-quit` holt die Arbeit ab
+  (`beginShutdown`: Sitzung versiegeln, Leerlauf-Timer des Tresors stoppen,
+  Löschkategorien lesen) und bricht das Beenden ab. Ein weiteres `before-quit` während
+  `running` tut nichts außer `preventDefault`; früher startete es die ganze Folge ein
+  zweites Mal. Erst in `done` geht `app.quit()` durch. `main()` fragt zwischen seinen
+  Phasen `quitting()` und öffnet nach begonnenem Beenden keine Fenster mehr.
+- **Reihenfolge und Fristen.** Zuerst das Löschen beim Beenden (Frist 30 s), danach alle
+  Flushes gleichzeitig unter einer gemeinsamen Frist von 10 s. Ein Store, der hängt oder
+  scheitert, hält die anderen nicht auf; das Log nennt ihn beim Namen. Ein nur-lesender
+  Store antwortet sofort und lässt nie auf die Frist warten.
+- **Nachholen.** Läuft das Löschen ab oder scheitert es, schreibt das Beenden eine Notiz
+  (`clear-on-exit-pending.json`). Der nächste Start löscht direkt nach `app.whenReady()`
+  und vor dem ersten Fenster (`catchUpPendingClear`, wieder mit 30 s) und entfernt die
+  Notiz erst nach Erfolg.
+- **Anmeldung.** Jeder Store trägt seinen Flush beim Öffnen unter einem Namen in die
+  `FlushRegistry` ein; ein Architekturtest prüft, dass jeder Store mit `flush` dort steht.
+- **Tresor.** `window-all-closed` sperrt den Tresor, solange kein Beenden läuft.
+  `PasswordVault.lock()` merkt sich sein laufendes Promise, und `flush()` wie
+  `resetVault()` warten darauf. Vorher fand der Flush beim Beenden keinen Store mehr vor,
+  und die letzte Änderung ging verloren: unter Windows beim Schließen des letzten
+  Fensters per X (QA 7.11).
 
 ## Plattformen
 
