@@ -8,15 +8,16 @@ import {
   type DownloadHandlerManager,
   type DownloadHandlerWindow
 } from '@main/ipc/download-handlers.js'
-import type { BrowsingMode } from '@main/data/HistoryStore.js'
+import type { DownloadSession } from '@main/downloads/DownloadManager.js'
 
 /**
  * The `downloads:*` handler bodies.
  *
  * Reachable by a test because `registerDownloadHandlers` is handed its registrar rather than
  * importing `ipc/router.ts`, which pulls in `ipcMain` and therefore only exists inside a running
- * Electron process. The two things worth asserting here are the two that are decisions rather than
- * forwards: which list a window is shown, and who the change event reaches with which flag.
+ * Electron process. The things worth asserting here are the ones that are decisions rather than
+ * forwards: which window a request came from, which list that window is shown, which rows it may act
+ * on, and who the change event reaches with which flag.
  */
 
 const T0 = 1_700_000_000_000
@@ -44,23 +45,38 @@ interface FakeManager extends DownloadHandlerManager {
   fire(): void
 }
 
-function fakeManager(options: { byMode?: Partial<Record<BrowsingMode, DownloadEntry[]>> } = {}) {
+/**
+ * A manager that answers by window, and says which ids each window can see.
+ *
+ * `visible` stands in for the manager's own rule — the session filter `DownloadManager.canSee` applies,
+ * tested with the manager. What is asserted here is that the handlers ask it, and ask it for the window
+ * the request really came from, before anything reaches the manager's actions.
+ */
+function fakeManager(
+  options: {
+    byWindow?: Record<number, DownloadEntry[]>
+    visible?: Record<number, readonly string[]>
+  } = {}
+) {
   const calls: string[] = []
   const listeners = new Set<() => void>()
-  const byMode = options.byMode ?? {}
+  const byWindow = options.byWindow ?? {}
+  const visible = options.visible ?? {}
   const manager: FakeManager = {
     calls,
     fire: () => {
       for (const listener of listeners) listener()
     },
-    list: (mode) => {
-      calls.push(`list:${mode}`)
-      return byMode[mode] ?? []
+    list: (viewer) => {
+      calls.push(`list:${viewer.windowId}`)
+      return byWindow[viewer.windowId] ?? []
     },
-    snapshot: (mode) => {
-      calls.push(`snapshot:${mode}`)
-      return byMode[mode] ?? []
+    snapshot: (viewer) => {
+      calls.push(`snapshot:${viewer.windowId}`)
+      return byWindow[viewer.windowId] ?? []
     },
+    canSee: (viewer, id) =>
+      (visible[viewer.windowId] ?? ['live', 'finished', 'here', 'gone', 'a']).includes(id),
     pause: (id) => {
       calls.push(`pause:${id}`)
       return id === 'live'
@@ -77,8 +93,8 @@ function fakeManager(options: { byMode?: Partial<Record<BrowsingMode, DownloadEn
       calls.push(`remove:${id}`)
       return id !== 'gone'
     },
-    clear: () => {
-      calls.push('clear')
+    clear: (viewer) => {
+      calls.push(`clear:${viewer.windowId}`)
       return 3
     },
     open: (id) => {
@@ -101,28 +117,31 @@ interface FakeWindow extends DownloadHandlerWindow {
   readonly pushed: EventPayload<'downloads:changed'>[]
 }
 
-function fakeWindow(privateMode: boolean): FakeWindow {
+const NO_SESSION: DownloadSession = { on: () => {} }
+
+/**
+ * One window: its id, its kind, and the web contents that speak for it.
+ *
+ * The chrome UI's id is the window id, and each tab's is the window id times ten plus its position — so
+ * window 1's tabs are 11 and 12. Only a convention of this file, but it keeps every sender id below
+ * readable as "which window, and was it a page".
+ */
+function fakeWindow(windowId: number, privateMode: boolean): FakeWindow {
   const pushed: EventPayload<'downloads:changed'>[] = []
+  const contents = [windowId, windowId * 10 + 1, windowId * 10 + 2]
   return {
-    privateMode,
+    viewer: { windowId, mode: privateMode ? 'private' : 'normal', session: NO_SESSION },
     pushed,
+    sends: (webContentsId) => contents.includes(webContentsId),
     emitToInternalPages: (_channel, payload) => {
       pushed.push(payload)
     }
   }
 }
 
-/** No handler here reads the event beyond handing it to `windows.resolve`. */
-const NO_EVENT = undefined as unknown as IpcMainInvokeEvent
-
 type AnyHandler = (payload: never, event: IpcMainInvokeEvent) => unknown
 
-function harness(options: {
-  manager: FakeManager
-  windows: FakeWindow[]
-  /** False for the case where the sender belongs to no window at all. */
-  resolves?: boolean
-}) {
+function harness(options: { manager: FakeManager; windows: FakeWindow[] }) {
   const handlers = new Map<string, AnyHandler>()
   const handle: DownloadHandle = (channel, handler) => {
     handlers.set(channel, handler)
@@ -132,8 +151,7 @@ function harness(options: {
     handle,
     downloads: options.manager,
     windows: {
-      resolve: () => (options.resolves === false ? undefined : options.windows[0]),
-      get controllers() {
+      get downloadWindows() {
         return options.windows
       }
     }
@@ -141,20 +159,25 @@ function harness(options: {
 
   return {
     channels: [...handlers.keys()],
-    // Wrapped in a promise the way `ipcMain.handle` does it: a handler that throws has to arrive as
-    // a rejection, because that is what the renderer sees.
-    invoke: (channel: string, payload?: unknown): Promise<unknown> =>
+    /**
+     * A request from one web contents, the downloads page of window 1 unless said otherwise.
+     *
+     * Wrapped in a promise the way `ipcMain.handle` does it: a handler that throws has to arrive as a
+     * rejection, because that is what the renderer sees.
+     */
+    invoke: (channel: string, payload?: unknown, senderId = 11): Promise<unknown> =>
       Promise.resolve().then(() => {
         const handler = handlers.get(channel)
         if (handler === undefined) throw new Error(`no handler for ${channel}`)
-        return handler(payload as never, NO_EVENT)
+        const event = { sender: { id: senderId } } as unknown as IpcMainInvokeEvent
+        return handler(payload as never, event)
       })
   }
 }
 
 describe('downloads IPC', () => {
   it('registers all eight channels', () => {
-    const { channels } = harness({ manager: fakeManager(), windows: [fakeWindow(false)] })
+    const { channels } = harness({ manager: fakeManager(), windows: [fakeWindow(1, false)] })
     expect(channels.sort()).toEqual([
       'downloads:cancel',
       'downloads:clear',
@@ -167,39 +190,59 @@ describe('downloads IPC', () => {
     ])
   })
 
-  it('lists what a normal window may see, freshly probed', async () => {
-    const manager = fakeManager({ byMode: { normal: [entry('a')] } })
-    const { invoke } = harness({ manager, windows: [fakeWindow(false)] })
+  it('lists what the sending window may see, freshly probed', async () => {
+    const manager = fakeManager({ byWindow: { 1: [entry('a')] } })
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false)] })
 
     expect(await invoke('downloads:list')).toEqual({
       downloads: [entry('a')],
       privateWindow: false
     })
     // `list`, not `snapshot`: the pull path pays for the truth. See `DownloadManager`.
-    expect(manager.calls).toEqual(['list:normal'])
+    expect(manager.calls).toEqual(['list:1'])
   })
 
-  it('tells a private window that it is private, and asks for the private list', async () => {
-    const manager = fakeManager({ byMode: { private: [entry('p')] } })
-    const { invoke } = harness({ manager, windows: [fakeWindow(true)] })
+  it('tells a private window that it is private, and asks for that window’s list', async () => {
+    const manager = fakeManager({ byWindow: { 2: [entry('p')] } })
+    const { invoke } = harness({ manager, windows: [fakeWindow(2, true)] })
 
-    expect(await invoke('downloads:list')).toEqual({
+    expect(await invoke('downloads:list', undefined, 21)).toEqual({
       downloads: [entry('p')],
       privateWindow: true
     })
-    expect(manager.calls).toEqual(['list:private'])
+    expect(manager.calls).toEqual(['list:2'])
   })
 
-  it('refuses rather than answering with an empty list when there is no window', async () => {
-    const { invoke } = harness({ manager: fakeManager(), windows: [], resolves: false })
+  it('answers the downloads page of a normal window with its own list while a private window is in front', async () => {
+    const manager = fakeManager({ byWindow: { 1: [entry('a')], 2: [entry('p')] } })
+    /*
+      The private window comes first, which is where "the focused window" and "the first window" would
+      both find it. The request is from tab 12 of window 1, and that is the only fact allowed to decide:
+      a fallback to either would hand a normal window's page a private window's downloads.
+    */
+    const { invoke } = harness({ manager, windows: [fakeWindow(2, true), fakeWindow(1, false)] })
+
+    expect(await invoke('downloads:list', undefined, 12)).toEqual({
+      downloads: [entry('a')],
+      privateWindow: false
+    })
+  })
+
+  it('refuses rather than answering when the sender belongs to no window', async () => {
+    const manager = fakeManager()
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false)] })
     // "You have downloaded nothing" and "there is no window for you" are different statements, and
     // a page shown the first would draw an empty list for as long as it stayed open.
-    await expect(invoke('downloads:list')).rejects.toThrow(/No window/)
+    await expect(invoke('downloads:list', undefined, 99)).rejects.toThrow(/No window/)
+    // And an action from nowhere does not fall through to the manager as if a window had asked.
+    await expect(invoke('downloads:cancel', { id: 'live' }, 99)).rejects.toThrow(/No window/)
+    await expect(invoke('downloads:clear', undefined, 99)).rejects.toThrow(/No window/)
+    expect(manager.calls).toEqual([])
   })
 
   it('reports whether pause, resume and cancel did anything', async () => {
     const manager = fakeManager()
-    const { invoke } = harness({ manager, windows: [fakeWindow(false)] })
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false)] })
 
     expect(await invoke('downloads:pause', { id: 'live' })).toEqual({ changed: true })
     // The refusal a resume has to be able to give: without server range support Electron would
@@ -209,28 +252,52 @@ describe('downloads IPC', () => {
     expect(manager.calls).toEqual(['pause:live', 'resume:finished', 'cancel:live'])
   })
 
+  it('does nothing to a row the sending window cannot see, and says so', async () => {
+    // Window 2 is a private window running `theirs`; window 1 cannot see it and names it anyway.
+    const manager = fakeManager({ visible: { 1: ['mine'], 2: ['theirs'] } })
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false), fakeWindow(2, true)] })
+
+    expect(await invoke('downloads:pause', { id: 'theirs' })).toEqual({ changed: false })
+    expect(await invoke('downloads:resume', { id: 'theirs' })).toEqual({ changed: false })
+    expect(await invoke('downloads:cancel', { id: 'theirs' })).toEqual({ changed: false })
+    expect(await invoke('downloads:remove', { id: 'theirs' })).toEqual({ removed: false })
+    expect(manager.calls).toEqual([])
+  })
+
+  it('hands the shell nothing for a row the sending window cannot see', async () => {
+    const manager = fakeManager({ visible: { 1: ['mine'], 2: ['theirs'] } })
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false), fakeWindow(2, true)] })
+
+    expect(await invoke('downloads:open', { id: 'theirs' })).toEqual({ opened: false })
+    expect(await invoke('downloads:reveal', { id: 'theirs' })).toEqual({ revealed: false })
+    // The manager is where the shell is called, so not reaching it is not reaching the shell.
+    expect(manager.calls).toEqual([])
+  })
+
   it('answers false for a file that has gone rather than handing it to the shell', async () => {
     const manager = fakeManager()
-    const { invoke } = harness({ manager, windows: [fakeWindow(false)] })
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false)] })
 
     expect(await invoke('downloads:open', { id: 'gone' })).toEqual({ opened: false })
     expect(await invoke('downloads:reveal', { id: 'gone' })).toEqual({ revealed: false })
     expect(await invoke('downloads:open', { id: 'here' })).toEqual({ opened: true })
   })
 
-  it('forgets one row and every finished row', async () => {
+  it('forgets one row, and every finished row the sending window can see', async () => {
     const manager = fakeManager()
-    const { invoke } = harness({ manager, windows: [fakeWindow(false)] })
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false), fakeWindow(2, true)] })
 
     expect(await invoke('downloads:remove', { id: 'gone' })).toEqual({ removed: false })
     expect(await invoke('downloads:remove', { id: 'a' })).toEqual({ removed: true })
-    expect(await invoke('downloads:clear')).toEqual({ removed: 3 })
+    expect(await invoke('downloads:clear', undefined, 21)).toEqual({ removed: 3 })
+    // Cleared as window 2, which is what keeps one private window's clear out of another's list.
+    expect(manager.calls).toEqual(['remove:gone', 'remove:a', 'clear:2'])
   })
 
   it('pushes each window its own list, with its own privacy flag', () => {
-    const normal = fakeWindow(false)
-    const priv = fakeWindow(true)
-    const manager = fakeManager({ byMode: { normal: [entry('a')], private: [entry('p')] } })
+    const normal = fakeWindow(1, false)
+    const priv = fakeWindow(2, true)
+    const manager = fakeManager({ byWindow: { 1: [entry('a')], 2: [entry('p')] } })
     harness({ manager, windows: [normal, priv] })
 
     manager.fire()
@@ -245,6 +312,6 @@ describe('downloads IPC', () => {
     expect(normal.pushed).toEqual([{ downloads: [entry('a')], privateWindow: false }])
     expect(priv.pushed).toEqual([{ downloads: [entry('p')], privateWindow: true }])
     // `snapshot`, not `list`: the pushed path reuses probes, four times a second.
-    expect(manager.calls).toEqual(['snapshot:normal', 'snapshot:private'])
+    expect(manager.calls).toEqual(['snapshot:1', 'snapshot:2'])
   })
 })

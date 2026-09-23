@@ -369,7 +369,15 @@ async function main(): Promise<void> {
       showItemInFolder: (path) => {
         shell.showItemInFolder(path)
       }
-    }
+    },
+    /*
+      Which window a download belongs to, asked of the registry at the moment it starts.
+
+      A closure because the registry is built further down and needs this manager to exist first — the
+      same arrangement as `parentWindow` below. Before the first window there is no download to ask
+      about, so the `null` case answers "no window", which is also the truthful answer.
+    */
+    windowFor: (source, session) => windows?.windowForDownload(source, session)
   })
 
   const passwordVault = passwords

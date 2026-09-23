@@ -61,6 +61,22 @@ Feature: Downloads
     Then the download list is empty
     And the browser does not claim to know that download
 
+  Scenario: A private window's download is its own, and does not outlive it
+    Private windows are one fresh session each, so "private" names none of them in
+    particular. A download in one must not appear in a normal window or in another
+    private one, and closing its window stops it rather than leaving a transfer that
+    no window shows and nothing can stop.
+
+    Given a normal window and two private windows
+    When "https://files.example/secret.pdf" is downloaded in the first private window
+    Then the first private window lists "secret.pdf"
+    And the normal window does not list "secret.pdf"
+    And the second private window does not list "secret.pdf"
+    When the first private window is closed while the download is still running
+    Then no open window lists "secret.pdf"
+    And the download of "secret.pdf" was stopped
+    And the browser keeps nothing of it in memory
+
   Scenario: A finished download whose file has gone says so, and offers nothing to open
     Given a download list holding:
       | address                     | file       | state     | on disk | received | total  |

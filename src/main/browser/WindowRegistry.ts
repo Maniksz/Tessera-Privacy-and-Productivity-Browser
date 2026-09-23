@@ -18,6 +18,7 @@ import type { QuickLink } from '@shared/quicklinks/model.js'
 import { applySessionHardening } from '../session/hardening.js'
 import { installRequestPipeline } from '../privacy/RequestPipeline.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
+import { WindowRecency, downloadWindowFor } from './window-recency.js'
 
 /**
  * Owns every window and every session.
@@ -45,8 +46,40 @@ import { BrowserWindowController } from './BrowserWindowController.js'
  */
 export interface DownloadSubscriber {
   attach(session: Session, mode: BrowsingMode): void
-  /** Drops what a session left in memory. The last piece of "a private window leaves no record". */
+  /**
+   * Stops and drops what a session left in memory. The last piece of "a private window leaves no
+   * record", and the reason an unfinished private download does not outlive its window.
+   */
   releaseSession(session: Session): void
+  /** A window closed: its downloads are filed under `successor` instead, or under no window. */
+  releaseWindow(windowId: number, successor: number | undefined): void
+}
+
+/**
+ * One window as the downloads channels see it; `registerDownloadHandlers` takes these.
+ *
+ * Built here rather than asked of the controller, because two of its three facts are this class's:
+ * the session was created here, and "which web contents speak for this window" includes its tabs,
+ * which the sender lookups in this class already walk. Structural, so this file imports nothing from
+ * the IPC layer it is handed to.
+ */
+export interface DownloadWindow {
+  readonly viewer: {
+    readonly windowId: number
+    readonly mode: BrowsingMode
+    readonly session: Session
+  }
+  sends(webContentsId: number): boolean
+  emitToInternalPages: BrowserWindowController['emitToInternalPages']
+}
+
+/** What the registry remembers about one open window beyond the controller itself. */
+interface OpenWindow {
+  readonly controller: BrowserWindowController
+  /** Read once while the window exists; a destroyed `BrowserWindow` is not asked for anything. */
+  readonly windowId: number
+  readonly session: Session
+  readonly downloads: DownloadWindow
 }
 
 /**
@@ -115,6 +148,9 @@ export interface WindowRegistryDeps {
 
 export class WindowRegistry {
   readonly #controllers = new Set<BrowserWindowController>()
+  readonly #open = new Map<BrowserWindowController, OpenWindow>()
+  /** Most recently focused first; see `window-recency.ts` for why an order and not only "focused". */
+  readonly #recency = new WindowRecency<OpenWindow>()
   readonly #preparedSessions = new WeakSet<Session>()
   #privateSessionCounter = 0
 
@@ -241,21 +277,27 @@ export class WindowRegistry {
       getSettings: () => this.#deps.settings.snapshot(),
       onClosed: (closed) => {
         this.#controllers.delete(closed)
+        this.#open.delete(closed)
+        this.#recency.forget(opened)
+        closed.window.removeListener('focus', onFocus)
         // A private session's data exists only for the life of its window
         // (spec 4): nothing may outlive it on disk or in memory.
         if (closed.privateMode) {
-          void session.clearStorageData()
-          void session.clearCache()
           /*
-            And in the manager, which is the half no storage call reaches.
+            The manager first, which is the half no storage call reaches — and first because it
+            *stops* something rather than only forgetting it.
 
             The store never saw those downloads — a private window holds a recorder that discards —
-            but the manager did, so a live entry that outlived its window would keep a private
-            download's address and file name in the process for as long as the browser ran. Only for
-            a private window: the default session is shared, and releasing it when an ordinary window
-            closed would drop the live downloads of every other one.
+            but the manager did, and Chromium is still writing any that have not finished. Releasing
+            the session cancels those before their listeners go, so no transfer outlives the window
+            it can no longer be seen or stopped in; and a live entry that outlived its window would
+            keep a private download's address and file name in the process for as long as the
+            browser ran. Only for a private window: the default session is shared, and releasing it
+            when an ordinary window closed would stop the downloads of every other one.
           */
           this.#deps.downloads.releaseSession(session)
+          void session.clearStorageData()
+          void session.clearCache()
           /*
             And the rules the picker wrote in that window, which are the third thing a private session
             leaves in memory rather than on disk.
@@ -269,6 +311,18 @@ export class WindowRegistry {
             this.#deps.userRules.endPrivateSession()
           }
         }
+        /*
+          And the window's claim on its downloads, for both kinds.
+
+          A normal window's downloads keep running — the default session outlives it — so they move to
+          the normal window focused most recently, whose button is the one a person would now look at.
+          A private window's are already stopped; `undefined` just drops the claim. So does the case
+          with no normal window left, which on macOS is an application still running with none open.
+        */
+        const successor = closed.privateMode
+          ? undefined
+          : this.#recency.latest((open) => !open.controller.privateMode)?.windowId
+        this.#deps.downloads.releaseWindow(opened.windowId, successor)
       },
       onPageContextMenu: (tab, target) => {
         // The controller travels with it: the menu opens a new tab beside the page that was clicked, and
@@ -281,7 +335,64 @@ export class WindowRegistry {
     })
 
     this.#controllers.add(controller)
+    const windowId = controller.window.id
+    const opened: OpenWindow = {
+      controller,
+      windowId,
+      session,
+      downloads: {
+        viewer: { windowId, mode, session },
+        sends: (webContentsId) => this.#speaksFor(controller, webContentsId),
+        emitToInternalPages: (channel, payload) => {
+          controller.emitToInternalPages(channel, payload)
+        }
+      }
+    }
+    this.#open.set(controller, opened)
+    // A new window is in front before its first `focus` event arrives, and a download can start in
+    // between — a window opened from a link that turns out to be a file.
+    this.#recency.touch(opened)
+    const onFocus = (): void => {
+      this.#recency.touch(opened)
+    }
+    controller.window.on('focus', onFocus)
     return controller
+  }
+
+  /** Every open window, as the downloads channels address them. */
+  get downloadWindows(): readonly DownloadWindow[] {
+    return [...this.#open.values()].map((open) => open.downloads)
+  }
+
+  /**
+   * The window a download that has just started belongs to, by id; `undefined` for none.
+   *
+   * Handed to the download manager as its resolver. The rule — the tab's window, else the window of
+   * that session focused last — is `downloadWindowFor`'s, where it is tested.
+   */
+  windowForDownload(
+    source: { readonly id: number } | undefined,
+    session: unknown
+  ): number | undefined {
+    const owner = downloadWindowFor(
+      source,
+      session,
+      this.#recency.mostRecentFirst,
+      (open, webContentsId) => this.#speaksFor(open.controller, webContentsId)
+    )
+    return owner?.windowId
+  }
+
+  /**
+   * Whether a web contents is this window's own: its chrome UI, its overlay, or one of its tabs.
+   *
+   * Strict on purpose, unlike `resolve`, which falls back to the focused window. A downloads page
+   * answered by that fallback while a private window was in front would be shown the private
+   * window's downloads.
+   */
+  #speaksFor(controller: BrowserWindowController, webContentsId: number): boolean {
+    if (controller.ownsChromeWebContents(webContentsId)) return true
+    return controller.tabs.some((tab) => tab.view.webContents.id === webContentsId)
   }
 
   /**

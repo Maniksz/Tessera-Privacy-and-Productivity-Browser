@@ -1,6 +1,8 @@
 import { expect } from 'vitest'
 import { Given, Then, When } from 'quickpickle'
 import { DownloadStore } from '@main/data/DownloadStore.js'
+import { DownloadManager, type DownloadViewer } from '@main/downloads/DownloadManager.js'
+import { defaultSettings } from '@shared/settings/definitions.js'
 import {
   MAX_DOWNLOAD_FILE_NAME_LENGTH,
   downloadFileNameFor
@@ -15,12 +17,13 @@ import {
   type DownloadRecord,
   type DownloadRecorder
 } from '@shared/downloads/model.js'
+import { FakeItem, FakeSession } from '../../download-fakes.js'
 import { scope, tempFile } from './world.js'
 
 /**
  * Steps for `downloads.feature`.
  *
- * Two halves, and they are separate on purpose.
+ * Three parts, and they are separate on purpose.
  *
  * The naming steps call `downloadFileNameFor` and nothing else, because that function is the
  * one choke point every candidate name passes through — a scenario that went via a download
@@ -35,6 +38,11 @@ import { scope, tempFile } from './world.js'
  * Whether the *file* is still on disk is stated by the scenario. The probe itself belongs to
  * `DownloadManager`, which needs a real filesystem and a real download; what is decided here
  * is what a row does with the answer.
+ *
+ * The window steps are the exception that proves the split: which window sees which download
+ * is decided *only* in `DownloadManager`, by session, so those scenarios drive the real manager
+ * over the real store — with Electron's items and sessions replaced by the plain objects the
+ * manager's own tests use, and a window's close modelled as the two calls the registry makes.
  */
 
 interface DataTable {
@@ -111,7 +119,56 @@ function writtenName(state: unknown): string {
   return name
 }
 
+/** The windows of a scenario that has them, by the names the feature gives them. */
+interface WindowWorld {
+  manager: DownloadManager
+  windows: Map<string, DownloadViewer & { session: FakeSession }>
+  items: Map<string, FakeItem>
+}
+
+function windowWorld(state: unknown): WindowWorld {
+  const existing = scope(state).scratch['downloadWindows'] as WindowWorld | undefined
+  if (existing === undefined) throw new Error('this scenario has no windows; add a Given for them')
+  return existing
+}
+
+function openWindow(state: unknown, name: string): DownloadViewer & { session: FakeSession } {
+  const found = windowWorld(state).windows.get(name)
+  if (found === undefined) throw new Error(`no open window called "${name}"`)
+  return found
+}
+
+function listedIn(state: unknown, viewer: DownloadViewer): string[] {
+  return windowWorld(state).manager.snapshot(viewer).map((entry) => entry.fileName)
+}
+
 // --- given -------------------------------------------------------------------
+
+Given('a normal window and two private windows', async (state: unknown) => {
+  await openList(state)
+  const manager = new DownloadManager({
+    store: store(state),
+    getSettings: () => defaultSettings(),
+    defaultDirectory: () => '/downloads',
+    fileExists: () => false,
+    shell: { openPath: () => Promise.resolve(''), showItemInFolder: () => {} },
+    // Each window's tab is named by the window's own id here, so the resolver is the identity.
+    windowFor: (source) => source?.id,
+    now: () => NOW,
+    progressIntervalMs: 0
+  })
+  const windows = new Map<string, DownloadViewer & { session: FakeSession }>()
+  const add = (name: string, windowId: number, mode: 'normal' | 'private'): void => {
+    const session = new FakeSession()
+    manager.attach(session, mode)
+    windows.set(name, { windowId, mode, session })
+  }
+  add('normal', 1, 'normal')
+  add('first private', 2, 'private')
+  add('second private', 3, 'private')
+  const world: WindowWorld = { manager, windows, items: new Map() }
+  scope(state).scratch['downloadWindows'] = world
+})
 
 Given('a download list', async (state: unknown) => {
   await openList(state)
@@ -202,6 +259,28 @@ When('a download of {string} starts', (state: unknown, url: string) => {
   refresh(state)
 })
 
+When(
+  '{string} is downloaded in the {word} private window',
+  (state: unknown, url: string, which: string) => {
+    const window = openWindow(state, `${which} private`)
+    const item = window.session.download(new FakeItem(url), window.windowId)
+    windowWorld(state).items.set(downloadFileNameFor({ url }), item)
+  }
+)
+
+When(
+  'the {word} private window is closed while the download is still running',
+  (state: unknown, which: string) => {
+    const world = windowWorld(state)
+    const name = `${which} private`
+    const window = openWindow(state, name)
+    // The registry's two calls on a private window's close, in its order.
+    world.manager.releaseSession(window.session)
+    world.manager.releaseWindow(window.windowId, undefined)
+    world.windows.delete(name)
+  }
+)
+
 When('the browser is closed and started again', async (state: unknown) => {
   // Flush first, then reopen the same file: the interesting behaviour is what `repairDownloads`
   // makes of a record whose writer is gone, and an in-memory copy would prove nothing about it.
@@ -229,6 +308,46 @@ Then('the name ends in {string}', (state: unknown, extension: string) => {
 Then('the name is at most {int} characters', (state: unknown, length: number) => {
   expect(length).toBe(MAX_DOWNLOAD_FILE_NAME_LENGTH)
   expect(writtenName(state).length).toBeLessThanOrEqual(length)
+})
+
+// --- then: windows -----------------------------------------------------------
+
+Then(
+  'the {word} private window lists {string}',
+  (state: unknown, which: string, fileName: string) => {
+    expect(listedIn(state, openWindow(state, `${which} private`))).toContain(fileName)
+  }
+)
+
+Then(
+  'the {word} private window does not list {string}',
+  (state: unknown, which: string, fileName: string) => {
+    expect(listedIn(state, openWindow(state, `${which} private`))).not.toContain(fileName)
+  }
+)
+
+Then('the normal window does not list {string}', (state: unknown, fileName: string) => {
+  expect(listedIn(state, openWindow(state, 'normal'))).not.toContain(fileName)
+})
+
+Then('no open window lists {string}', (state: unknown, fileName: string) => {
+  const open = [...windowWorld(state).windows.values()]
+  expect(open.length).toBeGreaterThan(0)
+  for (const window of open) expect(listedIn(state, window)).not.toContain(fileName)
+})
+
+Then('the download of {string} was stopped', (state: unknown, fileName: string) => {
+  const item = windowWorld(state).items.get(fileName)
+  if (item === undefined) throw new Error(`nothing was downloaded as "${fileName}"`)
+  // Stopped, and only then let go of: a transfer whose listeners went first would go on writing
+  // where nobody could see it.
+  expect(item.calls).toEqual(['cancel', 'removeListener:updated', 'removeListener:done'])
+})
+
+Then('the browser keeps nothing of it in memory', (state: unknown) => {
+  const { manager } = windowWorld(state)
+  expect(manager.liveCount).toBe(0)
+  expect(manager.windowsWithDownloads).toBe(0)
 })
 
 // --- then: the list ----------------------------------------------------------

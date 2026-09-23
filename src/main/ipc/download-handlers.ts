@@ -1,7 +1,7 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import type { DownloadEntry } from '@shared/downloads/model.js'
 import type { EventPayload, InvokeHandlerArg, InvokeResponse } from '@shared/ipc/contract.js'
-import type { BrowsingMode } from '../data/HistoryStore.js'
+import type { DownloadViewer } from '../downloads/DownloadManager.js'
 
 /**
  * The `downloads:*` channels, and the one event that goes with them.
@@ -13,12 +13,17 @@ import type { BrowsingMode } from '../data/HistoryStore.js'
  * tests at all. Taking the registrar as an argument turns these bodies into ordinary functions a
  * test can call.
  *
- * That matters here because two of them are decisions rather than forwards:
+ * That matters here because three of them are decisions rather than forwards:
  *
- *   - **Which list a window may see** depends on whether the window is private. A private window is
- *     shown the stored list *and* its own live downloads; a normal window is never shown a private
- *     one. The manager holds both halves and the mode picks between them, so the mode has to be
- *     resolved from the sender and cannot be taken from the request.
+ *   - **Which window is asking** is decided from the sender alone. The chrome UI and the overlay
+ *     are known by their own web contents, a downloads page by the tab it is in, and a sender that
+ *     is none of those is refused. There is deliberately no fallback to the focused window, which is
+ *     what `WindowRegistry.resolve` offers: the downloads page of a normal window, asking while a
+ *     private window is in front, would have been handed the private window's downloads.
+ *   - **Which list that window may see** depends on its session. A private window is shown the
+ *     stored list *and* its own live downloads, and no window is shown another private window's.
+ *     Every action is checked against the same rule before the manager hears of it, opening and
+ *     revealing included — an id is a name for a row, not permission to touch it.
  *   - **The push is per window**, and for the same reason. `privateWindow` is a fact about the
  *     receiver, not about the list, so one broadcast of one payload would tell a normal window it
  *     was private, or the reverse — and the page uses that flag to explain why a finished private
@@ -67,22 +72,27 @@ export type DownloadHandle = <C extends DownloadInvokeChannel>(
 /** What these handlers need from the manager. `DownloadManager` satisfies it. */
 export interface DownloadHandlerManager {
   /** Freshly probed. The path a click takes. */
-  list(mode: BrowsingMode): DownloadEntry[]
+  list(viewer: DownloadViewer): DownloadEntry[]
   /** From what is already known, for the pushed event. */
-  snapshot(mode: BrowsingMode): DownloadEntry[]
+  snapshot(viewer: DownloadViewer): DownloadEntry[]
+  /** Whether `id` is a row of this window's list — what every action below is checked against. */
+  canSee(viewer: DownloadViewer, id: string): boolean
   pause(id: string): boolean
   resume(id: string): boolean
   cancel(id: string): boolean
   remove(id: string): boolean
-  clear(): number
+  clear(viewer: DownloadViewer): number
   open(id: string): Promise<boolean>
   reveal(id: string): boolean
   onChange(listener: () => void): () => void
 }
 
-/** One window. `BrowserWindowController` satisfies this. */
+/** One window, as `WindowRegistry.downloadWindows` presents it. */
 export interface DownloadHandlerWindow {
-  readonly privateMode: boolean
+  /** Who this window is to the manager: its id, its kind and its session. */
+  readonly viewer: DownloadViewer
+  /** True when the web contents is this window's chrome UI, its overlay, or one of its tabs. */
+  sends(webContentsId: number): boolean
   emitToInternalPages(
     channel: 'downloads:changed',
     payload: EventPayload<'downloads:changed'>
@@ -91,8 +101,7 @@ export interface DownloadHandlerWindow {
 
 /** The window registry, as far as this file needs one. */
 export interface DownloadHandlerWindows {
-  resolve(event: IpcMainInvokeEvent): DownloadHandlerWindow | undefined
-  readonly controllers: readonly DownloadHandlerWindow[]
+  readonly downloadWindows: readonly DownloadHandlerWindow[]
 }
 
 export interface DownloadHandlerDeps {
@@ -102,51 +111,53 @@ export interface DownloadHandlerDeps {
   readonly windows: DownloadHandlerWindows
 }
 
-/**
- * Which kind of window this is, as the stores name it.
- *
- * One function rather than the ternary written at each of the two call sites: the two would
- * eventually disagree, and the way they would disagree is a private window being handed the mode
- * that writes to disk.
- */
-function modeOf(window: DownloadHandlerWindow): BrowsingMode {
-  return window.privateMode ? 'private' : 'normal'
-}
-
 export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   const { handle, downloads, windows } = deps
 
   /**
-   * The window this request is about.
+   * The window this request came from, and nothing else.
    *
    * Throws rather than answering with an empty list. "There is no window for you" and "you have
    * downloaded nothing" are different statements, and only the first one tells a page to stop
-   * drawing an empty list for as long as the user leaves it open.
+   * drawing an empty list for as long as the user leaves it open. An action from nowhere is
+   * refused the same way rather than being run as though some window had asked.
    */
-  const sender = (event: IpcMainInvokeEvent): DownloadHandlerWindow => {
-    const window = windows.resolve(event)
+  const sender = (event: IpcMainInvokeEvent): DownloadViewer => {
+    const window = windows.downloadWindows.find((candidate) => candidate.sends(event.sender.id))
     if (window === undefined) throw new Error('No window for this request')
-    return window
+    return window.viewer
   }
 
+  /** The sender's window, if that window's list holds the row. */
+  const mayTouch = (event: IpcMainInvokeEvent, id: string): boolean =>
+    downloads.canSee(sender(event), id)
+
   handle('downloads:list', (_payload, event) => {
-    const window = sender(event)
-    return { downloads: downloads.list(modeOf(window)), privateWindow: window.privateMode }
+    const viewer = sender(event)
+    return { downloads: downloads.list(viewer), privateWindow: viewer.mode === 'private' }
   })
 
   /*
-    Not resolved against the sending window, and that is deliberate rather than an omission.
+    Resolved against the sending window's list, and answered "nothing changed" for a row outside it.
 
-    An id names a row in one list the profile keeps, and the page that can see the row is the page
-    that got the id from `downloads:list`. Acting on the stored list from a private window is the
-    same judgement `HistoryStore` and `DownloadStore` already document for deletion: a private
-    window must contribute nothing, not be unable to manage what is there.
+    Within that list the stored rows stay reachable from a private window. Acting on the stored list
+    from a private window is the same judgement `HistoryStore` and `DownloadStore` already document for
+    deletion: a private window must contribute nothing, not be unable to manage what is there. What it
+    may not reach is another private window's rows, which it cannot see and so cannot have been given.
   */
-  handle('downloads:pause', ({ id }) => ({ changed: downloads.pause(id) }))
-  handle('downloads:resume', ({ id }) => ({ changed: downloads.resume(id) }))
-  handle('downloads:cancel', ({ id }) => ({ changed: downloads.cancel(id) }))
-  handle('downloads:remove', ({ id }) => ({ removed: downloads.remove(id) }))
-  handle('downloads:clear', () => ({ removed: downloads.clear() }))
+  handle('downloads:pause', ({ id }, event) => ({
+    changed: mayTouch(event, id) && downloads.pause(id)
+  }))
+  handle('downloads:resume', ({ id }, event) => ({
+    changed: mayTouch(event, id) && downloads.resume(id)
+  }))
+  handle('downloads:cancel', ({ id }, event) => ({
+    changed: mayTouch(event, id) && downloads.cancel(id)
+  }))
+  handle('downloads:remove', ({ id }, event) => ({
+    removed: mayTouch(event, id) && downloads.remove(id)
+  }))
+  handle('downloads:clear', (_payload, event) => ({ removed: downloads.clear(sender(event)) }))
 
   /*
     The authoritative presence checks, both of them.
@@ -155,8 +166,12 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
     can have gone. Both of these re-probe and answer `false`, which is what lets the page say "that
     file is no longer there" instead of the operating system raising a dialogue naming a path.
   */
-  handle('downloads:open', async ({ id }) => ({ opened: await downloads.open(id) }))
-  handle('downloads:reveal', ({ id }) => ({ revealed: downloads.reveal(id) }))
+  handle('downloads:open', async ({ id }, event) => ({
+    opened: mayTouch(event, id) && (await downloads.open(id))
+  }))
+  handle('downloads:reveal', ({ id }, event) => ({
+    revealed: mayTouch(event, id) && downloads.reveal(id)
+  }))
 
   /*
     One subscription for the process, fanned out per window.
@@ -166,10 +181,10 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
     the same reason.
   */
   downloads.onChange(() => {
-    for (const window of windows.controllers) {
+    for (const window of windows.downloadWindows) {
       window.emitToInternalPages('downloads:changed', {
-        downloads: downloads.snapshot(modeOf(window)),
-        privateWindow: window.privateMode
+        downloads: downloads.snapshot(window.viewer),
+        privateWindow: window.viewer.mode === 'private'
       })
     }
   })

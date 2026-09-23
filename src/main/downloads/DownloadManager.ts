@@ -15,6 +15,7 @@ import {
 } from '@shared/downloads/model.js'
 import type { BrowsingMode } from '../data/HistoryStore.js'
 import { resolveSavePath } from './target-path.js'
+import { DownloadOwnership } from './window-ownership.js'
 
 /**
  * The Electron-bound half of downloads: subscribing to `will-download`, deciding where each
@@ -93,9 +94,37 @@ export interface DownloadItemLike {
   removeListener(event: 'updated' | 'done', listener: () => void): void
 }
 
+/**
+ * The web contents Electron names as having started a download — a tab's page, usually.
+ *
+ * Only its id, which is all the window registry needs to find the tab and so the window. Optional in
+ * the listener although Electron's types say otherwise: a download with no page behind it still
+ * arrives, and the fallback for it is decided by the resolver rather than by a crash here.
+ */
+export interface DownloadSource {
+  readonly id: number
+}
+
 /** The part of Electron's `Session` this feature uses. */
 export interface DownloadSession {
-  on(event: 'will-download', listener: (event: unknown, item: DownloadItemLike) => void): void
+  on(
+    event: 'will-download',
+    listener: (event: unknown, item: DownloadItemLike, source: DownloadSource | undefined) => void
+  ): void
+}
+
+/**
+ * The window asking what it may see, as the manager needs to know it.
+ *
+ * The session, not the mode, is what decides which live rows belong to it. A private session is a
+ * fresh partition per window, so "private" names every private window at once, and filtering on it
+ * showed each private window the downloads of every other.
+ */
+export interface DownloadViewer {
+  /** `BrowserWindow.id`; see `DownloadOwnership` for why it is never written down. */
+  readonly windowId: number
+  readonly mode: BrowsingMode
+  readonly session: DownloadSession
 }
 
 /** What the manager needs from the store. `DownloadStore` satisfies it. */
@@ -128,6 +157,14 @@ export interface DownloadManagerOptions {
   /** Synchronous by necessity — see the note on `setSavePath` above. */
   fileExists: (path: string) => boolean
   shell: DownloadShell
+  /**
+   * Which window a download that has just started belongs to; `undefined` for none.
+   *
+   * The window registry's answer, because only it knows which tab lives where and which window of a
+   * session was focused last. Asked once, inside `will-download`: the web contents is gone by the time
+   * anybody wants to draw a button for it. Absent in a test that has no windows at all.
+   */
+  windowFor?: (source: DownloadSource | undefined, session: DownloadSession) => number | undefined
   now?: () => number
   progressIntervalMs?: number
 }
@@ -162,6 +199,7 @@ export class DownloadManager {
    * probed while what is pushed at them reuses an answer from a moment ago.
    */
   readonly #present = new Map<string, boolean>()
+  readonly #owners = new DownloadOwnership()
   #pendingEmit: ReturnType<typeof setTimeout> | null = null
   #counter = 0
 
@@ -183,33 +221,34 @@ export class DownloadManager {
     if (this.#attached.has(session)) return
     this.#attached.add(session)
     const recorder = this.#options.store.recorderFor(mode)
-    session.on('will-download', (_event, item) => {
-      this.#begin(item, session, mode, recorder)
+    session.on('will-download', (_event, item, source) => {
+      this.#begin(item, session, mode, recorder, source)
     })
   }
 
   /**
-   * Everything a window of this kind may see, freshly probed.
+   * Everything this window may see, freshly probed.
    *
    * The probe cache is emptied first: this is the path a person's click takes, and it is the
    * one place where paying for the truth is obviously worth it.
    */
-  list(mode: BrowsingMode): DownloadEntry[] {
+  list(viewer: DownloadViewer): DownloadEntry[] {
     this.#present.clear()
-    return this.snapshot(mode)
+    return this.snapshot(viewer)
   }
 
   /**
    * The same list, from what is already known.
    *
    * A private window's own downloads appear here and nowhere else: they exist only in
-   * `#live`, so a normal window's snapshot cannot include them however the list is filtered.
+   * `#live`, and a live row is shown only to a window of the session it arrived on — so neither
+   * a normal window nor another private one can include them however the list is filtered.
    * The stored list *is* shown to a private window, deliberately — reading the profile's own
    * download history from a private window reveals nothing to anybody else, while writing to
    * it would. The rule stays "a private window contributes nothing", not "a private window
    * sees nothing".
    */
-  snapshot(mode: BrowsingMode): DownloadEntry[] {
+  snapshot(viewer: DownloadViewer): DownloadEntry[] {
     const stored = this.#options.store.list()
     const storedIds = new Set(stored.map((record) => record.id))
 
@@ -218,13 +257,29 @@ export class DownloadManager {
       // was deliberately never written down.
       ...stored.map((record) => this.#live.get(record.id)?.record ?? record),
       ...[...this.#live.values()]
-        .filter((live) => live.mode === mode && !storedIds.has(live.record.id))
+        .filter((live) => live.session === viewer.session && !storedIds.has(live.record.id))
         .map((live) => live.record)
     ]
 
     return merged
       .sort((left, right) => right.startedAt - left.startedAt)
       .map((record) => this.#entryFor(record))
+  }
+
+  /**
+   * Whether this window's list holds the row — the same rule as `snapshot`, without building it.
+   *
+   * What every action is checked against before it runs. An id is not a capability: one private
+   * window must not be able to pause, open or remove another's download by naming it.
+   */
+  canSee(viewer: DownloadViewer, id: string): boolean {
+    if (this.#options.store.find(id) !== undefined) return true
+    return this.#live.get(id)?.session === viewer.session
+  }
+
+  /** The downloads started in this window during this run, finished ones included. */
+  idsStartedIn(windowId: number): ReadonlySet<string> {
+    return this.#owners.idsOf(windowId)
   }
 
   /** Called when a download starts, ends, is paused, or advances. Coalesced; see the header. */
@@ -285,19 +340,29 @@ export class DownloadManager {
       this.#live.delete(id)
     }
     const removed = this.#options.store.remove(id)
+    this.#owners.retain((owned) => owned !== id)
     this.#emitNow()
     return removed > 0 || live !== undefined
   }
 
-  /** Forgets every finished row. Anything running stays; see `DownloadStore.clear`. */
-  clear(): number {
+  /**
+   * Forgets every finished row this window can see. Anything running stays; see
+   * `DownloadStore.clear`.
+   *
+   * The stored list is cleared from any window, private ones included — the same judgement the
+   * store documents for deletion. The live rows are only this window's session's: clearing in one
+   * private window must not empty the list of another, which is the row that window's person was
+   * about to open.
+   */
+  clear(viewer: DownloadViewer): number {
     for (const [id, live] of [...this.#live]) {
-      if (isTerminalDownloadState(live.record.state)) {
+      if (live.session === viewer.session && isTerminalDownloadState(live.record.state)) {
         live.dispose()
         this.#live.delete(id)
       }
     }
     const removed = this.#options.store.clear()
+    this.#forgetVanishedClaims()
     this.#emitNow()
     return removed
   }
@@ -339,13 +404,44 @@ export class DownloadManager {
    * downloads, but the manager did, and a `#live` entry that outlived its window would keep a
    * private download's address and file name in the process for as long as the browser ran.
    * Called when a window closes, beside the session's storage being cleared.
+   *
+   * ## Why an unfinished download is cancelled rather than left to finish
+   *
+   * Dropping only the listeners, as this once did, left the transfer running: Chromium went on
+   * writing a file no row admitted to and no button could stop, for a window that no longer
+   * existed. So every download of the session that has not ended — running *or* paused, since a
+   * paused one still holds a partial file and a connection that can be resumed — is cancelled
+   * first, and only then are its listeners taken off.
+   *
+   * The partial file is Chromium's to remove, and `cancel()` does. Nothing here deletes by path:
+   * the save path is where the file was *going*, and with "ask where to save" it can name a file
+   * the person already had.
    */
   releaseSession(session: DownloadSession): void {
     for (const [id, live] of [...this.#live]) {
       if (live.session !== session) continue
+      if (!isTerminalDownloadState(live.record.state)) live.item.cancel()
       live.dispose()
       this.#live.delete(id)
+      // An unfinished download never reached `#finish`, which is where this is otherwise dropped.
+      this.#recorders.delete(id)
     }
+    this.#forgetVanishedClaims()
+    this.#emitNow()
+  }
+
+  /**
+   * A window closed: its claims on downloads go to `successor`, or are dropped.
+   *
+   * Separate from `releaseSession` because the two are different events for a normal window.
+   * The default session outlives every window that shares it, so a normal window's downloads keep
+   * running when it closes — they only lose the window whose button showed them. The registry
+   * names the successor, the normal window focused most recently, because it is the one that
+   * knows the focus order; with none left, as on macOS with every window closed, the downloads
+   * are still listed and simply belong to no button.
+   */
+  releaseWindow(windowId: number, successor: number | undefined): void {
+    this.#owners.handOver(windowId, successor)
     this.#emitNow()
   }
 
@@ -354,11 +450,17 @@ export class DownloadManager {
     return this.#live.size
   }
 
+  /** How many windows have a download filed under them. For tests and diagnostics. */
+  get windowsWithDownloads(): number {
+    return this.#owners.windowCount
+  }
+
   #begin(
     item: DownloadItemLike,
     session: DownloadSession,
     mode: BrowsingMode,
-    recorder: DownloadRecorder
+    recorder: DownloadRecorder,
+    source: DownloadSource | undefined
   ): void {
     this.#counter += 1
     const id = `dl-${this.#now().toString(36)}-${this.#counter.toString(36)}`
@@ -443,6 +545,10 @@ export class DownloadManager {
 
     this.#live.set(id, { record, item, mode, session, dispose })
     this.#recorders.set(id, recorder)
+    // After `setSavePath`, which is the one call that may not wait for anything; the resolver is
+    // synchronous too, but nothing is gained by putting even that in front of it.
+    const windowId = this.#options.windowFor?.(source, session)
+    if (windowId !== undefined) this.#owners.claim(windowId, id)
     // A private window's recorder discards. That is the whole mechanism: there is no branch
     // here that decides whether to write, because the object handed over already decided.
     recorder.start(started)
@@ -508,9 +614,14 @@ export class DownloadManager {
       copy would mean two answers to one id. A private download has no stored copy at all —
       dropping it here would make the row vanish the instant it finished, which is exactly
       when the user wants to open it. It goes with the window, in `releaseSession`.
+
+      Re-read rather than spread from `live`: `#note` has just replaced the entry, and `live` still
+      holds the record from before the terminal patch. Spreading it kept every finished private
+      download reading "in progress" — unopenable, and invisible to "clear the list".
     */
-    if (live.mode === 'private') {
-      this.#live.set(id, { ...live, dispose: () => {} })
+    const finished = this.#live.get(id)
+    if (live.mode === 'private' && finished !== undefined) {
+      this.#live.set(id, { ...finished, dispose: () => {} })
     } else {
       this.#live.delete(id)
     }
@@ -572,6 +683,11 @@ export class DownloadManager {
 
   #recordFor(id: string): DownloadRecord | undefined {
     return this.#live.get(id)?.record ?? this.#options.store.find(id)
+  }
+
+  /** Drops every window's claim on a row that is neither live nor stored any more. */
+  #forgetVanishedClaims(): void {
+    this.#owners.retain((id) => this.#recordFor(id) !== undefined)
   }
 
   #entryFor(record: DownloadRecord): DownloadEntry {
