@@ -132,21 +132,48 @@ function withBox(element: Element, width = 100, height = 20): ReturnType<typeof 
 }
 
 /**
+ * An event marked as the browser's own, which is what a real pointer or key produces.
+ *
+ * The picker acts only on `isTrusted` events — a page can dispatch any event it likes at its own
+ * elements, and a synthetic click must not choose what the user is offered to hide. happy-dom does not
+ * implement `isTrusted` at all, so every event here reads `undefined`, which the preload treats as
+ * untrusted — exactly what it must do with one. This stamps the flag on to stand in for the OS.
+ *
+ * A page cannot do the same in Chromium, which is why the check is a real boundary rather than a
+ * convention: `isTrusted` is an unforgeable own property there (redefining it throws), and the
+ * preload runs in an isolated world that sees its own wrapper of the event, not the page's.
+ */
+function trusted<T extends Event>(event: T): T {
+  Object.defineProperty(event, 'isTrusted', { value: true })
+  return event
+}
+
+/**
  * The full press, as Chromium dispatches it, on a real target.
  *
  * `dispatchEvent` and not `element.click()`: the point is that each event travels the tree and meets
- * the picker's capture-phase listener on `window` before the target's own handlers.
+ * the picker's capture-phase listener on `window` before the target's own handlers. Trusted unless
+ * the test is about a press the page made up.
  */
-function press(target: Element): Event[] {
+function press(target: Element, { fromPage = false }: { fromPage?: boolean } = {}): Event[] {
   const fired: Event[] = []
   for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
     const event = type.startsWith('pointer')
       ? new PointerEvent(type, { bubbles: true, cancelable: true })
       : new MouseEvent(type, { bubbles: true, cancelable: true })
-    target.dispatchEvent(event)
+    target.dispatchEvent(fromPage ? event : trusted(event))
     fired.push(event)
   }
   return fired
+}
+
+/** Escape, as the keyboard sends it. */
+function escape(target: EventTarget = document.body): KeyboardEvent {
+  const event = trusted(
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+  )
+  target.dispatchEvent(event)
+  return event
 }
 
 /** Records every event of a press that reached the element itself, in either phase. */
@@ -497,6 +524,61 @@ describe('measuring what a rule did', () => {
   })
 })
 
+describe('events the page made up', () => {
+  /*
+    The page can see the picker is up — its host is an element in the page's own document — and it can
+    dispatch any event it likes. Acting on those would hand it two powers it has no other way to get:
+    choosing which of its elements the user is shown as the thing to hide, and ending the user's attempt
+    with an Escape nobody pressed. What it still gets is swallowing, on purpose; see the preload.
+  */
+
+  it('does not freeze on a click the page dispatched itself, and still swallows it', () => {
+    document.body.innerHTML = '<main><button id="buy" class="cta">Buy</button></main>'
+    const button = document.getElementById('buy')!
+    begin()
+    const seen = watch(button)
+
+    press(button, { fromPage: true })
+    expect(messages(PICKER_FREEZE_CHANNEL)).toEqual([])
+    expect(seen).toEqual([])
+
+    // The user's own press afterwards is the one that freezes.
+    press(button)
+    expect(messages(PICKER_FREEZE_CHANNEL)).toHaveLength(1)
+  })
+
+  it('does not end the attempt on an Escape the page dispatched itself', () => {
+    begin()
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    document.body.dispatchEvent(event)
+
+    expect(messages(PICKER_ESCAPED_CHANNEL)).toEqual([])
+    expect(hostElement()).not.toBeNull()
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('does not follow a hover the page made up', () => {
+    // A synthetic `mouseover` would move the highlight and have the bar name an element the pointer is
+    // not over — the same choice made for the user, one step earlier.
+    document.body.innerHTML = '<i id="x"></i>'
+    const target = document.getElementById('x')!
+    const rect = withBox(target)
+    const asked: unknown[] = []
+    bus.propose = (payload) => {
+      asked.push(payload)
+      return selectorOf(payload)
+    }
+    begin()
+
+    target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    expect(asked).toEqual([])
+    expect(rect).not.toHaveBeenCalled()
+
+    target.dispatchEvent(trusted(new MouseEvent('mouseover', { bubbles: true })))
+    expect(asked).toHaveLength(1)
+  })
+})
+
 describe('leaving the mode', () => {
   it('tells the core about Escape instead of only tearing itself down', () => {
     /*
@@ -506,8 +588,7 @@ describe('leaving the mode', () => {
     */
     begin()
     const seen = watch(document.body)
-    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
-    document.body.dispatchEvent(event)
+    const event = escape()
 
     expect(messages(PICKER_ESCAPED_CHANNEL)).toEqual([{ sessionId: SESSION }])
     expect(hostElement()).toBeNull()
@@ -549,7 +630,7 @@ describe('leaving the mode', () => {
   it('starts again after an Escape without a reload', () => {
     // AE6. A second start finding leftover state was the observable half of the divergence.
     begin()
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    escape()
     begin('picker-2')
     expect(hostElement()).not.toBeNull()
 

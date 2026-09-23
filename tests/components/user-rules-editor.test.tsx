@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   UserRulesEditor,
@@ -230,6 +230,44 @@ describe('the rules as one text', () => {
     expect(box().value).toBe(
       '! the shop\nshop.example##.promo\n\n! the news site\nnews.example##.ad'
     )
+  })
+
+  it('keeps what was typed while a save was on its way, and says it is not saved', async () => {
+    /*
+      A save is two round trips, and the box stays open for typing through both. The core's answer is
+      the text as it was *sent*, so putting it into the box unconditionally threw away every keystroke
+      made while the answer was on its way — and left the box looking saved, with nothing to press.
+    */
+    const { host: core } = harness({ rules: [rule()] })
+    let answer = (): void => undefined
+    const host: UserRulesHost = {
+      list: core.list,
+      apply: (text, loadedIds) =>
+        new Promise((resolve) => {
+          answer = () => {
+            resolve(core.apply(text, loadedIds))
+          }
+        })
+    }
+    await editor(host)
+    const saveButton = screen.getByRole<HTMLButtonElement>('button', { name: 'Save rules' })
+    const discard = screen.getByRole<HTMLButtonElement>('button', { name: 'Discard changes' })
+
+    type('example.com##.banner-ad\nfirst.example##.x')
+    save()
+    // Neither can be answered twice, nor the text put back under a save that has not come back.
+    expect([saveButton.disabled, discard.disabled]).toEqual([true, true])
+
+    type('example.com##.banner-ad\nfirst.example##.x\nsecond.example##.y')
+    await act(async () => {
+      answer()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(box().value).toBe('example.com##.banner-ad\nfirst.example##.x\nsecond.example##.y')
+    expect([saveButton.disabled, discard.disabled]).toEqual([false, false])
+    // "Saved." would describe the text that was sent, not the one on screen.
+    expect(screen.queryByRole('status')).toBeNull()
   })
 
   it('offers to save or discard only once something has changed', async () => {

@@ -130,8 +130,19 @@ export function UserRulesEditor({
 }): React.ReactNode {
   const [answer, setAnswer] = useState<UserRulesAnswer | null>(null)
   const [draft, setDraft] = useState('')
-  /** The answer to the last save, until the text changes again. */
-  const [verdict, setVerdict] = useState<ApplyUserRuleSourceOutcome | null>(null)
+  /**
+   * The answer to the last save, and the text it is an answer about.
+   *
+   * Kept with its text rather than on its own, because a save is two round trips and the box stays open
+   * for typing through both: "Saved." arriving for the text that was sent, over a text the user has
+   * since changed, would call unsaved lines saved. It is shown only while the box still holds that text.
+   */
+  const [verdict, setVerdict] = useState<{
+    readonly outcome: ApplyUserRuleSourceOutcome
+    readonly text: string
+  } | null>(null)
+  /** A save on its way. Save and Discard wait for it; the text box does not. */
+  const [saving, setSaving] = useState(false)
   const mirror = useRef<HTMLDivElement>(null)
   /*
     Every call goes through `useCoreCall`, which holds the refusal and the try/catch.
@@ -215,6 +226,7 @@ export function UserRulesEditor({
 
   const saved = answer
   const dirty = draft !== saved.source
+  const said = verdict?.text === draft ? verdict.outcome : null
   /** 1-based, because these are said to a person: "line 2". */
   const refusedAt = lines.flatMap((line, index) => (line.rejected ? [index + 1] : []))
   /** One sentence per reason on screen, in a fixed order, so the explanation reads the same every time. */
@@ -225,6 +237,9 @@ export function UserRulesEditor({
     .join(' ')
 
   const save = async (): Promise<void> => {
+    // The text this save is about, held apart from `draft`: the user can go on typing while it is away.
+    const sent = draft
+    setSaving(true)
     await run(async () => {
       /*
         With the ids of the rules the box was filled from. The element picker can write a rule while this page
@@ -232,10 +247,10 @@ export function UserRulesEditor({
         none to show. Sent the ids, the core deletes only the rules this page showed and the user took out.
       */
       const outcome = await host.apply(
-        draft,
+        sent,
         saved.rules.map((entry) => entry.id)
       )
-      setVerdict(outcome)
+      setVerdict({ outcome, text: sent })
       /*
         Re-read after a save, and put what the core kept into the box — the same rule every write on this
         page follows: the core folds a repeated rule, writes a rule in its plain form and keeps a refused
@@ -243,12 +258,18 @@ export function UserRulesEditor({
 
         Not after a refusal. Nothing was written, and the user's text is the thing they now have to shorten;
         replacing it with the stored one would throw away every line they added.
+
+        And only over the text that was sent. Anything typed since is newer than the answer, and replacing it
+        would throw those keystrokes away and leave the box looking saved with nothing to press. Kept, it
+        reads against the new stored text — dirty, with Save offered — which is what it is.
       */
       if (outcome !== 'applied') return
       const next = await host.list()
       setAnswer(next)
-      setDraft(next.source)
+      setDraft((current) => (current === sent ? next.source : current))
+      setVerdict((current) => (current?.text === sent ? { outcome, text: next.source } : current))
     })
+    setSaving(false)
   }
 
   const discard = (): void => {
@@ -336,22 +357,32 @@ export function UserRulesEditor({
           onChange={(event) => {
             setDraft(event.target.value)
             // The verdict belongs to the text that produced it. Left up while the text changes, it would
-            // be a refusal of something the user has already corrected.
+            // be a refusal of something the user has already corrected — and dropped rather than merely
+            // hidden, so typing the old text back does not bring back an answer about a different save.
             setVerdict(null)
           }}
         />
       </div>
 
       <div className="userrules__actions">
+        {/*
+          Both wait for a save on its way. A second Save would send a text written against rules the first is
+          still changing, and Discard would put back a stored text the answer is about to replace.
+        */}
         <button
           type="button"
           className="dialog__button"
-          disabled={!dirty}
+          disabled={!dirty || saving}
           onClick={() => void save()}
         >
           {word('save')}
         </button>
-        <button type="button" className="dialog__button" disabled={!dirty} onClick={discard}>
+        <button
+          type="button"
+          className="dialog__button"
+          disabled={!dirty || saving}
+          onClick={discard}
+        >
           {word('discard')}
         </button>
       </div>
@@ -368,11 +399,11 @@ export function UserRulesEditor({
             {` ${word('rejectedLines')} ${refusedAt.join(', ')}`}
           </span>
         </p>
-      ) : verdict === 'limit-reached' ? (
+      ) : said === 'limit-reached' ? (
         <p className="panel__error" role="alert">
           {word('limitReached')}
         </p>
-      ) : verdict === 'applied' ? (
+      ) : said === 'applied' ? (
         <p className="panel__notice" role="status">
           {word('saved')}
         </p>

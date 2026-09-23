@@ -465,6 +465,20 @@ describe('the keyboard contract', () => {
     expect(calls.map((call) => call.channel)).not.toContain('overlay:dismiss')
   })
 
+  it('leaves Return on a focused control to the control', () => {
+    /*
+      A focused button activates itself on Return. The bar answering the same keystroke as well would
+      press Wider *and* confirm — a rule written for a selection the user was still in the middle of
+      moving. The browser's own activation is not something happy-dom performs on a keydown, so what is
+      pinned here is the half that is the bar's: it sends nothing.
+    */
+    const calls = installBridge()
+    render(<PickerBarSurface presentation={presentation()} />)
+
+    fireEvent.keyDown(button(t('widen')), { key: 'Enter' })
+    expect(calls).toEqual([])
+  })
+
   it('refuses Return while nothing is frozen', () => {
     // There is no keyboard path from `showing` into `frozen` — selecting is pointer-only by decision —
     // so Return here would confirm a selection that does not exist.

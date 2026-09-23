@@ -233,6 +233,8 @@ function start(started: PickerStart): void {
   parent.appendChild(host)
 
   const onMove = (event: MouseEvent): void => {
+    // Only the pointer's own hover; see `onClick` for why a page's made-up event is not acted on.
+    if (!event.isTrusted) return
     const run = session
     if (run === null) return
     // Once the selection is frozen the highlight belongs to it, not to the pointer: the person is
@@ -274,6 +276,24 @@ function start(started: PickerStart): void {
 
     `click` is still what the picker acts on, and it still arrives: neither cancelling `mousedown` nor
     cancelling `pointerdown` suppresses it. What it does now is freeze rather than commit.
+
+    Swallowed whoever sent it — the browser or the page's own script — and *acted on* only when the
+    browser did. The two halves split on purpose, because they cost different things:
+
+      - **Acting on an untrusted event is a power the page does not otherwise have.** The page can see
+        the picker is up (its host is an element in the page's document) and can dispatch any event at
+        any of its elements. A synthetic `click` would freeze on an element of the page's choosing and
+        preview it as the thing the user is about to hide; a synthetic Escape would end the user's
+        attempt. So `onClick`, `onKeyDown` and `onMove` ignore anything that is not `isTrusted`, which
+        Chromium sets and page script cannot forge — it is an unforgeable property, and this preload's
+        isolated world sees its own wrapper of the event rather than the page's.
+      - **Swallowing one costs the page nothing it could not do anyway.** Every handler a synthetic
+        event would have reached is the page's own code, which the page can call directly; stopping the
+        event denies it no capability, only a route. And the user asked for the page to hold still
+        while they choose: a script that forwards a click to a link, or opens its own menu by
+        dispatching one, is the page acting under the picker exactly as a real press would have. So
+        the swallowing stays unconditional and first, and the rule the click handler relies on — every
+        way out of it has already taken the event away from the page — needs no exception for origin.
   */
   const swallow = (event: Event): void => {
     if (event.cancelable && !event.type.startsWith('pointer')) event.preventDefault()
@@ -286,6 +306,8 @@ function start(started: PickerStart): void {
     // that has already taken the click away from the page. Picking an element inside a link must not
     // navigate away from the page being edited, whether or not a chain came of it.
     swallow(event)
+    // A click the page dispatched itself chooses nothing; see the comment on `swallow`.
+    if (!event.isTrusted) return
     const run = session
     if (run === null) return
     // A second click changes nothing. The sequence is swallowed, but "swallowed" is not
@@ -308,6 +330,8 @@ function start(started: PickerStart): void {
     // The same strictness the pointer sequence gets, and for the same reason: a page listening for
     // Escape on `window` in the capture phase would otherwise close its own dialogue beside this.
     swallow(event)
+    // An Escape nobody pressed does not end somebody's attempt; see the comment on `swallow`.
+    if (!event.isTrusted) return
     // Told, not merely done. Escape used to tear the page's picker down and say nothing, so the core
     // went on believing this view was picking and the next start found a session already running —
     // half of the state divergence this rebuild exists to remove (R10, R12).
