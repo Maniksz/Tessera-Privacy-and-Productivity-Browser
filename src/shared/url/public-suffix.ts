@@ -49,8 +49,8 @@ export const PUBLIC_SUFFIX_MAX_REMOVED_FRACTION = 0.02
  *
  * PRIVATE rules are hosting providers declaring their customers separate parties, and they do get
  * withdrawn when a service shuts down or is restructured. So losing a few is not refused outright:
- * it is held back and accepted once the same candidate is delivered again a week later (see
- * `PublicSuffixSubscription`). Beyond this many, it is refused however often it arrives.
+ * it is held back and accepted once the same rules are still missing a week later (see
+ * `isConfirmableRemoval`). Beyond this many, it is refused however often it arrives.
  */
 export const PUBLIC_SUFFIX_MAX_PRIVATE_REMOVED = 150
 
@@ -135,7 +135,8 @@ export function rulesOf(list: PublicSuffixList): readonly string[] {
 /**
  * Why a candidate was refused. Stable strings, so a log line can be searched for.
  *
- * `private-removed` is the only one that is not final: see `PUBLIC_SUFFIX_MAX_PRIVATE_REMOVED`.
+ * `icann-removed` and `private-removed` are the only ones that are not final: see
+ * `isConfirmableRemoval`.
  */
 export type PublicSuffixRejection =
   | 'too-large'
@@ -160,12 +161,28 @@ export interface PublicSuffixHistory {
 /** No history: what a stored copy is checked against at startup. */
 export const NO_PUBLIC_SUFFIX_HISTORY: PublicSuffixHistory = { current: null, baseline: null }
 
+/** The rules of the list in force a candidate lacks, per section, each sorted. */
+export interface PublicSuffixRemovals {
+  readonly icann: readonly string[]
+  readonly private: readonly string[]
+}
+
 export interface PublicSuffixVerdict {
   /** Null when the text was not parsed at all (too large). */
   readonly list: PublicSuffixList | null
   /** Empty when the list may be used. */
   readonly rejections: readonly PublicSuffixRejection[]
+  /**
+   * What the candidate drops against the list in force; empty without one, or for a body that is
+   * not the list.
+   *
+   * Sorted, so two bodies that lack the same rules name them identically however else they differ:
+   * that is what a held-back removal is recognised by on a later delivery.
+   */
+  readonly removed: PublicSuffixRemovals
 }
+
+const NO_REMOVALS: PublicSuffixRemovals = { icann: [], private: [] }
 
 /**
  * Hosts whose site any real list agrees on, checked against the candidate alone.
@@ -187,8 +204,8 @@ function byteLength(text: string): number {
   return new TextEncoder().encode(text).byteLength
 }
 
-function missingFrom(before: readonly string[], after: ReadonlySet<string>): number {
-  return before.filter((rule) => !after.has(rule)).length
+function missingFrom(before: readonly string[], after: ReadonlySet<string>): string[] {
+  return before.filter((rule) => !after.has(rule))
 }
 
 /** Whether `domain` is `ancestor` or sits beneath it, on whole labels. */
@@ -235,8 +252,8 @@ function ruleShapeRejections(
  *
  * Every reason is collected rather than stopping at the first, except for a body that is too large
  * or not the list at all: parsing a megabyte of something else to count its rules would say nothing
- * more. Collecting matters for one reason in particular — only a candidate whose *sole* problem is
- * `private-removed` may be accepted on a second delivery, and that cannot be known from the first
+ * more. Collecting matters for one reason in particular — only a candidate whose *sole* problems are
+ * removals within the limits may be accepted a week later, and that cannot be known from the first
  * problem found.
  */
 export function checkPublicSuffixList(
@@ -244,9 +261,11 @@ export function checkPublicSuffixList(
   toAscii: ToAscii,
   history: PublicSuffixHistory
 ): PublicSuffixVerdict {
-  if (byteLength(text) > PUBLIC_SUFFIX_MAX_BYTES) return { list: null, rejections: ['too-large'] }
+  if (byteLength(text) > PUBLIC_SUFFIX_MAX_BYTES) {
+    return { list: null, rejections: ['too-large'], removed: NO_REMOVALS }
+  }
   const list = parsePublicSuffixList(text, toAscii)
-  if (!list.structured) return { list, rejections: ['structure'] }
+  if (!list.structured) return { list, rejections: ['structure'], removed: NO_REMOVALS }
 
   const rejections: PublicSuffixRejection[] = []
   const all = rulesOf(list)
@@ -254,18 +273,22 @@ export function checkPublicSuffixList(
   if (all.length < PUBLIC_SUFFIX_MIN_RULES) rejections.push('too-few-rules')
 
   const { current, baseline } = history
+  let removed = NO_REMOVALS
   if (current !== null) {
-    if (missingFrom(current.icann, new Set(list.icann)) > 0) rejections.push('icann-removed')
-    const privateLost = missingFrom(current.private, new Set(list.private))
-    if (privateLost > PUBLIC_SUFFIX_MAX_PRIVATE_REMOVED) {
+    removed = {
+      icann: missingFrom(current.icann, new Set(list.icann)).sort(),
+      private: missingFrom(current.private, new Set(list.private)).sort()
+    }
+    if (removed.icann.length > 0) rejections.push('icann-removed')
+    if (removed.private.length > PUBLIC_SUFFIX_MAX_PRIVATE_REMOVED) {
       rejections.push('private-removed-beyond-limit')
-    } else if (privateLost > 0) {
+    } else if (removed.private.length > 0) {
       rejections.push('private-removed')
     }
   }
   if (baseline !== null) {
     const before = rulesOf(baseline)
-    if (missingFrom(before, allSet) > before.length * PUBLIC_SUFFIX_MAX_REMOVED_FRACTION) {
+    if (missingFrom(before, allSet).length > before.length * PUBLIC_SUFFIX_MAX_REMOVED_FRACTION) {
       rejections.push('baseline-drift')
     }
   }
@@ -277,13 +300,27 @@ export function checkPublicSuffixList(
   if (CANARIES.some(([host, site]) => registrableDomainUnder(rules, host) !== site)) {
     rejections.push('canary')
   }
-  return { list, rejections }
+  return { list, rejections, removed }
 }
 
+const CONFIRMABLE: ReadonlySet<PublicSuffixRejection> = new Set([
+  'icann-removed',
+  'private-removed'
+])
+
 /**
- * Whether the reasons leave room for acceptance on a second delivery: PRIVATE rules lost within the
- * limit, and nothing else.
+ * Whether the reasons leave room for acceptance once the same rules have stayed missing for a week:
+ * rules removed within the limits, ICANN or PRIVATE, and nothing else.
+ *
+ * Upstream does retire rules — a PRIVATE entry when a hosting service closes, an ICANN one when a
+ * brand top-level domain is terminated — and a list that refused every such removal for good would
+ * freeze at the last list before it, so new PRIVATE suffixes would never arrive and their tenants
+ * would stay one site. A removal that one delivery makes and the next ones do not is what a
+ * manipulated download looks like; the same removal, delivery after delivery for a week, is what a
+ * real change looks like (see `PublicSuffixSubscription`). Everything else — a broken body, a failed
+ * canary, a wildcard on a top-level domain, drift past the baseline, PRIVATE losses past their cap —
+ * is wrong however long it persists.
  */
-export function isOnlyPrivateLoss(rejections: readonly PublicSuffixRejection[]): boolean {
-  return rejections.length === 1 && rejections[0] === 'private-removed'
+export function isConfirmableRemoval(rejections: readonly PublicSuffixRejection[]): boolean {
+  return rejections.length > 0 && rejections.every((reason) => CONFIRMABLE.has(reason))
 }

@@ -7,10 +7,11 @@ import {
   NO_PUBLIC_SUFFIX_HISTORY,
   PUBLIC_SUFFIX_MAX_BYTES,
   checkPublicSuffixList,
-  isOnlyPrivateLoss,
+  isConfirmableRemoval,
   parsePublicSuffixList,
   rulesOf,
   type PublicSuffixRejection,
+  type PublicSuffixRemovals,
   type ToAscii
 } from '@shared/url/public-suffix.js'
 import { writeFileAtomically } from '../data/atomic-write.js'
@@ -60,7 +61,13 @@ export const PUBLIC_SUFFIX_MAX_AGE_MS = 7 * DAY_MS
 /** How long a baseline stands before it is moved up to the list in force. */
 export const PUBLIC_SUFFIX_BASELINE_MS = 30 * DAY_MS
 
-/** How long a candidate that only lost PRIVATE rules has to keep arriving before it is accepted. */
+/**
+ * How long the same rules have to stay missing before a candidate that only lost rules is accepted.
+ *
+ * Measured on the missing rules, not on the body: upstream publishes several times a week, so the
+ * body a week later is rarely the body that was first refused, while a genuine retirement is still
+ * missing from it. See `isConfirmableRemoval`.
+ */
 export const PUBLIC_SUFFIX_CONFIRM_MS = 7 * DAY_MS
 
 const STATE_FILE = 'state.json'
@@ -76,8 +83,19 @@ const stateSchema = z.object({
   baseline: storedListSchema.nullable(),
   /** The good list before the one in the cache: what startup falls back to. */
   previous: storedListSchema.nullable(),
-  /** The last candidate refused, and when it was first refused. */
-  rejected: z.object({ sha256: z.string(), firstRejectedAt: z.number() }).nullable()
+  /**
+   * The removal being held back: the SHA-256 of the missing rules (`removalFingerprint`), and when a
+   * candidate first lacked exactly those.
+   *
+   * `.catch(null)` because a state file from before this was keyed on the rules held the body's
+   * digest (`{ sha256, firstRejectedAt }`) here. That record cannot be matched to a removal, so it
+   * reads as none and the week starts over — and the rest of the file, baseline and previous list,
+   * is kept rather than lost with it.
+   */
+  rejected: z
+    .object({ removedSha256: z.string(), firstRejectedAt: z.number() })
+    .nullable()
+    .catch(null)
 })
 
 type State = z.output<typeof stateSchema>
@@ -120,6 +138,14 @@ export interface PublicSuffixSubscriptionOptions {
 
 function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex')
+}
+
+/**
+ * A stable name for a set of missing rules, sorted by the check. The sections stay apart, as the
+ * check counts them: an ICANN rule that reappears under PRIVATE is still an ICANN rule gone.
+ */
+function removalFingerprint(removed: PublicSuffixRemovals): string {
+  return sha256(JSON.stringify([removed.icann, removed.private]))
 }
 
 /**
@@ -167,7 +193,8 @@ export async function readPublicSuffixBody(
 /** What the `verify` hook decided about the body it saw, for `#refreshNow` to act on. */
 interface Judgement {
   readonly text: string
-  readonly sha256: string
+  /** The missing rules' fingerprint when the candidate could be confirmed later; null otherwise. */
+  readonly removedSha256: string | null
   readonly rejections: readonly PublicSuffixRejection[]
   readonly accepted: boolean
 }
@@ -277,16 +304,17 @@ export class PublicSuffixSubscription {
     const store = new FilterListStore({
       ...this.#storeOptions,
       verify: (text) => {
-        const { rejections } = checkPublicSuffixList(text, this.#toAscii, history)
-        const digest = sha256(text)
-        // The one way past a refusal: only PRIVATE rules lost, and the very same body still being
-        // served a week after it was first refused.
+        const { rejections, removed } = checkPublicSuffixList(text, this.#toAscii, history)
+        const removedSha256 = isConfirmableRemoval(rejections) ? removalFingerprint(removed) : null
+        // The one way past a refusal: nothing wrong but rules removed within the limits, and exactly
+        // those rules missing from every such delivery since a week ago — whatever else the bodies
+        // added in between.
         const confirmed =
-          isOnlyPrivateLoss(rejections) &&
-          state.rejected?.sha256 === digest &&
+          removedSha256 !== null &&
+          state.rejected?.removedSha256 === removedSha256 &&
           now - state.rejected.firstRejectedAt >= PUBLIC_SUFFIX_CONFIRM_MS
         const accepted = rejections.length === 0 || confirmed
-        seen.judgement = { text, sha256: digest, rejections, accepted }
+        seen.judgement = { text, removedSha256, rejections, accepted }
         return accepted ? null : `refused: ${rejections.join(', ')}`
       }
     })
@@ -302,12 +330,18 @@ export class PublicSuffixSubscription {
       }
     }
     if (!judgement.accepted) {
-      const first =
-        state.rejected?.sha256 === judgement.sha256 ? state.rejected.firstRejectedAt : now
-      await this.#writeState({
-        ...attempted,
-        rejected: { sha256: judgement.sha256, firstRejectedAt: first }
-      })
+      // A removal the record already names keeps its clock; a different one starts it again. A
+      // candidate refused for anything more leaves the record alone: a broken or manipulated body
+      // says nothing about what upstream retired, so it neither starts a week nor ends one.
+      const { removedSha256 } = judgement
+      if (removedSha256 !== null) {
+        const first =
+          state.rejected?.removedSha256 === removedSha256 ? state.rejected.firstRejectedAt : now
+        await this.#writeState({
+          ...attempted,
+          rejected: { removedSha256, firstRejectedAt: first }
+        })
+      }
       this.#warn('[public-suffix] refused a downloaded list:', judgement.rejections)
       return { status: 'rejected', rejections: judgement.rejections, reason: null }
     }

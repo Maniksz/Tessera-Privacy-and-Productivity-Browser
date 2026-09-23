@@ -13,7 +13,7 @@ import {
   PUBLIC_SUFFIX_MAX_REMOVED_FRACTION,
   PUBLIC_SUFFIX_MIN_RULES,
   checkPublicSuffixList,
-  isOnlyPrivateLoss,
+  isConfirmableRemoval,
   parsePublicSuffixList,
   rulesOf,
   type PublicSuffixHistory,
@@ -200,7 +200,11 @@ describe('checkPublicSuffixList: what it refuses', () => {
       domainToASCII,
       NO_PUBLIC_SUFFIX_HISTORY
     )
-    expect(verdict).toEqual({ list: null, rejections: ['too-large'] })
+    expect(verdict).toEqual({
+      list: null,
+      rejections: ['too-large'],
+      removed: { icann: [], private: [] }
+    })
   })
 
   it('parses a body of exactly a megabyte', () => {
@@ -347,12 +351,60 @@ describe('checkPublicSuffixList: what it refuses', () => {
   })
 })
 
-describe('isOnlyPrivateLoss', () => {
-  it('is true for private-removed alone and nothing else', () => {
-    expect(isOnlyPrivateLoss(['private-removed'])).toBe(true)
-    expect(isOnlyPrivateLoss([])).toBe(false)
-    expect(isOnlyPrivateLoss(['canary'])).toBe(false)
-    expect(isOnlyPrivateLoss(['private-removed', 'canary'])).toBe(false)
-    expect(isOnlyPrivateLoss(['private-removed-beyond-limit'])).toBe(false)
+describe('checkPublicSuffixList: what it names as removed', () => {
+  it('names the rules the list in force has and the candidate lacks, sorted, per section', () => {
+    const current = parse(fixtureRules())
+    const rules = without(fixtureRules(), ['i7.zz', 'i5.zz', ...fillerPrivate(2, 4)])
+    const verdict = checkPublicSuffixList(fixtureText(rules), domainToASCII, {
+      current,
+      baseline: null
+    })
+    expect(verdict.rejections).toEqual(['icann-removed', 'private-removed'])
+    expect(verdict.removed).toEqual({
+      icann: ['i5.zz', 'i7.zz'],
+      private: ['p2.hosting.zz', 'p3.hosting.zz']
+    })
+  })
+
+  it('names the same removals for two different bodies that lack the same rules', () => {
+    const current = parse(fixtureRules())
+    const history = { current, baseline: null }
+    const lean = without(fixtureRules(), ['i5.zz'])
+    const grown = withAdded(lean, 'private', ['new.hosting.zz'])
+    expect(fixtureText(grown)).not.toBe(fixtureText(lean))
+    expect(checkPublicSuffixList(fixtureText(grown), domainToASCII, history).removed).toEqual(
+      checkPublicSuffixList(fixtureText(lean), domainToASCII, history).removed
+    )
+  })
+
+  it('names nothing without a list in force, or for a body that is not the list', () => {
+    const none = { icann: [], private: [] }
+    expect(
+      checkPublicSuffixList(
+        fixtureText(without(fixtureRules(), ['i5.zz'])),
+        domainToASCII,
+        NO_PUBLIC_SUFFIX_HISTORY
+      ).removed
+    ).toEqual(none)
+    const current = parse(fixtureRules())
+    expect(
+      checkPublicSuffixList('<html></html>', domainToASCII, { current, baseline: null }).removed
+    ).toEqual(none)
+  })
+})
+
+describe('isConfirmableRemoval', () => {
+  it('is true for removals within the limits, ICANN or PRIVATE or both, and nothing else', () => {
+    expect(isConfirmableRemoval(['private-removed'])).toBe(true)
+    expect(isConfirmableRemoval(['icann-removed'])).toBe(true)
+    expect(isConfirmableRemoval(['icann-removed', 'private-removed'])).toBe(true)
+    expect(isConfirmableRemoval([])).toBe(false)
+    expect(isConfirmableRemoval(['canary'])).toBe(false)
+    expect(isConfirmableRemoval(['private-removed', 'canary'])).toBe(false)
+    expect(isConfirmableRemoval(['icann-removed', 'canary'])).toBe(false)
+    expect(isConfirmableRemoval(['icann-removed', 'tld-wildcard'])).toBe(false)
+    expect(isConfirmableRemoval(['icann-removed', 'private-removed-beyond-limit'])).toBe(false)
+    expect(isConfirmableRemoval(['private-removed-beyond-limit'])).toBe(false)
+    expect(isConfirmableRemoval(['icann-removed', 'baseline-drift'])).toBe(false)
   })
 })

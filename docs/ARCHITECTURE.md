@@ -297,11 +297,15 @@ Die volle Liste lädt der Kern zur Laufzeit (`main/privacy/PublicSuffixSubscript
   mit passender Wildcard und nie über einem Startsatz-Eintrag, keine neue Wildcard auf
   einer Top-Level-Domain und bestandene Kanarien. `FilterListStore` bekommt dafür einen
   `verify`-Haken; lehnt er ab, bleiben Datei und Manifest unverändert. Einzige Ausnahme:
-  ein Kandidat, dem nur PRIVATE-Regeln innerhalb der Obergrenze fehlen, wird angenommen,
-  wenn derselbe Körper (SHA-256) sieben Tage nach der ersten Ablehnung wieder kommt.
+  ein Kandidat, dem nur Regeln fehlen (ICANN oder PRIVATE innerhalb der Obergrenze) und
+  der sonst jede Prüfung besteht, wird angenommen, wenn genau dieselben Regeln sieben Tage
+  nach der ersten Ablehnung noch fehlen, auch in einem anderen Körper. Upstream zieht
+  Regeln zurück (etwa eine beendete Marken-TLD); ohne diesen Weg bliebe die Liste für immer
+  stehen. Eine andere Menge fehlender Regeln startet die Woche neu; ein aus anderem Grund
+  abgelehnter Kandidat lässt sie unberührt.
 - **Ablage.** `userData/public-suffix/`: die Liste in `list/` (eigener `FilterListStore`,
   dessen Aufräumen nur dort wirkt), daneben `state.json` (letzter Versuch, Basisliste,
-  vorige gute Liste, letzter abgelehnter Kandidat) über `writeFileAtomically`. Nicht im
+  vorige gute Liste, zurückgehaltene Entfernung als SHA-256 der fehlenden Regeln) über `writeFileAtomically`. Nicht im
   verwerfbaren Cache und nicht im Verzeichnis der Filterlisten.
 - **Renderer.** Nur `domain.ts` erreicht Renderer-Bundles, ohne Parser und Prüfung; dort
   gilt der Startsatz. Die Abweichung ist kosmetisch (Beschriftung in `HistoryPage.tsx`).

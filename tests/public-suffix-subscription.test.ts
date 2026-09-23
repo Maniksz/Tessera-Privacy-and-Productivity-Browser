@@ -41,6 +41,13 @@ const GOOD_TOO = fixtureText(withAdded(fixtureRules(), 'icann', ['added.zz']))
 const WITHOUT_COM_SG = fixtureText(without(fixtureRules(), ['com.sg']))
 const WITH_STAR_COM = fixtureText(withAdded(fixtureRules(), 'icann', ['*.com']))
 const PRIVATE_LOSS = fixtureText(without(fixtureRules(), fillerPrivate(0, 20)))
+/** A retired ICANN rule, as when a brand top-level domain is terminated. */
+const ICANN_LOSS = fixtureText(without(fixtureRules(), ['i5.zz']))
+/** The same rule missing from a different body: upstream went on publishing in the meantime. */
+const ICANN_LOSS_TOO = fixtureText(
+  withAdded(without(fixtureRules(), ['i5.zz']), 'private', ['new.hosting.zz'])
+)
+const FINGERPRINT = expect.stringMatching(/^[0-9a-f]{64}$/) as unknown
 const HTML = '<html><body>Service unavailable</body></html>'
 
 interface Harness {
@@ -264,20 +271,22 @@ describe('PublicSuffixSubscription: a refused list', () => {
     }
   })
 
-  it('accepts a list that only lost PRIVATE rules once the same body arrives a week later', async () => {
+  it('accepts a list that only lost PRIVATE rules once they are still missing a week later', async () => {
     const h = await acceptedAtT0()
     const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
     h.serve(PRIVATE_LOSS)
 
     h.setNow(first)
     expect((await h.launch().refresh()).rejections).toEqual(['private-removed'])
-    const digest = createHash('sha256').update(PRIVATE_LOSS).digest('hex')
-    expect((await state(h)).rejected).toEqual({ sha256: digest, firstRejectedAt: first })
+    expect((await state(h)).rejected).toEqual({
+      removedSha256: FINGERPRINT,
+      firstRejectedAt: first
+    })
 
     // A day later is not a week later.
     h.setNow(first + DAY)
     expect((await h.launch().refresh()).status).toBe('rejected')
-    expect((await state(h)).rejected).toEqual({ sha256: digest, firstRejectedAt: first })
+    expect((await state(h)).rejected).toMatchObject({ firstRejectedAt: first })
 
     h.setNow(first + PUBLIC_SUFFIX_CONFIRM_MS)
     expect(await h.launch().refresh()).toEqual({
@@ -289,7 +298,7 @@ describe('PublicSuffixSubscription: a refused list', () => {
     expect(await restart(h)).toBe('list')
   })
 
-  it('starts the week again when a different body is refused in between', async () => {
+  it('starts the week again when a different set of rules is missing in between', async () => {
     const h = await acceptedAtT0()
     const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
     h.setNow(first)
@@ -301,11 +310,135 @@ describe('PublicSuffixSubscription: a refused list', () => {
     await h.launch().refresh()
     expect((await state(h)).rejected).toMatchObject({ firstRejectedAt: first + DAY })
 
-    // The first body again, a week after it was first refused — but it is no longer the one on
+    // The first set again, a week after it was first refused — but it is no longer the one on
     // record, so its week starts over.
     h.setNow(first + PUBLIC_SUFFIX_CONFIRM_MS)
     h.serve(PRIVATE_LOSS)
     expect((await h.launch().refresh()).status).toBe('rejected')
+    expect((await state(h)).rejected).toMatchObject({
+      firstRejectedAt: first + PUBLIC_SUFFIX_CONFIRM_MS
+    })
+  })
+
+  it('accepts a retired ICANN rule once it has been missing for a week, across bodies', async () => {
+    const h = await acceptedAtT0()
+    const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
+    h.setNow(first)
+    h.serve(ICANN_LOSS)
+    expect((await h.launch().refresh()).rejections).toEqual(['icann-removed'])
+    const record = (await state(h)).rejected
+    expect(record).toEqual({ removedSha256: FINGERPRINT, firstRejectedAt: first })
+
+    // Day six: a different body, the same rule missing. Still held back, on the same clock.
+    h.setNow(first + 6 * DAY)
+    h.serve(ICANN_LOSS_TOO)
+    expect((await h.launch().refresh()).status).toBe('rejected')
+    expect((await state(h)).rejected).toEqual(record)
+
+    // Day seven.
+    h.setNow(first + PUBLIC_SUFFIX_CONFIRM_MS)
+    expect(await h.launch().refresh()).toEqual({
+      status: 'accepted',
+      rejections: ['icann-removed'],
+      reason: null
+    })
+    expect((await state(h)).rejected).toBeNull()
+    expect(await restart(h)).toBe('list')
+  })
+
+  it('accepts ICANN and PRIVATE rules missing together, a week on', async () => {
+    const h = await acceptedAtT0()
+    const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
+    h.serve(fixtureText(without(fixtureRules(), ['i5.zz', ...fillerPrivate(0, 3)])))
+    h.setNow(first)
+    expect((await h.launch().refresh()).rejections).toEqual(['icann-removed', 'private-removed'])
+    h.setNow(first + PUBLIC_SUFFIX_CONFIRM_MS)
+    expect((await h.launch().refresh()).status).toBe('accepted')
+  })
+
+  it('starts the week again when the missing ICANN rules change on day three', async () => {
+    const h = await acceptedAtT0()
+    const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
+    h.setNow(first)
+    h.serve(ICANN_LOSS)
+    await h.launch().refresh()
+
+    h.setNow(first + 3 * DAY)
+    h.serve(fixtureText(without(fixtureRules(), ['i5.zz', 'i6.zz'])))
+    expect((await h.launch().refresh()).status).toBe('rejected')
+    expect((await state(h)).rejected).toMatchObject({ firstRejectedAt: first + 3 * DAY })
+
+    h.setNow(first + PUBLIC_SUFFIX_CONFIRM_MS)
+    expect((await h.launch().refresh()).status).toBe('rejected')
+    expect((await state(h)).rejected).toMatchObject({ firstRejectedAt: first + 3 * DAY })
+
+    h.setNow(first + 3 * DAY + PUBLIC_SUFFIX_CONFIRM_MS)
+    expect((await h.launch().refresh()).status).toBe('accepted')
+  })
+
+  it('refuses a missing ICANN rule with a failed canary or *.com, however long it waited', async () => {
+    const hard = [
+      fixtureText(without(fixtureRules(), ['i5.zz', 'com.sg'])),
+      fixtureText(withAdded(without(fixtureRules(), ['i5.zz']), 'icann', ['*.com']))
+    ]
+    for (const candidate of hard) {
+      const h = await acceptedAtT0()
+      const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
+      h.setNow(first)
+      h.serve(ICANN_LOSS)
+      await h.launch().refresh()
+      const record = (await state(h)).rejected
+
+      h.setNow(first + PUBLIC_SUFFIX_CONFIRM_MS)
+      h.serve(candidate)
+      const refused = await h.launch().refresh()
+      expect(refused.status).toBe('rejected')
+      expect(refused.rejections).toContain('icann-removed')
+      expect(refused.rejections).toContain('canary')
+      // Not evidence about upstream's removals either way: the record stays as it was.
+      expect((await state(h)).rejected).toEqual(record)
+
+      h.setNow(first + 2 * PUBLIC_SUFFIX_CONFIRM_MS)
+      expect((await h.launch().refresh()).status).toBe('rejected')
+    }
+  })
+
+  it('does not start the week on a candidate that is refused for more than removals', async () => {
+    const h = await acceptedAtT0()
+    const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
+    h.setNow(first)
+    h.serve(fixtureText(without(fixtureRules(), ['i5.zz', 'com.sg'])))
+    expect((await h.launch().refresh()).status).toBe('rejected')
+    expect((await state(h)).rejected).toBeNull()
+
+    h.setNow(first + PUBLIC_SUFFIX_CONFIRM_MS)
+    h.serve(ICANN_LOSS)
+    expect((await h.launch().refresh()).status).toBe('rejected')
+    expect((await state(h)).rejected).toMatchObject({
+      firstRejectedAt: first + PUBLIC_SUFFIX_CONFIRM_MS
+    })
+  })
+
+  it('reads a state file that recorded the refused body by its digest, and restarts the week', async () => {
+    const h = await acceptedAtT0()
+    const saved = await state(h)
+    // The shape before the week was keyed on the missing rules.
+    await writeFile(
+      join(h.directory, 'state.json'),
+      JSON.stringify({ ...saved, rejected: { sha256: 'ab'.repeat(32), firstRejectedAt: T0 } })
+    )
+    expect(await restart(h)).toBe('list')
+
+    const first = T0 + PUBLIC_SUFFIX_MAX_AGE_MS
+    h.setNow(first)
+    h.serve(ICANN_LOSS)
+    expect((await h.launch().refresh()).status).toBe('rejected')
+    // The rest of the state survived: the baseline is still the first accepted list.
+    expect((await state(h)).baseline).toEqual({ text: GOOD, acceptedAt: T0 })
+    expect((await state(h)).rejected).toEqual({
+      removedSha256: FINGERPRINT,
+      firstRejectedAt: first
+    })
   })
 
   it('reports a failure, and changes nothing, when an accepted list cannot be stored', async () => {
