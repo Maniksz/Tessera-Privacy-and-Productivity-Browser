@@ -206,6 +206,26 @@ describe('internal page privileges', () => {
     expect(hearers).toEqual(['downloads'])
   })
 
+  it('gives the button summary to the chrome UI and to no internal page', () => {
+    /*
+      Numbers and states only, but still a fact about what this window is downloading, and no page has
+      a use for it: the downloads page has the list itself. Both halves, the pull and the push, because
+      a page granted either would learn the same thing.
+    */
+    const pullers = Object.entries(INTERNAL_PAGE_INVOKE_CHANNELS)
+      .filter(([, channels]) => (channels as readonly string[]).includes('downloads:summary'))
+      .map(([page]) => page)
+    const hearers = Object.entries(INTERNAL_PAGE_EVENT_CHANNELS)
+      .filter(([, channels]) =>
+        (channels as readonly string[]).includes('downloads:summaryChanged')
+      )
+      .map(([page]) => page)
+    expect(pullers).toEqual([])
+    expect(hearers).toEqual([])
+    // And the channel exists, so the two empty lists above are not about a name nobody declared.
+    expect(INVOKE_CHANNELS).toContain('downloads:summary')
+  })
+
   it('tells the passwords page nothing about the vault', () => {
     /*
       Deliberate, and a privacy decision rather than an omission: a pushed vault list would arrive

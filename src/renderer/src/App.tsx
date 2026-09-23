@@ -10,6 +10,7 @@ import { useTileRects } from './useTileRects.js'
 import { useI18n } from './i18n.js'
 import { TabBar } from './components/TabBar.js'
 import { Toolbar } from './components/Toolbar.js'
+import { isDownloadsPanel, useDownloadSummary } from './components/DownloadsButton.js'
 import { SplitDividers } from './components/SplitDividers.js'
 import { ExtensionsPanel } from './components/ExtensionsPanel.js'
 
@@ -42,6 +43,8 @@ export function App(): React.ReactNode {
    * own `open` flag would keep claiming a menu that is no longer there.
    */
   const [overlay, setOverlay] = useState<OverlayState>(null)
+  /** What the toolbar's download button says; pulled once, then pushed on every change. */
+  const downloads = useDownloadSummary()
   /** Where each tile's edges fall, for U1's active-tile frame and the per-tile empty placeholder below. */
   const { ref: contentRef, rects: tileRects } = useTileRects(state.split)
 
@@ -281,6 +284,8 @@ export function App(): React.ReactNode {
           privateMode={privateMode}
           titleWithShortcut={titleWithShortcut}
           layoutMenuOpen={overlay?.kind === 'layout-menu'}
+          downloads={downloads}
+          downloadsPanelOpen={isDownloadsPanel(overlay)}
           focusRequest={focusRequest}
           onOpenSettings={openSettingsTab}
           onOpenExtensions={() => setPanel('extensions')}

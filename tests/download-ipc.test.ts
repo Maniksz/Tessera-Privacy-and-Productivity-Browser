@@ -206,7 +206,7 @@ function harness(options: {
 }
 
 describe('downloads IPC', () => {
-  it('registers all eight channels', () => {
+  it('registers all nine channels', () => {
     const { channels } = harness({ manager: fakeManager(), windows: [fakeWindow(1, false)] })
     expect(channels.sort()).toEqual([
       'downloads:cancel',
@@ -216,7 +216,8 @@ describe('downloads IPC', () => {
       'downloads:pause',
       'downloads:remove',
       'downloads:resume',
-      'downloads:reveal'
+      'downloads:reveal',
+      'downloads:summary'
     ])
   })
 
@@ -557,5 +558,86 @@ describe('the download button summary', () => {
     present(a, T0 + 10)
 
     expect(a.chrome.at(-1)).toEqual(QUIET)
+  })
+
+  /*
+    The pull that goes with the push, the way `window:getState` goes with `window:stateChanged`.
+
+    Nothing is pushed until the summary first changes, so a chrome UI that mounts — or reloads — after
+    a download began would show no button at all until the next tick happened to move the ring. Sender
+    id 1 is window 1's chrome UI in this file's convention.
+  */
+  it('answers the chrome UI with its window’s summary before anything was pushed', async () => {
+    const a = fakeWindow(1, false)
+    const running = entry('a', { state: 'progressing', receivedBytes: 25, endedAt: null })
+    const manager = fakeManager({ byWindow: { 1: [running] }, startedIn: { 1: ['a'] } })
+    const { invoke } = harness({ manager, windows: [a] })
+
+    expect(await invoke('downloads:summary', undefined, 1)).toEqual({
+      visible: true,
+      activity: { kind: 'fraction', fraction: 0.25 },
+      marker: null
+    })
+    // From what is known, not re-probed: the button draws no row, so it needs no stat call.
+    expect(manager.calls).toEqual(['snapshot:1'])
+    expect(a.chrome).toEqual([])
+  })
+
+  it('answers with no button for a window that has started nothing', async () => {
+    const manager = fakeManager({ byWindow: { 1: [entry('a')] } })
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false)] })
+
+    expect(await invoke('downloads:summary', undefined, 1)).toEqual({
+      visible: false,
+      activity: null,
+      marker: null
+    })
+  })
+
+  it('answers a private window with its own downloads, whoever is in front', async () => {
+    const normal = fakeWindow(1, false)
+    const priv = fakeWindow(2, true)
+    const own = entry('p', { state: 'progressing', totalBytes: 0, receivedBytes: 5, endedAt: null })
+    const manager = fakeManager({
+      byWindow: { 1: [entry('n')], 2: [entry('n'), own] },
+      startedIn: { 1: ['n'], 2: ['p'] }
+    })
+    const { invoke } = harness({ manager, windows: [priv, normal] })
+
+    expect(await invoke('downloads:summary', undefined, 1)).toEqual({
+      visible: true,
+      activity: null,
+      marker: 'completed'
+    })
+    expect(await invoke('downloads:summary', undefined, 2)).toEqual({
+      visible: true,
+      activity: { kind: 'indeterminate' },
+      marker: null
+    })
+  })
+
+  it('refuses a pull from a sender that belongs to no window', async () => {
+    const manager = fakeManager()
+    const { invoke } = harness({ manager, windows: [fakeWindow(1, false)] })
+    await expect(invoke('downloads:summary', undefined, 99)).rejects.toThrow(/No window/)
+  })
+
+  it('does not let a pull stand in for the push that follows it', async () => {
+    /*
+      The pull answers whoever asked, and the window's overlay may ask as well as its chrome UI. So it
+      must not count as "sent" for the de-duplication: the chrome UI would otherwise miss a change it
+      was never told about, because somebody else had been.
+    */
+    const a = fakeWindow(1, false)
+    const manager = fakeManager({
+      byWindow: { 1: [entry('a', { state: 'interrupted' })] },
+      startedIn: { 1: ['a'] }
+    })
+    const { invoke } = harness({ manager, windows: [a] })
+
+    await invoke('downloads:summary', undefined, 1)
+    manager.fire()
+
+    expect(a.chrome).toEqual([{ visible: true, activity: null, marker: 'failed' }])
   })
 })

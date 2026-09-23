@@ -285,6 +285,14 @@ export const INVOKE_CHANNELS = [
   'downloads:pause',
   'downloads:resume',
   'downloads:cancel',
+  /**
+   * The toolbar button's summary as it stands, the pull that goes with `downloads:summaryChanged`.
+   *
+   * The same pairing as `window:getState` and `window:stateChanged`: the event carries changes only,
+   * so a chrome UI that mounts or reloads after a download began would otherwise show no button until
+   * the next change. Granted to no internal page; the downloads page has the list itself.
+   */
+  'downloads:summary',
   /*
     Saved passwords.
 

@@ -40,6 +40,10 @@ import type { DownloadViewer } from '../downloads/DownloadManager.js'
  * draws is not worth a message. The exception is a presentation of the downloads panel, which always
  * sends — see `DownloadHandlerWindows.onDownloadsPanelPresented`.
  *
+ * Because it is sent only on a change, it has a pull beside it: `downloads:summary` answers with the
+ * summary as it stands, for a chrome UI that mounts or reloads after a download began and would
+ * otherwise have nothing to draw until the next change.
+ *
  * ## Pull versus push
  *
  * `downloads:list` re-probes the disk; the pushed snapshot reuses answers from a moment ago. The
@@ -56,9 +60,10 @@ export type DownloadInvokeChannel =
   | 'downloads:pause'
   | 'downloads:resume'
   | 'downloads:cancel'
+  | 'downloads:summary'
 
 /**
- * The eight channels, derived from the shared contract rather than restated.
+ * The nine channels, derived from the shared contract rather than restated.
  *
  * `InvokeHandlerArg` is not simply the request type — it normalises a `void` request and carries the
  * contract's own inference — so a hand-written twin compiles and is then assignable to nothing at
@@ -183,7 +188,7 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   const memory = new WeakMap<DownloadHandlerWindow, ButtonMemory>()
 
   /*
-    The button's summary for one window, sent if it changed or if `always`.
+    The button's summary for one window, as it stands, with the state times brought up to date.
 
     The state times are why this keeps memory at all. A paused record has no time of its own —
     `endedAt` belongs to terminal states — so the summary would have to take the start for the pause,
@@ -191,11 +196,10 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
     runs on every coalesced change, and `DownloadManager` never coalesces a state change away, so the
     first pass that sees a new state is within a tick of it happening: that pass stamps it.
   */
-  const publishSummary = (
+  const currentSummary = (
     window: DownloadHandlerWindow,
-    entries: readonly DownloadEntry[],
-    always: boolean
-  ): void => {
+    entries: readonly DownloadEntry[]
+  ): { summary: DownloadButtonSummary; remembered: ButtonMemory } => {
     let remembered = memory.get(window)
     if (remembered === undefined) {
       remembered = { states: new Map(), last: NOTHING_SENT }
@@ -223,6 +227,16 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
       window.downloadsPanelPresentedAt,
       since
     )
+    return { summary, remembered }
+  }
+
+  /** The summary pushed to the window's chrome UI, if it changed or if `always`. */
+  const publishSummary = (
+    window: DownloadHandlerWindow,
+    entries: readonly DownloadEntry[],
+    always: boolean
+  ): void => {
+    const { summary, remembered } = currentSummary(window, entries)
     if (!always && sameSummary(summary, remembered.last)) return
     remembered.last = summary
     window.emit('downloads:summaryChanged', summary)
@@ -236,11 +250,12 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
    * drawing an empty list for as long as the user leaves it open. An action from nowhere is
    * refused the same way rather than being run as though some window had asked.
    */
-  const sender = (event: IpcMainInvokeEvent): DownloadViewer => {
+  const senderWindow = (event: IpcMainInvokeEvent): DownloadHandlerWindow => {
     const window = windows.downloadWindows.find((candidate) => candidate.sends(event.sender.id))
     if (window === undefined) throw new Error('No window for this request')
-    return window.viewer
+    return window
   }
+  const sender = (event: IpcMainInvokeEvent): DownloadViewer => senderWindow(event).viewer
 
   /** The sender's window, if that window's list holds the row. */
   const mayTouch = (event: IpcMainInvokeEvent, id: string): boolean =>
@@ -249,6 +264,20 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   handle('downloads:list', (_payload, event) => {
     const viewer = sender(event)
     return { downloads: downloads.list(viewer), privateWindow: viewer.mode === 'private' }
+  })
+
+  /*
+    The button's first picture, from the same snapshot a push would use — the button draws no row, so
+    there is nothing a fresh probe could change about it.
+
+    It leaves `last` alone on purpose. That field is what the window's chrome UI was *pushed*, and the
+    asker here need not be the chrome UI: the window's overlay resolves to the same window. Recording
+    this answer as sent would let the de-duplication swallow the next change for a chrome UI that had
+    never heard of this one. The cost is at most one push repeating what a pull just said.
+  */
+  handle('downloads:summary', (_payload, event) => {
+    const window = senderWindow(event)
+    return currentSummary(window, downloads.snapshot(window.viewer)).summary
   })
 
   /*

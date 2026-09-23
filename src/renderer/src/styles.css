@@ -434,6 +434,62 @@ body {
   background: var(--bg-input);
 }
 
+/*
+  The download button. The tray under the arrow is the progress track: dimmed while something runs,
+  filled from the left for a known share, swept by a short segment for an unknown one. Reduced motion
+  keeps the sweep still but dashed, so unknown stays unlike any share.
+*/
+.downloads[data-activity] .downloads__track {
+  stroke: var(--fg-dim);
+  opacity: 0.5;
+}
+
+.downloads__fill,
+.downloads__sweep {
+  stroke: var(--accent);
+}
+
+.downloads__sweep {
+  stroke-dasharray: 0.3 1;
+  animation: downloads-sweep 1.2s linear infinite;
+}
+
+@keyframes downloads-sweep {
+  from {
+    stroke-dashoffset: 0.3;
+  }
+  to {
+    stroke-dashoffset: -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .downloads__sweep {
+    stroke-dasharray: 0.08 0.1;
+    animation: none;
+  }
+}
+
+/* The mark: its shape says which outcome, the colour only repeats it. */
+.downloads__badge circle {
+  fill: var(--accent);
+  stroke: var(--bg);
+  stroke-width: 1;
+}
+
+.downloads__badge path {
+  stroke: var(--bg);
+  stroke-width: 1.2;
+}
+
+.downloads[data-marker='failed'] .downloads__badge circle {
+  fill: var(--danger);
+}
+
+.downloads[data-marker='paused'] .downloads__badge circle {
+  fill: var(--fg-dim);
+}
+
 /* --- address bar ----------------------------------------------------------- */
 
 .omnibox {

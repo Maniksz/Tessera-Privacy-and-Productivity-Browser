@@ -119,6 +119,9 @@ export const en = {
   */
   'toolbar.zoomLevel': '{percent}%',
   'toolbar.zoomReset': 'Reset zoom',
+  // The download button's name while it has something to say; `{status}` is a `downloads.state.*`.
+  'toolbar.downloadsStatus': 'Downloads: {status}',
+  'toolbar.downloadsProgress': 'Downloads: {percent}%',
 
   // address bar
   'omnibox.placeholder': 'Search or enter address',

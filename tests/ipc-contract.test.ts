@@ -98,6 +98,22 @@ describe('IPC contract', () => {
     ).toBe(false)
   })
 
+  it('answers the pull for the download summary with the same strict shape the push carries', () => {
+    // The first picture and every one after it cross the boundary as one schema, so the pull cannot
+    // become the side door a file name leaks through.
+    const pull = invokeContract['downloads:summary']
+    expect(pull.request.safeParse(undefined).success).toBe(true)
+    expect(pull.response).toBe(eventContract['downloads:summaryChanged'])
+    expect(
+      pull.response.safeParse({
+        visible: true,
+        activity: null,
+        marker: 'failed',
+        fileName: 'a.zip'
+      }).success
+    ).toBe(false)
+  })
+
   it('rejects a malformed request', () => {
     // The main process must not trust the renderer, even our own.
     expect(invokeContract['split:setLayout'].request.safeParse({ layout: '9x9' }).success).toBe(false)

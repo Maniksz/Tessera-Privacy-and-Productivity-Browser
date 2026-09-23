@@ -106,6 +106,8 @@ export const de = {
   // Mit Leerzeichen vor dem Prozentzeichen — anders als im Englischen.
   'toolbar.zoomLevel': '{percent} %',
   'toolbar.zoomReset': 'Zoom zurücksetzen',
+  'toolbar.downloadsStatus': 'Downloads: {status}',
+  'toolbar.downloadsProgress': 'Downloads: {percent} %',
 
   'omnibox.placeholder': 'Suchen oder Adresse eingeben',
   'omnibox.searchWith': 'Mit {engine} suchen',

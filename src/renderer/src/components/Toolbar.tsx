@@ -1,3 +1,4 @@
+import type { DownloadButtonSummary } from '@shared/downloads/summary.js'
 import type { SplitState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { ShortcutTitle } from '@shared/shortcuts/format.js'
@@ -5,6 +6,7 @@ import { HOME_URL } from '@shared/url/omnibox.js'
 import { effectiveZoomPercent } from '@shared/zoom/model.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
+import { DownloadsButton } from './DownloadsButton.js'
 import { LayoutMenu } from './LayoutMenu.js'
 import { Omnibox } from './Omnibox.js'
 
@@ -12,10 +14,10 @@ import { Omnibox } from './Omnibox.js'
  * The toolbar.
  *
  * Left: navigation and Home — the things you reach for constantly, grouped where the
- * pointer already is after using the tab strip. Right: the layout menu and the two
- * panels, which are occasional. Five separate layout buttons used to sit on the right
- * and cost five slots to express one choice; `LayoutMenu` is one button that also shows
- * which arrangement is active.
+ * pointer already is after using the tab strip. Right: the layout menu, the downloads
+ * button once there is something to show, and the panels, which are occasional. Five
+ * separate layout buttons used to sit on the right and cost five slots to express one
+ * choice; `LayoutMenu` is one button that also shows which arrangement is active.
  */
 
 interface ToolbarProps {
@@ -25,6 +27,13 @@ interface ToolbarProps {
   privateMode: boolean
   /** Whether the layout menu is currently up on the overlay layer. */
   layoutMenuOpen: boolean
+  /**
+   * What the download button says, from `useDownloadSummary`. Optional because absent and hidden
+   * mean the same here — no button — and a toolbar rendered for anything else need not invent one.
+   */
+  downloads?: DownloadButtonSummary
+  /** Whether the downloads panel is currently up on the overlay layer. */
+  downloadsPanelOpen?: boolean
   onOpenSettings: () => void
   onOpenExtensions: () => void
   /** Bumped when the user asks for the address bar; passed straight to `Omnibox`. */
@@ -39,9 +48,10 @@ export function Toolbar({
   settings,
   privateMode,
   layoutMenuOpen,
+  downloads,
+  downloadsPanelOpen = false,
   onOpenSettings,
-  onOpenExtensions
-,
+  onOpenExtensions,
   focusRequest,
   titleWithShortcut
 }: ToolbarProps): React.ReactNode {
@@ -195,6 +205,10 @@ export function Toolbar({
               {maximized ? <path d="M4 8h5V3M16 12h-5v5" /> : <path d="M4 4h12v12H4z" />}
             </svg>
           </button>
+        )}
+
+        {downloads !== undefined && (
+          <DownloadsButton summary={downloads} open={downloadsPanelOpen} />
         )}
 
         {/* No key: `SHORTCUT_ACTIONS` has no extensions action, and a tooltip must not invent one. */}

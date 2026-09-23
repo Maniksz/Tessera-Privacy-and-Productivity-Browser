@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Toolbar } from '@renderer/components/Toolbar.js'
+import type { DownloadButtonSummary } from '@shared/downloads/summary.js'
 import type { SplitState, TabState } from '@shared/model.js'
 import { shortcutTitles } from '@shared/shortcuts/format.js'
 
@@ -70,7 +71,9 @@ function split(): SplitState {
   }
 }
 
-function renderToolbar(): void {
+function renderToolbar(
+  downloads: DownloadButtonSummary = { visible: false, activity: null, marker: null }
+): void {
   installBridge()
   render(
     <Toolbar
@@ -79,6 +82,8 @@ function renderToolbar(): void {
       settings={null}
       privateMode={false}
       layoutMenuOpen={false}
+      downloads={downloads}
+      downloadsPanelOpen={false}
       focusRequest={0}
       onOpenSettings={() => {}}
       onOpenExtensions={() => {}}
@@ -124,5 +129,27 @@ describe('the settings button draws a cog', () => {
     renderToolbar()
     const button = screen.getByRole('button', { name: /^Settings/ })
     expect(button.querySelectorAll('circle')).toHaveLength(1)
+  })
+})
+
+describe('the download button', () => {
+  it('is not in the toolbar while the window has nothing to show', () => {
+    renderToolbar({ visible: false, activity: null, marker: null })
+    expect(screen.queryByRole('button', { name: /^Downloads/ })).toBeNull()
+  })
+
+  it('sits beside the extensions button once a download has started', () => {
+    // With the other occasional panels on the right, rather than among the constant controls on the left.
+    renderToolbar({ visible: true, activity: { kind: 'indeterminate' }, marker: null })
+    const downloads = screen.getByRole('button', { name: /^Downloads/ })
+    expect(downloads.nextElementSibling).toBe(screen.getByRole('button', { name: 'Extensions' }))
+  })
+
+  it('draws a 20px outline its name already says, like its neighbours', () => {
+    renderToolbar({ visible: true, activity: null, marker: null })
+    const svg = screen.getByRole('button', { name: /^Downloads/ }).querySelector('svg')
+    expect(svg?.getAttribute('viewBox')).toBe('0 0 20 20')
+    // Hidden, because the name carries the progress and the mark; read twice, it would be noise.
+    expect(svg?.getAttribute('aria-hidden')).toBe('true')
   })
 })

@@ -1095,6 +1095,11 @@ export const invokeContract = {
    */
   'downloads:resume': { request: downloadIdRequest, response: downloadChanged },
   'downloads:cancel': { request: downloadIdRequest, response: downloadChanged },
+  /**
+   * The sending window's button summary, now. The very schema the push uses, not a copy of it, so
+   * what the first picture may carry cannot drift from what every later one may.
+   */
+  'downloads:summary': { request: nothing, response: downloadButtonSummarySchema },
 
   // --- saved passwords -----------------------------------------------------
   /** Origins, usernames and timestamps. No password reaches the page through this channel. */
