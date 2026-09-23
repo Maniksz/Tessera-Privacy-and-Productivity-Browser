@@ -46,6 +46,14 @@ export interface UserRule {
 export interface UserRuleDocument {
   version: 1
   rules: UserRule[]
+  /**
+   * The rules as the user last saved them as one text — notes, blank lines and order included.
+   *
+   * Absent until the text box has been saved once, and optional rather than versioned because an older
+   * file without it means exactly "no text saved yet". Never read as rules: the rules above are the truth,
+   * and `projectUserRuleSource` in `user-rules-source.ts` merges this into them rather than the reverse.
+   */
+  source?: string | undefined
 }
 
 export function emptyUserRuleDocument(): UserRuleDocument {

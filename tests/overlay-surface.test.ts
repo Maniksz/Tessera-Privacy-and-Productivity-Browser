@@ -169,7 +169,8 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
     canWiden: true,
     canNarrow: true,
     outcome: null,
-    canUndo: false
+    canUndo: false,
+    text: {}
   },
   'downloads-panel': {
     kind: 'downloads-panel',

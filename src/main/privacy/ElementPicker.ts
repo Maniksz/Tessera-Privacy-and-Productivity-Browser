@@ -32,6 +32,7 @@ import {
   type OverlayPresentation,
   type OverlayState
 } from '@shared/overlay/surface.js'
+import type { Locale } from '@shared/i18n/catalog.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Rect } from '@shared/ui/anchor.js'
 import { onOverlayVacancy, type OverlayVacancyReason } from '../permissions/vacancy.js'
@@ -125,14 +126,23 @@ export interface PickerHost {
 
 export interface ElementPickerOptions {
   /**
-   * The picker's stylesheet and wording, for the language in force *now*.
+   * The picker's stylesheet: the one thing that still crosses into the page.
    *
-   * Read per start rather than once, so a language change reaches the next picker session rather than
-   * the next restart — and so the preload never has to hold a translation catalogue.
+   * It carried wording too, once, and the preload never had to hold a translation catalogue for it. The
+   * words are the confirmation bar's now, and they travel on the bar's presentation; see `locale` below.
    */
   readonly chrome: () => PickerChrome
   /** Read per start, because whether this document may be filtered is a live answer. */
   readonly getSettings: () => SettingsSnapshot
+  /**
+   * The language the interface is in, read per presentation.
+   *
+   * The bar's words are resolved here in the core (`picker-bar-text.ts`) and sent with every
+   * presentation, so this is asked each time rather than once per session: a language changed under an
+   * open bar is in force by the next thing the bar says. A closure rather than `getSettings`, because
+   * `'system'` means the desktop's language and only `app.getLocale()` knows what that is.
+   */
+  readonly locale: () => Locale
   /**
    * Where a picked rule goes. Bound to a browsing mode by `UserRuleStore.editorFor`, so a private
    * window's picker writes nothing to disk — which is a property of the object rather than a check
@@ -184,8 +194,6 @@ interface PickerAttempt {
   hovered: string
   /** The rule *this attempt* wrote, so Undo can take back exactly it and nothing else. */
   written: { readonly ruleId: string; readonly editor: UserRuleEditor } | null
-  /** The deadline on the page's measurement, cleared at every end. */
-  measuring: ReturnType<typeof setTimeout> | null
 }
 
 export class ElementPicker {
@@ -198,6 +206,17 @@ export class ElementPicker {
    */
   #session: PickerSession | null = null
   #attempt: PickerAttempt | null = null
+  /**
+   * The deadline on the page's measurement, cleared at every end.
+   *
+   * Held here rather than on the attempt, and where it is held is the point. It lived on the attempt,
+   * and a bar leaving the layer drops the attempt *before* it aborts — deliberately, see
+   * `#overlayVacated` — so the end that should have cleared it found no attempt to clear it on. The
+   * timer then outlived its session and fired into the next one in the same view. There is one
+   * session in the program, so there is one deadline, and nothing about clearing it should depend on
+   * which record happens still to be held.
+   */
+  #deadline: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: ElementPickerOptions) {
     this.#options = options
@@ -298,7 +317,29 @@ export class ElementPicker {
     // Whatever was running ends first, in whatever window — including when this start is about to be
     // refused. An old session must not survive a refusal that has nothing to do with it.
     this.#release(result.did === 'started' || result.did === 'refused' ? result.displaced : null)
-    this.#attempt = { sessionId, host, hovered: '', written: null, measuring: null }
+    /*
+      And whatever an *ended* attempt left on screen goes too, which the line above cannot do.
+
+      An attempt that finished with an answer — saved, refused, already there — is over, so it is not
+      displaced and `#release` has nothing to end; but its bar is still up, naming the outcome and
+      offering Close and Undo. Once the record below names the new attempt, every press on that bar
+      names one the core no longer holds and is refused, Escape included, and the vacancy it would
+      announce on leaving is ignored for the same reason: a surface nothing can take down.
+
+      The record is dropped *before* the dismissal, `#overlayVacated`'s order for its reason: the
+      departure is announced synchronously, and it must find no attempt to abort.
+
+      Only in another window. In the same one the new presentation replaces the old bar in place — a
+      picker bar is named by its session, so the layer treats it as a new surface and announces the
+      old one's departure, which the new record ignores. Taking it down first there would hand focus
+      to the chrome and straight back, a keystroke's worth of interference for nothing on screen.
+    */
+    const previous = this.#attempt
+    this.#attempt = null
+    if (previous !== null && previous.host.windowId !== host.windowId) {
+      previous.host.dismissOverlayKind('picker-bar')
+    }
+    this.#attempt = { sessionId, host, hovered: '', written: null }
 
     if (result.did === 'refused') {
       this.#session = null
@@ -512,10 +553,16 @@ export class ElementPicker {
       sessionId: session.sessionId,
       selector
     })
-    const waiting = this.#attempt
-    if (waiting === null) return
-    waiting.measuring = setTimeout(() => {
-      waiting.measuring = null
+    this.#stopWaiting()
+    this.#deadline = setTimeout(() => {
+      this.#deadline = null
+      /*
+        Only for the session it was armed for. Every end clears this, so a timer that fires for another
+        session is one that an end missed — and the step below is addressed to a *view*, which a new
+        session in the same tab satisfies. Answered there, it would report "no answer came" to an
+        attempt whose page has not been asked yet.
+      */
+      if (this.#session?.sessionId !== session.sessionId) return
       // No answer is coming. Reported as a measurement of nothing rather than as an error, because
       // that is what the session makes of it: stored, and no effect observed here.
       this.#step({
@@ -577,10 +624,9 @@ export class ElementPicker {
   }
 
   #stopWaiting(): void {
-    const attempt = this.#attempt
-    if (attempt?.measuring == null) return
-    clearTimeout(attempt.measuring)
-    attempt.measuring = null
+    if (this.#deadline === null) return
+    clearTimeout(this.#deadline)
+    this.#deadline = null
   }
 
   /** A correction, applied to all three of the places that have to agree about it. */
@@ -604,6 +650,7 @@ export class ElementPicker {
       hovered: attempt.hovered,
       outcome,
       canUndo: attempt.written !== null,
+      locale: this.#options.locale(),
       place: {
         tabId: attempt.host.tabId,
         tileIndex: attempt.host.tileIndex,
@@ -628,7 +675,8 @@ export class ElementPicker {
 
       The bar has left, so nothing can be pressed on it any more — including Undo, whose rule id this
       record is the only holder of. Dropping it first is also what keeps `#end` from trying to take
-      down a surface that has already gone.
+      down a surface that has already gone. It no longer strands the measurement deadline, which is not
+      on the record (see `#deadline`): the abort's `#clear` finds it without one.
     */
     this.#attempt = null
     this.#abort({ of: 'window', windowId: attempt.host.windowId }, vacancyAbortReason(reason))

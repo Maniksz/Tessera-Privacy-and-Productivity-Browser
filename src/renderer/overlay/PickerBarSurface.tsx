@@ -1,9 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { PickerBarPresentation } from '@shared/overlay/surface.js'
 import type { PickerBarAction } from '@shared/overlay/picker-bar.js'
-import type { MessageKey } from '@shared/i18n/catalog.js'
+import { interpolate } from '@shared/i18n/catalog.js'
 import { invoke } from '@renderer/bridge.js'
-import { useI18n } from '@renderer/i18n.js'
 import './picker-bar.css'
 
 /**
@@ -24,11 +23,15 @@ import './picker-bar.css'
  * - **Confirm is not pressable while the core is working.** `writing` and `measuring` are the window in
  *   which a second press would write a second rule, and both routes into it are closed: the button is
  *   disabled and Return is refused. A disabled button alone would leave the keyboard contract open.
- * - **An unknown outcome renders its own key.** The set of outcomes belongs to the picking session, which
- *   is where it is held to being exhaustive; the bar receives an opaque key and resolves
- *   `picker.outcome.${outcome}` against the catalogue. A table here would be a second list of the same
- *   eight names, and a ninth would render as an empty bar — a blank, which is the one thing that reads as
- *   reassuring while saying nothing.
+ * - **The words are the presentation's.** Every sentence and label arrives in `presentation.text`,
+ *   resolved in the core for the interface language (`main/privacy/picker-bar-text.ts`, which says why
+ *   they are not in the renderer's catalogue). Nothing here reaches for `useI18n`: a bar that did would
+ *   say English over a German presentation the moment the two disagreed.
+ * - **An unknown key renders as itself.** The set of outcomes belongs to the picking session, which is
+ *   where it is held to being exhaustive; the bar receives an opaque key and resolves `outcome.${outcome}`
+ *   in the words it was sent. A table here would be a second list of the same eight names, and a ninth
+ *   would render as an empty bar — a blank, which is the one thing that reads as reassuring while saying
+ *   nothing. A missing label falls back the same way, so no control is ever unlabelled.
  * - **Escape is stopped here.** It is a *named* cancel rather than the layer's generic dismissal, because
  *   a dismissal takes down whatever is up: one that arrived a moment after a consent dialogue had claimed
  *   the layer would take the dialogue down, and the safe default turns that into a refusal nobody gave.
@@ -46,11 +49,24 @@ export function PickerBarSurface({
 }: {
   presentation: PickerBarPresentation
 }): React.ReactNode {
-  const { t } = useI18n()
   const barRef = useRef<HTMLDivElement>(null)
 
-  const { sessionId, tileIndex, mode, selector, matches, canWiden, canNarrow, outcome, canUndo } =
-    presentation
+  const {
+    sessionId,
+    tileIndex,
+    mode,
+    selector,
+    matches,
+    canWiden,
+    canNarrow,
+    outcome,
+    canUndo,
+    text
+  } = presentation
+
+  // The shared interpolator, so `{index}` and `{count}` mean what they mean in every catalogue sentence.
+  const t = (key: string, params?: Record<string, string | number>): string =>
+    interpolate(text[key] ?? key, params)
 
   /*
     Focus lands on the bar itself, once per attempt.
@@ -83,11 +99,11 @@ export function PickerBarSurface({
     if (finished) {
       // `outcome` is `null` only for a bar the core would not have presented at all; the key falls
       // back to itself either way, which is a name on screen rather than a blank.
-      return t(`picker.outcome.${outcome ?? ''}` as MessageKey)
+      return t(`outcome.${outcome ?? ''}`)
     }
-    if (mode === 'showing') return t('picker.bar.choosing')
-    if (mode === 'writing') return t('picker.bar.writing')
-    if (mode === 'measuring') return t('picker.bar.measuring')
+    if (mode === 'showing') return t('choosing')
+    if (mode === 'writing') return t('writing')
+    if (mode === 'measuring') return t('measuring')
     /*
       Frozen, so the count is the answer — and `null` is not a count.
 
@@ -95,10 +111,10 @@ export function PickerBarSurface({
       confirms. `null` is the absence of a finding, and rendering the two the same way would announce a
       result while the measurement was still on its way.
     */
-    if (matches === null) return t('picker.bar.counting')
-    if (matches === 0) return t('picker.bar.matchesNone')
-    if (matches === 1) return t('picker.bar.matchesOne')
-    return t('picker.bar.matches', { count: matches })
+    if (matches === null) return t('counting')
+    if (matches === 0) return t('matchesNone')
+    if (matches === 1) return t('matchesOne')
+    return t('matches', { count: matches })
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -157,7 +173,7 @@ export function PickerBarSurface({
       ref={barRef}
       className="pickerbar"
       role="group"
-      aria-label={t('picker.bar.label', { index: tileIndex + 1 })}
+      aria-label={t('label', { index: tileIndex + 1 })}
       /*
         Focusable, and out of the tab ring. It has to hold focus for the four keys to reach it, and it
         must not be a stop the trap above walks through — the trap cycles the controls, and a container
@@ -196,7 +212,7 @@ export function PickerBarSurface({
               disabled={busy || !canWiden}
               onClick={() => act('widen')}
             >
-              {t('picker.bar.widen')}
+              {t('widen')}
             </button>
             <button
               type="button"
@@ -204,7 +220,7 @@ export function PickerBarSurface({
               disabled={busy || !canNarrow}
               onClick={() => act('narrow')}
             >
-              {t('picker.bar.narrow')}
+              {t('narrow')}
             </button>
             {/*
               Disabled rather than absent while the core is working, so the bar does not change shape
@@ -217,7 +233,7 @@ export function PickerBarSurface({
               disabled={busy}
               onClick={() => act('confirm')}
             >
-              {t('picker.bar.confirm')}
+              {t('confirm')}
             </button>
           </>
         )}
@@ -225,7 +241,7 @@ export function PickerBarSurface({
         {/* R15: the way back, offered only where this attempt actually wrote something to take back. */}
         {finished && canUndo && (
           <button type="button" className="pickerbar__button" onClick={() => act('undo')}>
-            {t('picker.bar.undo')}
+            {t('undo')}
           </button>
         )}
 
@@ -239,7 +255,7 @@ export function PickerBarSurface({
         */}
         {finished && (
           <button type="button" className="pickerbar__button" onClick={() => act('open-rules')}>
-            {t('picker.bar.openRules')}
+            {t('openRules')}
           </button>
         )}
 
@@ -251,7 +267,7 @@ export function PickerBarSurface({
           back, which is the button beside it.
         */}
         <button type="button" className="pickerbar__button" onClick={() => act('cancel')}>
-          {finished ? t('picker.bar.close') : t('picker.bar.cancel')}
+          {finished ? t('close') : t('cancel')}
         </button>
       </div>
     </div>

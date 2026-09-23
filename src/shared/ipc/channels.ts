@@ -161,11 +161,16 @@ export const INVOKE_CHANNELS = [
    * against the one it is running, so a stale or invented one presses nothing.
    */
   'picker:barAction',
-  /** The user's own rules, for the settings page and the blocker menu. */
+  /** The user's own rules, for the settings page's rule manager. */
   'userrules:list',
-  'userrules:add',
-  'userrules:setEnabled',
-  'userrules:remove',
+  /**
+   * The rule manager's text, saved whole — the one new channel U8 gives `tessera://settings` (KTD13).
+   *
+   * Classified rather than inherited from the line above, and it lands on the settings page's grant for
+   * a reason of its own, argued there: it *replaces* the three one-rule write channels that page held,
+   * and does not add to them.
+   */
+  'userrules:apply',
   'media:list',
   'media:describe',
   'media:download',
@@ -449,11 +454,30 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
       network syntax and it refuses scriptlets, so the most this page can do is hide or restyle an element on
       a site it names. That is strictly less than it can already do with `settings:set` — which writes
       `privacy.blockerLists`, a set of addresses this browser will fetch and compile.
+
+      ## Two channels where there were four (OQ5)
+
+      `userrules:apply` *replaces* `userrules:add`, `userrules:setEnabled` and `userrules:remove` here, and
+      the three are gone from the contract as well rather than left standing beside it. Three reasons:
+
+      - **It adds no power they did not have, and they add none it lacks.** A saved text can add a rule,
+        switch one off or on, and delete one; so could the three. Keeping them would grant nothing new — it
+        would keep three more doors into the same editor, each needing its own check to stay right.
+      - **One of those doors was the weaker one.** `setEnabled` switches a stored rule on without
+        re-validating it. Behind `apply`, a line becomes a switched-on rule only by passing `describeUserRule`
+        on the way in — a commented line without its `!` — so there is one validation path and not two.
+      - **Nobody calls them any more.** This page was their only caller; the blocker menu and the picker act
+        on the editor in the core and never had the channels. The rule applied to `settings:get` and
+        `settings:resetAll` above applies here: a grant nobody exercises is a grant nobody notices going
+        wrong. `tests/internal-page-wiring.test.ts` compares this list with what the page calls, so the
+        next person to want one back makes it a decision again.
+
+      What `apply` carries that the three did not is the whole text, and so the whole rule set in one call —
+      bounded by `MAX_USER_RULE_SOURCE_LENGTH` and refused outright past the rule limit, so the worst a page
+      can do in one call is what it could already do in five hundred.
     */
     'userrules:list',
-    'userrules:add',
-    'userrules:setEnabled',
-    'userrules:remove',
+    'userrules:apply',
     /*
       The way from the Passwords section to the passwords themselves.
 

@@ -194,8 +194,8 @@ function fakeCore(
           every assertion in this file about "no alert is shown" would fail for a reason that has nothing to
           do with what it is testing.
 
-          One rule in the list rather than none, so the privilege sweep below sees the row's controls exist —
-          an empty editor calls `list` and nothing else, which would let a missing grant pass unnoticed.
+          One rule in the text rather than none, and the sweep below edits it and saves — an editor that is
+          only read calls `list` and nothing else, which would let a missing grant for the save pass unnoticed.
         */
         case 'userrules:list':
           return Promise.resolve({
@@ -209,13 +209,13 @@ function fakeCore(
                 kind: 'declarative'
               }
             ],
-            text: { heading: 'My filter rules', add: 'Add rule', remove: 'Delete this rule', toggle: 'Apply this rule' }
+            text: { heading: 'My filter rules', save: 'Save rules', discard: 'Discard changes' },
+            source: 'example.com##.ad',
+            rejected: [],
+            session: false
           })
-        case 'userrules:add':
-          return Promise.resolve({ outcome: 'added' })
-        case 'userrules:setEnabled':
-        case 'userrules:remove':
-          return Promise.resolve(undefined)
+        case 'userrules:apply':
+          return Promise.resolve({ outcome: 'applied' })
         case 'settings:getAll':
           return Promise.resolve({ ...snapshot })
         case 'settings:set': {
@@ -528,8 +528,14 @@ describe('the settings surface, which is now only a page', () => {
     fireEvent.change(screen.getByLabelText('Gesperrte Hosts'), { target: { value: 'a.example' } })
     fireEvent.click(screen.getByRole('button', { name: 'Check for Updates…' }))
     fireEvent.click(screen.getByLabelText(`Reset to default: ${BLOCKER}`))
+    await waitFor(() => expect(screen.getByLabelText('My filter rules')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('My filter rules'), {
+      target: { value: '! example.com##.ad' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save rules' }))
 
     await waitFor(() => expect(internal.channels()).toContain('settings:reset'))
+    await waitFor(() => expect(internal.channels()).toContain('userrules:apply'))
     const granted: readonly string[] = INTERNAL_PAGE_INVOKE_CHANNELS.settings
     expect([...new Set(internal.channels())].filter((channel) => !granted.includes(channel))).toEqual([])
 

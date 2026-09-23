@@ -77,7 +77,7 @@ import { restoreSettingsFrom } from './session-restore/settings.js'
 import { FilterSubscription } from './privacy/FilterSubscription.js'
 import { CosmeticInjector } from './privacy/CosmeticInjector.js'
 import { ElementPicker } from './privacy/ElementPicker.js'
-import { pickerChromeFor } from './privacy/picker-chrome.js'
+import { pickerChrome } from './privacy/picker-chrome.js'
 import { buildPageContextMenu } from './menu/pageContextMenu.js'
 import { UserRuleStore } from './data/UserRuleStore.js'
 import { PermissionStore } from './data/PermissionStore.js'
@@ -821,10 +821,11 @@ async function main(): Promise<void> {
     would block a request, because hiding a banner and cutting a site off must not sit behind one click.
   */
   elementPicker = new ElementPicker({
-    // Read per call and through `uiLocale`, so the picker's own labels follow the language the rest of
-    // the interface is in — including the `'system'` default, which the raw setting does not answer.
-    chrome: () => pickerChromeFor(uiLocale(settings)),
+    // No language in the chrome any more: what crosses into the page is a stylesheet. The words are the
+    // confirmation bar's, resolved in the core and sent with its presentation — hence `locale`.
+    chrome: pickerChrome,
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
+    locale: () => uiLocale(settings),
     editorFor: (webContentsId) => {
       const controller = windows?.controllerForWebContents(webContentsId)
       if (controller === undefined) return null

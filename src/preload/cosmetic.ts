@@ -145,23 +145,52 @@ function replaceSpecificStyles(css: string): boolean {
  * not working. The core pushes the complete set on the same channel; `replaceSpecificStyles` is what
  * makes a re-send safe, and the file docblock argues why replacement rather than appending.
  *
- * ## Why a failed first write is retried
+ * ## Why the write waits for `<html>`, and why on a mutation observer
  *
- * `styleElement` needs somewhere to put the sheet, and at `document-start` there may be no `<html>`
- * yet. That is a real timing on a slow first byte, and the failure is invisible — the rules arrive and
- * are dropped. One retry when the DOM exists costs a listener that is never installed on the common
- * path, and turns "sometimes this site is not filtered and nobody can say why" into a flicker.
+ * `styleElement` needs somewhere to put the sheet, and at `document-start` there is normally nothing:
+ * a preload runs before the parser has produced `<html>`, so the first write fails on almost every
+ * page rather than on a rare slow one. The rules have to be held until the element exists.
+ *
+ * This used to wait for `DOMContentLoaded`, and that was the bug behind a picked rule that "sometimes
+ * does not work" when reloading quickly. The browser paints long before `DOMContentLoaded` — the parser
+ * yields, the first frames are drawn with whatever has arrived — so every one of them showed the
+ * element, and a document thrown away by the next reload never reached the event at all. A mutation
+ * observer on the document fires as soon as `<html>` is inserted, and its callback runs as a microtask:
+ * before the next paint, so the sheet is in place before the element is ever drawn.
+ *
+ * A push waits the same way. Before this it tried once and was dropped if there was no `<html>` yet —
+ * silently, with the rules computed and sent and never applied.
  */
 function installSpecificStyles(): void {
   /*
-    The rules as last heard, written through one function.
+    The rules as last heard, and whether a write is still waiting for somewhere to go.
 
-    Held rather than passed to the retry below, and that is the whole reason this is a variable: a
-    retry that closed over the *first* answer would undo a rule the user wrote in the meantime, which
-    is the one thing this change exists to make impossible.
+    Held rather than passed to the retry, and that is the whole reason `latest` is a variable: a retry
+    that closed over the *first* answer would undo a rule the user wrote in the meantime, which is the
+    one thing this exists to make impossible. A push that arrives while the retry waits only replaces
+    what it will write — so there is one observer however many answers arrive, and never a stale sheet
+    written after a newer one.
   */
   let latest = ''
-  const write = (): boolean => replaceSpecificStyles(latest)
+  let waiting = false
+
+  const ensureWritten = (): void => {
+    if (waiting || replaceSpecificStyles(latest)) return
+    waiting = true
+    const retry = (): void => {
+      if (!replaceSpecificStyles(latest)) return
+      waiting = false
+      observer.disconnect()
+      document.removeEventListener('DOMContentLoaded', retry)
+    }
+    // `childList` on the document alone, not its subtree: `<html>` is enough of a parent (see
+    // `styleElement`), so the insertion of `<html>` itself is the one mutation that matters.
+    const observer = new MutationObserver(retry)
+    observer.observe(document, { childList: true })
+    // A last resort, for a document built some way the observer does not see. Nothing on the normal
+    // path reaches it: the observer has written and removed it long before.
+    document.addEventListener('DOMContentLoaded', retry)
+  }
 
   ipcRenderer.on(COSMETIC_SPECIFIC_CHANNEL, (_event, payload: unknown) => {
     // Not `asCosmeticStyles`: that reads the empty string as "nothing to add", and here it is the
@@ -169,7 +198,7 @@ function installSpecificStyles(): void {
     // rule the user deleted stops applying to the page they deleted it on.
     if (typeof payload !== 'string') return
     latest = payload
-    write()
+    ensureWritten()
   })
 
   let answer: unknown
@@ -183,9 +212,7 @@ function installSpecificStyles(): void {
   const css = asCosmeticStyles(answer)
   if (css === null) return
   latest = css
-  if (write()) return
-
-  document.addEventListener('DOMContentLoaded', write, { once: true })
+  ensureWritten()
 }
 
 /**

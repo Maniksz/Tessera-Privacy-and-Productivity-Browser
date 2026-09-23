@@ -1,6 +1,6 @@
 import { cosmeticCss, hostChain } from './cosmetic.js'
 import { hostnameOfUrl } from './model.js'
-import { describeUserRule } from './user-rules.js'
+import { describeUserRule, type UserRuleDetail } from './user-rules.js'
 
 /**
  * The host-specific stylesheet one **view** is served: the engine's answer for the document, plus
@@ -230,8 +230,8 @@ type LineVerdict =
 function readLine(line: string, chain: ReadonlySet<string>): LineVerdict {
   const detail = describeUserRule(line)
   if (detail === null) return { taken: false, reason: 'unreadable' }
-  if (detail.isException) return { taken: false, reason: 'exception' }
-  if (detail.kind === 'procedural') return { taken: false, reason: 'procedural' }
+  const refusal = kindRefusal(detail)
+  if (refusal !== null) return { taken: false, reason: refusal }
   // A rule naming no host applies everywhere by its writer's own choosing. One naming hosts has to
   // name this one, matched against the host's parent domains exactly as `cosmeticSelectorsFor`
   // matches a list's rules — a rule for `example.com` applies on `www.example.com`.
@@ -242,4 +242,28 @@ function readLine(line: string, chain: ReadonlySet<string>): LineVerdict {
   return scoped || excluded
     ? { taken: false, reason: 'other-host' }
     : { taken: true, selector: detail.selector }
+}
+
+/**
+ * The refusals that follow from what a readable rule *is*, whichever document it is served to. Null for a
+ * rule an addition can carry on a host it names.
+ */
+function kindRefusal(detail: UserRuleDetail): 'exception' | 'procedural' | null {
+  if (detail.isException) return 'exception'
+  if (detail.kind === 'procedural') return 'procedural'
+  return null
+}
+
+/**
+ * Whether a rule can reach a page as an addition at all: on the hosts it names, `viewStylesheet` would
+ * take it.
+ *
+ * What a private window's editor asks before it holds a rule (`SessionUserRuleEditor`). That editor's rules
+ * reach its pages through this module and nowhere else, so a rule this answers `false` for — a procedural
+ * one, a `#@#` exception — would be listed as working and do nothing. Asked here rather than restated
+ * there, so the editor's refusal and the stylesheet's cannot drift apart: both are `kindRefusal`.
+ */
+export function isAdditionRule(text: string): boolean {
+  const detail = describeUserRule(text)
+  return detail !== null && kindRefusal(detail) === null
 }

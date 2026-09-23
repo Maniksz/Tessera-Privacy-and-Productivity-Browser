@@ -5,6 +5,7 @@ import { PRODUCT_NAME, PRODUCT_SCHEME } from '@shared/product.js'
 import { FAVICON_PAGE, faviconSiteOf, faviconTokenMatches } from '@shared/favicons/model.js'
 import { THUMBNAIL_PAGE, thumbnailPageOf, thumbnailTokenMatches } from '@shared/thumbnails/model.js'
 import { devServerUrl } from './startup-flags.js'
+import { devServerPathFor } from './internal-dev-path.js'
 
 /**
  * The `tessera://` scheme for internal pages (start page, settings, history,
@@ -144,7 +145,14 @@ export function registerInternalProtocol(options: {
     const relativePath = isAsset ? url.pathname : `internal/${page}.html`
 
     if (devServer !== null) {
-      return net.fetch(new URL(relativePath, devServer).toString())
+      /*
+        An asset keeps its query: Vite marks what it wants back as a module with one (`start.css?import`
+        is JavaScript, `start.css` is the stylesheet), so dropping it would hand a module script the wrong
+        kind of file. And a page's own relative references are looked up beside its file; see
+        `devServerPathFor`.
+      */
+      const target = isAsset ? `${devServerPathFor(url.pathname)}${url.search}` : relativePath
+      return net.fetch(new URL(target, devServer).toString())
     }
 
     const target = normalize(join(rootDir, relativePath))

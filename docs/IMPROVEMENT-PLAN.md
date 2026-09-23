@@ -609,11 +609,7 @@ Ein deutscher Nutzer bekommt deutsche Menüs und interne Seiten, aber ein englis
 
 ### U9 — Benutzerregeln erreichbar machen
 
-`userrules:list`, `userrules:setEnabled` und `userrules:remove` sind als Kanäle deklariert (`channels.ts:140-142`), aber im Renderer kommt `userrules` **nicht vor**, und die Settings-Seite hat keine Erlaubnis dafür. Das Blocker-Menü bietet „Meine Regeln (n)" an und ruft `onOpenSettings()` (`blocker-menu-items.ts:60-63`) — die Seite, die diese Regeln nicht anzeigen kann.
-
-**Nutzerpfad:** Element blocken → Seite geht kaputt → „Meine Regeln (3)" klicken → Einstellungen öffnen sich → nichts. Die einzige Rücknahme ist der globale Aus-Schalter des Blockers.
-
-**Fix.** Regel-Liste in den Einstellungen, Grant ergänzen. **Aufwand** 1 Tag.
+**Erledigt.** Die Settings-Seite hat die Regelverwaltung und die Erlaubnis dafür. Seit dem Element-Picker-Umbau (`docs/plans/2026-08-09-001-fix-element-picker-plan.md`) ist sie ein einziges Textfeld über alle eigenen Regeln, gespeichert über `userrules:apply`; `userrules:add`, `userrules:setEnabled` und `userrules:remove` gibt es für die Seite nicht mehr. „Meine Regeln (n)" im Blocker-Menü führt dorthin, und nach einem Block bietet die Picker-Leiste Rückgängig und den Weg in die Verwaltung an.
 
 ### U10 — Kleinere UX-Korrekturen
 

@@ -50,6 +50,7 @@ function pickerBarSample(overrides: Partial<PickerBarPresentation> = {}): Picker
     canNarrow: true,
     outcome: null,
     canUndo: false,
+    text: {},
     ...overrides
   }
 }
@@ -208,6 +209,24 @@ describe('the word the bar sends back', () => {
       rule: 'example.com##body'
     })
     expect(Object.keys(parsed).sort()).toEqual(['action', 'sessionId'])
+  })
+})
+
+describe('the bar on the wire', () => {
+  const schema = invokeContract['overlay:present'].request
+
+  it('carries the words the bar is said in, and refuses a bar without them', () => {
+    /*
+      The words travel on the presentation because they are not in the renderer's catalogue any more
+      (see `main/privacy/picker-bar-text.ts`). A schema that let them be left out would deliver a bar
+      whose every label is a bare key — legible to a developer and to nobody else.
+    */
+    const words = { confirm: 'Block it', 'outcome.saved-effective': 'Blocked.' }
+    const parsed = schema.parse(pickerBarSample({ text: words }))
+    expect(parsed.kind === 'picker-bar' && parsed.text).toEqual(words)
+
+    const { text: _dropped, ...wordless } = pickerBarSample()
+    expect(schema.safeParse(wordless).success).toBe(false)
   })
 })
 

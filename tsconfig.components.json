@@ -24,7 +24,23 @@
     "src/preload/api.d.ts",
     "src/preload/internal-api.d.ts",
     // Autofill's content-preload half, whose focus handling is tested in a document.
-    "src/preload/autofill.ts"
+    "src/preload/autofill.ts",
+    /*
+      Preload modules, one by one, because a test in here imports each of them.
+
+      The element picker's page half is all document: where its host hangs, which element a
+      capture-phase listener saw, how many things a selector matches and whether any of them is still
+      drawn. None of that can be asserted in the `unit` project, which is `environment: node` — so its
+      test lives beside the component tests, and this project is a `composite` one that refuses to
+      pull a file in through an import it was not told about (TS6307).
+
+      Named file by file rather than as `src/preload/**`, so this stays a list of what is *tested*
+      here. `tsconfig.preload.json` remains the project that checks the preload as a whole, with the
+      settings a preload actually builds under.
+    */
+    "src/preload/picker.ts",
+    // The cosmetic preload, for the same reason: when its host sheet lands is a question about a document.
+    "src/preload/cosmetic.ts"
   ],
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

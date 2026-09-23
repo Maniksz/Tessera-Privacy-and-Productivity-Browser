@@ -4,6 +4,7 @@ import type { SettingsStore } from '../settings/SettingsStore.js'
 import { describeSettings } from '../settings/describe.js'
 import { userRulesText } from '../settings/user-rules-text.js'
 import { describeUserRule, type UserRule } from '@shared/filters/user-rules.js'
+import type { RejectedUserRuleLine } from '@shared/filters/user-rules-lines.js'
 import type { WindowRegistry } from '../browser/WindowRegistry.js'
 import type { QuickLinkStore } from '../data/QuickLinkStore.js'
 import type { ExtensionStore } from '../data/ExtensionStore.js'
@@ -34,7 +35,7 @@ import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
 import type { IpcMainInvokeEvent } from 'electron'
 import type { MediaSessions } from '../media/MediaSessions.js'
 import type { ElementPicker } from '../privacy/ElementPicker.js'
-import type { UserRuleStore, UserRuleEditor } from '../data/UserRuleStore.js'
+import type { UserRuleStore, UserRuleTextEditor } from '../data/UserRuleStore.js'
 import type { BookmarkStore } from '../data/BookmarkStore.js'
 import type { DownloadManager } from '../downloads/DownloadManager.js'
 import type { PasswordApi } from '../passwords/PasswordApi.js'
@@ -96,13 +97,13 @@ export function registerIpcHandlers(deps: {
    * the one mode that writes to disk, so a settings page whose private window had just closed
    * would have put its rule into the normal profile.
    */
-  const isPrivateSender = (event: IpcMainInvokeEvent): boolean =>
-    windows.resolve(event)?.privateMode === true
-  const editorFor = (event: IpcMainInvokeEvent): UserRuleEditor => {
+  const modeOf = (event: IpcMainInvokeEvent): 'private' | 'normal' => {
     const controller = windows.resolve(event)
     if (!controller) throw new Error('No window for this request')
-    return deps.userRules.editorFor(controller.privateMode ? 'private' : 'normal')
+    return controller.privateMode ? 'private' : 'normal'
   }
+  const editorFor = (event: IpcMainInvokeEvent): UserRuleTextEditor =>
+    deps.userRules.editorFor(modeOf(event))
 
   // The router must know which renderers are the trusted chrome UI before any
   // handler can run; everything else is refused or restricted to the internal
@@ -399,8 +400,6 @@ export function registerIpcHandlers(deps: {
       // profile while hiding the ones the picker had just written in this window — the list and the
       // switch disagreeing about what "my rules" are.
       userRules: editor.list(),
-      // A private window lists the stored rules and may change only its own (see `mayChange`).
-      mayChangeRule: (id) => editor.mayChange(id),
       blockerEnabled: settings.get('privacy.blockerEnabled'),
       host,
       blockerEnabledOnSite: !filteringExemptFor(state.url, exemptSites),
@@ -439,7 +438,12 @@ export function registerIpcHandlers(deps: {
       },
       onRemoveRules: (ids) => {
         for (const id of ids) editor.remove(id)
-      }
+      },
+      // And asked of the same editor, so the menu offers only what it would honour. A private window's
+      // cannot switch off or delete a rule from the normal profile — that rule reaches this window through
+      // the engine's global slot and would go on hiding its element — and refuses if asked anyway.
+      canSetRuleEnabled: (id, enabled) => editor.canSetEnabled(id, enabled),
+      canRemoveRule: (id) => editor.canRemove(id)
     }).popup({ window: window.window })
     return OK
   })
@@ -456,64 +460,59 @@ export function registerIpcHandlers(deps: {
     `repairUserRules`; the editor shows it until then, which is better than hiding it.
   */
   const userRulesAnswer = (
-    editor: UserRuleEditor,
-    privateMode: boolean
+    event: IpcMainInvokeEvent
   ): {
-    rules: Array<UserRule & { kind: 'declarative' | 'procedural'; locked: boolean }>
+    rules: Array<UserRule & { kind: 'declarative' | 'procedural' }>
     text: Record<string, string>
+    source: string
+    rejected: RejectedUserRuleLine[]
+    session: boolean
   } => {
-    const text = userRulesText(activeLocale(settings.get('appearance.uiLanguage')))
+    const editor = editorFor(event)
+    const view = editor.source()
     return {
       rules: editor.list().map((rule) => ({
         ...rule,
-        kind: describeUserRule(rule.text)?.kind ?? 'declarative',
-        // A stored rule seen from a private window: listed, because the page applies it, and not
-        // changeable, because it is the profile's. See `UserRuleEditor.mayChange`.
-        locked: !editor.mayChange(rule.id)
+        kind: describeUserRule(rule.text)?.kind ?? 'declarative'
       })),
-      /*
-        A private window refuses more than the syntax does — exceptions and procedural rules, which
-        its per-view stylesheet cannot carry — so its refusal says so rather than calling a valid line
-        one this browser cannot apply.
-      */
-      text: privateMode ? { ...text, invalid: text.invalidPrivate } : text
+      text: userRulesText(activeLocale(settings.get('appearance.uiLanguage'))),
+      source: view.source,
+      rejected: view.rejected,
+      session: modeOf(event) === 'private'
     }
   }
 
   /*
-    Through the mode-bound editor, like the three channels that write (R16).
+    Through the mode-bound editor, like the channel that writes (R16).
 
     It read the store, and that made the rule manager unreachable from the window that most needs it:
     a private window's picker writes into its session editor, so the page it sends the user to listed
     everything except the rule they had just made — and offered to delete rules belonging to a profile
     that window is not allowed to touch. One editor per mode, read and written through the same seam.
   */
-  handle('userrules:list', (_request, event) =>
-    userRulesAnswer(editorFor(event), isPrivateSender(event))
-  )
+  handle('userrules:list', (_request, event) => userRulesAnswer(event))
   /*
-    Through the mode-bound editor like the other two, so a private window's settings page writes nothing
-    into the rules the normal profile keeps.
+    The whole text, through the sending window's editor like the read above — so a private window's settings
+    page writes nothing into the rules the normal profile keeps and nothing to disk, and the one validation
+    every line goes through is the editor's, not this handler's.
 
-    The outcome travels back rather than being thrown: the two duplicates mean the rule is already there —
-    applied, or sitting switched off — `limit-reached` means the list is as long as this build will keep it,
-    and `invalid` means the line is not one this build can honour. The editor beside the text box has to be
-    able to say each of them. A rejected promise would make them all look like a failure of the browser.
+    The outcome travels back rather than being thrown: a refused line is not a failed save (it is marked where
+    it stands and the rest is taken), and `limit-reached` means nothing was written. A rejected promise would
+    make both look like a failure of the browser.
+
+    The page sends the ids of the rules it loaded with the text, and a missing line deletes only one of
+    those. So a rule written after the page was opened — by the picker, or by a second rule manager — is kept
+    by this page's save instead of being deleted by a text that never showed it, and a loaded rule deleted
+    elsewhere meanwhile is simply already gone.
+
+    What is still last-write-wins is every line the text names. Two rule managers that both show a rule's
+    line decide its switch by whichever saves last; a rule deleted elsewhere whose line is still in this text
+    comes back as a new rule typed here; and the notes and the order are the last saver's. The rules nobody
+    saw are safe, the lines everybody saw are not merged (see `applyUserRuleSource`).
   */
-  handle('userrules:add', ({ text }, event) => {
-    const editor = editorFor(event)
-    return { outcome: editor.add({ text, origin: 'manual' }).outcome }
-  })
-  handle('userrules:setEnabled', ({ id, enabled }, event) => {
-    // Through the mode-bound editor rather than the store, so a private window cannot alter the rules the
-    // normal profile keeps — the same reason the picker takes its editor from the sending window.
-    editorFor(event).setEnabled(id, enabled)
-    return OK
-  })
-  handle('userrules:remove', ({ id }, event) => {
-    editorFor(event).remove(id)
-    return OK
-  })
+  handle('userrules:apply', ({ text, loadedIds }, event) => ({
+    outcome: editorFor(event).applySource(text, loadedIds).outcome
+  }))
 
   // --- content blocker -----------------------------------------------------
   /*

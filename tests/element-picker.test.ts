@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { COSMETIC_SPECIFIC_CHANNEL } from '@shared/filters/injection.js'
 import {
   PICKER_ESCAPED_CHANNEL,
   PICKER_FREEZE_CHANNEL,
@@ -21,6 +22,7 @@ import {
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { AddRuleResult, UserRuleEditor } from '@main/data/UserRuleStore.js'
 import type { UserRule, UserRuleInput } from '@shared/filters/user-rules.js'
+import type { PickerHost } from '@main/privacy/ElementPicker.js'
 
 /**
  * The picker's wiring: which view is spoken to, in what order, and what the bar is left showing.
@@ -76,6 +78,8 @@ const electron = vi.hoisted(() => {
 vi.mock('electron', () => ({ app: electron.app, webContents: electron.webContents }))
 
 const { ElementPicker } = await import('@main/privacy/ElementPicker.js')
+const { CosmeticInjector } = await import('@main/privacy/CosmeticInjector.js')
+const { FilterEngine } = await import('@main/privacy/FilterEngine.js')
 
 const DOCUMENT = 'https://example.com/article'
 
@@ -146,6 +150,13 @@ class FakeView {
   ask(payload: unknown): unknown {
     const event: { returnValue: unknown } = { returnValue: undefined }
     this.emit('ipc-message-sync', event, PICKER_PROPOSE_CHANNEL, payload)
+    return event.returnValue
+  }
+
+  /** The host-stylesheet question a new document asks at `document-start`, answered synchronously. */
+  askStyles(): unknown {
+    const event: { returnValue: unknown } = { returnValue: undefined }
+    this.emit('ipc-message-sync', event, COSMETIC_SPECIFIC_CHANNEL, this.url)
     return event.returnValue
   }
 
@@ -261,6 +272,22 @@ class FakeEditor implements UserRuleEditor {
   }
 }
 
+/** The window and tile a view is in, as `BrowserWindowController` would answer for it. */
+function hostIn(window: FakeWindow, tileIndex = 0): PickerHost {
+  return {
+    windowId: window.windowId,
+    tabId: `tab-${String(window.windowId)}`,
+    tileIndex,
+    tileRect: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
+    presentOverlay: (presentation) => {
+      window.present(presentation)
+    },
+    dismissOverlayKind: (kind) => window.dismissKind(kind),
+    overlayPresentation: () => window.presented,
+    openRules: () => window.opened.push('settings')
+  }
+}
+
 interface Harness {
   picker: InstanceType<typeof ElementPicker>
   view: FakeView
@@ -273,11 +300,19 @@ interface Harness {
 }
 
 function harnessFor(
-  options: { url?: string; settings?: Partial<SettingsSnapshot>; tileIndex?: number | null } = {}
+  options: {
+    url?: string
+    settings?: Partial<SettingsSnapshot>
+    tileIndex?: number | null
+    /** An editor that does more than record, for a test that needs the rule to reach an engine. */
+    editor?: FakeEditor
+    /** Where a preview goes besides the record, for the same kind of test. */
+    preview?: (id: number, rule: string | null) => void
+  } = {}
 ): Harness {
   const view = new FakeView(1, options.url ?? DOCUMENT)
   const window = new FakeWindow(3)
-  const editor = new FakeEditor()
+  const editor = options.editor ?? new FakeEditor()
   const previews: Array<{ id: number; rule: string | null }> = []
   const timeline: string[] = []
   const settings = { ...defaultSettings(), ...options.settings }
@@ -285,26 +320,14 @@ function harnessFor(
   const picker = new ElementPicker({
     chrome: () => ({ styles: '.box{}', hint: 'hint', noRule: 'none', warnings: {} }),
     getSettings: () => settings,
+    locale: () => 'en',
     editorFor: () => editor,
     preview: (id, rule) => {
       previews.push({ id, rule })
       timeline.push(rule === null ? 'preview:off' : 'preview:on')
+      options.preview?.(id, rule)
     },
-    hostFor: (id) =>
-      id === view.id
-        ? {
-            windowId: window.windowId,
-            tabId: 'tab-1',
-            tileIndex: options.tileIndex ?? 0,
-            tileRect: () => ({ x: 0, y: 0, width: 1200, height: 800 }),
-            presentOverlay: (presentation) => {
-              window.present(presentation)
-            },
-            dismissOverlayKind: (kind) => window.dismissKind(kind),
-            overlayPresentation: () => window.presented,
-            openRules: () => window.opened.push('settings')
-          }
-        : null,
+    hostFor: (id) => (id === view.id ? hostIn(window, options.tileIndex ?? 0) : null),
     measureTimeoutMs: 20
   })
   picker.install()
@@ -570,6 +593,33 @@ describe('the click, the correction and the confirmation', () => {
     await new Promise((resolve) => setTimeout(resolve, 40))
     expect(harness.window.bar()?.outcome).toBe('saved-ineffective')
   })
+  it('does not let the deadline of an attempt whose bar left end the next one', () => {
+    /*
+      A bar that leaves while the page is measuring — a resize, a lost focus, a consent dialogue — ends
+      the attempt from the vacancy announcement, and the deadline armed for that attempt has to go with
+      it. Left running, it fires into whatever session is live in the same view by then: an attempt
+      started again, confirmed and waiting on its own page would be told "no answer came" by a clock
+      that was never its own, and report a rule as doing nothing before the page had said a word.
+    */
+    vi.useFakeTimers()
+    try {
+      const harness = harnessFor()
+      const first = frozen(harness)
+      harness.picker.barAction(first, 'confirm')
+      vi.advanceTimersByTime(10)
+      harness.window.claim(consentDialogue())
+      harness.window.dismissKind('permission-request')
+
+      const second = frozen(harness)
+      harness.picker.barAction(second, 'confirm')
+      // Past the first attempt's deadline and short of the second's.
+      vi.advanceTimersByTime(15)
+      expect(harness.window.bar()?.sessionId).toBe(second)
+      expect(harness.window.bar()?.mode).toBe('measuring')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('taking it back, and going to the rules', () => {
@@ -615,6 +665,105 @@ describe('taking it back, and going to the rules', () => {
     for (const action of ['confirm', 'widen', 'narrow', 'undo', 'open-rules', 'cancel'] as const) {
       expect(harness.picker.barAction(sessionId, action), action).toBe(false)
     }
+  })
+})
+
+describe('an answer left on screen when the next attempt starts', () => {
+  /** Two views, each in its own window, which is what a bar left over from another attempt is about. */
+  function twoWindows(): {
+    picker: InstanceType<typeof ElementPicker>
+    here: FakeView
+    there: FakeView
+    left: FakeWindow
+    right: FakeWindow
+  } {
+    const here = new FakeView(1, DOCUMENT)
+    const there = new FakeView(2, 'https://example.org/news')
+    const left = new FakeWindow(3)
+    const right = new FakeWindow(4)
+    const windows = new Map([
+      [here.id, left],
+      [there.id, right]
+    ])
+    const editor = new FakeEditor()
+    const picker = new ElementPicker({
+      chrome: () => ({ styles: '.box{}', hint: 'hint', noRule: 'none', warnings: {} }),
+      getSettings: () => defaultSettings(),
+      locale: () => 'en',
+      editorFor: () => editor,
+      preview: () => undefined,
+      hostFor: (id) => {
+        const window = windows.get(id)
+        return window === undefined ? null : hostIn(window)
+      },
+      measureTimeoutMs: 20
+    })
+    picker.install()
+    electron.open(here)
+    electron.open(there)
+    return { picker, here, there, left, right }
+  }
+
+  /** Picks `.ad-slot` in `view` all the way to "saved, and it worked". */
+  function answered(
+    picker: InstanceType<typeof ElementPicker>,
+    view: FakeView,
+    window: FakeWindow
+  ): string {
+    picker.start(view.id)
+    const sessionId = window.bar()?.sessionId ?? ''
+    view.tell(PICKER_FREEZE_CHANNEL, { sessionId, chain: [candidate('.ad-slot')] })
+    picker.barAction(sessionId, 'confirm')
+    view.tell(PICKER_MEASURED_CHANNEL, { sessionId, matches: 3, visible: 0 })
+    return sessionId
+  }
+
+  it('takes the old bar down when the new attempt is in another window', () => {
+    /*
+      An ended attempt is not displaced — there is nothing left running to end — so nothing on the
+      session's side takes its bar down. Left up, it is a bar whose every button is refused: Close,
+      Undo and Escape name an attempt the core no longer holds, and the vacancy it would announce on
+      its way out is ignored for the same reason. A surface on screen that nothing can remove.
+    */
+    const { picker, here, there, left, right } = twoWindows()
+    answered(picker, here, left)
+    expect(left.bar()?.outcome).toBe('saved-effective')
+
+    expect(picker.start(there.id)).toBe(true)
+    expect(left.bar()).toBeNull()
+    // The old bar's departure is not read as the new attempt's own.
+    const current = right.bar()?.sessionId ?? ''
+    expect(right.bar()?.mode).toBe('showing')
+    expect(there.ask(ELEMENT)).not.toBeNull()
+    expect(picker.barAction(current, 'cancel')).toBe(true)
+  })
+
+  it('takes down a refusal left in another window the same way', () => {
+    // A refused start leaves no session at all and still leaves a bar, which is the same stranding.
+    const { picker, here, there, left, right } = twoWindows()
+    here.url = 'file:///home/me/notes.html'
+    picker.start(here.id)
+    expect(left.bar()?.outcome).toBe('not-filterable')
+
+    expect(picker.start(there.id)).toBe(true)
+    expect(left.bar()).toBeNull()
+    expect(right.bar()?.mode).toBe('showing')
+  })
+
+  it('replaces the old bar in place when the new attempt is in the same window', () => {
+    // No gap to close here: the layer names a picker bar by its session, so the new presentation is a
+    // new surface and the old one leaves as it arrives.
+    const harness = harnessFor()
+    const first = frozen(harness)
+    harness.picker.barAction(first, 'confirm')
+    harness.view.tell(PICKER_MEASURED_CHANNEL, { sessionId: first, matches: 3, visible: 0 })
+
+    expect(harness.picker.start(harness.view.id)).toBe(true)
+    const bar = harness.window.bar()
+    expect(bar?.sessionId).not.toBe(first)
+    expect(bar?.mode).toBe('showing')
+    expect(harness.picker.barAction(bar?.sessionId ?? '', 'cancel')).toBe(true)
+    expect(harness.window.bar()).toBeNull()
   })
 })
 
@@ -707,5 +856,75 @@ describe('every way one ends', () => {
     expect(harness.picker.start(harness.view.id)).toBe(true)
     expect(harness.window.bar()?.mode).toBe('showing')
     expect(harness.window.bar()?.sessionId).not.toBe(first)
+  })
+})
+
+describe('a picked rule across rapid reloads', () => {
+  /** The rule editor as the application wires it: a stored rule recompiles the engine and re-serves. */
+  class StoringEditor extends FakeEditor {
+    readonly #onStored: (text: string) => void
+    #text = ''
+
+    constructor(onStored: (text: string) => void) {
+      super()
+      this.#onStored = onStored
+    }
+
+    override add(input: UserRuleInput): AddRuleResult {
+      const result = super.add(input)
+      if (result.outcome === 'added') {
+        this.#text = this.#text === '' ? input.text : `${this.#text}\n${input.text}`
+        this.#onStored(this.#text)
+      }
+      return result
+    }
+  }
+
+  it('is in every new document’s first answer, and nothing is pushed while reloading', () => {
+    /*
+      The core's half of "reloading quickly sometimes shows the element". It was not the cause — the
+      page applied the answer too late (`tests/components/cosmetic-preload.test.ts`) — and this is what
+      rules the core out, and keeps it ruled out: after a pick is confirmed and measured, every reload
+      is a new document that asks once and gets the rule, and the navigation itself pushes nothing a
+      half-built document could receive in place of it.
+    */
+    const settings = defaultSettings()
+    const engine = new FilterEngine({ lists: ['[Adblock Plus 2.0]'], getSettings: () => settings })
+    const injector = new CosmeticInjector({
+      getSettings: () => settings,
+      stylesFor: (url) => engine.cosmeticStylesFor(url),
+      openFeed: (url) => engine.openCosmeticFeed(url),
+      scriptletsFor: () => [],
+      proceduralFor: () => []
+    })
+    injector.install()
+    const harness = harnessFor({
+      // `index.ts`'s `userRules.onChange`, in its order: recompile, then re-serve.
+      editor: new StoringEditor((text) => {
+        engine.replaceUserRules(text)
+        injector.refresh()
+      }),
+      preview: (id, rule) => {
+        injector.setPreview(id, rule)
+      }
+    })
+    const ruled = '.ad-slot { display: none !important; }'
+    const pushes = (): unknown[] =>
+      harness.view.sent
+        .filter((entry) => entry.channel === COSMETIC_SPECIFIC_CHANNEL)
+        .map((entry) => entry.payload)
+
+    harness.view.askStyles()
+    const sessionId = frozen(harness)
+    harness.picker.barAction(sessionId, 'confirm')
+    harness.view.tell(PICKER_MEASURED_CHANNEL, { sessionId, matches: 3, visible: 0 })
+    expect(harness.window.bar()?.outcome).toBe('saved-effective')
+
+    const before = pushes().length
+    for (let reload = 0; reload < 10; reload += 1) {
+      harness.view.navigate({ isMainFrame: true, isSameDocument: false, url: DOCUMENT })
+      expect(harness.view.askStyles(), `reload ${String(reload)}`).toContain(ruled)
+    }
+    expect(pushes().slice(before)).toEqual([])
   })
 })

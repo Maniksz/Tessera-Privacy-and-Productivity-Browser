@@ -4,7 +4,6 @@ import {
   MAX_ATTRIBUTES,
   MAX_PICKER_CHAIN,
   asElementDescription,
-  asPickerChrome,
   asPickerEscape,
   asPickerFreezeReport,
   asPickerMeasureRequest,
@@ -16,7 +15,7 @@ import {
   type PickerElement
 } from '@shared/filters/picker-wire.js'
 import { proposeSelector } from '@shared/filters/picker.js'
-import { pickerChromeFor } from '@main/privacy/picker-chrome.js'
+import { pickerChrome } from '@main/privacy/picker-chrome.js'
 
 /**
  * Turning a DOM element into the plain data the picker reasons about.
@@ -208,71 +207,30 @@ describe('what crosses the boundary', () => {
   })
 })
 
-describe('the picker chrome the core sends', () => {
-  const chrome = {
-    styles: '.box { border: 1px solid }',
-    hint: 'Click to hide',
-    noRule: 'No rule for this element',
-    warnings: { 'matches-ancestor': 'Would hide the surrounding region' }
-  }
-
-  it('reads what the core built', () => {
-    expect(asPickerChrome(chrome)).toMatchObject({ hint: 'Click to hide' })
-  })
-
-  it('refuses a chrome missing any part it must draw with', () => {
-    /*
-      All or nothing, deliberately. A picker with styles and no words is a bar of unlabelled buttons over
-      somebody's page; one with words and no styles is unstyled text in the corner of a document that has its
-      own opinions about `div`. Either is worse than not entering the mode — so a build mismatch leaves the
-      page alone instead of drawing something the user cannot interpret.
-    */
-    for (const missing of ['styles', 'hint', 'noRule', 'warnings']) {
-      // Rebuilt without the key rather than deleted from a copy: a dynamic `delete` is banned here, and
-      // filtering says the same thing without reaching for one.
-      const partial = Object.fromEntries(
-        Object.entries(chrome).filter(([key]) => key !== missing)
-      )
-      expect(asPickerChrome(partial), missing).toBeNull()
-    }
-  })
-
-  it('refuses anything that is not an object at all', () => {
-    for (const value of [null, undefined, 'chrome', 42, []]) {
-      expect(asPickerChrome(value), JSON.stringify(value)).toBeNull()
-    }
-  })
-
-  it('accepts a warnings table that words only some of them', () => {
-    // The renderer falls back to the warning's own key for one it has no sentence for, so a partial table is a
-    // menu that says something rather than one that says nothing — silence would read as safe.
-    expect(asPickerChrome({ ...chrome, warnings: {} })).not.toBeNull()
-  })
-})
-
 describe('the chrome the core builds', () => {
-  it('words every warning the picker can produce', () => {
-    /*
-      The table is keyed by the `SelectorWarning` names the picker's model defines, and a warning added there
-      without a sentence here shows its bare key. That is deliberate — a caveat with no words would read as
-      "nothing to worry about" — but it is not something to ship, so this holds the two lists together.
-    */
-    const chrome = pickerChromeFor('en')
-    for (const warning of ['matches-ancestor', 'matches-many', 'positional', 'no-stable-feature']) {
-      expect(chrome.warnings[warning], warning).toBeTruthy()
-    }
-  })
-
-  it('answers in the language it was asked for', () => {
-    // Read per start rather than once, so a language change reaches the next picker session. If this ever
-    // returned one language for both, that setting would silently stop working for this feature alone.
-    expect(pickerChromeFor('de').hint).not.toBe(pickerChromeFor('en').hint)
-  })
-
   it('carries a stylesheet, because the page has its own opinions about div', () => {
-    // The picker lives inside a shadow root for exactly this reason; an empty stylesheet would leave the bar
-    // to whatever the site says about unstyled elements.
-    expect(pickerChromeFor('en').styles.length).toBeGreaterThan(100)
+    // The highlight lives inside a shadow root for exactly this reason; an empty stylesheet would leave a
+    // bare `<div>` to whatever the site says about unstyled elements.
+    expect(pickerChrome().styles).toContain('.box')
+  })
+
+  it('sends no prose into the page at all', () => {
+    /*
+      It used to send four things: the stylesheet, a hint, a "no rule for this element", and a sentence for
+      each selector warning — because the picker drew a confirmation bar inside the document and a preload
+      cannot read the i18n catalogue. The bar is an overlay surface now, and its sentences travel on the
+      bar's presentation from `picker-bar-text.ts`; this holds the wire down to the one thing still in the page.
+      A second copy of the words shipped into every picked document would be a translation nobody reads.
+    */
+    expect(Object.keys(pickerChrome())).toEqual(['styles'])
+  })
+
+  it('styles nothing that is no longer drawn in the page', () => {
+    // The bar's own rules went with the bar. Left behind they would be a stylesheet injected into every
+    // picked document for elements that are never created — invisible, and impossible to notice as dead.
+    for (const gone of ['.bar', '.selector', '.hint', '.warn']) {
+      expect(pickerChrome().styles, gone).not.toContain(gone)
+    }
   })
 })
 
@@ -286,36 +244,30 @@ describe('the chrome the core builds', () => {
  * and a measurement naming the wrong attempt reports one document's state as another's.
  */
 describe('the message that starts an attempt', () => {
-  const chrome = {
-    styles: '.box { border: 1px solid }',
-    hint: 'Click to hide',
-    noRule: 'No rule for this element',
-    warnings: {}
-  }
+  const chrome = { styles: '.box { border: 1px solid }' }
 
   it('carries the identity every answer is matched against', () => {
     expect(asPickerStart({ ...chrome, sessionId: 'picker-7' })?.sessionId).toBe('picker-7')
   })
 
   it('refuses a start with no session to answer for', () => {
+    // Nothing could take the highlight off again: every message the page sends back names the attempt,
+    // and a page holding a session the core cannot address is the divergence this rebuild removes.
     for (const sessionId of [undefined, '', 7, null]) {
       expect(asPickerStart({ ...chrome, sessionId }), JSON.stringify(sessionId)).toBeNull()
     }
   })
 
-  it('refuses a start that is not usable chrome either', () => {
+  it('refuses a start with nothing to draw the highlight with', () => {
+    // An unstyled `<div>` over somebody's document, in a page that has its own opinions about `div`.
     expect(asPickerStart({ sessionId: 'picker-1' })).toBeNull()
+    expect(asPickerStart({ sessionId: 'picker-1', styles: 7 })).toBeNull()
   })
 
-  it('is still readable as chrome by a preload built before it existed', () => {
-    /*
-      The compatibility this shape was chosen for. The page half of the picker lands in a later unit,
-      so for one step of the plan an older preload runs against this core — and it hands the whole
-      payload to `asPickerChrome`, which checks the four fields it needs and ignores the rest. An
-      envelope would have made that preload refuse to start at all, which is a worse browser in the
-      middle of repairing one.
-    */
-    expect(asPickerChrome({ ...chrome, sessionId: 'picker-1' })).not.toBeNull()
+  it('refuses anything that is not an object at all', () => {
+    for (const value of [null, undefined, 'chrome', 42, []]) {
+      expect(asPickerStart(value), JSON.stringify(value)).toBeNull()
+    }
   })
 })
 

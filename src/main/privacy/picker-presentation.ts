@@ -6,8 +6,10 @@ import {
   type PickerSession
 } from '@shared/filters/picker-session.js'
 import { pickerBarBounds, type PickerBarMode } from '@shared/overlay/picker-bar.js'
+import type { Locale } from '@shared/i18n/catalog.js'
 import type { PickerBarPresentation } from '@shared/overlay/surface.js'
 import type { Rect } from '@shared/ui/anchor.js'
+import { pickerBarText } from './picker-bar-text.js'
 
 /**
  * The picking session, as the confirmation bar has to receive it.
@@ -61,6 +63,11 @@ export interface PickerBarRequest {
   readonly outcome: PickerOutcome | null
   /** Whether *this* attempt wrote a rule that is still there to take back. */
   readonly canUndo: boolean
+  /**
+   * The language the interface is in *now*, so a change of setting reaches the next thing the bar says
+   * rather than the next session. The words themselves are in `picker-bar-text.ts`.
+   */
+  readonly locale: Locale
   readonly place: PickerBarPlace
 }
 
@@ -106,7 +113,8 @@ export function pickerBarPresentation(request: PickerBarRequest): PickerBarPrese
     canWiden: request.session !== null && canWidenSelection(request.session),
     canNarrow: request.session !== null && canNarrowSelection(request.session),
     outcome: request.outcome,
-    canUndo: request.canUndo
+    canUndo: request.canUndo,
+    text: pickerBarText(request.locale)
   }
 }
 
