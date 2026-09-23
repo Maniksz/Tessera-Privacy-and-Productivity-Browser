@@ -104,6 +104,66 @@ export function readCheckModule(
   return modulePath === '' ? null : modulePath
 }
 
+/**
+ * The development server the chrome UI loads from, or `null` for "load the bundle from disk".
+ *
+ * ## Why it is refused in a packaged build
+ *
+ * electron-vite sets `ELECTRON_RENDERER_URL` for `pnpm dev`, and whatever it names becomes the chrome
+ * UI — the one renderer that holds every IPC channel there is. An environment variable is something
+ * any launcher can set, so a shipped build that honoured it would hand the whole browser to whoever
+ * wrote the shortcut. There the bundle is the only answer, which is also why this is the only place
+ * the variable is read: three call sites each checking it themselves is three chances to forget the
+ * `packaged` half. Pure, with `app.isPackaged` supplied by the caller, as `readCheckModule` is.
+ *
+ * An empty value counts as unset, because that is how a shell clears a variable for one command.
+ */
+export function devServerUrl(
+  env: Readonly<Record<string, string | undefined>>,
+  options: { packaged: boolean }
+): string | null {
+  if (options.packaged) return null
+  const url = env['ELECTRON_RENDERER_URL']
+  return url === undefined || url === '' ? null : url
+}
+
+/**
+ * The Chromium switches that open the DevTools protocol to another process.
+ *
+ * The fuses in `electron-builder.yml` turn off Node's inspector switches and
+ * `ELECTRON_RUN_AS_NODE`, but nothing there reaches Chromium's own debugger — and that one is the
+ * whole browser: every page, every cookie, script in any tab. `remote-debugging-pipe` is the same
+ * protocol over a file descriptor.
+ */
+const DEBUG_SWITCHES = ['remote-debugging-port', 'remote-debugging-pipe'] as const
+
+/**
+ * The debugging switch a packaged build was started with, or `null` when it may run.
+ *
+ * The caller exits on anything but `null`, before the single-instance lock: a shipped browser started
+ * with one of these was started by something other than its user, and there is no safe degraded mode
+ * for "a remote process may drive every tab".
+ *
+ * ## Why it asks rather than reads argv
+ *
+ * Chromium accepts a switch with two leading dashes, with one, and on Windows with `/`, in any
+ * capitalisation. A search of argv would have to reproduce all of that and would be wrong the day
+ * Chromium accepts another spelling; `app.commandLine.hasSwitch` is Chromium's own parser
+ * answering. So the question is injected, and this stays pure and testable. (The switches are
+ * named here without their dashes on purpose: `tests/architecture.test.ts` bans the dashed
+ * spelling anywhere in the source, for reasons given there.)
+ *
+ * A development build is never refused: a developer attaching DevTools to their own build is the
+ * switch doing its job.
+ */
+export function refusedDebugSwitch(
+  hasSwitch: (name: string) => boolean,
+  options: { packaged: boolean }
+): string | null {
+  if (!options.packaged) return null
+  return DEBUG_SWITCHES.find((name) => hasSwitch(name)) ?? null
+}
+
 /** The subset of the settings snapshot that reaches the command line. */
 export function startupFlagsFrom(settings: SettingsSnapshot): StartupFlags {
   return {

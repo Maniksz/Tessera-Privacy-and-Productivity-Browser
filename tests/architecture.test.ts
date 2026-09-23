@@ -151,7 +151,7 @@ function valueImportsOf(text: string): string[] {
   while ((match = pattern.exec(text)) !== null) {
     const clause = match[1] ?? ''
     // `import { type A, type B } from` is also fully erased.
-    const named = (/\{([^}]*)\}/.exec(clause))?.[1]
+    const named = /\{([^}]*)\}/.exec(clause)?.[1]
     if (named !== undefined && named.trim() !== '') {
       const allTypes = named
         .split(',')
@@ -348,7 +348,10 @@ describe('layer boundaries', () => {
       this refuses.
     */
     const path = join(ROOT, 'src/main/browser/window-events.ts')
-    expect(existsSync(path), 'window-events.ts moved; this rule moved with it or died with it').toBe(true)
+    expect(
+      existsSync(path),
+      'window-events.ts moved; this rule moved with it or died with it'
+    ).toBe(true)
     const text = readFileSync(path, 'utf8')
 
     expect(valueImportsOf(text), 'window-events.ts imports Electron').not.toContain('electron')
@@ -392,7 +395,9 @@ describe('bundle weight', () => {
     }
 
     for (const file of rendererFiles) visit(file)
-    expect(reachable.size, 'expected the renderer to import something from shared').toBeGreaterThan(0)
+    expect(reachable.size, 'expected the renderer to import something from shared').toBeGreaterThan(
+      0
+    )
 
     for (const module of reachable) {
       const text = readFileSync(join(ROOT, module), 'utf8')
@@ -658,7 +663,9 @@ describe('IPC discipline', () => {
       appeared. These pin the wiring at both ends, and pin that the hardening decides only through
       the policy, so the settings and the dialog cannot drift apart again.
     */
-    const registry = codeOnly(readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8'))
+    const registry = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    )
     const index = codeOnly(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
     const hardening = codeOnly(readFileSync(join(ROOT, 'src/main/session/hardening.ts'), 'utf8'))
     expect(registry).toMatch(
@@ -690,7 +697,9 @@ describe('IPC discipline', () => {
       focused window. The decision now lives in `sender-window.ts`; this keeps the registry on it and
       keeps the dead branch and the focus fallback from coming back.
     */
-    const registry = codeOnly(readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8'))
+    const registry = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    )
     const raw = readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
     expect(raw).toMatch(/from '\.\/sender-window\.js'/)
     expect(registry).toMatch(/resolve\([^)]*\)[^{]*\{[^}]*windowOfSender\(/)
@@ -814,7 +823,9 @@ describe('IPC discipline', () => {
     // 1. A literal `accel('…')` anywhere in the menus. The directory rather than `appMenu.ts`, because the
     //    item templates already live in their own modules and a menu built in one of them registers just
     //    as well.
-    const menus = (await collect('src/main/menu')).map((file) => withoutComments(file.text)).join('\n')
+    const menus = (await collect('src/main/menu'))
+      .map((file) => withoutComments(file.text))
+      .join('\n')
     const registered = new Set<string>(
       [...menus.matchAll(/accel\('([A-Za-z0-9]+)'\)/g)].map((match) => match[1] ?? '')
     )
@@ -823,9 +834,10 @@ describe('IPC discipline', () => {
     //    table is read rather than its four current values written down — and only while the loop is still
     //    there to turn it into accelerators, so deleting the loop takes the four out of the set.
     const layoutActions = tableActions('LAYOUT_SHORTCUTS')
-    expect(layoutActions.length, 'LAYOUT_SHORTCUTS no longer reads as a table of actions').toBeGreaterThan(
-      0
-    )
+    expect(
+      layoutActions.length,
+      'LAYOUT_SHORTCUTS no longer reads as a table of actions'
+    ).toBeGreaterThan(0)
     const appMenu = withoutComments(readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8'))
     if (/LAYOUT_SHORTCUTS\[[\s\S]{0,400}?accel\(shortcut\)/.test(appMenu)) {
       for (const action of layoutActions) registered.add(action)
@@ -835,13 +847,18 @@ describe('IPC discipline', () => {
     //    globally are reached. Their names come out of `PageKeyAction` — the union of everything that path
     //    can do — rather than from a pair of literals here, and they count only while the subscription and
     //    the call that resolves it both exist.
-    const pageKeys = withoutComments(readFileSync(join(ROOT, 'src/main/browser/page-keys.ts'), 'utf8'))
+    const pageKeys = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/page-keys.ts'), 'utf8')
+    )
     const pageKeyActions = [
       ...(/export type PageKeyAction =([^\n]*)/.exec(pageKeys)?.[1] ?? '').matchAll(/'([a-z-]+)'/g)
     ]
       .flatMap((match) => (match[1] ?? '').split('-'))
       .filter(isShortcutAction)
-    expect(pageKeyActions.length, 'PageKeyAction names no shortcut action any more').toBeGreaterThan(1)
+    expect(
+      pageKeyActions.length,
+      'PageKeyAction names no shortcut action any more'
+    ).toBeGreaterThan(1)
 
     const wiring = (await collect('src/main/browser'))
       // Its own declarations would otherwise stand in for a caller, and a mechanism nobody calls is
@@ -898,9 +915,9 @@ describe('IPC discipline', () => {
     */
     const resolveArgument = (code: string, argument: string): ShortcutAction[] => {
       if (!/^[A-Za-z_$][\w$]*$/.test(argument)) return []
-      const assignment = new RegExp(`(?:const|let)\\s+${argument}\\s*(?::[^=\\n]*)?=\\s*([^\\n]+)`).exec(
-        code
-      )?.[1]
+      const assignment = new RegExp(
+        `(?:const|let)\\s+${argument}\\s*(?::[^=\\n]*)?=\\s*([^\\n]+)`
+      ).exec(code)?.[1]
       const table = /^([A-Z][A-Z0-9_]*)\s*\[/.exec(assignment?.trim() ?? '')?.[1]
       return table === undefined ? [] : tableActions(table)
     }
@@ -939,10 +956,18 @@ describe('IPC discipline', () => {
       'an action argument this scan cannot read is an action it is not checking; teach it, do not skip it'
     ).toEqual([])
     // Floors, so none of this can pass by matching nothing — the failure the whole test is about.
-    expect(callSites, 'no control in the renderer advertises a shortcut any more').toBeGreaterThan(6)
-    expect(fromVariables, 'no non-literal argument resolved; the blind spot is back').toBeGreaterThan(0)
+    expect(callSites, 'no control in the renderer advertises a shortcut any more').toBeGreaterThan(
+      6
+    )
+    expect(
+      fromVariables,
+      'no non-literal argument resolved; the blind spot is back'
+    ).toBeGreaterThan(0)
     expect(advertised.size, 'the advertised set collapsed').toBeGreaterThan(8)
-    expect(registered.size, 'the registered set collapsed, which would pass everything').toBeGreaterThan(20)
+    expect(
+      registered.size,
+      'the registered set collapsed, which would pass everything'
+    ).toBeGreaterThan(20)
 
     for (const [action, where] of advertised) {
       expect(
@@ -980,7 +1005,10 @@ describe('IPC discipline', () => {
 
     /** Declared, not yet honoured. Each line is a bug with a name. */
     const notYetRead = new Map([
-      ['network.killSwitch', 'spec 4 promises no traffic when the tunnel drops; nothing implements it'],
+      [
+        'network.killSwitch',
+        'spec 4 promises no traffic when the tunnel drops; nothing implements it'
+      ],
       ['network.proxyMode', 'no proxy is ever configured from settings'],
       ['network.proxyUrl', 'same; the address is stored and unused'],
       ['privacy.malwareProtection', 'no reputation check exists'],
@@ -1014,7 +1042,9 @@ describe('IPC discipline', () => {
       unread.push(key)
     }
 
-    expect(unread, 'nothing in src reads these settings, so switching them does nothing').toEqual([])
+    expect(unread, 'nothing in src reads these settings, so switching them does nothing').toEqual(
+      []
+    )
 
     // The debt list may only shrink: a key that has since gained a reader must leave it, or the list
     // stops describing anything.
@@ -1263,7 +1293,9 @@ describe('IPC discipline', () => {
         // A narrowing of a third-party type, not a mirror of one of ours.
         if (right !== undefined && fromElectron.has(right)) continue
         if (pairs.has(`${right ?? ''}→${left ?? ''}`)) continue
-        missing.push(`${file.relative}: nothing asserts ${right ?? ''} is assignable to ${left ?? ''}`)
+        missing.push(
+          `${file.relative}: nothing asserts ${right ?? ''} is assignable to ${left ?? ''}`
+        )
       }
     }
 
@@ -1286,7 +1318,10 @@ describe('IPC discipline', () => {
       the user typed" convenience — each of them a one-line subscription, and each of them a plaintext
       master password somewhere it must never be.
     */
-    const allowed = new Set(['src/main/ipc/password-handlers.ts', 'src/main/passwords/overlay-keys.ts'])
+    const allowed = new Set([
+      'src/main/ipc/password-handlers.ts',
+      'src/main/passwords/overlay-keys.ts'
+    ])
 
     for (const file of await collect('src')) {
       if (allowed.has(file.relative)) continue
@@ -1340,7 +1375,10 @@ describe('IPC discipline', () => {
       }
     }
 
-    expect(offenders, 'the CDP harness is back; see this test for why that alerts somebody').toEqual([])
+    expect(
+      offenders,
+      'the CDP harness is back; see this test for why that alerts somebody'
+    ).toEqual([])
   })
 
   it('keeps the application from statically importing its own checks', () => {
@@ -1433,7 +1471,9 @@ describe('IPC discipline', () => {
       because the condition sits next to the accelerator, and this one was four hundred lines away.
     */
     const menu = readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8')
-    const conditionalPushes = [...menu.matchAll(/if\s*\(\s*isMac\s*\)\s*template\.push\(([^)]*)\)/g)]
+    const conditionalPushes = [
+      ...menu.matchAll(/if\s*\(\s*isMac\s*\)\s*template\.push\(([^)]*)\)/g)
+    ]
 
     for (const push of conditionalPushes) {
       const names = (push[1] ?? '').split(',').map((name) => name.trim())
@@ -1642,12 +1682,16 @@ describe('IPC discipline', () => {
     const events = ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived']
     for (const event of events) {
       const registrations = files.flatMap((file) =>
-        [...file.text.matchAll(new RegExp(`webRequest\\.${event}\\(`, 'g'))].map(() => file.relative)
+        [...file.text.matchAll(new RegExp(`webRequest\\.${event}\\(`, 'g'))].map(
+          () => file.relative
+        )
       )
       // `RequestPipeline` registers `onBeforeRequest` twice: once to install and
       // once with null to remove it.
       const expected = event === 'onBeforeRequest' ? 2 : 1
-      expect(registrations.length, `${event} registered in ${registrations.join(', ')}`).toBe(expected)
+      expect(registrations.length, `${event} registered in ${registrations.join(', ')}`).toBe(
+        expected
+      )
     }
   })
 })
@@ -1881,7 +1925,8 @@ describe('internal page scrolling', () => {
       const css = withoutComments(sheet.text)
       if (!/overflow(-y)?\s*:\s*visible/.test(css)) continue
       expect(
-        /body\s*\{[^}]*height:\s*auto/.test(css) || /html,\s*body\s*\{[^}]*height:\s*auto/.test(css),
+        /body\s*\{[^}]*height:\s*auto/.test(css) ||
+          /html,\s*body\s*\{[^}]*height:\s*auto/.test(css),
         `${sheet.relative} sets overflow: visible on the body but leaves height: 100% from the chrome ` +
           'reset in force. A visible overflow out of a fixed-height box still cannot be scrolled to; ' +
           'add height: auto (with min-height: 100% to keep the background) beside it.'
@@ -2011,7 +2056,9 @@ describe('privacy invariants', () => {
         // it; matching case-insensitively on the stem catches a store nobody registered.
         const stem = (store ?? '').replace(/Store$/, '').toLowerCase()
         const found = registered.some((name) => (name ?? '').toLowerCase().startsWith(stem))
-        expect(found, `${store ?? ''} has a flush() but nothing registers it in index.ts`).toBe(true)
+        expect(found, `${store ?? ''} has a flush() but nothing registers it in index.ts`).toBe(
+          true
+        )
         checked += 1
       }
     }
@@ -2093,10 +2140,13 @@ describe('resource discipline', () => {
       /\.on\(\s*'closed'/
     )
 
-    const events = withoutComments(readFileSync(join(ROOT, 'src/main/browser/window-events.ts'), 'utf8'))
-    expect(events, 'the teardown moved behind the host, which cannot reach what it disposes').not.toMatch(
-      /'closed'/
+    const events = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/window-events.ts'), 'utf8')
     )
+    expect(
+      events,
+      'the teardown moved behind the host, which cannot reach what it disposes'
+    ).not.toMatch(/'closed'/)
   })
 
   it('cleans up every renderer subscription', async () => {
@@ -2200,9 +2250,10 @@ describe('product identity', () => {
     const scanned = catalogues.map((file) => file.text).join('\n')
     // The placeholder the messages use *instead* of the name. Its absence would mean the sentences are
     // no longer in view, which is precisely the failure above.
-    expect(scanned, 'no message in the scan uses {app}, so the messages are somewhere else again').toContain(
-      '{app}'
-    )
+    expect(
+      scanned,
+      'no message in the scan uses {app}, so the messages are somewhere else again'
+    ).toContain('{app}')
 
     for (const file of catalogues) {
       // Comments stripped, string literals kept: a message is a literal, so the literal is the subject —
@@ -2383,5 +2434,218 @@ describe('continuous integration', () => {
         )
       }
     }
+  })
+})
+
+describe('shutdown', () => {
+  /*
+    `before-quit` used to guard itself with one boolean: a second Cmd+Q during the flushes ran the
+    clearing and every flush again, a hung write held the process forever, and the vault's own flush
+    was not waited for when a lock had just emptied it. The sequence in `shutdown.ts` owns all of that
+    now; these keep `index.ts` going through it rather than growing a guard of its own beside it.
+  */
+  const ENTRY_FILE = 'src/main/index.ts'
+
+  it('quits only through the shutdown sequence', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY_FILE), 'utf8'))
+    expect(entry).toMatch(/app\.on\('before-quit', onBeforeQuit\)/)
+    expect(entry, 'the quit is held other than by asking the sequence').toMatch(
+      /function onBeforeQuit\(event: Electron\.Event\): void \{\s*if \(!shutdown\.beforeQuit\(beginShutdown\)\) event\.preventDefault\(\)\s*\}/
+    )
+    expect(entry, 'the sequence does not quit when it is done').toMatch(
+      /new ShutdownSequence\(\{[\s\S]*?finish: \(report\) => \{[\s\S]*?app\.quit\(\)/
+    )
+    expect(
+      codeOnly(readFileSync(join(ROOT, ENTRY_FILE), 'utf8')),
+      'a guard of its own beside the sequence'
+    ).not.toMatch(/shutdownComplete/)
+  })
+
+  it('stops the vault timer, seals the session and flushes the registry in the shutdown', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY_FILE), 'utf8'))
+    const begin = /function beginShutdown\(\): ShutdownWork \{[\s\S]*?\n\}/.exec(entry)?.[0] ?? ''
+    expect(begin, 'passwords.dispose() is not in the shutdown').toMatch(/passwords\?\.dispose\(\)/)
+    expect(begin).toMatch(/sessionStore\?\.seal\(\)/)
+    expect(begin).toMatch(/flushes: flushOnExit\.entries\(\)/)
+    // A lock after the quit began would start a write the ending process does not wait for.
+    expect(entry).toMatch(/if \(!quitting\(\)\) void passwords\?\.lock\(\)/)
+  })
+
+  it('ends startup at its phase boundaries once a quit has begun, and catches up the clearing first', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY_FILE), 'utf8'))
+    const start = entry.indexOf('async function main()')
+    const main = entry.slice(start, entry.indexOf('\n}\n', start))
+    const check = /if \(quitting\(\)\) return/
+    expect([...main.matchAll(/if \(quitting\(\)\) return/g)].length).toBeGreaterThanOrEqual(3)
+    expect(main.indexOf('catchUpPendingClear(')).toBeGreaterThan(
+      main.indexOf('await app.whenReady()')
+    )
+    expect(main.indexOf('catchUpPendingClear(')).toBeLessThan(
+      main.indexOf('openLocalDataProtection(')
+    )
+    expect(main.indexOf('if (quitting()) return')).toBeLessThan(
+      main.indexOf('openLocalDataProtection(')
+    )
+    expect(
+      main.slice(main.indexOf('PermissionStore.open('), main.indexOf('new WindowRegistry('))
+    ).toMatch(check)
+    expect(main.slice(main.indexOf('beginRun('), main.indexOf('applySessionRestore('))).toMatch(
+      check
+    )
+  })
+
+  it('names every write registered for shutdown, so a hung one can be reported', () => {
+    const entry = readFileSync(join(ROOT, ENTRY_FILE), 'utf8')
+    const pushes = (entry.match(/flushOnExit\.push\(/g) ?? []).length
+    const named = [...entry.matchAll(/flushOnExit\.push\(\(\)\s*=>[^\n]*,\s*'[^']+'\)\n/g)].length
+    expect(pushes).toBeGreaterThan(3)
+    expect(named).toBe(pushes)
+  })
+})
+
+describe('release hardening', () => {
+  /*
+    `ELECTRON_RENDERER_URL` was read in three places, none of them asking whether the build was
+    packaged, so a variable in a shipped browser's environment could swap its whole UI for a remote
+    page with the full bridge. The fuses and the debugging guard close the other ways in.
+  */
+  it('reads the dev server address only through devServerUrl', () => {
+    const offenders: string[] = []
+    for (const file of filesUnder(join(ROOT, 'src'))) {
+      if (!/\.(ts|tsx)$/.test(file)) continue
+      const path = relative(ROOT, file)
+      if (path === join('src', 'main', 'startup-flags.ts')) continue
+      if (readFileSync(file, 'utf8').includes('ELECTRON_RENDERER_URL')) offenders.push(path)
+    }
+    expect(
+      offenders,
+      'read devServerUrl(process.env, { packaged: app.isPackaged }) instead'
+    ).toEqual([])
+    for (const path of [
+      'src/main/browser/BrowserWindowController.ts',
+      'src/main/browser/OverlayLayer.ts',
+      'src/main/protocol.ts',
+      'src/main/ipc/router.ts'
+    ]) {
+      expect(withoutComments(readFileSync(join(ROOT, path), 'utf8')), path).toMatch(
+        /devServerUrl\(process\.env, \{ packaged: app\.isPackaged \}\)/
+      )
+    }
+  })
+
+  it('ends a packaged build started with a debugging switch before the lock', () => {
+    const entry = codeOnly(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const guard = entry.search(
+      /refusedDebugSwitch\(\s*\(\s*(\w+)\s*\)\s*=>\s*app\.commandLine\.hasSwitch\(\s*\1\s*\)/
+    )
+    expect(guard, 'the guard is not handed app.commandLine.hasSwitch').toBeGreaterThan(-1)
+    expect(guard, 'the guard runs after the lock').toBeLessThan(
+      entry.indexOf('requestSingleInstanceLock(')
+    )
+    const flags = withoutComments(readFileSync(join(ROOT, 'src/main/startup-flags.ts'), 'utf8'))
+    const body = flags.slice(flags.indexOf('export function refusedDebugSwitch('))
+    expect(body.slice(0, body.indexOf('\n}\n')), 'the guard reads argv itself').not.toMatch(
+      /argv|process\./
+    )
+  })
+
+  it('ships with the Node fuses off', () => {
+    const block =
+      /^electronFuses:\n((?: {2}.*\n)+)/m.exec(
+        readFileSync(join(ROOT, 'electron-builder.yml'), 'utf8')
+      )?.[1] ?? ''
+    for (const fuse of [
+      'runAsNode',
+      'enableNodeOptionsEnvironmentVariable',
+      'enableNodeCliInspectArguments'
+    ]) {
+      expect(block, `${fuse} is not switched off`).toMatch(new RegExp(`^ {2}${fuse}: false$`, 'm'))
+    }
+    expect(block, 'stays at its default until the chrome UI has its own scheme').not.toMatch(
+      /grantFileProtocolExtraPrivileges/
+    )
+  })
+
+  it('asks macOS for JIT only', () => {
+    // Comments stripped: the plist explains the two removed keys by name.
+    const plist = readFileSync(join(ROOT, 'build/entitlements.mac.plist'), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      ''
+    )
+    expect(plist).toContain('<key>com.apple.security.cs.allow-jit</key>')
+    expect(plist).not.toContain('allow-unsigned-executable-memory')
+    expect(plist).not.toContain('files.user-selected.read-write')
+  })
+})
+
+describe('chrome surface guard', () => {
+  /*
+    Tabs had a navigation guard and a window-open handler; the chrome window and the overlay had
+    neither, and the router trusted a chrome identity whatever document it held. Drag and drop is off
+    by default in Electron 43, so this is depth rather than a door that stood open — which is why it
+    is pinned at every layer rather than argued once.
+  */
+  for (const path of [
+    'src/main/browser/BrowserWindowController.ts',
+    'src/main/browser/OverlayLayer.ts'
+  ]) {
+    it(`keeps ${path} on its own document`, () => {
+      const code = withoutComments(readFileSync(join(ROOT, path), 'utf8'))
+      expect(code).toMatch(/'will-frame-navigate'/)
+      expect(code).toMatch(/decideChromeNavigation\(/)
+      expect(code).toMatch(/\.prevent\(\)/)
+      expect(code).toMatch(/setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/)
+      expect(code).toMatch(/'will-attach-webview'/)
+      expect(code).not.toMatch(/'will-navigate'/)
+    })
+  }
+
+  it('subscribes the window guard through #on, before the first load', () => {
+    const code = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/BrowserWindowController.ts'), 'utf8')
+    )
+    expect(code).toMatch(/this\.#on\(\s*'will-frame-navigate'/)
+    expect(code).toMatch(/this\.#on\(\s*'will-attach-webview'/)
+    const guard = code.indexOf('this.#guardChrome()')
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(code.indexOf('this.#loadChrome()'))
+  })
+
+  it('guards every overlay view it builds, in #ensureView', () => {
+    const code = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/OverlayLayer.ts'), 'utf8')
+    )
+    const ensureView = code.slice(
+      code.indexOf('#ensureView(): WebContentsView {'),
+      code.indexOf('#load(view: WebContentsView)')
+    )
+    for (const marker of [
+      "'will-frame-navigate'",
+      "'will-attach-webview'",
+      'setWindowOpenHandler('
+    ]) {
+      expect(ensureView).toContain(marker)
+    }
+    expect(ensureView.indexOf("'will-frame-navigate'")).toBeLessThan(
+      ensureView.indexOf('this.#load(view)')
+    )
+  })
+
+  it('refuses drops in both chrome renderers', () => {
+    for (const path of ['src/renderer/src/main.tsx', 'src/renderer/src/overlay.tsx']) {
+      const code = withoutComments(readFileSync(join(ROOT, path), 'utf8'))
+      expect(code, path).toMatch(
+        /addEventListener\('dragover', \(event\) => \{\s*event\.preventDefault\(\)/
+      )
+      expect(code, path).toMatch(
+        /addEventListener\('drop', \(event\) => \{\s*event\.preventDefault\(\)/
+      )
+    }
+  })
+
+  it('hands the router the frame and the expected chrome address', () => {
+    const router = withoutComments(readFileSync(join(ROOT, 'src/main/ipc/router.ts'), 'utf8'))
+    expect(router).toMatch(/decideAccess\(channel, senderOf\(event\), chromeAddresses\)/)
+    expect(router).toMatch(/isMainFrame: frame\.parent === null/)
   })
 })

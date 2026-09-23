@@ -5,10 +5,12 @@ import { describe, expect, it } from 'vitest'
 import {
   ExternalAddressInbox,
   acceptExternalAddress,
+  devServerUrl,
   externalAddressWindow,
   firstExternalAddress,
   readCheckModule,
   readStartupFlags,
+  refusedDebugSwitch,
   secondInstanceAddress,
   startupFlagsFrom,
   writeStartupFlags,
@@ -195,6 +197,88 @@ describe('the check-run switch', () => {
     // `startsWith` on the bare name would accept `--run-checks-later=x` and hand the core a path it
     // was never given; the `=` is part of what is matched for that reason.
     expect(readCheckModule(['electron', '--run-checksum=/tmp/x.mjs'], DEVELOPMENT)).toBeNull()
+  })
+})
+
+describe('the development server address', () => {
+  const URL_FROM_VITE = { ELECTRON_RENDERER_URL: 'http://localhost:5173' }
+
+  it('is never read in a packaged build, whatever the environment says', () => {
+    /*
+      The guard that matters. The chrome UI holds every IPC channel there is, so whoever decides where
+      it loads from owns the browser — and an environment variable is something any launcher can set.
+      A shipped build loads its bundle from disk, full stop.
+    */
+    expect(devServerUrl(URL_FROM_VITE, { packaged: true })).toBeNull()
+  })
+
+  it('is the address electron-vite hands a development build', () => {
+    // Without it `pnpm dev` would load the last built bundle, and the chrome UI would stop reloading.
+    expect(devServerUrl(URL_FROM_VITE, { packaged: false })).toBe('http://localhost:5173')
+  })
+
+  it('is absent when the variable is unset or empty', () => {
+    // Empty is how a shell unsets a variable for one command; both mean "load from disk".
+    expect(devServerUrl({}, { packaged: false })).toBeNull()
+    expect(devServerUrl({ ELECTRON_RENDERER_URL: '' }, { packaged: false })).toBeNull()
+  })
+})
+
+describe('the debugging switches a packaged build refuses', () => {
+  /** A command line holding exactly `present`, as `app.commandLine.hasSwitch` would read it. */
+  const switches =
+    (...present: string[]) =>
+    (name: string): boolean =>
+      present.includes(name)
+
+  it('names the remote-debugging port in a packaged build', () => {
+    /*
+      The fuses turn off Node's inspector, not Chromium's DevTools protocol, and the protocol is the
+      whole browser: every page, every cookie, script in any tab. A shipped build started with the
+      switch has been started by something other than its user.
+    */
+    expect(refusedDebugSwitch(switches('remote-debugging-port'), { packaged: true })).toBe(
+      'remote-debugging-port'
+    )
+  })
+
+  it('names the remote-debugging pipe in a packaged build', () => {
+    // The same protocol over a file descriptor instead of a port. Refusing one and not the other
+    // would close the door and leave the window beside it open.
+    expect(refusedDebugSwitch(switches('remote-debugging-pipe'), { packaged: true })).toBe(
+      'remote-debugging-pipe'
+    )
+  })
+
+  it('lets an ordinary packaged launch through', () => {
+    expect(refusedDebugSwitch(switches('user-data-dir', 'lang'), { packaged: true })).toBeNull()
+  })
+
+  it('never refuses a development build', () => {
+    // A developer attaching DevTools to their own build is the switch doing its job.
+    expect(
+      refusedDebugSwitch(switches('remote-debugging-port', 'remote-debugging-pipe'), {
+        packaged: false
+      })
+    ).toBeNull()
+  })
+
+  it('asks the command line rather than reading it', () => {
+    /*
+      Chromium accepts `-remote-debugging-port` and, on Windows, `/remote-debugging-port` and any
+      capitalisation of it. A search of argv would have to know all of that and would be wrong the
+      day Chromium learns another spelling; `hasSwitch` is Chromium's own parser answering. So the
+      guard is handed the question and asks it about both switches.
+    */
+    const asked: string[] = []
+    refusedDebugSwitch(
+      (name) => {
+        asked.push(name)
+        return false
+      },
+      { packaged: true }
+    )
+    expect(asked).toEqual(['remote-debugging-port', 'remote-debugging-pipe'])
   })
 })
 

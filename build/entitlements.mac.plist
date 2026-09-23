@@ -2,20 +2,26 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Electron needs these two under the hardened runtime; without them the
-       renderer processes crash on launch. -->
+  <!-- Electron needs this one under the hardened runtime: V8 generates code at
+       run time, and without it the renderer processes crash on launch.
+
+       `allow-jit` alone, not `allow-unsigned-executable-memory` beside it. The
+       second is the broader exception — any writable memory may become
+       executable, not only the JIT's own MAP_JIT regions — and Electron has not
+       needed it since V8 moved to MAP_JIT. Keeping it would widen what an
+       exploited renderer can do for no gain. -->
   <key>com.apple.security.cs.allow-jit</key>
-  <true/>
-  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
 
   <!-- Deliberately absent: camera, microphone, location, address book and
        calendar. The browser denies those permissions by default (spec 4), so
        requesting the entitlements would be a lie in the installer prompt.
-       Add them here only when the matching permission prompt ships. -->
+       Add them here only when the matching permission prompt ships.
 
-  <!-- Downloads need user-selected write access. -->
-  <key>com.apple.security.files.user-selected.read-write</key>
-  <true/>
+       Also absent: `files.user-selected.read-write`. It only means anything
+       inside the App Sandbox, which this app does not enable; outside it the key
+       is inert, and downloads already write wherever the user chooses. A key
+       that reads like a permission but grants nothing misleads whoever audits
+       this file next. -->
 </dict>
 </plist>

@@ -1,4 +1,4 @@
-import { BrowserWindow, type Session } from 'electron'
+import { app, BrowserWindow, type Session } from 'electron'
 import { join } from 'node:path'
 import type { ChromeInsets, WindowState } from '@shared/model.js'
 
@@ -8,6 +8,7 @@ import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Fractions, LayoutId, Rect } from '@shared/split/layout.js'
 import { chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { decideAutomaticNavigation } from './automatic-navigation.js'
+import { decideChromeNavigation, pendingNavigationOf } from './navigation-policy.js'
 import { AutomaticNavigationPrompt } from './AutomaticNavigationPrompt.js'
 import { HOME_URL, resolveOmniboxInput } from '@shared/url/omnibox.js'
 import type { OverlayPresentation, OverlayState } from '@shared/overlay/surface.js'
@@ -28,6 +29,7 @@ import type { SplitSnapshotForPersistence } from './SplitController.js'
 import { OverlayLayer } from './OverlayLayer.js'
 import { SplitController, type TileDirection } from './SplitController.js'
 import { currentPlatform, preloadFile, preloadRoleArgument } from '../paths.js'
+import { devServerUrl } from '../startup-flags.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
 import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
 import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
@@ -87,6 +89,18 @@ function hostOf(url: string): string {
   } catch {
     return ''
   }
+}
+
+/**
+ * `preventDefault` on an Electron event that arrived through `#on` as `unknown`.
+ *
+ * A declaration rather than a cast, as in `pendingNavigationOf`: `object` is assignable to a type
+ * whose only field is optional, so this narrows without asserting anything unchecked.
+ */
+function preventDefaultOf(event: unknown): void {
+  if (typeof event !== 'object' || event === null) return
+  const cancellable: { preventDefault?: () => void } = event
+  cancellable.preventDefault?.()
 }
 
 export class BrowserWindowController {
@@ -265,15 +279,66 @@ export class BrowserWindowController {
       scheduleBroadcast: () => this.#scheduleBroadcast()
     })
     this.#wireLifecycle()
+    this.#guardChrome()
     this.#loadChrome()
     this.#seams.fullscreen.applyPolicy()
   }
 
   // --- lifecycle -----------------------------------------------------------
 
+  /**
+   * Keeps the chrome UI on the document the core loaded into it.
+   *
+   * This renderer holds every IPC channel there is, so whatever it shows is trusted with all of them
+   * — which makes "it shows only what `#loadChrome` put there" a security property, not a nicety.
+   * Three ways a page could otherwise replace it, each closed here before the first load:
+   *
+   *   - `will-frame-navigate`: a dropped link, an assignment to `location`. The core never moves this
+   *     view that way (`loadURL` does not fire the event), so `decideChromeNavigation` refuses
+   *     everything but Vite's own reload in `pnpm dev`. Only this event, not `will-navigate` as well —
+   *     it is the documented superset, the reasoning in `navigation-policy.ts`.
+   *   - `setWindowOpenHandler`: nothing in the chrome UI opens a window, so every request is denied.
+   *   - `will-attach-webview`: `webviewTag` is off, and this is what holds if it is ever switched on.
+   *
+   * Through `#on`, so the listeners go with the window like every other subscription here. The IPC
+   * router checks the address on every call as well (`classifySender`), because a guard that cannot
+   * see the core's own loads cannot be the only line.
+   */
+  #guardChrome(): void {
+    const contents = this.window.webContents
+    const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
+
+    this.#on(
+      'will-frame-navigate',
+      (details: unknown) => {
+        const pending = pendingNavigationOf(details, 'frame')
+        if (pending === null) {
+          // A payload this build does not recognise is refused rather than waved through: for
+          // this surface there is no navigation it would have been right to follow.
+          preventDefaultOf(details)
+          return
+        }
+        const decision = decideChromeNavigation(pending, devServer)
+        if (decision.allowed) return
+        pending.prevent()
+        console.warn(`[chrome] refused: ${decision.reason}`)
+      },
+      contents
+    )
+    this.#on(
+      'will-attach-webview',
+      (event: unknown) => {
+        preventDefaultOf(event)
+        console.warn('[chrome] refused: the chrome UI may not attach a <webview>')
+      },
+      contents
+    )
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  }
+
   #loadChrome(): void {
-    const devServer = process.env.ELECTRON_RENDERER_URL
-    if (devServer !== undefined && devServer !== '') {
+    const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
+    if (devServer !== null) {
       void this.window.loadURL(devServer)
     } else {
       void this.window.loadFile(join(__dirname, '../renderer/index.html'))
@@ -292,9 +357,15 @@ export class BrowserWindowController {
    *
    * Reached from `window-events.ts` as `WindowEventHost.on` rather than copied into it: the disposers are
    * this window's, and the pairing only means anything where the thing being torn down lives.
+   *
+   * The window by default; `#guardChrome` passes the window's `webContents`, whose navigation events
+   * are not the window's.
    */
-  #on(event: string, handler: (...args: unknown[]) => void): void {
-    const emitter: NodeJS.EventEmitter = this.window
+  #on(
+    event: string,
+    handler: (...args: unknown[]) => void,
+    emitter: NodeJS.EventEmitter = this.window
+  ): void {
     emitter.on(event, handler)
     this.#disposers.push(() => {
       emitter.removeListener(event, handler)

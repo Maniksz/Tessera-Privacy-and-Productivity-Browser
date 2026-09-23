@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { PRODUCT_NAME, PRODUCT_SCHEME } from '@shared/product.js'
 import { FAVICON_PAGE, faviconSiteOf } from '@shared/favicons/model.js'
 import { THUMBNAIL_PAGE, thumbnailPageOf } from '@shared/thumbnails/model.js'
+import { devServerUrl } from './startup-flags.js'
 
 /**
  * The `tessera://` scheme for internal pages (start page, settings, history,
@@ -108,8 +109,8 @@ export function registerInternalProtocol(options: {
   ])
   // In development the renderer is served by Vite, so requests are proxied there
   // instead of read from disk — otherwise internal pages would be stale while the
-  // chrome UI hot-reloads.
-  const devServer = process.env.ELECTRON_RENDERER_URL
+  // chrome UI hot-reloads. Never in a packaged build; see `devServerUrl`.
+  const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
 
   protocol.handle(SCHEME, async (request) => {
     const url = new URL(request.url)
@@ -133,7 +134,7 @@ export function registerInternalProtocol(options: {
     const isAsset = url.pathname !== '' && url.pathname !== '/'
     const relativePath = isAsset ? url.pathname : `internal/${page}.html`
 
-    if (devServer !== undefined && devServer !== '') {
+    if (devServer !== null) {
       return net.fetch(new URL(relativePath, devServer).toString())
     }
 
