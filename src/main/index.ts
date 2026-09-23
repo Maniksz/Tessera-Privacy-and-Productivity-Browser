@@ -63,6 +63,7 @@ import { TabGroupStore } from './data/TabGroupStore.js'
 import { SessionStore } from './data/SessionStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
 import { DownloadStore } from './data/DownloadStore.js'
+import { removeTempFilesOf } from './data/atomic-write.js'
 import { applySessionRestore } from './session-restore/apply.js'
 import { restoreSettingsFrom } from './session-restore/settings.js'
 import { FilterSubscription } from './privacy/FilterSubscription.js'
@@ -338,6 +339,14 @@ async function main(): Promise<void> {
       console.warn('[startup-flags] could not be written:', String(error))
     })
   }
+  /*
+    Leftovers a crash left beside the flags file, removed once before the first write. Not inside
+    `writeStartupFlags`: its calls are not serialised, and a cleanup there would delete the temporary
+    another call is about to rename.
+  */
+  await removeTempFilesOf(startupFlagsFile()).catch((error: unknown) => {
+    console.warn('[startup-flags] could not remove leftover temporaries:', String(error))
+  })
   persistStartupFlags(settings.snapshot())
   settings.onChange(({ snapshot }) => persistStartupFlags(snapshot))
 
@@ -718,6 +727,9 @@ async function main(): Promise<void> {
     // Bound to a browsing mode where the session is created, so a private window holds a recorder
     // that discards rather than a flag somebody has to remember to check.
     downloads: downloadManager,
+    // Every session asks through the one arbiter, so two windows' prompts queue in one place and a
+    // check reads the same memory the answer was written to.
+    permissions: permissionArbiter,
     /*
       The page's right-click menu is assembled here because this is the only layer that has all of it: the
       language, whether the blocker is on, the element picker, and the window to open a link beside.

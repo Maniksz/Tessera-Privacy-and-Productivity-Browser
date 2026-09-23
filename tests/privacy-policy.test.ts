@@ -5,8 +5,8 @@ import {
   PERMISSION_SETTINGS,
   decideMediaPermission,
   decidePermission,
-  requestOrigin,
-  toDecision
+  toDecision,
+  topLevelOrigin
 } from '@main/session/permission-policy.js'
 import {
   UNIFORM_IDENTITY,
@@ -163,26 +163,47 @@ describe('decideMediaPermission', () => {
   })
 })
 
-describe('requestOrigin', () => {
-  it('prefers the requesting URL', () => {
-    expect(requestOrigin('https://a.example/page', 'https://b.example/')).toBe('https://a.example')
+describe('topLevelOrigin', () => {
+  it("gives a main frame's request the page's origin", () => {
+    expect(
+      topLevelOrigin({ frame: 'https://a.example/page', topLevel: 'https://a.example/other' })
+    ).toBe('https://a.example')
   })
 
-  it('falls back to the sender URL', () => {
-    expect(requestOrigin(null, 'https://b.example/page')).toBe('https://b.example')
+  it('attributes a same-origin subframe to the page', () => {
+    expect(
+      topLevelOrigin({ frame: 'https://a.example/frame', topLevel: 'https://a.example/' })
+    ).toBe('https://a.example')
   })
 
-  it('skips an empty requesting URL', () => {
-    expect(requestOrigin('', 'https://b.example/page')).toBe('https://b.example')
+  it('refuses a frame embedded from another site', () => {
+    // No delegation signal reaches either handler, so the embedded site is never asked for as the page.
+    expect(
+      topLevelOrigin({ frame: 'https://ads.example.net/x', topLevel: 'https://a.example/' })
+    ).toBeNull()
+    // The port is part of the origin.
+    expect(
+      topLevelOrigin({ frame: 'https://a.example:8443/', topLevel: 'https://a.example/' })
+    ).toBeNull()
   })
 
-  it('skips an unparseable candidate', () => {
-    expect(requestOrigin('not a url', 'https://b.example/')).toBe('https://b.example')
+  it('takes the frame as its own top level when there is no page to compare with', () => {
+    // A service worker's check arrives with no webContents.
+    expect(topLevelOrigin({ frame: 'https://a.example', topLevel: null })).toBe('https://a.example')
   })
 
   it('returns null rather than something misleading', () => {
-    expect(requestOrigin(null, null)).toBeNull()
-    expect(requestOrigin('not a url', 'also not a url')).toBeNull()
+    expect(topLevelOrigin({ frame: null, topLevel: 'https://a.example/' })).toBeNull()
+    expect(topLevelOrigin({ frame: null, topLevel: null })).toBeNull()
+    expect(topLevelOrigin({ frame: '', topLevel: 'https://a.example/' })).toBeNull()
+    expect(topLevelOrigin({ frame: 'not a url', topLevel: 'https://a.example/' })).toBeNull()
+    expect(topLevelOrigin({ frame: 'https://a.example/', topLevel: 'not a url' })).toBeNull()
+  })
+
+  it('refuses an opaque origin rather than sharing one answer between all of them', () => {
+    // `new URL('data:…').origin` is the string "null"; remembering under it would cover every such page.
+    expect(topLevelOrigin({ frame: 'data:text/html,hi', topLevel: 'data:text/html,hi' })).toBeNull()
+    expect(topLevelOrigin({ frame: 'about:blank', topLevel: null })).toBeNull()
   })
 })
 

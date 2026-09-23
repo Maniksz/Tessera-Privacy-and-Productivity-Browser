@@ -8,7 +8,8 @@ import {
   type PermissionHost
 } from '@main/permissions/PermissionArbiter.js'
 import { notifyOverlayVacancy, onOverlayVacancy } from '@main/permissions/vacancy.js'
-import type { SitePermissionRules } from '@main/permissions/model.js'
+import { forgetfulSitePermissions, type SitePermissionRules } from '@main/permissions/model.js'
+import type { BrowsingMode } from '@main/data/HistoryStore.js'
 import type { PermissionDecision } from '@main/session/permission-policy.js'
 
 /**
@@ -20,9 +21,9 @@ import type { PermissionDecision } from '@main/session/permission-policy.js'
  * refusal, and a way for one tile to deny another tile's request by asking first.
  *
  * The other half of the file is about the ways a dialogue can leave the screen without being
- * answered. Those matter more than Escape does in practice: the window controller dismisses the
- * overlay layer on every resize and every focus loss, and each of those has to arrive as a refusal
- * rather than as a page left waiting forever.
+ * answered: a closed window, a displaced dialogue, a full queue. Each has to arrive as a refusal
+ * rather than as a page left waiting forever — and as a refusal *this once*, never remembered,
+ * because nobody refused the site.
  */
 
 interface FakeHost extends PermissionHost {
@@ -100,6 +101,7 @@ function recordingRules(): SitePermissionRules & {
 function arbiter(
   options: {
     rules?: SitePermissionRules
+    rulesFor?: (mode: BrowsingMode) => SitePermissionRules
     settings?: SettingsSnapshot
     maxQueued?: number
   } = {}
@@ -107,7 +109,7 @@ function arbiter(
   let counter = 0
   const rules = options.rules ?? recordingRules()
   return new PermissionArbiter({
-    rulesFor: () => rules,
+    rulesFor: options.rulesFor ?? (() => rules),
     getSettings: () => options.settings ?? askSettings(),
     newRequestId: () => {
       counter += 1
@@ -141,26 +143,48 @@ describe('one request', () => {
     expect(host.dismissals, 'the dialogue was left on screen').toBe(1)
   })
 
-  it('names the devices a media request would reach', async () => {
+  it('refuses a camera set to ask without presenting anything', async () => {
+    // R13: camera and microphone behave exactly as they did before prompting was wired.
+    const rules = recordingRules()
     const host = fakeHost()
-    const core = arbiter()
-    const answer = core.ask(
-      { permission: 'media', mediaTypes: ['video', 'audio'], origin: 'https://example.com' },
-      host
-    )
-
-    const prompt = lastPrompt(host)
-    expect(prompt.subject).toBe('camera-and-microphone')
-    expect(prompt.devices).toEqual(['camera', 'microphone'])
-
-    core.answer(prompt.requestId, 'block')
-    await expect(answer).resolves.toBe(false)
+    const core = arbiter({ rules })
+    for (const mediaTypes of [['video'], ['audio'], ['video', 'audio']]) {
+      await expect(
+        core.ask({ permission: 'media', mediaTypes, origin: 'https://example.com' }, host),
+        mediaTypes.join('+')
+      ).resolves.toBe(false)
+    }
+    await expect(
+      core.ask(
+        { permission: 'display-capture', mediaTypes: [], origin: 'https://example.com' },
+        host
+      )
+    ).resolves.toBe(false)
+    expect(host.presented, 'a camera prompt reached the layer').toEqual([])
+    expect(rules.written).toEqual([])
   })
 
   it('refuses a request that belongs to no window', async () => {
     // Nowhere to show a dialogue means nobody can answer it, so it cannot be granted.
-    const core = arbiter()
+    const rules = recordingRules()
+    const core = arbiter({ rules })
     await expect(core.ask(geolocation(), null)).resolves.toBe(false)
+    expect(rules.written, 'a refusal nobody gave was remembered').toEqual([])
+  })
+
+  it('still lets the settings answer a request that belongs to no window', async () => {
+    // The settings needed no window before any of this was wired, and a camera on allow still does.
+    const core = arbiter({
+      settings: {
+        ...defaultSettings(),
+        'permissions.geolocation': 'allow',
+        'permissions.camera': 'allow'
+      }
+    })
+    await expect(core.ask(geolocation(), null)).resolves.toBe(true)
+    await expect(
+      core.ask({ permission: 'media', mediaTypes: ['video'], origin: null }, null)
+    ).resolves.toBe(true)
   })
 
   it('shows no dialogue at all when the settings already answer', async () => {
@@ -185,6 +209,23 @@ describe('one request', () => {
     const presentedBefore = host.presented.length
     await expect(core.ask(geolocation(), host)).resolves.toBe(true)
     expect(host.presented.length, 'a remembered answer was asked again').toBe(presentedBefore)
+  })
+
+  it('remembers Escape as a block', async () => {
+    // The surface sends Escape over `permissions:answer` as `block`; it is the user's answer.
+    const rules = recordingRules()
+    const host = fakeHost()
+    const core = arbiter({ rules })
+    const first = core.ask(geolocation(), host)
+    core.answer(lastPrompt(host).requestId, 'block')
+    await expect(first).resolves.toBe(false)
+    expect(rules.written).toEqual([
+      { origin: 'https://example.com', subject: 'geolocation', decision: 'deny' }
+    ])
+
+    const presentedBefore = host.presented.length
+    await expect(core.ask(geolocation(), host)).resolves.toBe(false)
+    expect(host.presented.length, 'a remembered block was asked again').toBe(presentedBefore)
   })
 
   it('ignores an answer for a request that no longer exists', async () => {
@@ -312,7 +353,8 @@ describe('two requests at the same time', () => {
     // dismissal revealing another dialogue is a way to make the browser unusable.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const host = fakeHost()
-    const core = arbiter({ maxQueued: 2 })
+    const rules = recordingRules()
+    const core = arbiter({ rules, maxQueued: 2 })
 
     void core.ask(geolocation('https://a.example'), host)
     void core.ask(geolocation('https://b.example'), host)
@@ -320,6 +362,7 @@ describe('two requests at the same time', () => {
 
     await expect(refused, 'the cap granted instead of refusing').resolves.toBe(false)
     expect(core.pendingCount(host)).toBe(2)
+    expect(rules.written, 'a full queue blocked a site nobody refused').toEqual([])
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
   })
@@ -390,6 +433,38 @@ describe('a dialogue that leaves the screen without an answer', () => {
     expect(core.pendingCount(host)).toBe(0)
   })
 
+  it('remembers nothing when a window closes with eight sites waiting', async () => {
+    // AE5: eight tabs ask for the location, the window closes unanswered, and no site is blocked.
+    const rules = recordingRules()
+    const host = fakeHost()
+    const core = arbiter({ rules })
+    const answers = Array.from({ length: 8 }, (_, index) =>
+      core.ask(geolocation(`https://site${String(index)}.example`), host)
+    )
+    expect(core.pendingCount(host)).toBe(8)
+
+    core.overlayVacated(lastPrompt(host), 'gone')
+
+    for (const answer of answers) await expect(answer).resolves.toBe(false)
+    expect(rules.written, 'a closed window blocked sites nobody refused').toEqual([])
+    // And each site is asked again next time rather than refused from memory.
+    const again = fakeHost()
+    void core.ask(geolocation('https://site3.example'), again)
+    expect(prompts(again)).toHaveLength(1)
+  })
+
+  it('remembers nothing for a dialogue that was dismissed or displaced', async () => {
+    for (const reason of ['dismissed', 'replaced'] as const) {
+      const rules = recordingRules()
+      const host = fakeHost()
+      const core = arbiter({ rules })
+      const answer = core.ask(geolocation(), host)
+      core.overlayVacated(lastPrompt(host), reason)
+      await expect(answer, reason).resolves.toBe(false)
+      expect(rules.written, reason).toEqual([])
+    }
+  })
+
   it('ignores a surface that nothing was waiting on', async () => {
     const host = fakeHost()
     const core = arbiter()
@@ -414,6 +489,39 @@ describe('a dialogue that leaves the screen without an answer', () => {
     core.answer(prompt.requestId, 'allow-always')
     core.overlayVacated(prompt, 'dismissed')
     await expect(answer).resolves.toBe(true)
+  })
+})
+
+describe('permission checks', () => {
+  const check = {
+    permission: 'geolocation',
+    requestingOrigin: 'https://example.com',
+    embeddingOrigin: null,
+    topLevelUrl: null
+  }
+
+  function modalRules(): (mode: BrowsingMode) => SitePermissionRules {
+    const normal = recordingRules()
+    normal.remember('https://example.com', 'geolocation', 'allow')
+    return (mode) => (mode === 'private' ? forgetfulSitePermissions : normal)
+  }
+
+  it("reads the normal profile's remembered allow without a webContents", () => {
+    const core = arbiter({ rulesFor: modalRules() })
+    expect(core.check(check, 'normal')).toBe(true)
+  })
+
+  it("does not show a private session the normal profile's grants", () => {
+    const core = arbiter({ rulesFor: modalRules() })
+    expect(core.check(check, 'private')).toBe(false)
+  })
+
+  it('reads the settings at the moment of the check', () => {
+    let settings = askSettings()
+    const core = new PermissionArbiter({ rulesFor: modalRules(), getSettings: () => settings })
+    expect(core.check(check, 'normal')).toBe(true)
+    settings = { ...askSettings(), 'permissions.geolocation': 'deny' }
+    expect(core.check(check, 'normal'), 'a deny setting left a stored allow granted').toBe(false)
   })
 })
 

@@ -16,6 +16,8 @@ import type { Tab } from './Tab.js'
 import { quickLinkCards, type QuickLinkCard } from '@shared/quicklinks/cards.js'
 import type { QuickLink } from '@shared/quicklinks/model.js'
 import { applySessionHardening } from '../session/hardening.js'
+import type { PermissionCheck, PermissionRequestDetails } from '../session/permission-policy.js'
+import type { PermissionHost } from '../permissions/PermissionArbiter.js'
 import { installRequestPipeline } from '../privacy/RequestPipeline.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
 import { windowOfSender, windowOfTab } from './sender-window.js'
@@ -48,6 +50,18 @@ export interface DownloadSubscriber {
   attach(session: Session, mode: BrowsingMode): void
   /** Drops what a session left in memory. The last piece of "a private window leaves no record". */
   releaseSession(session: Session): void
+}
+
+/**
+ * Permission decisions, as far as this class needs them. `PermissionArbiter` satisfies it.
+ *
+ * Structural for the reason `DownloadSubscriber` is: the two calls say what the coupling is. This
+ * class contributes the two facts only it has — which window a tab belongs to, for the dialogue, and
+ * which kind of window a session serves, for the memory a check reads.
+ */
+export interface PermissionDecider {
+  ask(request: PermissionRequestDetails, host: PermissionHost | null): Promise<boolean>
+  check(check: PermissionCheck, mode: BrowsingMode): boolean
 }
 
 export interface WindowRegistryDeps {
@@ -84,6 +98,13 @@ export interface WindowRegistryDeps {
    * and it is bound once, in `#prepareSession`.
    */
   downloads: DownloadSubscriber
+  /**
+   * Permission requests and checks, installed per session in `#prepareSession`.
+   *
+   * Required rather than optional: a session hardened without it still decides from the settings,
+   * but a user who chose "ask" would never see a dialogue, and nothing would say why.
+   */
+  permissions: PermissionDecider
   /**
    * The user right-clicked a page.
    *
@@ -293,7 +314,19 @@ export class WindowRegistry {
 
     applySessionHardening({
       session,
-      getSettings: () => this.#deps.settings.snapshot()
+      getSettings: () => this.#deps.settings.snapshot(),
+      /*
+        The window a request is shown in is the one owning the tab that asked. `null` when none does —
+        a view already detached — and the arbiter then lets the settings answer and asks nobody.
+      */
+      requestFromUser: (request, webContents) =>
+        this.#deps.permissions.ask(request, this.controllerForWebContents(webContents.id) ?? null),
+      /*
+        Bound to the mode here, once, like the download subscription below: a check can arrive with no
+        `webContents` at all, and this is the only place that knows which kind of window the session
+        is for.
+      */
+      checkPermission: (check) => this.#deps.permissions.check(check, mode)
     })
 
     /*

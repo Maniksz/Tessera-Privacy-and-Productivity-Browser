@@ -7,7 +7,12 @@ import {
 } from '@shared/overlay/permission.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import {
+  UNANSWERED,
+  answerPermissionCheck,
   resolvePermissionRequest,
+  unaskedPrompting,
+  type PermissionCheck,
+  type PermissionOutcome,
   type PermissionRequestDetails
 } from '../session/permission-policy.js'
 import type { BrowsingMode } from '../data/HistoryStore.js'
@@ -44,10 +49,18 @@ import type { OverlayVacancyReason } from './vacancy.js'
  *
  * ## Why nothing here is allowed to leave a request unanswered
  *
- * Every path settles the promise. A dismissed dialogue, a resized window, a closed window, a
- * crashed surface, a full queue: each one resolves to `block`. An unsettled request is a page that
+ * Every path settles the promise. A dismissed or displaced dialogue, a closed window, a crashed
+ * surface, a full queue: each one resolves to `UNANSWERED`. An unsettled request is a page that
  * hangs with no error and no explanation, and it is the failure this class is mostly written to
  * avoid.
+ *
+ * ## Why only a person's answer is remembered
+ *
+ * `UNANSWERED` refuses exactly as `block` does, and unlike `block` it leaves nothing on disk. It used
+ * to be `block`, which made every one of those paths a *remembered* refusal: a window closed with
+ * eight location prompts queued left eight sites blocked for good, and not one of them had been
+ * refused by anybody. The only way to a remembered answer is now `answer`, which is `permissions:answer`
+ * — the buttons, and Escape, which the surface sends as `block`.
  */
 
 /**
@@ -94,7 +107,7 @@ interface PendingPrompt {
    * one site asking for the microphone are one dialogue and two pending promises, and both have to
    * be settled by the single answer.
    */
-  readonly settlers: Array<(answer: PermissionAnswer) => void>
+  readonly settlers: Array<(outcome: PermissionOutcome) => void>
   presented: boolean
   /**
    * The `waiting` count last sent for this prompt, or `null` before it was ever shown.
@@ -138,7 +151,13 @@ export class PermissionArbiter {
    * here, applied to the one case where the browser itself is the reason nobody was asked.
    */
   ask(request: PermissionRequestDetails, host: PermissionHost | null): Promise<boolean> {
-    if (host === null) return Promise.resolve(false)
+    /*
+      The settings still answer: a camera set to `allow` was granted before any of this was wired,
+      and a request the registry could not place in a window is no reason to start refusing it. Only
+      a question that would need a dialogue is refused — unanswered, so nothing is remembered.
+    */
+    if (host === null)
+      return resolvePermissionRequest(request, unaskedPrompting(this.#getSettings()))
 
     /*
       The mode is resolved once, here, and the rules object is bound before the dialogue appears.
@@ -158,6 +177,22 @@ export class PermissionArbiter {
         rules.remember(origin, subject, decision)
       },
       prompt: (prompt) => this.#enqueue(host, prompt.origin, prompt.subject)
+    })
+  }
+
+  /**
+   * Answers a synchronous check for a session of the given kind. Wired to the check handler.
+   *
+   * The mode comes from where the session was created rather than from a window, because a check
+   * can arrive without a `webContents` — a service worker's — and still has to read the right
+   * memory: a private session reads `forgetfulSitePermissions`, so a grant from the normal profile
+   * never shows through as `granted` there.
+   */
+  check(check: PermissionCheck, mode: BrowsingMode): boolean {
+    const rules = this.#rulesFor(mode)
+    return answerPermissionCheck(check, {
+      settings: this.#getSettings(),
+      recall: (origin, subject) => rules.recall(origin, subject)
     })
   }
 
@@ -187,21 +222,23 @@ export class PermissionArbiter {
    * A prompt left the screen without being answered. Wired to `onOverlayVacancy`.
    *
    * Refusing is the only safe reading: the dialogue is gone, so whatever the user was about to
-   * choose was not chosen. Spec 4 is explicit that an unanswered prompt counts as denied.
+   * choose was not chosen. Spec 4 is explicit that an unanswered prompt counts as denied — denied
+   * *this once*, which is why it settles `UNANSWERED` and not `block`: nobody refused the site.
    *
    * It used to say that this is where "unanswered" mostly happens, because a resize and a focus
    * change both took the layer down. Neither does any more: `DISMISSED_ON_INTERRUPTION` in
    * `window-events.ts` leaves every surface somebody is waiting on standing, precisely so that a
    * notification stealing focus stops answering "Blockieren" for a user who never read the question.
-   * A prompt now leaves unanswered only through Escape, a stronger surface displacing it, or the
-   * window closing — so this path is rarer than it was, and each of those three is a real departure
-   * rather than an interruption. The safe reading is unchanged; only the frequency is.
+   * A prompt now leaves unanswered only through a stronger surface displacing it or the window
+   * closing — Escape is an answer, sent over `permissions:answer` as `block` — so this path is rarer
+   * than it was, and each of those is a real departure rather than an interruption. The safe reading
+   * is unchanged; only the frequency is.
    */
   overlayVacated(presentation: OverlayPresentation, reason: OverlayVacancyReason): void {
     if (presentation.kind !== 'permission-request') return
     const pending = this.#take(presentation.requestId)
     if (pending === null) return
-    this.#settle(pending, 'block')
+    this.#settle(pending, UNANSWERED)
 
     if (reason === 'gone') {
       // No layer left to present into, and `presentOverlay` on a destroyed window throws. Everything
@@ -224,21 +261,22 @@ export class PermissionArbiter {
     host: PermissionHost,
     origin: string,
     subject: PermissionSubject
-  ): Promise<PermissionAnswer> {
+  ): Promise<PermissionOutcome> {
     const queue = this.#queues.get(host) ?? []
     this.#queues.set(host, queue)
 
     const [same] = queue.filter((p) => p.origin === origin && p.subject === subject).slice(0, 1)
     if (same !== undefined) {
       // The same question, already asked. One dialogue, two answers delivered from it.
-      return new Promise<PermissionAnswer>((resolve) => same.settlers.push(resolve))
+      return new Promise<PermissionOutcome>((resolve) => same.settlers.push(resolve))
     }
 
     if (queue.length >= this.#maxQueued) {
       // Bounded, and the bound refuses rather than drops: a dropped request is a page that waits
-      // forever, which is the one outcome worse than a denial nobody asked for.
+      // forever, which is the one outcome worse than a denial nobody asked for. Unanswered, because
+      // nobody was asked: the site is refused this once and asked again next time.
       console.warn(`[permissions] refusing ${subject} for ${origin}: too many prompts waiting`)
-      return Promise.resolve('block')
+      return Promise.resolve(UNANSWERED)
     }
 
     const pending: PendingPrompt = {
@@ -251,7 +289,7 @@ export class PermissionArbiter {
       presentedWaiting: null
     }
     queue.push(pending)
-    const answer = new Promise<PermissionAnswer>((resolve) => pending.settlers.push(resolve))
+    const answer = new Promise<PermissionOutcome>((resolve) => pending.settlers.push(resolve))
     this.#present(host)
     return answer
   }
@@ -312,10 +350,10 @@ export class PermissionArbiter {
   #abandon(host: PermissionHost): void {
     const queue = this.#queues.get(host) ?? []
     this.#queues.delete(host)
-    for (const pending of queue) this.#settle(pending, 'block')
+    for (const pending of queue) this.#settle(pending, UNANSWERED)
   }
 
-  #settle(pending: PendingPrompt, answer: PermissionAnswer): void {
-    for (const settle of pending.settlers) settle(answer)
+  #settle(pending: PendingPrompt, outcome: PermissionOutcome): void {
+    for (const settle of pending.settlers) settle(outcome)
   }
 }

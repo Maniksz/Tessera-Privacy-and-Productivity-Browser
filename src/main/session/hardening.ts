@@ -5,10 +5,12 @@ import { uniformUserAgent } from '@shared/fingerprint/identity.js'
 import { maskingPlanFor, resolvedAcceptLanguage } from '@shared/fingerprint/plan.js'
 import { FINGERPRINT_PLAN_CHANNEL } from '@shared/fingerprint/wire.js'
 import {
-  decideMediaPermission,
-  decidePermission,
-  requestOrigin,
-  type PermissionDecision
+  answerPermissionCheck,
+  resolvePermissionRequest,
+  topLevelOrigin,
+  unaskedPrompting,
+  type PermissionCheck,
+  type PermissionRequestDetails
 } from './permission-policy.js'
 import { filterResponseHeaders, normalizeRequestHeaders } from './headers.js'
 
@@ -57,10 +59,25 @@ export interface HardeningOptions {
   session: Session
   getSettings(): SettingsSnapshot
   /**
-   * Asks the user. The scaffold has no prompt UI yet, so the default resolves to
-   * `false` — the correct failure mode: unanswered means denied.
+   * Decides one request, asking the user when the settings say `ask`: `PermissionArbiter.ask`, for
+   * the window that owns `webContents`.
+   *
+   * The whole decision goes through here, not only the part that needs a dialogue, so the order in
+   * `settleWithoutAsking` is the only order there is. Without it the session still decides through
+   * `resolvePermissionRequest`, with nobody to ask: the settings answer, and `ask` refuses without
+   * remembering anything.
    */
-  requestFromUser?: (permission: string, origin: string | null) => Promise<boolean>
+  requestFromUser?: (
+    request: PermissionRequestDetails,
+    webContents: WebContents
+  ) => Promise<boolean>
+  /**
+   * Answers a synchronous check with the memory of this session's kind of window:
+   * `PermissionArbiter.check`, bound to the mode `WindowRegistry.#prepareSession` named. Bound there
+   * rather than looked up per check, because a check can arrive with no `webContents` to look up.
+   * Without it only the settings answer.
+   */
+  checkPermission?: (check: PermissionCheck) => boolean
   /**
    * Every response whose headers passed through here.
    *
@@ -76,43 +93,53 @@ export interface HardeningOptions {
 
 export function applySessionHardening(options: HardeningOptions): void {
   const { session, getSettings } = options
-  // `Promise.resolve(false)` rather than an async function with no await: the
-  // signature has to return a promise, and unanswered must mean denied.
-  const ask = options.requestFromUser ?? ((): Promise<boolean> => Promise.resolve(false))
+  const ask =
+    options.requestFromUser ??
+    ((request: PermissionRequestDetails): Promise<boolean> =>
+      resolvePermissionRequest(request, unaskedPrompting(getSettings())))
+  const check =
+    options.checkPermission ??
+    ((request: PermissionCheck): boolean =>
+      answerPermissionCheck(request, unaskedPrompting(getSettings())))
   const onResponse = options.onResponse ?? (() => {})
 
   // --- permissions ---------------------------------------------------------
   session.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    const settings = getSettings()
+    /*
+      Only the facts are gathered here; every decision is `resolvePermissionRequest`'s.
 
-    const decision: PermissionDecision =
-      permission === 'media'
-        ? decideMediaPermission((details as { mediaTypes?: string[] }).mediaTypes ?? [], settings)
-        : decidePermission(permission, settings)
-
-    if (decision === 'allow') {
-      callback(true)
-      return
+      The origin is the page's, not the frame's: `webContents.getURL()` is the tab's document and
+      `requestingUrl` the frame that asked, and `topLevelOrigin` refuses a frame on another site.
+      Read defensively, like `mediaTypes`: the details are a union, and a field missing at run time
+      must fall towards a refusal rather than towards a guess.
+    */
+    const request: PermissionRequestDetails = {
+      permission,
+      mediaTypes: (details as { mediaTypes?: string[] }).mediaTypes ?? [],
+      origin: topLevelOrigin({
+        frame: (details as { requestingUrl?: string }).requestingUrl ?? null,
+        topLevel: webContents.getURL()
+      })
     }
-    if (decision === 'deny') {
+    // A rejection refuses too: a callback never called is a page that hangs with no error.
+    void ask(request, webContents).then(callback, () => {
       callback(false)
-      return
-    }
-
-    const origin = requestOrigin(
-      (details as { requestingUrl?: string }).requestingUrl ?? null,
-      webContents.getURL()
-    )
-    void ask(permission, origin).then(callback)
+    })
   })
 
   /**
    * Synchronous counterpart. Without it, Chromium answers `permissions.query()`
    * from its own defaults, so a page could see "granted" for something the request
-   * handler above would refuse.
+   * handler above would refuse. `webContents` is `null` for a service worker's
+   * check, which is why the memory it reads was bound to a mode beforehand.
    */
-  session.setPermissionCheckHandler((_webContents, permission) => {
-    return decidePermission(permission, getSettings()) === 'allow'
+  session.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    return check({
+      permission,
+      requestingOrigin,
+      embeddingOrigin: details.embeddingOrigin ?? null,
+      topLevelUrl: webContents?.getURL() ?? null
+    })
   })
 
   /** WebHID / WebSerial / WebUSB device pickers. */
