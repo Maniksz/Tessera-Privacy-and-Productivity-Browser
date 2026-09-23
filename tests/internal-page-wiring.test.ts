@@ -256,7 +256,10 @@ describe('internal page messages', () => {
   */
   const pageSources = [
     'src/renderer/internal/BookmarksPage.tsx',
-    'src/renderer/internal/DownloadsPage.tsx'
+    'src/renderer/internal/DownloadsPage.tsx',
+    // The state labels and size texts the downloads page renders live here, shared with the
+    // toolbar's panel; leaving the file out would stop checking the keys the page still shows.
+    'src/shared/downloads/presentation.ts'
   ]
     .map((relative) => source(relative))
     .join('\n')

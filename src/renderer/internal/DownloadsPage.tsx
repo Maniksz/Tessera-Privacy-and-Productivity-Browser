@@ -5,10 +5,13 @@ import {
   downloadSourceHost,
   fileWentMissing,
   isActiveDownload,
-  type DownloadEntry,
-  type DownloadState
+  type DownloadEntry
 } from '@shared/downloads/model.js'
-import { byteSize } from '@shared/downloads/presentation.js'
+import {
+  DOWNLOAD_STATE_LABELS,
+  downloadNumberFormat,
+  downloadProgressText
+} from '@shared/downloads/presentation.js'
 import { downloadsApi, internalBridgeAvailable, type DownloadListing } from './internal-calls.js'
 import { DOWNLOAD_MESSAGES, pendingTranslator, type DownloadMessageKey } from './pending-messages.js'
 import { useInternalI18n } from './useInternalI18n.js'
@@ -35,15 +38,10 @@ import { useInternalI18n } from './useInternalI18n.js'
  * "file not found" dialogue is how a list teaches the user to distrust it. And because the
  * file can vanish between the row being drawn and the button being pressed, `downloads:open`
  * checks again and the page refreshes when it answers no.
+ *
+ * The state names and the size and progress text come from `shared/downloads/presentation.ts`,
+ * because the toolbar's downloads panel must say exactly what this page says.
  */
-
-const STATE_LABELS: Readonly<Record<DownloadState, DownloadMessageKey>> = {
-  progressing: 'downloads.state.progressing',
-  paused: 'downloads.state.paused',
-  completed: 'downloads.state.completed',
-  cancelled: 'downloads.state.cancelled',
-  interrupted: 'downloads.state.interrupted'
-}
 
 export function DownloadsPage(): React.ReactNode {
   const { locale } = useInternalI18n()
@@ -57,10 +55,7 @@ export function DownloadsPage(): React.ReactNode {
   const [notice, setNotice] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
 
-  const numberFormat = useMemo(
-    () => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }),
-    [locale]
-  )
+  const numberFormat = useMemo(() => downloadNumberFormat(locale), [locale])
   const timeFormat = useMemo(
     () => new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }),
     [locale]
@@ -118,19 +113,6 @@ export function DownloadsPage(): React.ReactNode {
     },
     []
   )
-
-  const sizeText = (bytes: number): string => {
-    const { value, unit } = byteSize(bytes)
-    return tp('downloads.byteSize', { value: numberFormat.format(value), unit })
-  }
-
-  const progressText = (entry: DownloadEntry): string =>
-    entry.totalBytes > 0
-      ? tp('downloads.progress', {
-          received: sizeText(entry.receivedBytes),
-          total: sizeText(entry.totalBytes)
-        })
-      : tp('downloads.progressUnknown', { received: sizeText(entry.receivedBytes) })
 
   const openEntry = (entry: DownloadEntry): void => {
     void run(async () => {
@@ -196,17 +178,17 @@ export function DownloadsPage(): React.ReactNode {
             <li className="downloads__entry" key={entry.id}>
               <span className="downloads__name">{entry.fileName}</span>
               <span className="downloads__meta">
-                {tp(STATE_LABELS[entry.state])}
+                {tp(DOWNLOAD_STATE_LABELS[entry.state])}
                 {host === '' ? '' : ` · ${tp('downloads.fromHost', { host })}`}
                 {entry.state === 'completed' && entry.endedAt !== null
                   ? ` · ${timeFormat.format(entry.endedAt)}`
-                  : ` · ${progressText(entry)}`}
+                  : ` · ${downloadProgressText(entry, tp, numberFormat)}`}
               </span>
 
               {isActiveDownload(entry) && (
                 <progress
                   className="downloads__progress"
-                  aria-label={tp(STATE_LABELS[entry.state])}
+                  aria-label={tp(DOWNLOAD_STATE_LABELS[entry.state])}
                   /*
                     An indeterminate bar when the total is unknown, which is what `null` from
                     `downloadFraction` means. Passing 0 instead would draw an empty bar that
