@@ -23,37 +23,18 @@ on:
     tags:
       - 'v*'
 
-# The only permission the job needs: create a release and attach files to it. Everything else stays
-# read-only, so a compromised dependency in a build cannot rewrite the repository.
+# Read-only by default. Only the two jobs that create a release and upload into it are granted
+# `contents: write`, each on its own; the gates, which run the dependency install and the test suite,
+# never hold a token that can change the repository.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  # The gates, once, before anything is published.
-  #
-  # Once and not per platform, and that is a correction rather than a saving. Run on all three, the suite
-  # failed on Windows — not on anything about the product, but on four assertions that read a file's POSIX
-  # mode, which Windows does not have. So a release with no `.exe` was produced by a *test* that could never
-  # have passed there, and the Windows job died before it built anything.
-  #
-  # These are pure-logic tests over shared modules; there is nothing platform-specific for them to catch that
-  # three runs would find and one would not. What *is* platform-specific is the build, and that still happens
-  # on each.
+  # The gates, once, before anything is published — and the same ones a pull request passes, because
+  # they are not a copy: this calls `gates.yml`. See that file for why they run once rather than per
+  # platform, and why `build` precedes the tests.
   gates:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.32.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run build
-      - run: pnpm run lint
-      - run: pnpm test
+    uses: ./.github/workflows/gates.yml
 
   # The release itself, created exactly once before anything uploads into it.
   #
@@ -79,9 +60,14 @@ jobs:
   release:
     needs: gates
     runs-on: ubuntu-latest
+    # Creating a release is a write to the repository; this job and `publish` are the only ones that get it.
+    permissions:
+      contents: write
     steps:
       # Shallow, because nothing here reads history — `gh` needs the repository context and no more.
-      - uses: actions/checkout@v4
+      # Actions are pinned to commits rather than tags, as in `gates.yml`: a tag can be moved, and this
+      # job holds a token that can write.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Create the release if it is not there yet
         env:
@@ -123,17 +109,21 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    steps:
-      - uses: actions/checkout@v4
+    # Uploading installers and `latest*.yml` into the release.
+    permissions:
+      contents: write
 
-      - uses: pnpm/action-setup@v4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           # Pinned to what this repository is developed with. A different pnpm resolves the lockfile
           # differently, and a release built from other dependencies than the tests ran against is a
           # release nobody has tested.
           version: 10.32.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm

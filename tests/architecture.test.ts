@@ -165,6 +165,102 @@ function valueImportsOf(text: string): string[] {
   return specifiers
 }
 
+/**
+ * What a test that reads `out/` may do with the build it finds.
+ *
+ * These tests used to pass whenever `out/` was absent, which made them decorative in exactly the place
+ * they matter: a CI job that forgot to build, or built after testing, went green on budgets nobody had
+ * measured. And locally they measured whatever `out/` happened to hold, so a bundle from last week
+ * could pass or fail a budget for code that no longer exists.
+ *
+ * So the rule differs by where it runs. In CI a missing or stale build is a broken pipeline and fails.
+ * On a developer's machine a unit-test run should not require a build, so it skips — loudly, because a
+ * silent skip is the same false comfort as a silent pass.
+ *
+ * Pure, so the table can be asserted without a build, a clock or an environment variable.
+ */
+type BuildVerdict = { kind: 'check' } | { kind: 'fail' | 'skip'; reason: string }
+
+function judgeBuild(input: {
+  ci: boolean
+  artifact: string
+  /** Modification time of the built artifact, or `null` when it does not exist. */
+  builtAt: number | null
+  newestSourceAt: number
+}): BuildVerdict {
+  const { ci, artifact, builtAt, newestSourceAt } = input
+  const problem =
+    builtAt === null ? 'is missing' : builtAt < newestSourceAt ? 'is older than src/' : null
+  if (problem === null) return { kind: 'check' }
+  const advice = ci ? 'CI must run `pnpm build` before the tests' : 'run `pnpm build` to check it'
+  return { kind: ci ? 'fail' : 'skip', reason: `${artifact} ${problem}; ${advice}` }
+}
+
+/** GitHub Actions and most other runners set `CI`; `false` and `0` are how people switch it off. */
+function runningInCi(): boolean {
+  const value = process.env['CI']
+  return value !== undefined && value !== '' && value !== 'false' && value !== '0'
+}
+
+let newestSourceAtCache: number | undefined
+
+/** The most recent modification anywhere under `src/`, computed once per run. */
+function newestSourceAt(): number {
+  newestSourceAtCache ??= Math.max(
+    ...filesUnder(join(ROOT, 'src')).map((file) => statSync(file).mtimeMs)
+  )
+  return newestSourceAtCache
+}
+
+/**
+ * When the build under `out/` was written: the file's own time, or for a directory the *oldest* file in
+ * it, since one chunk left over from an earlier build is enough to make a budget check meaningless.
+ */
+function builtAt(path: string): number | null {
+  if (!existsSync(path)) return null
+  if (!statSync(path).isDirectory()) return statSync(path).mtimeMs
+  const files = filesUnder(path)
+  return files.length === 0 ? null : Math.min(...files.map((file) => statSync(file).mtimeMs))
+}
+
+/**
+ * Fails, skips or returns, per `judgeBuild`. `skip` is the test context's, so the skip is reported
+ * against the test it belongs to rather than counted as a pass.
+ */
+function requireFreshBuild(relativePath: string, skip: (note: string) => never): void {
+  const verdict = judgeBuild({
+    ci: runningInCi(),
+    artifact: relativePath,
+    builtAt: builtAt(join(ROOT, relativePath)),
+    newestSourceAt: newestSourceAt()
+  })
+  if (verdict.kind === 'check') return
+  if (verdict.kind === 'fail') expect.fail(verdict.reason)
+  // `process.stderr` rather than `console.warn`: Vitest's default reporter does not print console output
+  // from a test that ends skipped, which would leave this skip as quiet as the pass it replaces. The
+  // note passed to `skip` is shown too, but only by the verbose reporter.
+  process.stderr.write(`skipped: ${verdict.reason}\n`)
+  skip(verdict.reason)
+}
+
+/** A workflow file with its comment lines removed, so prose about a step is not read as the step. */
+function workflowCode(name: string): string {
+  const text = readFileSync(join(ROOT, '.github/workflows', name), 'utf8')
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n')
+}
+
+/** The jobs of a workflow by name, each as the text of its block. Two-space indentation, as written. */
+function workflowJobs(code: string): Map<string, string> {
+  const jobs = new Map<string, string>()
+  const body = code.split(/^jobs:\s*$/m)[1] ?? ''
+  const parts = body.split(/^ {2}([\w-]+):\s*$/m)
+  for (let index = 1; index < parts.length; index += 2) jobs.set(parts[index]!, parts[index + 1]!)
+  return jobs
+}
+
 describe('layer boundaries', () => {
   it('keeps shared code free of Electron', async () => {
     // `shared` is imported by the renderer, which has no Electron API. An import
@@ -285,14 +381,10 @@ describe('bundle weight', () => {
     }
   })
 
-  it('holds the built renderer bundles to a size budget', () => {
-    // Skipped rather than failed when there is no build: a unit-test run should not
-    // require one, but a run after a build must hold the line.
+  it('holds the built renderer bundles to a size budget', (context) => {
+    // Fails in CI and skips locally when the build is missing or stale; see `judgeBuild`.
+    requireFreshBuild('out/renderer/assets', context.skip)
     const assets = join(ROOT, 'out/renderer/assets')
-    if (!existsSync(assets)) {
-      expect(true, 'no build present; run pnpm build to check the budget').toBe(true)
-      return
-    }
 
     /**
      * First match wins, and the last entry is a catch-all.
@@ -374,12 +466,9 @@ describe('bundle weight', () => {
     }
   })
 
-  it('keeps the preload bundle self-contained', () => {
+  it('keeps the preload bundle self-contained', (context) => {
+    requireFreshBuild('out/preload/index.cjs', context.skip)
     const preload = join(ROOT, 'out/preload/index.cjs')
-    if (!existsSync(preload)) {
-      expect(true, 'no build present').toBe(true)
-      return
-    }
     const text = readFileSync(preload, 'utf8')
     const requires = [...text.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1])
     // A sandboxed preload cannot require a relative chunk; a shared chunk here
@@ -453,7 +542,7 @@ describe('sandbox rules', () => {
     }
   })
 
-  it('keeps the public-suffix table out of the preload', () => {
+  it('keeps the public-suffix table out of the preload', (context) => {
     /*
       The preload runs in every renderer, so every byte of it is parse work on every page load.
 
@@ -466,8 +555,8 @@ describe('sandbox rules', () => {
       Checked against the built bundle rather than against imports, because the failure is about what
       ends up in the file: a future import three modules deep would reintroduce it just as invisibly.
     */
+    requireFreshBuild('out/preload/index.cjs', context.skip)
     const bundle = join(ROOT, 'out/preload/index.cjs')
-    if (!existsSync(bundle)) return // Nothing built; `pnpm build` covers this in CI.
     const text = readFileSync(bundle, 'utf8')
     expect(text, 'the preload must not carry the eTLD list').not.toContain('co.uk')
     // And the thing it *does* need is still there, so this cannot pass by the preload shrinking to
@@ -514,6 +603,22 @@ describe('sandbox rules', () => {
 })
 
 describe('IPC discipline', () => {
+  it('resolves the window of a request from its sender, never from focus', () => {
+    /*
+      A settings page in a private window once wrote its user rules into the normal profile whenever
+      another window had focus. `fromEvent` matched a tab's sender on `hostWebContents`, which only a
+      `<webview>` sets and a `WebContentsView` never does, so every internal page fell through to the
+      focused window. The decision now lives in `sender-window.ts`; this keeps the registry on it and
+      keeps the dead branch and the focus fallback from coming back.
+    */
+    const registry = codeOnly(readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8'))
+    const raw = readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    expect(raw).toMatch(/from '\.\/sender-window\.js'/)
+    expect(registry).toMatch(/resolve\([^)]*\)[^{]*\{[^}]*windowOfSender\(/)
+    expect(registry).not.toMatch(/hostWebContents/)
+    expect(registry).not.toMatch(/resolve\([^)]*\)[^{]*\{[^}]*focused\(\)/)
+  })
+
   it('gives every shortcut action a menu item that carries its accelerator', () => {
     /*
       An accelerator only fires if a menu item declares it.
@@ -1966,5 +2071,108 @@ describe('product identity', () => {
     expect(config, 'nsis.include no longer points at build/installer.nsh').toMatch(
       /include:\s*build\/installer\.nsh/
     )
+  })
+})
+
+describe('continuous integration', () => {
+  it('fails a missing or stale build in CI and skips it locally', () => {
+    const at = { artifact: 'out/renderer/assets', newestSourceAt: 2_000 }
+
+    const missingInCi = judgeBuild({ ...at, ci: true, builtAt: null })
+    expect(missingInCi.kind).toBe('fail')
+    // The message has to say what to do, not only what is wrong.
+    expect(missingInCi.kind === 'check' ? '' : missingInCi.reason).toContain('pnpm build')
+
+    expect(judgeBuild({ ...at, ci: true, builtAt: 1_000 }).kind, 'stale in CI').toBe('fail')
+    expect(judgeBuild({ ...at, ci: false, builtAt: null }).kind, 'missing locally').toBe('skip')
+
+    const staleLocally = judgeBuild({ ...at, ci: false, builtAt: 1_000 })
+    expect(staleLocally.kind).toBe('skip')
+    expect(staleLocally.kind === 'check' ? '' : staleLocally.reason).toMatch(/older than src\//)
+
+    // Equal times count as fresh: a build that finishes in the same tick as the last save is current.
+    expect(judgeBuild({ ...at, ci: true, builtAt: 2_000 }).kind).toBe('check')
+    expect(judgeBuild({ ...at, ci: false, builtAt: 3_000 }).kind).toBe('check')
+  })
+
+  it('runs every gate on pull requests and on main, building before the tests', () => {
+    /*
+      Until this workflow existed the floors in `vitest.config.ts` were enforced by nothing: the only CI
+      was the release, and it ran `pnpm test` without coverage. A floor that only a tag push can trip is
+      a floor that trips after the merge, which is the moment it is least useful.
+
+      `build` before `test:coverage` is not style. The bundle budgets read `out/`, and in CI a missing
+      `out/` fails them — so the wrong order is a red pipeline rather than a silently skipped budget.
+    */
+    const gates = workflowCode('gates.yml')
+    expect(gates, 'release.yml cannot call it without this').toMatch(/^ {2}workflow_call:/m)
+    expect(gates, 'pull requests are not gated').toMatch(/^ {2}pull_request:/m)
+    expect(gates, 'pushes to main are not gated').toMatch(/^ {2}push:\s*\n\s+branches:\s*\[main\]/m)
+
+    const steps = [
+      'pnpm install --frozen-lockfile',
+      'pnpm run build',
+      'pnpm run lint',
+      'pnpm run format:check',
+      'pnpm run test:coverage'
+    ]
+    // Whole `run:` lines, so `pnpm run build` is not found inside some longer command.
+    const runs = [...gates.matchAll(/^\s*- run:\s*(.+?)\s*$/gm)].map((match) => match[1])
+    for (const step of steps) expect(runs, `the gates do not run ${step}`).toContain(step)
+    expect(runs.indexOf('pnpm run build'), 'the tests run before the build').toBeLessThan(
+      runs.indexOf('pnpm run test:coverage')
+    )
+  })
+
+  it('has the release take its gates from the same workflow as pull requests', () => {
+    // A second copy of the gates would drift — the release's copy already had: no coverage, no format
+    // check. Calling the one workflow is what keeps a release from being held to a lower bar than a PR.
+    const release = workflowCode('release.yml')
+    const jobs = workflowJobs(release)
+    expect(jobs.get('gates'), 'release.yml has no gates job').toBeDefined()
+    expect(jobs.get('gates')).toMatch(/^\s+uses:\s*\.\/\.github\/workflows\/gates\.yml\s*$/m)
+    expect(release, 'release.yml runs a gate of its own').not.toMatch(
+      /pnpm (?:run )?(?:lint|test|format:check)\b/
+    )
+    for (const name of ['release', 'publish']) {
+      expect(jobs.get(name), `${name} does not wait for the gates`).toMatch(
+        /needs:\s*(?:gates\b|\[[^\]]*\bgates\b)/
+      )
+    }
+  })
+
+  it('grants write access only to the jobs that publish', () => {
+    // Everything that runs code from dependencies — install, build, the test suite — runs read-only, so
+    // a compromised package in the build cannot push to the repository or tamper with a release.
+    for (const name of ['gates.yml', 'release.yml']) {
+      expect(workflowCode(name), `${name} top-level permissions`).toMatch(
+        /^permissions:\s*\n {2}contents: read\s*$/m
+      )
+    }
+    const jobs = workflowJobs(workflowCode('release.yml'))
+    for (const [name, block] of jobs) {
+      const writes = /contents:\s*write/.test(block)
+      expect(writes, `${name} ${writes ? 'must not have' : 'needs'} contents: write`).toBe(
+        name === 'release' || name === 'publish'
+      )
+    }
+  })
+
+  it('pins every third-party action to a commit rather than a tag', () => {
+    // A tag is a pointer its owner can move; a commit is not. The comment keeps the pin reviewable,
+    // since nobody can tell from forty hex digits which release they are looking at.
+    const directory = join(ROOT, '.github/workflows')
+    const workflows = readdirSync(directory).filter((name) => /\.ya?ml$/.test(name))
+    expect(workflows).toContain('gates.yml')
+    for (const name of workflows) {
+      const text = readFileSync(join(directory, name), 'utf8')
+      for (const line of text.split('\n')) {
+        const reference = /^\s*(?:-\s*)?uses:\s*(\S+)/.exec(line)?.[1]
+        if (reference === undefined || reference.startsWith('./')) continue
+        expect(line, `${name}: ${reference} is not pinned to a commit`).toMatch(
+          /@[0-9a-f]{40}\s+#\s*v\d+(?:\.\d+)*\s*$/
+        )
+      }
+    }
   })
 })
