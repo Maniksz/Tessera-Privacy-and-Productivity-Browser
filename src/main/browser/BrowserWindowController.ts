@@ -75,6 +75,13 @@ export interface WindowControllerOptions {
   getSettings(): SettingsSnapshot
   onClosed(controller: BrowserWindowController): void
   onRequestNewWindow(options: { privateMode: boolean }): void
+  /**
+   * This window has just presented its downloads panel; `downloadsPanelPresentedAt` already says when.
+   *
+   * Passed up rather than handled here because the button's summary is computed by the downloads
+   * channels from the manager's list, neither of which a window holds.
+   */
+  onDownloadsPanelPresented(): void
 }
 
 const DEFAULT_CHROME_INSETS: ChromeInsets = { top: 88, bottom: 0, left: 0, right: 0 }
@@ -160,6 +167,8 @@ export class BrowserWindowController {
   })
   #broadcastScheduled = false
   #disposers: Array<() => void> = []
+  /** See `downloadsPanelPresentedAt`. */
+  #downloadsPanelPresentedAt: number | null = null
 
   private readonly getSettings: () => SettingsSnapshot
   private readonly options: WindowControllerOptions
@@ -984,6 +993,31 @@ export class BrowserWindowController {
 
   overlayPresentation(): OverlayState {
     return this.#overlay.presentation
+  }
+
+  /**
+   * When this window last presented its downloads panel, or `null` if it has not.
+   *
+   * The moment the toolbar button counts from: an outcome that happened no later than this was on the
+   * panel, so it has been seen and earns no mark (KTD6). In memory only, and per window, so it is gone
+   * with the window — a private window's included.
+   */
+  get downloadsPanelPresentedAt(): number | null {
+    return this.#downloadsPanelPresentedAt
+  }
+
+  /**
+   * Records that the downloads panel has just been presented, and has the button told at once.
+   *
+   * To be called for *every* presentation of the panel: the first, and each re-presentation with fresh
+   * rows while it stays open, same identity or not. Each one is the user looking at the list as it now
+   * stands, so a download that finishes while the panel is up is seen by the re-presentation that
+   * shows it, and closing the panel leaves no mark behind for it. The summary is sent even when it has
+   * not changed, rather than waiting for the next download event to carry it.
+   */
+  downloadsPanelPresented(at: number = Date.now()): void {
+    this.#downloadsPanelPresentedAt = at
+    this.options.onDownloadsPanelPresented()
   }
 
   /**

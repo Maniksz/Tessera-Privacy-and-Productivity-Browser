@@ -8,7 +8,6 @@ import {
   type DownloadHandlerManager,
   type DownloadHandlerWindow
 } from '@main/ipc/download-handlers.js'
-import type { DownloadSession } from '@main/downloads/DownloadManager.js'
 
 /**
  * The `downloads:*` handler bodies.
@@ -56,12 +55,15 @@ function fakeManager(
   options: {
     byWindow?: Record<number, DownloadEntry[]>
     visible?: Record<number, readonly string[]>
+    /** Which ids each window started — `DownloadManager.idsStartedIn`. None, unless said. */
+    startedIn?: Record<number, readonly string[]>
   } = {}
 ) {
   const calls: string[] = []
   const listeners = new Set<() => void>()
   const byWindow = options.byWindow ?? {}
   const visible = options.visible ?? {}
+  const startedIn = options.startedIn ?? {}
   const manager: FakeManager = {
     calls,
     fire: () => {
@@ -75,6 +77,7 @@ function fakeManager(
       calls.push(`snapshot:${viewer.windowId}`)
       return byWindow[viewer.windowId] ?? []
     },
+    idsStartedIn: (windowId) => new Set(startedIn[windowId] ?? []),
     canSee: (viewer, id) =>
       (visible[viewer.windowId] ?? ['live', 'finished', 'here', 'gone', 'a']).includes(id),
     pause: (id) => {
@@ -115,9 +118,11 @@ function fakeManager(
 
 interface FakeWindow extends DownloadHandlerWindow {
   readonly pushed: EventPayload<'downloads:changed'>[]
+  /** What reached this window's chrome UI: the button's summaries, in order. */
+  readonly chrome: EventPayload<'downloads:summaryChanged'>[]
+  /** Stands in for the controller's own record; set by `present` below. */
+  downloadsPanelPresentedAt: number | null
 }
-
-const NO_SESSION: DownloadSession = { on: () => {} }
 
 /**
  * One window: its id, its kind, and the web contents that speak for it.
@@ -128,24 +133,37 @@ const NO_SESSION: DownloadSession = { on: () => {} }
  */
 function fakeWindow(windowId: number, privateMode: boolean): FakeWindow {
   const pushed: EventPayload<'downloads:changed'>[] = []
+  const chrome: EventPayload<'downloads:summaryChanged'>[] = []
   const contents = [windowId, windowId * 10 + 1, windowId * 10 + 2]
   return {
-    viewer: { windowId, mode: privateMode ? 'private' : 'normal', session: NO_SESSION },
+    // A session per window, as the registry gives each private window its own partition.
+    viewer: { windowId, mode: privateMode ? 'private' : 'normal', session: { on: () => {} } },
     pushed,
+    chrome,
+    downloadsPanelPresentedAt: null,
     sends: (webContentsId) => contents.includes(webContentsId),
     emitToInternalPages: (_channel, payload) => {
       pushed.push(payload)
+    },
+    emit: (_channel, payload) => {
+      chrome.push(payload)
     }
   }
 }
 
 type AnyHandler = (payload: never, event: IpcMainInvokeEvent) => unknown
 
-function harness(options: { manager: FakeManager; windows: FakeWindow[] }) {
+function harness(options: {
+  manager: FakeManager
+  windows: FakeWindow[]
+  clock?: { now: number }
+}) {
   const handlers = new Map<string, AnyHandler>()
   const handle: DownloadHandle = (channel, handler) => {
     handlers.set(channel, handler)
   }
+  const presented = new Set<(window: DownloadHandlerWindow) => void>()
+  const clock = options.clock ?? { now: T0 }
 
   registerDownloadHandlers({
     handle,
@@ -153,12 +171,24 @@ function harness(options: { manager: FakeManager; windows: FakeWindow[] }) {
     windows: {
       get downloadWindows() {
         return options.windows
+      },
+      onDownloadsPanelPresented: (listener) => {
+        presented.add(listener)
       }
-    }
+    },
+    now: () => clock.now
   })
 
   return {
     channels: [...handlers.keys()],
+    /**
+     * The window presented its downloads panel at `at`, as `BrowserWindowController` reports it: the
+     * controller records the time, then the registry tells whoever listens.
+     */
+    present: (window: FakeWindow, at: number): void => {
+      window.downloadsPanelPresentedAt = at
+      for (const listener of presented) listener(window)
+    },
     /**
      * A request from one web contents, the downloads page of window 1 unless said otherwise.
      *
@@ -313,5 +343,219 @@ describe('downloads IPC', () => {
     expect(priv.pushed).toEqual([{ downloads: [entry('p')], privateWindow: true }])
     // `snapshot`, not `list`: the pushed path reuses probes, four times a second.
     expect(manager.calls).toEqual(['snapshot:1', 'snapshot:2'])
+  })
+})
+
+describe('the download button summary', () => {
+  const QUIET = { visible: true, activity: null, marker: null }
+
+  it('reaches only the window the download started in, and shows it', () => {
+    const a = fakeWindow(1, false)
+    const b = fakeWindow(3, false)
+    // Both normal windows list the running download; only window 1 started it.
+    const running = entry('a', { state: 'progressing', receivedBytes: 25, endedAt: null })
+    const manager = fakeManager({
+      byWindow: { 1: [running], 3: [running] },
+      startedIn: { 1: ['a'] }
+    })
+    harness({ manager, windows: [a, b] })
+
+    manager.fire()
+
+    expect(a.chrome).toEqual([
+      { visible: true, activity: { kind: 'fraction', fraction: 0.25 }, marker: null }
+    ])
+    // Not even a "hidden": a window that has shown nothing has nothing to take back.
+    expect(b.chrome).toEqual([])
+  })
+
+  it('sends nothing for a tick that leaves the summary as it was', () => {
+    const a = fakeWindow(1, false)
+    const byWindow = { 1: [entry('a', { state: 'progressing', totalBytes: 0, endedAt: null })] }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    harness({ manager, windows: [a] })
+
+    manager.fire()
+    // More bytes, still no declared size: the button draws the same activity either way.
+    byWindow[1] = [
+      entry('a', { state: 'progressing', totalBytes: 0, receivedBytes: 500, endedAt: null })
+    ]
+    manager.fire()
+
+    expect(a.chrome).toEqual([{ visible: true, activity: { kind: 'indeterminate' }, marker: null }])
+  })
+
+  it('sends the progress again when it has moved', () => {
+    const a = fakeWindow(1, false)
+    const byWindow = { 1: [entry('a', { state: 'progressing', receivedBytes: 10, endedAt: null })] }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    harness({ manager, windows: [a] })
+
+    manager.fire()
+    byWindow[1] = [entry('a', { state: 'progressing', receivedBytes: 60, endedAt: null })]
+    manager.fire()
+
+    expect(a.chrome.map((summary) => summary.activity)).toEqual([
+      { kind: 'fraction', fraction: 0.1 },
+      { kind: 'fraction', fraction: 0.6 }
+    ])
+  })
+
+  it('carries no file name and no address', () => {
+    const a = fakeWindow(1, false)
+    const manager = fakeManager({
+      byWindow: { 1: [entry('secret-report', { state: 'interrupted' })] },
+      startedIn: { 1: ['secret-report'] }
+    })
+    harness({ manager, windows: [a] })
+
+    manager.fire()
+
+    expect(a.chrome).toHaveLength(1)
+    expect(Object.keys(a.chrome[0] ?? {}).sort()).toEqual(['activity', 'marker', 'visible'])
+    const wire = JSON.stringify(a.chrome)
+    expect(wire).not.toContain('secret-report')
+    expect(wire).not.toContain('example.com')
+    expect(wire).not.toContain('/tmp/')
+  })
+
+  it('gives a private window a summary of its own downloads only', () => {
+    const normal = fakeWindow(1, false)
+    const priv = fakeWindow(2, true)
+    // The stored list reaches the private window's page too, deliberately — but not its button.
+    const stored = entry('n', { state: 'completed' })
+    const own = entry('p', { state: 'progressing', totalBytes: 0, receivedBytes: 5, endedAt: null })
+    const manager = fakeManager({
+      byWindow: { 1: [stored], 2: [stored, own] },
+      startedIn: { 1: ['n'], 2: ['p'] }
+    })
+    harness({ manager, windows: [normal, priv] })
+
+    manager.fire()
+
+    expect(priv.chrome).toEqual([
+      { visible: true, activity: { kind: 'indeterminate' }, marker: null }
+    ])
+    expect(normal.chrome).toEqual([{ visible: true, activity: null, marker: 'completed' }])
+  })
+
+  it('marks a normal download that finished as completed', () => {
+    const a = fakeWindow(1, false)
+    const byWindow = { 1: [entry('a', { state: 'progressing', receivedBytes: 50, endedAt: null })] }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    harness({ manager, windows: [a] })
+
+    manager.fire()
+    byWindow[1] = [entry('a', { state: 'completed', endedAt: T0 + 10 })]
+    manager.fire()
+
+    expect(a.chrome.at(-1)).toEqual({ visible: true, activity: null, marker: 'completed' })
+  })
+
+  it('takes the button away when the list no longer holds anything the window started', () => {
+    const a = fakeWindow(1, false)
+    const byWindow: Record<number, DownloadEntry[]> = { 1: [entry('a')] }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    harness({ manager, windows: [a] })
+
+    manager.fire()
+    byWindow[1] = []
+    manager.fire()
+
+    expect(a.chrome).toEqual([
+      { visible: true, activity: null, marker: 'completed' },
+      { visible: false, activity: null, marker: null }
+    ])
+  })
+
+  it('drops the mark as soon as the panel is presented, with no download event in between', () => {
+    const a = fakeWindow(1, false)
+    const manager = fakeManager({
+      byWindow: { 1: [entry('a', { state: 'completed', endedAt: T0 + 1 })] },
+      startedIn: { 1: ['a'] }
+    })
+    const { present } = harness({ manager, windows: [a] })
+
+    manager.fire()
+    present(a, T0 + 5)
+
+    expect(a.chrome).toEqual([{ visible: true, activity: null, marker: 'completed' }, QUIET])
+  })
+
+  it('sends the summary on every presentation, a re-presentation of the same panel included', () => {
+    const a = fakeWindow(1, false)
+    const manager = fakeManager({
+      byWindow: { 1: [entry('a', { state: 'completed', endedAt: T0 + 1 })] },
+      startedIn: { 1: ['a'] }
+    })
+    const { present } = harness({ manager, windows: [a] })
+
+    present(a, T0 + 5)
+    present(a, T0 + 6)
+
+    // Unchanged, and sent anyway: a presentation is the moment the button is owed an answer.
+    expect(a.chrome).toEqual([QUIET, QUIET])
+  })
+
+  it('leaves no mark after the panel closes on a download that finished while it was open', () => {
+    const clock = { now: T0 }
+    const a = fakeWindow(1, false)
+    const byWindow = { 1: [entry('a', { state: 'progressing', receivedBytes: 50, endedAt: null })] }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    const { present } = harness({ manager, windows: [a], clock })
+
+    manager.fire()
+    present(a, T0 + 1)
+    /*
+      It finishes with the panel up. The core re-presents the open panel with the fresh rows, as it
+      does for every change — and each presentation is a sighting. Closing sends nothing, so what the
+      button shows afterwards is whatever the last presentation left it.
+    */
+    clock.now = T0 + 2
+    byWindow[1] = [entry('a', { state: 'completed', endedAt: T0 + 2 })]
+    manager.fire()
+    present(a, T0 + 2)
+
+    expect(a.chrome.at(-1)).toEqual(QUIET)
+  })
+
+  it('marks a pause that came after the last presentation, though the download began before it', () => {
+    const clock = { now: T0 }
+    const a = fakeWindow(1, false)
+    const byWindow = {
+      1: [entry('a', { state: 'progressing', startedAt: T0, receivedBytes: 50, endedAt: null })]
+    }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    const { present } = harness({ manager, windows: [a], clock })
+
+    manager.fire()
+    present(a, T0 + 5)
+    // A paused record keeps `endedAt: null`; its start alone would say the panel had shown this.
+    clock.now = T0 + 10
+    byWindow[1] = [entry('a', { state: 'paused', startedAt: T0, receivedBytes: 50, endedAt: null })]
+    manager.fire()
+
+    expect(a.chrome.at(-1)).toEqual({ visible: true, activity: null, marker: 'paused' })
+  })
+
+  it('counts a pause the panel was presented after as seen', () => {
+    const clock = { now: T0 }
+    const a = fakeWindow(1, false)
+    const byWindow = {
+      1: [entry('a', { state: 'progressing', receivedBytes: 50, endedAt: null })]
+    }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    const { present } = harness({ manager, windows: [a], clock })
+
+    manager.fire()
+    clock.now = T0 + 3
+    byWindow[1] = [entry('a', { state: 'paused', receivedBytes: 50, endedAt: null })]
+    manager.fire()
+    // Later ticks while it stays paused do not move the moment it paused.
+    clock.now = T0 + 20
+    manager.fire()
+    present(a, T0 + 10)
+
+    expect(a.chrome.at(-1)).toEqual(QUIET)
   })
 })

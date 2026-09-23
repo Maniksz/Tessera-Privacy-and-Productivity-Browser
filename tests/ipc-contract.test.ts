@@ -64,6 +64,40 @@ describe('IPC contract', () => {
     expect(parsed.success).toBe(true)
   })
 
+  it('carries the download summary as numbers and states, and refuses anything that names a file', () => {
+    /*
+      The toolbar's feed, and the reason it is its own channel rather than `downloads:changed` sent
+      one step further: that list names what somebody downloaded and where from, and it stays with
+      the downloads page. The summary is strict, so a field added in the core that named a file
+      would be refused here rather than quietly reaching the chrome UI.
+    */
+    const summary = eventContract['downloads:summaryChanged']
+    expect(
+      summary.safeParse({
+        visible: true,
+        activity: { kind: 'fraction', fraction: 0.5 },
+        marker: null
+      }).success
+    ).toBe(true)
+    const indeterminate = { visible: true, activity: { kind: 'indeterminate' }, marker: null }
+    expect(summary.safeParse(indeterminate).success).toBe(true)
+    const failed = { visible: true, activity: null, marker: 'failed' }
+    expect(summary.safeParse(failed).success).toBe(true)
+    for (const extra of [{ fileName: 'a.zip' }, { url: 'https://example.com/a.zip' }]) {
+      expect(
+        summary.safeParse({ visible: true, activity: null, marker: 'completed', ...extra }).success,
+        Object.keys(extra)[0]
+      ).toBe(false)
+    }
+    expect(
+      summary.safeParse({
+        visible: true,
+        activity: { kind: 'fraction', fraction: 0.5, fileName: 'a.zip' },
+        marker: null
+      }).success
+    ).toBe(false)
+  })
+
   it('rejects a malformed request', () => {
     // The main process must not trust the renderer, even our own.
     expect(invokeContract['split:setLayout'].request.safeParse({ layout: '9x9' }).success).toBe(false)

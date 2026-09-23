@@ -51,14 +51,20 @@ import type { DownloadRecord, DownloadState } from './model.js'
  * after that moment, or when the panel has never been presented in this window. An outcome at
  * the very millisecond of presenting counts as seen: the panel showed the list as it stood.
  *
- * **A pause has no time of its own.** The record keeps `startedAt` and, for a terminal state,
- * `endedAt`; a pause is not terminal, so `endedAt` stays `null` and nothing records when the
- * pause happened. The start stands in for it — the latest moment the record can vouch for.
- * The consequence, stated rather than hidden: a download that began before the panel was last
- * presented and paused only afterwards counts as seen, and the button stays quiet about it. It
- * errs towards silence, which is the direction this browser prefers, and the row on the panel
- * and on the downloads page still says "Paused". Closing the gap needs the time of the last
- * state change on the record, which is a change to the record, not to this function.
+ * **A pause has no time of its own on the record.** The record keeps `startedAt` and, for a
+ * terminal state, `endedAt`; a pause is not terminal, so `endedAt` stays `null` and nothing
+ * stored says when the pause happened. So the caller may pass `stateChangedAt`: for each id, when
+ * it first saw the entry in the state it is in now. The IPC layer can say that because it
+ * recomputes this summary on every coalesced change, and a state change is never coalesced away
+ * — `DownloadManager` sends it at once. Without that time the start stands in, the latest moment
+ * the record itself can vouch for, and the consequence is the one the time exists to prevent: a
+ * download that began before the panel was presented and paused only afterwards would count as
+ * seen.
+ *
+ * A terminal outcome keeps its own `endedAt` even when an observed time is given. The record's
+ * end is exact; an observation can only be later — by a coalescing tick, or by a good deal more
+ * for a download a closing window handed on to this one — and a later time could only ever turn
+ * something the panel already showed back into news.
  */
 
 /** An outcome worth a mark on the button, heaviest first. Cancelled has none, on purpose. */
@@ -84,17 +90,23 @@ export interface DownloadButtonSummary {
 
 const HIDDEN: DownloadButtonSummary = { visible: false, activity: null, marker: null }
 
+const NO_OBSERVATIONS: ReadonlyMap<string, number> = new Map()
+
 /**
  * Summarises the downloads a window started, for its toolbar button.
  *
  * @param entries The list as the core holds it; order does not matter.
  * @param startedHere Ids of the downloads started in this window during its session.
  * @param lastPresentedAt When this window last presented the downloads panel, or `null`.
+ * @param stateChangedAt Per id, when the caller first saw the entry in its current state; used
+ *   for a pause, which the record gives no time of its own. An id without one falls back to the
+ *   start.
  */
 export function summarizeWindowDownloads(
   entries: readonly DownloadRecord[],
   startedHere: ReadonlySet<string>,
-  lastPresentedAt: number | null
+  lastPresentedAt: number | null,
+  stateChangedAt: ReadonlyMap<string, number> = NO_OBSERVATIONS
 ): DownloadButtonSummary {
   const mine = entries.filter((entry) => startedHere.has(entry.id))
   if (mine.length === 0) return HIDDEN
@@ -103,7 +115,7 @@ export function summarizeWindowDownloads(
   if (running.length > 0) return { visible: true, activity: activityOf(running), marker: null }
 
   const unseen = mine.filter(
-    (entry) => lastPresentedAt === null || outcomeTime(entry) > lastPresentedAt
+    (entry) => lastPresentedAt === null || outcomeTime(entry, stateChangedAt) > lastPresentedAt
   )
   return { visible: true, activity: null, marker: heaviestMarker(unseen) }
 }
@@ -127,9 +139,12 @@ function activityOf(running: readonly DownloadRecord[]): DownloadActivity {
   return { kind: 'fraction', fraction: received / total }
 }
 
-/** When the entry reached the state it is in, as near as the record can say. */
-function outcomeTime(entry: DownloadRecord): number {
-  return entry.endedAt ?? entry.startedAt
+/**
+ * When the entry reached the state it is in: the record's own end if it has one, else when the
+ * caller saw the state change, else the start. See "What 'seen' means" above for the order.
+ */
+function outcomeTime(entry: DownloadRecord, stateChangedAt: ReadonlyMap<string, number>): number {
+  return entry.endedAt ?? stateChangedAt.get(entry.id) ?? entry.startedAt
 }
 
 /**

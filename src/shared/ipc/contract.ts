@@ -39,6 +39,7 @@ import {
 import { MAX_TAB_GROUP_NAME_LENGTH } from '../tabgroups/model.js'
 import { BOOKMARK_KINDS, type Bookmark } from '../bookmarks/model.js'
 import { DOWNLOAD_STATES, type DownloadEntry } from '../downloads/model.js'
+import { DOWNLOAD_MARKERS, type DownloadButtonSummary } from '../downloads/summary.js'
 import {
   MASTER_PASSWORD_PROBLEMS,
   MASTER_PASSWORD_PURPOSES,
@@ -376,6 +377,31 @@ const downloadListingSchema = z.object({
    */
   privateWindow: z.boolean()
 })
+
+/**
+ * What the toolbar's download button says, for one window: numbers and states, and nothing else.
+ *
+ * Strict at every level, because the point of this shape is what it cannot carry. The download list
+ * names what somebody downloaded and where from, which is why it reaches the downloads page and no
+ * other renderer; the button needs none of that, and a strict schema turns "somebody added the file
+ * name for a tooltip" into a failing test instead of a leak. See `summarizeWindowDownloads`.
+ */
+const downloadButtonSummarySchema = z.strictObject({
+  visible: z.boolean(),
+  activity: z
+    .discriminatedUnion('kind', [
+      z.strictObject({ kind: z.literal('fraction'), fraction: z.number().min(0).max(1) }),
+      z.strictObject({ kind: z.literal('indeterminate') })
+    ])
+    .nullable(),
+  marker: z.enum(DOWNLOAD_MARKERS).nullable()
+})
+
+const _downloadSummaryWireMatchesModel: SameShape<
+  z.output<typeof downloadButtonSummarySchema>,
+  DownloadButtonSummary
+> = true
+void _downloadSummaryWireMatchesModel
 
 const downloadIdRequest = z.object({ id: z.string().min(1) })
 /** Whether the operation did anything. `false` is an answer, not a failure — see `DownloadManager`. */
@@ -1235,6 +1261,14 @@ export const eventContract = {
    * `privateWindow` is a fact about the receiver rather than about the list.
    */
   'downloads:changed': downloadListingSchema,
+  /**
+   * The window's download button, pushed to its chrome UI.
+   *
+   * Sent when the summary changes, and again every time the window presents its downloads panel,
+   * changed or not — presenting is what marks the window's outcomes as seen, and the button has to
+   * drop its mark then rather than at the next download event.
+   */
+  'downloads:summaryChanged': downloadButtonSummarySchema,
   /** `null` means nothing is presented — an explicit state, not an absent message. */
   'overlay:presented': z.object({ presentation: overlayPresentationSchema.nullable() })
 } satisfies Record<EventChannel, z.ZodType>

@@ -71,6 +71,10 @@ export interface DownloadWindow {
   }
   sends(webContentsId: number): boolean
   emitToInternalPages: BrowserWindowController['emitToInternalPages']
+  /** To the window's chrome UI; the button's summary travels this way. */
+  emit: BrowserWindowController['emit']
+  /** The controller's record; see `BrowserWindowController.downloadsPanelPresentedAt`. */
+  readonly downloadsPanelPresentedAt: number | null
 }
 
 /** What the registry remembers about one open window beyond the controller itself. */
@@ -153,6 +157,8 @@ export class WindowRegistry {
   readonly #recency = new WindowRecency<OpenWindow>()
   readonly #preparedSessions = new WeakSet<Session>()
   #privateSessionCounter = 0
+  /** See `onDownloadsPanelPresented`. */
+  readonly #downloadsPanelListeners = new Set<(window: DownloadWindow) => void>()
 
   readonly #deps: WindowRegistryDeps
   /** What the internal pages were last told, so `locale:changed` fires on a change and not on a save. */
@@ -331,6 +337,9 @@ export class WindowRegistry {
       },
       onRequestNewWindow: ({ privateMode }) => {
         this.createWindow({ privateMode }).createTab({})
+      },
+      onDownloadsPanelPresented: () => {
+        for (const listener of this.#downloadsPanelListeners) listener(opened.downloads)
       }
     })
 
@@ -345,6 +354,12 @@ export class WindowRegistry {
         sends: (webContentsId) => this.#speaksFor(controller, webContentsId),
         emitToInternalPages: (channel, payload) => {
           controller.emitToInternalPages(channel, payload)
+        },
+        emit: (channel, payload) => {
+          controller.emit(channel, payload)
+        },
+        get downloadsPanelPresentedAt() {
+          return controller.downloadsPanelPresentedAt
         }
       }
     }
@@ -359,9 +374,21 @@ export class WindowRegistry {
     return controller
   }
 
-  /** Every open window, as the downloads channels address them. */
+  /** Every open window, as the downloads channels address them; one object per window, for its life. */
   get downloadWindows(): readonly DownloadWindow[] {
     return [...this.#open.values()].map((open) => open.downloads)
+  }
+
+  /**
+   * Tells `listener` whenever a window has presented its downloads panel, naming the window.
+   *
+   * One listener set for the registry rather than one per window, and no way off: the downloads
+   * channels subscribe once for the life of the process, the way they subscribe to the manager, so
+   * nothing here is left holding a closed window. A window reaches it through its controller's
+   * `downloadsPanelPresented`.
+   */
+  onDownloadsPanelPresented(listener: (window: DownloadWindow) => void): void {
+    this.#downloadsPanelListeners.add(listener)
   }
 
   /**

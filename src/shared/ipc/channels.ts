@@ -650,6 +650,15 @@ export const EVENT_CHANNELS = [
    * window, because what a window may see depends on whether it is private.
    */
   'downloads:changed',
+  /**
+   * What the window's download button shows: whether it is there, how far what runs has got, and
+   * the one outcome worth a mark.
+   *
+   * The chrome UI's feed, and deliberately not `downloads:changed` sent one step further. That list
+   * names what somebody downloaded, and it stays with the downloads page; this carries numbers and
+   * states only. Pushed per window, to that window's chrome UI, like `window:stateChanged`.
+   */
+  'downloads:summaryChanged',
   'tabgroups:changed',
   /**
    * Sent to both the overlay surface, which renders it, and the chrome UI, whose button

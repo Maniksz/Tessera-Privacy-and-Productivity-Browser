@@ -196,9 +196,42 @@ describe('summarizeWindowDownloads', () => {
   })
 
   it('treats a pause of a download started after the last presentation as unseen', () => {
-    // A pause carries no time of its own; see the module's note on why the start stands in.
+    // No observed time given, so the start stands in for the pause; see the module's note.
     const paused = entry({ state: 'paused', startedAt: 4_000 })
     expect(summarizeWindowDownloads([paused], startedHere(paused), 3_000).marker).toBe('paused')
+  })
+
+  it('marks a pause that happened after the last presentation, given when the state changed', () => {
+    // Started before the panel was presented and paused afterwards: the start alone would call
+    // this seen. The time the caller saw the state change is what closes that gap.
+    const paused = entry({ state: 'paused', startedAt: 1_000 })
+    const changedAt = new Map([[paused.id, 4_000]])
+    expect(summarizeWindowDownloads([paused], startedHere(paused), 3_000, changedAt).marker).toBe(
+      'paused'
+    )
+  })
+
+  it('counts a pause observed before the last presentation as seen', () => {
+    const paused = entry({ state: 'paused', startedAt: 1_000 })
+    const changedAt = new Map([[paused.id, 2_000]])
+    expect(
+      summarizeWindowDownloads([paused], startedHere(paused), 3_000, changedAt).marker
+    ).toBeNull()
+  })
+
+  it('keeps the end time as the moment of a terminal outcome, whatever the caller observed', () => {
+    // The record's own end is exact; an observation can only be later, by up to a coalescing tick
+    // — or by much more, for a download a closing window handed to this one.
+    const done = entry({ state: 'completed', startedAt: 1_000, endedAt: 2_000 })
+    const changedAt = new Map([[done.id, 4_000]])
+    expect(summarizeWindowDownloads([done], startedHere(done), 3_000, changedAt).marker).toBeNull()
+  })
+
+  it('falls back to the start for a pause the caller has no time for', () => {
+    const paused = entry({ state: 'paused', startedAt: 1_000 })
+    expect(
+      summarizeWindowDownloads([paused], startedHere(paused), 3_000, new Map()).marker
+    ).toBeNull()
   })
 
   it('falls back to the start for a finished record that lost its end time', () => {
