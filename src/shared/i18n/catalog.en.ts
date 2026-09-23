@@ -490,19 +490,6 @@ export const en = {
   'permission.subject.topLevelStorageAccess': 'storing data across sites',
 
   /*
-    The element picker.
-
-    Each warning says what will *happen*, not what the rule is technically like: "would hide the surrounding
-    region" is something a person can decide about, "matches an ancestor" is not.
-  */
-  'picker.hint': 'Click to hide · Escape to cancel',
-  'picker.noRule': 'No rule can be written for this element',
-  'picker.warning.matchesAncestor': 'Would hide the surrounding region',
-  'picker.warning.matchesMany': 'Would hide several elements',
-  'picker.warning.positional': 'Depends on position — may stop working when the page changes',
-  'picker.warning.noStableFeature': 'This element has no stable name to match on',
-
-  /*
     The eight named answers of R1, on the confirmation bar.
 
     Keyed by the outcome itself rather than by a camel-cased alias, so the bar resolves

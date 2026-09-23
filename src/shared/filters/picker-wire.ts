@@ -1,4 +1,9 @@
-import type { ElementAttribute, ElementDescription, ElementNode, SelectorProposal } from './picker.js'
+import type {
+  ElementAttribute,
+  ElementDescription,
+  ElementNode,
+  SelectorProposal
+} from './picker.js'
 import type { PickerCandidate } from './picker-session.js'
 
 /**
@@ -41,60 +46,46 @@ import type { PickerCandidate } from './picker-session.js'
 export const PICKER_START_CHANNEL = 'tessera:picker-start'
 
 /**
- * The picker's own appearance and wording, supplied by the core when the mode starts.
+ * The picker's own appearance, supplied by the core when the mode starts.
  *
- * Two reasons, and the first is a rule this project holds everywhere else: no user-visible string may be
- * written into the code. The preload cannot read the i18n catalogue — importing it would put every
- * translation into a bundle that runs before every page — so the words have to arrive with the request.
+ * One field, and it used to be four. The other three were sentences — a hint, a "no rule for this
+ * element", a table wording each selector warning — because the picker drew a bar inside the page and
+ * the preload cannot read the i18n catalogue: importing it would put every translation into a bundle
+ * that is parsed before every page in every tab. The bar is an overlay surface now, so the words are
+ * read there, in the renderer's own language, and sending them into the document would be shipping a
+ * second copy of them to a place nothing reads them from.
  *
- * The second is that budget. The preload is the tightest one here because it is parsed before every page
- * in every tab, and a stylesheet plus eight sentences is a real fraction of it for a feature most pages
- * never use.
+ * The stylesheet stays, and for the same reason the words left: the highlight *is* in the page, and
+ * `src/main/privacy/picker-chrome.ts` says why its colours are literals rather than custom properties.
  */
 export interface PickerChrome {
-  /** The picker's stylesheet, scoped inside a shadow root. */
+  /** The highlight's stylesheet, scoped inside a shadow root. */
   readonly styles: string
-  /** Shown when the proposed selector is safe to use. */
-  readonly hint: string
-  /** Keyed by `SelectorWarning`, so a warning the core adds later cannot go unworded. */
-  readonly warnings: Readonly<Record<string, string>>
-  /** Shown when no rule could be proposed for the element under the pointer. */
-  readonly noRule: string
-}
-
-/** Total, because a build mismatch must leave a usable picker rather than an unstyled, wordless one. */
-export function asPickerChrome(value: unknown): PickerChrome | null {
-  if (typeof value !== 'object' || value === null) return null
-  const candidate = value as Record<string, unknown>
-  if (typeof candidate['styles'] !== 'string') return null
-  if (typeof candidate['hint'] !== 'string') return null
-  if (typeof candidate['noRule'] !== 'string') return null
-  const warnings = candidate['warnings']
-  if (typeof warnings !== 'object' || warnings === null) return null
-  return value as PickerChrome
 }
 
 /**
  * What starts one attempt: which attempt it is, and what it looks like.
  *
- * The identity travels *on* the chrome rather than beside it, and that is a compatibility decision
- * with a short life and a real payoff. The page half of this feature lands in a later unit, so for
- * one step of the plan a preload built before this change is running against a core built after it —
- * and `asPickerChrome` accepts this object unchanged, because it checks the four fields it needs and
- * ignores the rest. The picker keeps drawing; only the half that was being rebuilt is missing. A
- * `{ sessionId, chrome }` envelope would have made the older preload refuse to start at all, which
- * would be a worse browser in the middle of repairing one.
+ * The identity travels *on* the chrome rather than beside it. It was a compatibility decision with a
+ * short life — for one step of the plan a preload built before the rebuild ran against a core built
+ * after it, and a `{ sessionId, chrome }` envelope would have made that preload refuse to start at
+ * all. That step is over; the shape is kept because there is now nothing in a start that is not one
+ * of these two things, and an envelope around a single field would be ceremony.
  */
 export interface PickerStart extends PickerChrome {
   /** The core's name for this attempt. Echoed by every message the page sends back. */
   readonly sessionId: string
 }
 
-/** Total, for the same reason `asPickerChrome` is: a build mismatch must not leave a wordless picker. */
+/**
+ * Total, because a build mismatch must leave the page alone rather than draw something into it.
+ *
+ * Without a stylesheet the highlight is an unstyled `<div>` over somebody's document; without a
+ * session there is nothing to answer for, so nothing could take it off again.
+ */
 export function asPickerStart(value: unknown): PickerStart | null {
-  if (asPickerChrome(value) === null) return null
-  const candidate = value as Record<string, unknown>
-  if (typeof candidate['sessionId'] !== 'string' || candidate['sessionId'] === '') return null
+  const named = namedSession(value)
+  if (named === null || typeof named['styles'] !== 'string') return null
   return value as PickerStart
 }
 
@@ -284,6 +275,21 @@ export const MAX_ANCESTOR_DEPTH = 8
  * on it and a great deal of work in the core for a gesture that produced eight.
  */
 export const MAX_PICKER_CHAIN = MAX_ANCESTOR_DEPTH + 1
+
+/**
+ * The tags the walkable chain stops below: KTD11's hard upper bound.
+ *
+ * Here rather than beside the transition it governs, because **both** sides apply it and for
+ * different reasons. The page cuts before it builds a rung, so an ancestor that would be dropped on
+ * arrival is never proposed and never counted — a round trip and a `querySelectorAll` saved on every
+ * click, and the outermost rung the bar offers is then the outermost one that exists. The core cuts
+ * again in `pickableChain`, because a chain from a renderer is not a chain to be trusted.
+ *
+ * Two enforcement points, one declaration. Written twice, the copy that drifted would be the one
+ * offering `html##html` — a selector that empties the page, on a page the user then has to look at
+ * to decide whether to keep it.
+ */
+export const PICKER_CHAIN_LIMIT_TAGS = ['body', 'html'] as const
 
 /**
  * How many of an element's attributes are carried.

@@ -1,109 +1,111 @@
 import { ipcRenderer } from 'electron'
 import {
+  MAX_PICKER_CHAIN,
+  PICKER_CHAIN_LIMIT_TAGS,
+  PICKER_ESCAPED_CHANNEL,
+  PICKER_FREEZE_CHANNEL,
+  PICKER_MEASURED_CHANNEL,
+  PICKER_MEASURE_CHANNEL,
   PICKER_PROPOSE_CHANNEL,
+  PICKER_SELECT_CHANNEL,
   PICKER_START_CHANNEL,
   PICKER_STOP_CHANNEL,
-  asPickerChrome,
+  asPickerMeasureRequest,
+  asPickerSelectRequest,
+  asPickerStart,
   asSelectorProposal,
-  describeElement,
-  type PickerChrome
+  describeElement
 } from '@shared/filters/picker-wire.js'
+import type { PickerStart } from '@shared/filters/picker-wire.js'
+import type { PickerCandidate } from '@shared/filters/picker-session.js'
 import type { SelectorProposal } from '@shared/filters/picker.js'
 
 /**
  * "Block this element", inside the page.
  *
- * ## Why it is here and not on the overlay layer
+ * ## What is here, and what used to be
  *
- * Everything else in this browser that has to appear over a page is drawn on a transparent topmost view,
- * because the page is a native view and the chrome UI's DOM sits beneath it. A picker cannot work that
- * way: highlighting an element means knowing where that element *is*, and the overlay cannot see into the
- * page's DOM. So the picker is built by this preload, in the page, which is also the only place a
- * `mouseover` on a page element can be observed.
+ * Three things, and they are the three that cannot be done anywhere else: the highlight, which needs
+ * the page's geometry; the swallowing of the pointer sequence, whose listeners must be registered
+ * before any page script; and the measurement, because the document is here (KTD12, KTD8).
+ *
+ * The confirmation bar is *not* here any more. It is an overlay surface now
+ * (`renderer/overlay/PickerBarSurface.tsx`), which is where the words, the buttons and the keyboard
+ * contract went with it — this file draws one rectangle and holds no text at all. The click does not
+ * write a rule either: it freezes a selection and hands the core a walkable ancestor chain, and a
+ * separate confirmation on the bar is what commits (R7).
  *
  * ## Why a page cannot use it
  *
- * Nothing here is exposed on `window`. The mode is entered by a message from the core, sent to one view
- * because the user chose it in the browser's own interface, and the core independently refuses to answer
- * a view it did not start. So a page can neither turn this on nor ask what a selector would match nor
- * write a rule — see `ElementPicker`.
+ * Nothing here is exposed on `window`. The mode is entered by a message from the core, sent to one
+ * view because the user chose it in the browser's own interface, and the core independently refuses
+ * to answer a view it did not start. So a page can neither turn this on nor ask what a selector
+ * would match nor write a rule — see `ElementPicker`.
  *
- * ## Why a shadow root
+ * ## Why a shadow root, and why on the document element
  *
- * The highlight and the confirmation bar are elements in the page's document, so the page's own CSS would
- * otherwise style them: a site with `* { box-sizing: border-box }` and a `div { position: static
- * !important }` could move or hide the picker. A closed shadow root also keeps the page's scripts from
- * reading the selector being proposed, which would tell a site exactly which of its elements a user is
- * trying to remove.
+ * The highlight is an element in the page's document, so the page's own CSS would otherwise style
+ * it: a site with `div { position: static !important }` could move or hide it. A closed shadow root
+ * also keeps the page's scripts from reading the selector being proposed, which would tell a site
+ * exactly which of its elements a user is trying to remove.
+ *
+ * The host hangs off `documentElement` rather than off `body`, and that is a positioning decision
+ * rather than a tidiness one: a `transform` on any ancestor makes it the containing block for
+ * `position: fixed` descendants, so a host inside a transformed `<body>` — which is how a great many
+ * page transitions and drawer animations are built — would draw the highlight at an offset from the
+ * element it is meant to be around.
  */
 
 const HOST_ELEMENT_ID = 'tessera-picker'
 
-interface PickerUi {
-  readonly box: HTMLElement
-  readonly bar: HTMLElement
-  readonly selectorText: HTMLElement
-  readonly noteText: HTMLElement
-  destroy(): void
-}
+const CHAIN_LIMIT = new Set<string>(PICKER_CHAIN_LIMIT_TAGS)
 
 /**
  * The document as it actually is, rather than as the DOM types describe it.
  *
- * `lib.dom` declares `body` and `documentElement` non-nullable. A preload runs before the parser has
- * produced `<body>`, so the type is wrong for this timing — and the linter's suggestion to drop the
- * checks because "they cannot be null" would crash the preload and take the page with it.
+ * `lib.dom` declares `documentElement` non-nullable. A preload runs before the parser has produced
+ * it, so the type is wrong for this timing — and the linter's suggestion to drop the check because
+ * "it cannot be null" would crash the preload and take the page with it.
  */
 // `Omit` and not an intersection: `HTMLElement & (HTMLElement | null)` is still `HTMLElement`, so an
 // intersection narrows where this has to widen. The original field has to be removed to be replaced.
-const earlyDocument = document as Omit<Document, 'body' | 'documentElement'> & {
-  body: HTMLElement | null
+const earlyDocument = document as Omit<Document, 'documentElement'> & {
   documentElement: HTMLElement | null
 }
 
-function buildUi(chrome: PickerChrome): PickerUi | null {
-  const parent = earlyDocument.body ?? earlyDocument.documentElement
-  if (parent === null) return null
-
-  const host = document.createElement('div')
-  host.id = HOST_ELEMENT_ID
-  // `closed`, so the page's scripts cannot read what is being proposed — which would tell a site exactly
-  // which of its elements the user is about to remove.
-  const root = host.attachShadow({ mode: 'closed' })
-
-  const style = document.createElement('style')
-  style.textContent = chrome.styles
-  const box = document.createElement('div')
-  box.className = 'box'
-  const bar = document.createElement('div')
-  bar.className = 'bar'
-  const selectorText = document.createElement('span')
-  selectorText.className = 'selector'
-  const noteText = document.createElement('span')
-  noteText.className = 'hint'
-  bar.append(selectorText, noteText)
-  root.append(style, box, bar)
-  parent.appendChild(host)
-
-  return {
-    box,
-    bar,
-    selectorText,
-    noteText,
-    destroy: () => host.remove()
-  }
+/** What one attempt installed, so stopping can undo exactly that. */
+interface PickerRun {
+  /** The core's name for this attempt. Every message back echoes it, and stale ones are refused. */
+  readonly sessionId: string
+  readonly box: HTMLElement
+  /**
+   * The frozen chain as *elements*, index-aligned with the rungs the core was sent; null while the
+   * highlight is still following the pointer.
+   *
+   * The elements are held rather than re-resolved, because the core answers a correction with an
+   * index and nothing else. Re-running the selector to find the rung again would resolve it against
+   * a document that may have re-rendered since the click, and the bar and the highlight would then
+   * be describing two different elements.
+   */
+  chain: readonly Element[] | null
+  readonly teardown: () => void
 }
 
-/** The one bit of state the mode needs: what is installed, so stopping can undo exactly that. */
-let session: { ui: PickerUi; teardown: () => void } | null = null
+let session: PickerRun | null = null
 
+/**
+ * What would hide this element, asked of the core.
+ *
+ * Synchronous, because this runs on every `mouseover` and an awaited answer would make the highlight
+ * lag behind the pointer by a frame or more — which reads as the picker being broken. The answer is
+ * also what the bar names: the core updates it as a side effect of answering, so the hover has one
+ * round trip rather than two.
+ */
 function describe(target: Element): SelectorProposal | null {
   let answer: unknown
   try {
-    // Synchronous, because this runs on every `mouseover` and an awaited answer would make the highlight
-    // lag behind the pointer by a frame or more — which reads as the picker being broken.
-    // An `Element` satisfies `PickerElement` structurally — that shape exists so the transcription can
-    // be tested without a DOM — so this is a widening to a smaller interface, not an assertion.
+    // An `Element` satisfies `PickerElement` structurally — that shape exists so the transcription
+    // can be tested without a DOM — so this is a widening to a smaller interface, not an assertion.
     answer = ipcRenderer.sendSync(PICKER_PROPOSE_CHANNEL, describeElement(target))
   } catch {
     return null
@@ -112,62 +114,138 @@ function describe(target: Element): SelectorProposal | null {
 }
 
 /**
- * What to say about a proposal, in the user's language.
+ * Whether an element the selector matched is still being drawn.
  *
- * The order is the order of consequence, not the order the warnings arrive in: hiding an ancestor takes the
- * surrounding region with it, which is the one outcome somebody would not undo by clicking again. Only the
- * first is shown — a bar listing four caveats is a bar nobody reads.
+ * Asked of the computed style *and* of the box, because the two answer different questions. A
+ * cosmetic rule writes `display: none !important`, so reading `display` reads the rule's own effect
+ * rather than inferring it, and `visibility: hidden` is the other thing a hand-written rule does —
+ * an element hidden that way keeps its box, so geometry alone would call it visible. The box is what
+ * catches everything neither of those says: an ancestor hidden instead of the element, a node
+ * detached from the tree between the write and the question, and a slot collapsed to nothing.
+ *
+ * Nothing here is a verdict. Two counts go back and the session module decides what they mean
+ * (KTD8) — "it worked" is a decision, and a hidden element still matches its selector.
  */
-function warningText(
-  chrome: PickerChrome,
-  proposal: SelectorProposal
-): { text: string; warn: boolean } {
-  const byConsequence = ['matches-ancestor', 'matches-many', 'positional', 'no-stable-feature']
-  const [worst] = byConsequence.filter((warning) =>
-    (proposal.warnings as readonly string[]).includes(warning)
-  )
-  if (worst === undefined) return { text: chrome.hint, warn: false }
-  const worded = chrome.warnings[worst]
-  return {
-    // A warning the core added and did not word must still say *something*: silence would read as safe.
-    text: worded ?? worst,
-    warn: true
+function drawn(element: Element): boolean {
+  const style = getComputedStyle(element)
+  if (style.display === 'none' || style.visibility === 'hidden') return false
+  const rect = element.getBoundingClientRect()
+  return rect.width > 0 || rect.height > 0
+}
+
+/**
+ * What a selector does to this document: how much it matches, and how much of that is still on
+ * screen (R9).
+ *
+ * Measured here rather than estimated in the core, because the core has no DOM and the estimate it
+ * can make is taken against the one element it was told about. A person deciding whether to hide
+ * three things or three hundred needs the document's own answer.
+ *
+ * A selector the document's engine refuses is zero and zero rather than a throw. The core sends only
+ * plain CSS, so this is totality rather than distrust — but an exception escaping a listener in a
+ * preload is an exception in the page's own script context, and the picker is not worth that.
+ */
+function matched(selector: string): Element[] {
+  try {
+    // The picker's own host is an element in this document, so a broad selector matches it. Counted,
+    // it would report the picker's presence as the rule's effect — and the host is always drawn, so
+    // it would be the one match that makes every rule look ineffective.
+    return [...document.querySelectorAll(selector)].filter(
+      (element) => element.id !== HOST_ELEMENT_ID
+    )
+  } catch {
+    return []
   }
 }
 
-function start(chrome: PickerChrome): void {
-  if (session !== null) return
-  const ui = buildUi(chrome)
-  if (ui === null) return
+function measure(selector: string): { matches: number; visible: number } {
+  const found = matched(selector)
+  return { matches: found.length, visible: found.filter(drawn).length }
+}
 
-  let proposal: SelectorProposal | null = null
-
-  const show = (target: Element): void => {
-    const rect = target.getBoundingClientRect()
-    ui.box.style.left = `${String(rect.left)}px`
-    ui.box.style.top = `${String(rect.top)}px`
-    ui.box.style.width = `${String(rect.width)}px`
-    ui.box.style.height = `${String(rect.height)}px`
-
-    proposal = describe(target)
-    if (proposal === null) {
-      ui.selectorText.textContent = ''
-      ui.noteText.textContent = chrome.noRule
-      ui.noteText.className = 'hint warn'
-      return
-    }
-    ui.selectorText.textContent = proposal.selector
-    const note = warningText(chrome, proposal)
-    ui.noteText.textContent = note.text
-    ui.noteText.className = note.warn ? 'hint warn' : 'hint'
+/**
+ * The clicked element and the ancestors above it, each already proposed and already counted.
+ *
+ * Built in one go at the click, which is what makes a later correction instant: the core answers
+ * "wider" with an index into this, so no round trip stands between a keypress and the highlight
+ * moving, and a page that re-renders between two presses cannot offer a different ancestor the
+ * second time.
+ *
+ * The walk stops at three places, and each stop is a different requirement. `CHAIN_LIMIT` is KTD11 —
+ * there is deliberately nothing at or above `body` to widen to. `MAX_PICKER_CHAIN` is the bound the
+ * core will enforce anyway, applied here so the rungs beyond it are never proposed. And a rung the
+ * core cannot describe ends the chain rather than being skipped: the rungs are *positions*, one
+ * unreadable rung rejects the whole click on arrival, and a chain with a hole quietly closed would
+ * answer "wider" with an ancestor two steps away.
+ */
+function chainFrom(target: Element): { elements: Element[]; rungs: PickerCandidate[] } {
+  const elements: Element[] = []
+  const rungs: PickerCandidate[] = []
+  let current: Element | null = target
+  while (current !== null && rungs.length < MAX_PICKER_CHAIN) {
+    const tag = current.tagName.toLowerCase()
+    if (CHAIN_LIMIT.has(tag)) break
+    const proposal = describe(current)
+    if (proposal === null) break
+    elements.push(current)
+    // Counted, not measured: a rung wants the number the bar shows, and asking every match of every
+    // rung whether it is still drawn would be nine selectors' worth of style recalculation on one
+    // click for an answer nothing reads. `visible` matters once, after the rule is written.
+    rungs.push({ tag, proposal, matches: matched(proposal.selector).length })
+    current = current.parentElement
   }
+  return { elements, rungs }
+}
+
+/**
+ * Moves the highlight onto one element.
+ *
+ * Hidden rather than drawn when the element reports no box at all. A 0×0 rectangle with a 2px border
+ * is a blue dot in the corner of the page pointing at nothing, and it arrives on ordinary pages: a
+ * correction can reach a rung whose element was re-rendered away since the click, and a detached
+ * element reports nothing but zeroes.
+ */
+function show(run: PickerRun, target: Element): void {
+  const rect = target.getBoundingClientRect()
+  // One declaration block rather than five properties, so the previous position goes away with the
+  // assignment instead of being partly overwritten by the next one.
+  run.box.style.cssText =
+    rect.width === 0 && rect.height === 0
+      ? 'display:none'
+      : `left:${String(rect.left)}px;top:${String(rect.top)}px;width:${String(rect.width)}px;height:${String(rect.height)}px`
+}
+
+function start(started: PickerStart): void {
+  if (session !== null) return
+  const parent = earlyDocument.documentElement
+  if (parent === null) return
+
+  const host = document.createElement('div')
+  host.id = HOST_ELEMENT_ID
+  // `closed`, so the page's scripts cannot read what is being proposed — which would tell a site
+  // exactly which of its elements the user is about to remove.
+  const root = host.attachShadow({ mode: 'closed' })
+  const style = document.createElement('style')
+  style.textContent = started.styles
+  const box = document.createElement('div')
+  box.className = 'box'
+  root.append(style, box)
+  parent.appendChild(host)
 
   const onMove = (event: MouseEvent): void => {
+    const run = session
+    if (run === null) return
+    // Once the selection is frozen the highlight belongs to it, not to the pointer: the person is
+    // reading the bar, and a highlight still chasing the mouse would be describing something else.
+    if (run.chain !== null) return
     const target = event.target
-    // The picker's own host is in the page, so it can be hovered. Skipping it keeps the highlight on the
-    // page rather than on the confirmation bar the user is reading.
+    // The picker's own host is in the page, so it can be hovered.
     if (!(target instanceof Element) || target.id === HOST_ELEMENT_ID) return
-    show(target)
+    show(run, target)
+    // The answer is not read here: what it is *for* at this point is the side effect in the core,
+    // which names the element under the pointer in the bar. The proposals that matter are taken
+    // again, rung by rung, at the click.
+    describe(target)
   }
 
   /*
@@ -194,8 +272,8 @@ function start(chrome: PickerChrome): void {
     on `window` in the capture phase. It cannot get in front of this one — the preload runs before any
     page script — but it would otherwise still run *beside* it.
 
-    `click` is still what commits, and it still arrives: neither cancelling `mousedown` nor cancelling
-    `pointerdown` suppresses it.
+    `click` is still what the picker acts on, and it still arrives: neither cancelling `mousedown` nor
+    cancelling `pointerdown` suppresses it. What it does now is freeze rather than commit.
   */
   const swallow = (event: Event): void => {
     if (event.cancelable && !event.type.startsWith('pointer')) event.preventDefault()
@@ -204,35 +282,54 @@ function start(chrome: PickerChrome): void {
   }
 
   const onClick = (event: MouseEvent): void => {
-    // Captured and cancelled: the click must not also reach the page, or picking an element inside a link
-    // would navigate away from the page the user was editing.
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    /*
-      The click no longer writes anything, and that is the point of the rebuild rather than an
-      omission here: a click that stored a rule was a click whose five ways of failing nobody could
-      tell apart. Its new job — freezing the selection and handing the core the walkable ancestor
-      chain on `PICKER_FREEZE_CHANNEL` — belongs to the unit that rewrites this file, together with
-      the ancestor walk and the measurement it needs. Until then the press only ends the mode, which
-      is the one thing it can do here without pretending to have done the other.
-    */
-    stop()
+    // Swallowed first and unconditionally, so that every way out of this handler below is a way out
+    // that has already taken the click away from the page. Picking an element inside a link must not
+    // navigate away from the page being edited, whether or not a chain came of it.
+    swallow(event)
+    const run = session
+    if (run === null) return
+    // A second click changes nothing. The sequence is swallowed, but "swallowed" is not
+    // "impossible", and a re-freeze would move the selection under somebody reading the selector.
+    if (run.chain !== null) return
+    const target = event.target
+    if (!(target instanceof Element) || target.id === HOST_ELEMENT_ID) return
+
+    const built = chainFrom(target)
+    // Nothing describable, or a click on `body` itself. The core refuses an empty chain and would
+    // ignore this anyway; not sending it keeps the picker in the state the user can still act in.
+    if (built.rungs.length === 0) return
+    run.chain = built.elements
+    show(run, built.elements[0]!)
+    ipcRenderer.send(PICKER_FREEZE_CHANNEL, { sessionId: run.sessionId, chain: built.rungs })
   }
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== 'Escape') return
-    event.preventDefault()
-    event.stopPropagation()
+    // The same strictness the pointer sequence gets, and for the same reason: a page listening for
+    // Escape on `window` in the capture phase would otherwise close its own dialogue beside this.
+    swallow(event)
+    // Told, not merely done. Escape used to tear the page's picker down and say nothing, so the core
+    // went on believing this view was picking and the next start found a session already running —
+    // half of the state divergence this rebuild exists to remove (R10, R12).
+    ipcRenderer.send(PICKER_ESCAPED_CHANNEL, { sessionId: started.sessionId })
     stop()
   }
 
-  // Capture phase throughout, so a page that stops propagation on its own handlers cannot take the
-  // picker's events away from it.
-  const options = { capture: true } as const
+  /*
+    Capture phase throughout, so a page that stops propagation on its own handlers cannot take the
+    picker's events away from it.
+
+    Revoked by one signal rather than by ten `removeEventListener` calls, and that is a correctness
+    choice rather than a shorter one. A removal has to match its registration in *three* things —
+    type, function identity and the capture flag — and a picker that left one `click` listener behind
+    would swallow the next click the user made on the page, with nothing on screen to explain why. The
+    signal cannot be mismatched: it is the same object every registration was given.
+  */
+  const listening = new AbortController()
+  const options = { capture: true, signal: listening.signal } as const
 
   /**
-   * The press, in the order Chromium dispatches it, minus the `click` that commits.
+   * The press, in the order Chromium dispatches it, minus the `click` that freezes.
    *
    * `mouseover` is deliberately absent: it is what the highlight follows, and the page seeing a hover
    * costs nothing. `contextmenu` is here because a right-click while picking should not leave the
@@ -255,41 +352,79 @@ function start(chrome: PickerChrome): void {
   window.addEventListener('keydown', onKeyDown, options)
 
   session = {
-    ui,
+    sessionId: started.sessionId,
+    box,
+    chain: null,
     teardown: () => {
-      for (const type of SWALLOWED) window.removeEventListener(type, swallow, options)
-      window.removeEventListener('mouseover', onMove, options)
-      window.removeEventListener('click', onClick, options)
-      window.removeEventListener('keydown', onKeyDown, options)
+      listening.abort()
+      host.remove()
     }
   }
 }
 
 /**
- * Leaves picker mode, removing everything `start` installed.
- *
- * Every listener paired with its removal, and the host element removed with them. A picker that left one
- * `click` handler behind would swallow the next click the user made on the page, with nothing on screen
- * to explain why.
+ * Leaves picker mode, removing everything `start` installed: every listener, and the host with them.
  */
 function stop(): void {
   if (session === null) return
   session.teardown()
-  session.ui.destroy()
   session = null
 }
 
-/** Installs the listeners that let the *core* start and stop the mode. Nothing is exposed to the page. */
+/** The attempt this message is about, or null when it names another one — or none. */
+function runFor(sessionId: string): PickerRun | null {
+  return session?.sessionId === sessionId ? session : null
+}
+
+/** Installs the listeners that let the *core* drive the mode. Nothing is exposed to the page. */
 export function installElementPicker(): void {
   try {
     ipcRenderer.on(PICKER_START_CHANNEL, (_event, payload: unknown) => {
-      const chrome = asPickerChrome(payload)
-      // No chrome, no picker. A build mismatch must leave the page alone rather than draw an unstyled,
-      // wordless bar the user cannot interpret.
-      if (chrome !== null) start(chrome)
+      const started = asPickerStart(payload)
+      // No chrome, no picker. A build mismatch must leave the page alone rather than draw an
+      // unstyled rectangle over somebody's document with nothing able to take it off again.
+      if (started !== null) start(started)
     })
+
     ipcRenderer.on(PICKER_STOP_CHANNEL, () => {
       stop()
+    })
+
+    /*
+      A correction, arriving as an index and nothing else.
+
+      The core holds the chain it was given and moves along it; this side moves the highlight to
+      match. Sending a selector back instead would invite this side to re-resolve it against a
+      document that may have changed, and the two would then disagree about which element the bar is
+      describing.
+    */
+    ipcRenderer.on(PICKER_SELECT_CHANNEL, (_event, payload: unknown) => {
+      const request = asPickerSelectRequest(payload)
+      if (request === null) return
+      const run = runFor(request.sessionId)
+      if (run === null) return
+      // An index past the chain, or one arriving before the click that built it. Both mean the core
+      // and this page disagree about the attempt, and moving the highlight anywhere would be a guess.
+      const chosen = run.chain?.[request.index]
+      if (chosen !== undefined) show(run, chosen)
+    })
+
+    /*
+      The measurement, asked once the preview is off and the stored rule delivered (R13).
+
+      Answered synchronously, in the same turn the request arrives in. The cosmetic stylesheet that
+      carries the stored rule was sent before this message and IPC keeps that order, so by the time
+      this listener runs the new sheet is already applied — and `getBoundingClientRect` flushes the
+      layout it implies. A `requestAnimationFrame` here would buy nothing and would spend part of the
+      core's two-second deadline.
+    */
+    ipcRenderer.on(PICKER_MEASURE_CHANNEL, (_event, payload: unknown) => {
+      const request = asPickerMeasureRequest(payload)
+      if (request === null || runFor(request.sessionId) === null) return
+      ipcRenderer.send(PICKER_MEASURED_CHANNEL, {
+        sessionId: request.sessionId,
+        ...measure(request.selector)
+      })
     })
   } catch (error) {
     console.warn('[picker] could not be installed:', error)

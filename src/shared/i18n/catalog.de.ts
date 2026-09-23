@@ -370,13 +370,6 @@ export const de = {
   'permission.subject.storageAccess': 'seitenübergreifend Daten zu speichern',
   'permission.subject.topLevelStorageAccess': 'seitenübergreifend Daten zu speichern',
 
-  'picker.hint': 'Klicken zum Ausblenden · Escape bricht ab',
-  'picker.noRule': 'Für dieses Element lässt sich keine Regel schreiben',
-  'picker.warning.matchesAncestor': 'Würde den umgebenden Bereich mit ausblenden',
-  'picker.warning.matchesMany': 'Würde mehrere Elemente ausblenden',
-  'picker.warning.positional': 'Hängt von der Position ab — kann bei Änderungen der Seite ausfallen',
-  'picker.warning.noStableFeature': 'Dieses Element hat keinen stabilen Namen zum Anknüpfen',
-
   'picker.outcome.saved-effective': 'Geblockt. Die Regel ist gespeichert und das Element ist weg.',
   'picker.outcome.saved-ineffective':
     'Gespeichert, aber auf dieser Seite hat sich nichts geändert. Das Element kann später noch nachladen, oder die Seite baut es anders auf.',

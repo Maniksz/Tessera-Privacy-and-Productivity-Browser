@@ -1,4 +1,5 @@
 import { ADD_USER_RULE_OUTCOMES, type AddUserRuleOutcome } from './user-rules.js'
+import { PICKER_CHAIN_LIMIT_TAGS } from './picker-wire.js'
 import type { SelectorProposal } from './picker.js'
 
 /**
@@ -161,8 +162,11 @@ export type PickerAbortReason = (typeof PICKER_ABORT_REASONS)[number]
  * would have to look at is blank. So the rungs at and above `body` are not offered at all, which
  * also means "wider" simply stops being available rather than becoming a thing that asks for
  * confirmation nobody can evaluate.
+ *
+ * Declared in `picker-wire.ts` and re-exported here, because the page applies the same cut before it
+ * proposes a rung and the preload cannot reach this module's runtime — see the note there.
  */
-export const PICKER_CHAIN_LIMIT_TAGS = ['body', 'html'] as const
+export { PICKER_CHAIN_LIMIT_TAGS }
 
 const CHAIN_LIMIT = new Set<string>(PICKER_CHAIN_LIMIT_TAGS)
 
