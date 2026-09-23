@@ -131,6 +131,7 @@
     "src/main/menu/tab-position-accelerators.ts",
     "src/main/browser/page-keys.ts",
     "src/main/browser/navigation-policy.ts",
+    "src/main/browser/sender-window.ts",
     "src/main/browser/tab-strip-position.ts",
     "src/main/updates/UpdateService.ts",
     "src/main/updates/version.ts",

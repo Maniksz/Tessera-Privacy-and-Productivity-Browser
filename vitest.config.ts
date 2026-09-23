@@ -343,6 +343,20 @@ export default defineConfig({
           statements: 100
         },
         /*
+          Which window an IPC call acts for, carved out of `WindowRegistry.ts` so it could be measured.
+
+          The registry is excluded as Electron-bound, and this decision in it was wrong for as long as
+          it existed without a number ever saying so: no tab sender matched, so every internal page
+          acted for the focused window, and a private window's settings page wrote into the normal
+          profile. A floor below all of it would leave room for exactly that branch to go untested again.
+        */
+        'src/main/browser/sender-window.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           Held at all of it because it was carved out of a file that is excluded.
 
           These nine handlers lived in `BrowserWindowController.ts`, which is on the exclude list
