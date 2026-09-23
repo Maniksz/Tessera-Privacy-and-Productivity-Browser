@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { classifyOmniboxInput } from '@shared/url/omnibox.js'
 import {
   configurePublicSuffixes,
   matchHostRule,
   normalizeHost,
-  registrableDomain
+  registrableDomain,
+  resetPublicSuffixes
 } from '@shared/url/domain.js'
 import { dividersFor, withDefaults } from '@shared/split/layout.js'
 import { titleFromUrl } from '@shared/quicklinks/model.js'
@@ -94,27 +95,44 @@ describe('omnibox: hosts the common cases miss', () => {
 })
 
 describe('domain: the public suffix seam', () => {
-  it('accepts a replacement suffix list', () => {
+  // Set once per run, so every case starts from the bootstrap and leaves it behind.
+  beforeEach(() => {
+    resetPublicSuffixes()
+  })
+  afterEach(() => {
+    resetPublicSuffixes()
+  })
+
+  it('adds a supplied list to the bootstrap', () => {
     // The seam the real Public Suffix List drops into; untested it would be a
     // promise rather than a feature.
-    const original = registrableDomain('foo.bar.example')
+    expect(registrableDomain('foo.bar.example')).toBe('bar.example')
     configurePublicSuffixes(['bar.example'])
     expect(registrableDomain('foo.bar.example')).toBe('foo.bar.example')
-
-    // Restore something close to the bootstrap set so later tests are unaffected.
-    configurePublicSuffixes(['co.uk', 'com.au', 'github.io'])
+    // A union, not a replacement: the bootstrap's entries are still in force.
     expect(registrableDomain('www.bbc.co.uk')).toBe('bbc.co.uk')
-    expect(original).toBeDefined()
+  })
+
+  it('refuses a second list in the same run', () => {
+    configurePublicSuffixes(['bar.example'])
+    expect(() => configurePublicSuffixes(['baz.example'])).toThrow(/once per run/)
+    expect(registrableDomain('foo.baz.example')).toBe('baz.example')
+  })
+
+  it('goes back to the bootstrap on reset', () => {
+    configurePublicSuffixes(['bar.example'])
+    resetPublicSuffixes()
+    expect(registrableDomain('foo.bar.example')).toBe('bar.example')
   })
 
   it('normalises a leading dot in a supplied suffix', () => {
-    configurePublicSuffixes(['.co.uk'])
-    expect(registrableDomain('www.bbc.co.uk')).toBe('bbc.co.uk')
+    configurePublicSuffixes(['.com.sg'])
+    expect(registrableDomain('www.bank.com.sg')).toBe('bank.com.sg')
   })
 
   it('lower-cases supplied suffixes', () => {
-    configurePublicSuffixes(['CO.UK'])
-    expect(registrableDomain('WWW.BBC.CO.UK')).toBe('bbc.co.uk')
+    configurePublicSuffixes(['COM.SG'])
+    expect(registrableDomain('WWW.BANK.COM.SG')).toBe('bank.com.sg')
   })
 })
 

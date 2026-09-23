@@ -215,13 +215,47 @@ die erste ersetzen.
 `shared/url/domain.ts`. Zwei Fehlerklassen, die die Spezifikation namentlich nennt:
 
 - **Naives „letzte zwei Labels"** macht aus `bbc.co.uk` und `evil.co.uk` dieselbe
-  Partei. Deshalb eine Public-Suffix-Auswertung mit längstem Treffer.
+  Partei. Deshalb eine Public-Suffix-Auswertung nach dem Algorithmus der Liste:
+  exakte Regeln, `*.`-Wildcards, `!`-Ausnahmen (die jede andere Regel schlagen) und
+  die implizite Regel `*`.
 - **Teilstring-Abgleich** auf `track.` oder `click.` blockt Paketverfolgung und
   Newsletter-Links. Deshalb matcht `hostMatchesRule` nur auf ganzen Labels.
 
-Der eingebaute Suffix-Satz ist ein bewusst kleiner Startsatz.
-`configurePublicSuffixes()` ist die Nahtstelle, um die echte Public Suffix List zu
-laden und aktuell zu halten.
+#### Public Suffix List: Kanal und Lebenszyklus
+
+Der eingebaute Suffix-Satz (`BOOTSTRAP_SUFFIXES`) ist ein bewusst kleiner Startsatz.
+Die volle Liste lädt der Kern zur Laufzeit (`main/privacy/PublicSuffixSubscription.ts`):
+
+- **Einspielen nur beim Start.** `load()` läuft in `main()` nach `SettingsStore.open`
+  und vor `FaviconStore.open`, weil Favicon-Index und Element-Regeln nach Site
+  schlüsseln. Es liest nur die Platte, prüft die gespeicherte Liste erneut und spielt
+  sie per `configurePublicSuffixes()` als Vereinigung mit dem Startsatz ein. Scheitert
+  die Prüfung, gilt die vorige gute Liste aus der Zustandsdatei, sonst der Startsatz,
+  jeweils mit Warnung. `configurePublicSuffixes()` nimmt pro Lauf genau einen Aufruf an:
+  eine Site-Zuordnung ändert sich während eines Laufs nie (R7).
+- **Abruf danach, selten.** `refresh()` holt `https://publicsuffix.org/list/public_suffix_list.dat`
+  über `net.fetch` (Proxy, Kill-Switch, sicheres DNS wie die Filterlisten), höchstens
+  einmal pro 24 Stunden laut Zustandsdatei, und nicht, solange die angenommene Liste
+  jünger als sieben Tage ist. Körper über 1 MB oder von einer anderen Adresse werden
+  verworfen. Ein Refresh schreibt nur den Cache; die neue Liste gilt ab dem nächsten Start.
+- **Prüfung vor dem Schreiben.** `shared/url/public-suffix.ts` verlangt die vier
+  Sektionsmarker, eine Mindestzahl an Regeln, keine entfernte ICANN-Regel gegenüber der
+  Liste in Kraft, höchstens 2 % entfernte Regeln als Mengendifferenz gegenüber der
+  Basisliste (30 Tage stehend), eine Obergrenze entfernter PRIVATE-Regeln, Ausnahmen nur
+  mit passender Wildcard und nie über einem Startsatz-Eintrag, keine neue Wildcard auf
+  einer Top-Level-Domain und bestandene Kanarien. `FilterListStore` bekommt dafür einen
+  `verify`-Haken; lehnt er ab, bleiben Datei und Manifest unverändert. Einzige Ausnahme:
+  ein Kandidat, dem nur PRIVATE-Regeln innerhalb der Obergrenze fehlen, wird angenommen,
+  wenn derselbe Körper (SHA-256) sieben Tage nach der ersten Ablehnung wieder kommt.
+- **Ablage.** `userData/public-suffix/`: die Liste in `list/` (eigener `FilterListStore`,
+  dessen Aufräumen nur dort wirkt), daneben `state.json` (letzter Versuch, Basisliste,
+  vorige gute Liste, letzter abgelehnter Kandidat) über `writeFileAtomically`. Nicht im
+  verwerfbaren Cache und nicht im Verzeichnis der Filterlisten.
+- **Renderer.** Nur `domain.ts` erreicht Renderer-Bundles, ohne Parser und Prüfung; dort
+  gilt der Startsatz. Die Abweichung ist kosmetisch (Beschriftung in `HistoryPage.tsx`).
+- **Bestandsdaten.** Element-Regeln des Pickers, deren Schlüssel mit der vollen Liste
+  selbst ein Suffix ist, werden erkannt, gemeldet und nicht angewendet, ohne `enabled` zu
+  ändern (`isTooBroadUserRule`). Siehe QA 6.10.
 
 ### Berechtigungen
 

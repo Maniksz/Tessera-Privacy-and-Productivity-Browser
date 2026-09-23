@@ -448,6 +448,46 @@ describe('FilterListStore', () => {
     expect(await store.load([PRIVACY_URL])).toEqual([])
   })
 
+  it('keeps the file and the manifest as they were when the check refuses a body', async () => {
+    const { store, directory } = await harness({ [LIST_URL]: EASYLIST_SLICE })
+    await store.refresh([LIST_URL])
+    const snapshot = async (): Promise<string[][]> => {
+      const names = (await readdir(directory)).sort()
+      return Promise.all(
+        names.map(async (name) => [name, await readFile(join(directory, name), 'utf8')])
+      )
+    }
+    const before = await snapshot()
+
+    const verify = vi.fn((text: string, url: string): string | null =>
+      text.includes('||') && url === LIST_URL ? 'looks wrong' : null
+    )
+    const checked = new FilterListStore({
+      directory,
+      fetchList: () => Promise.resolve('||replacement.example^'),
+      now: () => 1_000_000 + DEFAULT_LIST_MAX_AGE_MS,
+      verify
+    })
+    expect(await checked.refresh([LIST_URL])).toEqual([
+      { url: LIST_URL, status: 'failed', reason: 'looks wrong' }
+    ])
+    expect(verify).toHaveBeenCalledWith('||replacement.example^', LIST_URL)
+    expect(await snapshot()).toEqual(before)
+    expect((await checked.load([LIST_URL]))[0]!.text).toBe(EASYLIST_SLICE)
+  })
+
+  it('stores a body the check accepts', async () => {
+    const { directory } = await harness({})
+    const checked = new FilterListStore({
+      directory,
+      fetchList: () => Promise.resolve('##.banner'),
+      now: () => 0,
+      verify: () => null
+    })
+    expect((await checked.refresh([LIST_URL]))[0]!.status).toBe('fetched')
+    expect((await checked.load([LIST_URL]))[0]!.text).toBe('##.banner')
+  })
+
   it('leaves something in the cache directory it cannot remove', async () => {
     // Failing a refresh over an unexpected entry would be worse than ignoring it.
     const { store, directory } = await harness({ [LIST_URL]: EASYLIST_SLICE })
