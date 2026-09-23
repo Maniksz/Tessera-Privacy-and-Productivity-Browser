@@ -1,72 +1,74 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { AddUserRuleOutcome, UserRule } from '@shared/filters/user-rules.js'
+import { useEffect, useRef, useState } from 'react'
+import type { UserRule } from '@shared/filters/user-rules.js'
+import { annotateSourceLines, type AnnotatedLine } from '@shared/filters/user-rules-lines.js'
+import type { ApplyUserRuleSourceOutcome } from '@shared/filters/user-rules-source.js'
 import { useCoreCall } from './useCoreCall.js'
 
 /**
- * The user's own filter rules: see them, write them, switch one off, delete it.
+ * The user's own filter rules, as one text.
  *
  * ## What was missing, and it was the whole feature
  *
  * `user-rules.ts` states the requirement in its own docblock: *"The three operations that matter are not
  * 'add': they are see, disable, delete."* All three had core handlers and **no caller**, and there was no
- * `userrules:add` channel at all — so the element picker was the only thing in the browser that could write
- * a rule, and nothing could show one. A rule that hid the wrong element was permanent and unfindable.
+ * way to write a rule at all — so the element picker was the only thing in the browser that could write a
+ * rule, and nothing could show one. A rule that hid the wrong element was permanent and unfindable.
  *
- * The blocker menu now lists the rules for the site in front of the user, which answers *"why is this page
- * broken"*. This is the other half: the whole list, and a box to type into. Asked for as wanting to enter
- * procedural selectors *"wie bei uBlock origin selber"* — uBO's own filter box is exactly this shape.
+ * The blocker menu lists the rules for the site in front of the user, which answers *"why is this page
+ * broken"*. This is the other half: every rule, in a box to type into. Asked for as wanting to enter
+ * procedural selectors *"wie bei uBlock origin selber"* — and uBO's own filter box is exactly this shape.
  *
- * ## Why one line at a time rather than uBO's whole-textarea
+ * ## Why a text after all, when this used to argue for one line at a time
  *
- * uBO edits its filters as one document and saves the lot. That is the right shape when the browser can
- * accept any line and report on the file afterwards; here every line goes through `describeUserRule`, which
- * refuses request-blocking syntax and scriptlets outright. A whole-document save would therefore need a
- * per-line error report next to a textarea — several messages about lines the user has to count to find.
- * One line at a time puts the refusal beside the thing refused, and the stored rules are still individually
- * editable below because each is its own row.
+ * It did, and the argument was sound as far as it went. Every line goes through `describeUserRule`, which
+ * refuses request-blocking syntax and scriptlets outright, so a whole-document save needs "a per-line error
+ * report next to a textarea" — several messages about lines the user has to count to find. One line at a
+ * time put the refusal beside the thing refused, and each stored rule had its own switch and delete button.
+ *
+ * The user asked for the text regardless (R17), and the objection is answered rather than overruled: **the
+ * refusal is drawn on the refused line**, in the text, where the user is already looking. Nothing has to be
+ * counted. The mark is found by the line's text rather than its number (see `annotateSourceLines`), so it
+ * stays with its line while lines are inserted above it and goes the moment the line is corrected. A refused
+ * line does not refuse the text: everything around it is saved.
+ *
+ * The two per-row controls become the two things uBO's box does with a line — `!` in front switches a rule
+ * off, deleting the line deletes it — and the core keeps each rule's id, age and origin through the round
+ * trip by tracing unchanged lines back to their rules (KTD7). What the list could do and a text cannot is
+ * *narrow*: hiding lines of a document that is saved whole would lose them. So the settings search marks
+ * the lines it matches instead of hiding the others.
+ *
+ * ## How the marks are drawn in place
+ *
+ * A `<textarea>` cannot style one of its lines. So the text is drawn twice: once by the text box, on top,
+ * with a transparent background, and once underneath by a mirror with the same font, padding and scroll
+ * position, in which the text itself is transparent and only the marks show — a tint behind a refused or
+ * matched line, and a short tag after it. Both use `white-space: pre` so neither wraps and the two cannot
+ * disagree about where a line is. The mirror is `aria-hidden`; a screen reader gets `aria-invalid` on the
+ * box and the line numbers in the explanation, which is the one place a number is the right answer.
  *
  * ## Where the words come from
  *
  * The core, on the same answer as the rules. `main/settings/user-rules-text.ts` explains why: the shared
  * message catalogue is one chunk that every internal page fetches before first paint, it is held to a
- * measured budget, and sixteen sentences about filter syntax should not be downloaded by the start page.
+ * measured budget, and a dozen sentences about filter syntax should not be downloaded by the start page.
  */
 
-/** A rule with what the core worked out about it. `kind` decides which cost the row reports. */
+/** A rule with what the core worked out about it. `kind` decides which cost its line reports. */
 export interface EditableUserRule extends UserRule {
   readonly kind: 'declarative' | 'procedural'
 }
 
-/**
- * What the core made of the line, in the core's own vocabulary.
- *
- * An alias rather than a union spelled again here. The two lists were written twice and drifted the moment
- * the core learned to tell a switched-off duplicate from an applied one — and the way that drift shows up
- * on screen is *nothing at all*: an answer with no branch renders no sentence, which to the user is a
- * button that does not work.
- */
-export type AddRuleOutcome = AddUserRuleOutcome
-
-/**
- * The sentence and the tone each answer gets, and the compiler insists on one for every answer.
- *
- * A table rather than a chain of comparisons, the same shape and for the same reason as `UpdateService`'s:
- * an outcome added to the core without a sentence here fails to compile instead of arriving silently.
- *
- * `added` is deliberately the one with no sentence — the rule appears in the list below, which says it
- * better than a line of prose would. The two refusals are alerts because the browser declined to do what
- * was asked; the two duplicates are a status, because the rule the user wants exists and that is not a
- * failure.
- */
-const OUTCOME_MESSAGES: Record<
-  AddRuleOutcome,
-  { readonly word: string; readonly role: 'alert' | 'status' } | null
-> = {
-  added: null,
-  invalid: { word: 'invalid', role: 'alert' },
-  'duplicate-active': { word: 'duplicate', role: 'status' },
-  'duplicate-disabled': { word: 'duplicateDisabled', role: 'status' },
-  'limit-reached': { word: 'limitReached', role: 'alert' }
+/** Everything the core says about the rules on one read. */
+export interface UserRulesAnswer {
+  rules: EditableUserRule[]
+  /** The editor's words, resolved in the core for the interface language. */
+  text: Record<string, string>
+  /** The rules as the text to edit, merged with the notes last saved. */
+  source: string
+  /** The lines of `source` the browser refuses, trimmed — marked where they stand. */
+  rejected: string[]
+  /** True in a private window, whose changes last for the session and which cannot switch off a stored rule. */
+  session: boolean
 }
 
 /**
@@ -77,10 +79,16 @@ const OUTCOME_MESSAGES: Record<
  * business knowing one.
  */
 export interface UserRulesHost {
-  list(): Promise<{ rules: EditableUserRule[]; text: Record<string, string> }>
-  add(text: string): Promise<AddRuleOutcome>
-  setEnabled(id: string, enabled: boolean): Promise<void>
-  remove(id: string): Promise<void>
+  list(): Promise<UserRulesAnswer>
+  apply(text: string): Promise<ApplyUserRuleSourceOutcome>
+}
+
+/** The tags after a line, in the order a reader wants them: the refusal first, then what the rule costs. */
+function tagsOf(line: AnnotatedLine, word: (key: string) => string): string {
+  if (line.rejected) return word('rejectedMark')
+  return [line.procedural ? word('kindProcedural') : '', line.picked ? word('originPicker') : '']
+    .filter((part) => part !== '')
+    .join(' · ')
 }
 
 export function UserRulesEditor({
@@ -91,43 +99,29 @@ export function UserRulesEditor({
   /**
    * What the settings page's search box currently holds.
    *
-   * Optional, and the default is what "nobody is searching" means — which is also what a test that
-   * only cares about the rules gets. See `matchesSearch` below for why this block takes part in the
-   * search at all rather than being hidden while one runs.
+   * Optional, and the default is what "nobody is searching" means — which is also what a test that only
+   * cares about the rules gets. See `matchesSearch` below for why this block takes part in the search at
+   * all rather than being hidden while one runs.
    */
   query?: string
 }): React.ReactNode {
-  const [rules, setRules] = useState<EditableUserRule[]>([])
-  const [text, setText] = useState<Record<string, string>>({})
+  const [answer, setAnswer] = useState<UserRulesAnswer | null>(null)
   const [draft, setDraft] = useState('')
-  const [outcome, setOutcome] = useState<AddRuleOutcome | null>(null)
+  /** The answer to the last save, until the text changes again. */
+  const [verdict, setVerdict] = useState<ApplyUserRuleSourceOutcome | null>(null)
+  const mirror = useRef<HTMLDivElement>(null)
   /*
     Every call goes through `useCoreCall`, which holds the refusal and the try/catch.
 
     Not a convenience. That hook exists because four surfaces here surfaced a *write* refusal and dropped
     every other one — including the first load, which rendered an empty screen for "the core refused". An
-    empty rule list and a refused `userrules:list` look identical, and one of them means "you have no rules"
+    empty rule text and a refused `userrules:list` look identical, and one of them means "you have no rules"
     while the other means the browser would not say.
   */
   const { error, run } = useCoreCall()
 
-  const word = (key: string): string => text[key] ?? ''
-
   /*
-    One re-read after every write, rather than patching the local array.
-
-    The store repairs, deduplicates and trims to a maximum on the way in, so what it kept is not always what
-    was sent. This is the same rule the settings page follows for the same reason — a screen that displayed
-    what it *sent* disagrees with what was stored, and the disagreement survives until a reload.
-  */
-  const refresh = useCallback(async () => {
-    const answer = await host.list()
-    setRules(answer.rules)
-    setText(answer.text)
-  }, [host])
-
-  /*
-    An async body inside `run`, with a cancellation flag, rather than `void refresh()`.
+    An async body inside `run`, with a cancellation flag, rather than `void host.list().then(...)`.
 
     The same shape `SettingsView`'s first load uses and for the reason written there: a state write attached
     to a promise in an effect body has no relationship to the effect's own cleanup, which is what the
@@ -136,40 +130,23 @@ export function UserRulesEditor({
   useEffect(() => {
     let cancelled = false
     void run(async () => {
-      const answer = await host.list()
+      const first = await host.list()
       if (cancelled) return
-      setRules(answer.rules)
-      setText(answer.text)
+      setAnswer(first)
+      setDraft(first.source)
     })
     return () => {
       cancelled = true
     }
   }, [host, run])
 
-  const submit = async (): Promise<void> => {
-    const line = draft.trim()
-    if (line === '') return
-    await run(async () => {
-      const result = await host.add(line)
-      setOutcome(result)
-      // The box is cleared only on success, so a refused line stays there to be corrected rather than
-      // having to be typed again.
-      if (result === 'added') setDraft('')
-      await refresh()
-    })
-  }
-
-  const act = (action: () => Promise<void>): void => {
-    void run(async () => {
-      await action()
-      await refresh()
-    })
-  }
+  const text = answer?.text ?? {}
+  const word = (key: string): string => text[key] ?? ''
 
   /*
     Nothing is rendered before the words arrive, and a test is what made that explicit.
 
-    The words come from the core with the rules, so on the first pass `text` is empty — and the version that
+    The words come from the core with the rules, so on the first pass there are none — and the version that
     rendered anyway produced a text box with no accessible name and a button with no label. `PermissionSurface`
     states the principle for a prompt: *"the one thing a consent dialogue may never do is present a button
     before it can say what the button agrees to"*. It is weaker here, because nothing irreversible is behind
@@ -178,7 +155,7 @@ export function UserRulesEditor({
     The refusal is the exception and has to be, or a failed first read would render nothing at all — which is
     the "empty surface instead of an error" failure `useCoreCall` exists to prevent.
   */
-  if (Object.keys(text).length === 0) {
+  if (answer === null || Object.keys(text).length === 0) {
     return error === null ? null : (
       <section className="panel__section userrules">
         <p className="panel__error" role="alert">
@@ -191,41 +168,72 @@ export function UserRulesEditor({
   /*
     The search, and the reason this block is in it at all.
 
-    It used to be *hidden* whenever the box had anything in it. The argument was consistent — the box
-    filters descriptors by label and key, and a block it cannot filter would sit there while everything
-    around it disappeared — but the consequence was the opposite of what the block is for: a person
-    looking for their filter rules types "Regeln", and typing the word makes the only screen that shows
-    them go away. Reported as there being no field for the rules at all, which from the outside it was.
+    It used to be *hidden* whenever the box had anything in it, and a person looking for their filter rules
+    who typed "Regeln" made the only screen that shows them go away — reported as there being no field for
+    the rules at all. So it answers the search instead, two ways:
 
-    So it answers the search instead. Two ways in, because they are two different questions:
+      - The **heading and the explanation** match, which is somebody looking for the feature. The whole
+        block appears.
+      - A **line of the text** matches, which is somebody looking for one rule — almost always by the site
+        it broke. The block appears and those lines are marked.
 
-      - The **heading and the explanation** match, which is somebody looking for the feature. Then the
-        whole block appears, rules and all.
-      - A **rule's own text** matches, which is somebody looking for one rule — almost always by the
-        site it broke. Then the list narrows to it, which is the thing the whole list could not do:
-        five hundred rules is a scroll, and the rule that broke a page is findable by typing its host.
-
-    Matched on the words the *core* sent rather than on a keyword list kept here, so the German
-    interface answers German searches without a second table to forget to translate.
+    Matched on the words the *core* sent rather than on a keyword list kept here, so the German interface
+    answers German searches without a second table to forget to translate.
   */
   const term = query.trim().toLowerCase()
+  const lines = annotateSourceLines(draft, { rules: answer.rules, rejected: answer.rejected, term })
   const matchesSearch =
     term === '' ||
     word('heading').toLowerCase().includes(term) ||
-    word('hint').toLowerCase().includes(term)
-  const shown = matchesSearch
-    ? rules
-    : rules.filter((rule) => rule.text.toLowerCase().includes(term))
-  // Nothing here answers what was typed: leave the results to the sections that do, rather than
-  // showing a heading with an empty list under it, which reads as "you have no rules".
-  if (!matchesSearch && shown.length === 0) return null
+    word('hint').toLowerCase().includes(term) ||
+    lines.some((line) => line.match)
+  // Nothing here answers what was typed: leave the results to the sections that do.
+  if (!matchesSearch) return null
 
-  /** Null until something has been submitted, and null again for the answer that speaks through the list. */
-  const message = outcome === null ? null : OUTCOME_MESSAGES[outcome]
+  const saved = answer
+  const dirty = draft !== saved.source
+  /** 1-based, because these are said to a person: "line 2". */
+  const refusedAt = lines.flatMap((line, index) => (line.rejected ? [index + 1] : []))
+
+  const save = async (): Promise<void> => {
+    await run(async () => {
+      const outcome = await host.apply(draft)
+      setVerdict(outcome)
+      /*
+        Re-read after a save, and put what the core kept into the box — the same rule every write on this
+        page follows: the core folds a repeated rule, writes a rule in its plain form and keeps a refused
+        line where it was, and a box showing what was *sent* would disagree with what was stored.
+
+        Not after a refusal. Nothing was written, and the user's text is the thing they now have to shorten;
+        replacing it with the stored one would throw away every line they added.
+      */
+      if (outcome !== 'applied') return
+      const next = await host.list()
+      setAnswer(next)
+      setDraft(next.source)
+    })
+  }
+
+  const discard = (): void => {
+    setDraft(saved.source)
+    setVerdict(null)
+  }
+
+  /*
+    Kept in step by hand because the mirror has no scrollbar of its own to follow: it is `overflow: hidden`
+    and moves only when told. Horizontal as well as vertical, since neither layer wraps.
+  */
+  const follow = (box: HTMLTextAreaElement): void => {
+    if (mirror.current === null) return
+    mirror.current.scrollTop = box.scrollTop
+    mirror.current.scrollLeft = box.scrollLeft
+  }
 
   return (
     <section className="panel__section userrules">
-      <h3 className="panel__sectionTitle">{word('heading')}</h3>
+      <h3 className="panel__sectionTitle" id="userrules-heading">
+        {word('heading')}
+      </h3>
       {/*
         Its own class rather than `field__description`, which was the first attempt and was wrong twice over.
         That class belongs to a *setting's* explanatory sentence, so reusing it made a strict test fail — the
@@ -236,84 +244,102 @@ export function UserRulesEditor({
         {word('hint')}
       </p>
 
+      {/*
+        The known limit of a private window, said where it applies rather than left for somebody to find.
+        See `SessionUserRuleEditor.applySource` for why a stored rule switched off here keeps hiding its
+        element in this window.
+      */}
+      {saved.session && (
+        <p className="panel__notice" role="note">
+          {word('sessionNote')}
+        </p>
+      )}
+
       {error !== null && (
         <p className="panel__error" role="alert">
           {error}
         </p>
       )}
 
-      <div className="userrules__add">
-        <input
-          className="field__text userrules__input"
+      <div className="userrules__editor">
+        <div className="userrules__mirror" ref={mirror} aria-hidden="true">
+          {lines.map((line, index) => {
+            const tags = tagsOf(line, word)
+            return (
+              <div
+                // Positional on purpose: the mirror is a picture of the lines as they stand, line for line.
+                key={index}
+                className={[
+                  'userrules__line',
+                  line.rejected ? 'userrules__line--rejected' : '',
+                  line.match ? 'userrules__line--match' : ''
+                ]
+                  .filter((name) => name !== '')
+                  .join(' ')}
+              >
+                <span className="userrules__ghost">{line.text}</span>
+                {tags !== '' && <span className="userrules__tag">{tags}</span>}
+              </div>
+            )
+          })}
+        </div>
+        <textarea
+          className="userrules__source"
           value={draft}
           placeholder={word('placeholder')}
-          aria-label={word('heading')}
-          aria-describedby="userrules-hint"
+          aria-labelledby="userrules-heading"
+          aria-describedby={
+            refusedAt.length > 0 ? 'userrules-hint userrules-refused' : 'userrules-hint'
+          }
+          aria-invalid={refusedAt.length > 0}
           spellCheck={false}
+          wrap="off"
+          rows={Math.min(24, Math.max(8, lines.length + 1))}
+          onScroll={(event) => follow(event.currentTarget)}
           onChange={(event) => {
             setDraft(event.target.value)
-            // The verdict belongs to the line that produced it. Left up while the text changes, it would be
-            // a refusal of something the user has already corrected.
-            setOutcome(null)
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter') return
-            event.preventDefault()
-            void submit()
+            // The verdict belongs to the text that produced it. Left up while the text changes, it would
+            // be a refusal of something the user has already corrected.
+            setVerdict(null)
           }}
         />
-        <button type="button" className="dialog__button" onClick={() => void submit()}>
-          {word('add')}
+      </div>
+
+      <div className="userrules__actions">
+        <button
+          type="button"
+          className="dialog__button"
+          disabled={!dirty}
+          onClick={() => void save()}
+        >
+          {word('save')}
+        </button>
+        <button type="button" className="dialog__button" disabled={!dirty} onClick={discard}>
+          {word('discard')}
         </button>
       </div>
 
-      {message !== null && (
-        <p
-          className={message.role === 'alert' ? 'panel__error' : 'panel__notice'}
-          role={message.role}
-        >
-          {word(message.word)}
+      {/*
+        One explanation for every mark, and it follows the marks rather than the last save: a refused line
+        kept in the saved text is marked again on every visit, so the sentence that says what the mark means
+        is there whenever a mark is.
+      */}
+      {refusedAt.length > 0 ? (
+        <p className="panel__error" role="alert" id="userrules-refused">
+          {word('rejected')}
+          <span className="userrules__spoken">
+            {` ${word('rejectedLines')} ${refusedAt.join(', ')}`}
+          </span>
         </p>
-      )}
-
-      {shown.length === 0 ? (
-        <p className="panel__empty">{word('empty')}</p>
-      ) : (
-        <ul className="userrules__list">
-          {shown.map((rule) => (
-            <li className="userrules__rule" key={rule.id}>
-              <input
-                type="checkbox"
-                className="field__toggle"
-                checked={rule.enabled}
-                aria-label={`${word('toggle')}: ${rule.text}`}
-                onChange={(event) => act(() => host.setEnabled(rule.id, event.target.checked))}
-              />
-              <div className="userrules__body">
-                {/* The line as written, never reformatted: it is the only form the user can recognise. */}
-                <code className="userrules__text">{rule.text}</code>
-                <span className="userrules__meta">
-                  {[
-                    rule.kind === 'procedural' ? word('kindProcedural') : word('kindDeclarative'),
-                    rule.origin === 'picker' ? word('originPicker') : word('originManual'),
-                    rule.enabled ? null : word('disabled')
-                  ]
-                    .filter((part) => part !== null && part !== '')
-                    .join(' · ')}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="field__reset"
-                aria-label={`${word('remove')}: ${rule.text}`}
-                onClick={() => act(() => host.remove(rule.id))}
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      ) : verdict === 'limit-reached' ? (
+        <p className="panel__error" role="alert">
+          {word('limitReached')}
+        </p>
+      ) : verdict === 'applied' ? (
+        <p className="panel__notice" role="status">
+          {word('saved')}
+        </p>
+      ) : null}
     </section>
   )
 }

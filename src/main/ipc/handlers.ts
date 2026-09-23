@@ -34,7 +34,7 @@ import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
 import type { IpcMainInvokeEvent } from 'electron'
 import type { MediaSessions } from '../media/MediaSessions.js'
 import type { ElementPicker } from '../privacy/ElementPicker.js'
-import type { UserRuleStore, UserRuleEditor } from '../data/UserRuleStore.js'
+import type { UserRuleStore, UserRuleTextEditor } from '../data/UserRuleStore.js'
 import type { BookmarkStore } from '../data/BookmarkStore.js'
 import type { DownloadManager } from '../downloads/DownloadManager.js'
 import type { PasswordApi } from '../passwords/PasswordApi.js'
@@ -90,8 +90,10 @@ export function registerIpcHandlers(deps: {
    * back here and reaches nothing else — not the file, not the normal profile, not the engine's
    * global slot. Every `userrules:*` channel goes through this, reads included (R16).
    */
-  const editorFor = (event: IpcMainInvokeEvent): UserRuleEditor =>
-    deps.userRules.editorFor(windows.resolve(event)?.privateMode === true ? 'private' : 'normal')
+  const modeOf = (event: IpcMainInvokeEvent): 'private' | 'normal' =>
+    windows.resolve(event)?.privateMode === true ? 'private' : 'normal'
+  const editorFor = (event: IpcMainInvokeEvent): UserRuleTextEditor =>
+    deps.userRules.editorFor(modeOf(event))
 
   // The router must know which renderers are the trusted chrome UI before any
   // handler can run; everything else is refused or restricted to the internal
@@ -438,47 +440,53 @@ export function registerIpcHandlers(deps: {
     `repairUserRules`; the editor shows it until then, which is better than hiding it.
   */
   const userRulesAnswer = (
-    rules: readonly UserRule[]
-  ): { rules: Array<UserRule & { kind: 'declarative' | 'procedural' }>; text: Record<string, string> } => ({
-    rules: rules.map((rule) => ({
-      ...rule,
-      kind: describeUserRule(rule.text)?.kind ?? 'declarative'
-    })),
-    text: userRulesText(activeLocale(settings.get('appearance.uiLanguage')))
-  })
+    event: IpcMainInvokeEvent
+  ): {
+    rules: Array<UserRule & { kind: 'declarative' | 'procedural' }>
+    text: Record<string, string>
+    source: string
+    rejected: string[]
+    session: boolean
+  } => {
+    const editor = editorFor(event)
+    const view = editor.source()
+    return {
+      rules: editor.list().map((rule) => ({
+        ...rule,
+        kind: describeUserRule(rule.text)?.kind ?? 'declarative'
+      })),
+      text: userRulesText(activeLocale(settings.get('appearance.uiLanguage'))),
+      source: view.source,
+      rejected: view.rejected,
+      session: modeOf(event) === 'private'
+    }
+  }
 
   /*
-    Through the mode-bound editor, like the three channels that write (R16).
+    Through the mode-bound editor, like the channel that writes (R16).
 
     It read the store, and that made the rule manager unreachable from the window that most needs it:
     a private window's picker writes into its session editor, so the page it sends the user to listed
     everything except the rule they had just made — and offered to delete rules belonging to a profile
     that window is not allowed to touch. One editor per mode, read and written through the same seam.
   */
-  handle('userrules:list', (_request, event) => userRulesAnswer(editorFor(event).list()))
+  handle('userrules:list', (_request, event) => userRulesAnswer(event))
   /*
-    Through the mode-bound editor like the other two, so a private window's settings page writes nothing
-    into the rules the normal profile keeps.
+    The whole text, through the sending window's editor like the read above — so a private window's settings
+    page writes nothing into the rules the normal profile keeps and nothing to disk, and the one validation
+    every line goes through is the editor's, not this handler's.
 
-    The outcome travels back rather than being thrown: the two duplicates mean the rule is already there —
-    applied, or sitting switched off — `limit-reached` means the list is as long as this build will keep it,
-    and `invalid` means the line is not one this build can honour. The editor beside the text box has to be
-    able to say each of them. A rejected promise would make them all look like a failure of the browser.
+    The outcome travels back rather than being thrown: a refused line is not a failed save (it is marked where
+    it stands and the rest is taken), and `limit-reached` means nothing was written. A rejected promise would
+    make both look like a failure of the browser.
+
+    Two rule managers open at once are last-write-wins: each saves the text it was shown, so a rule written
+    in one — or by the picker — after the other was opened is deleted by the other's save. Named rather than
+    solved in this round (see `UserRuleTextEditor.applySource`).
   */
-  handle('userrules:add', ({ text }, event) => {
-    const editor = editorFor(event)
-    return { outcome: editor.add({ text, origin: 'manual' }).outcome }
-  })
-  handle('userrules:setEnabled', ({ id, enabled }, event) => {
-    // Through the mode-bound editor rather than the store, so a private window cannot alter the rules the
-    // normal profile keeps — the same reason the picker takes its editor from the sending window.
-    editorFor(event).setEnabled(id, enabled)
-    return OK
-  })
-  handle('userrules:remove', ({ id }, event) => {
-    editorFor(event).remove(id)
-    return OK
-  })
+  handle('userrules:apply', ({ text }, event) => ({
+    outcome: editorFor(event).applySource(text).outcome
+  }))
 
   // --- content blocker -----------------------------------------------------
   /*

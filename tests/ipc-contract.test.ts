@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   EVENT_CHANNELS,
+  INTERNAL_PAGE_INVOKE_CHANNELS,
   INVOKE_CHANNELS,
   isEventChannel,
   isInvokeChannel
@@ -14,6 +15,7 @@ import {
   KNOWN_CONFLICTS
 } from '@shared/shortcuts/bindings.js'
 import type { Platform } from '@shared/model.js'
+import { MAX_USER_RULE_SOURCE_LENGTH } from '@shared/filters/user-rules-source.js'
 
 /**
  * Spec 6 requires the UI/core boundary to be defined once and checked
@@ -68,6 +70,66 @@ describe('IPC contract', () => {
     // The main process must not trust the renderer, even our own.
     expect(invokeContract['split:setLayout'].request.safeParse({ layout: '9x9' }).success).toBe(false)
     expect(invokeContract['tabs:close'].request.safeParse({}).success).toBe(false)
+  })
+})
+
+/**
+ * The rule manager's two channels (U8, KTD13, OQ5).
+ *
+ * The save is the one new channel this work gives `tessera://settings`, and it *replaced* three rather than
+ * joining them — see the grant's comment in `channels.ts`. What is pinned here is the shape that argument
+ * rests on: the text is bounded, the answer is one of two words, and the one-rule write channels are gone
+ * from the contract, not merely from the page's grant.
+ */
+describe('the rule manager', () => {
+  const apply = invokeContract['userrules:apply']
+
+  it('takes a whole text, an empty one included, and nothing past the bound', () => {
+    expect(apply.request.safeParse({ text: '! note\nexample.com##.ad' }).success).toBe(true)
+    // An emptied box, saved, is a list with no rules — not a malformed request.
+    expect(apply.request.safeParse({ text: '' }).success).toBe(true)
+    expect(
+      apply.request.safeParse({ text: 'x'.repeat(MAX_USER_RULE_SOURCE_LENGTH + 1) }).success
+    ).toBe(false)
+    expect(apply.request.safeParse({}).success).toBe(false)
+  })
+
+  it('answers with one of the two outcomes and nothing else', () => {
+    expect(apply.response.safeParse({ outcome: 'applied' }).success).toBe(true)
+    expect(apply.response.safeParse({ outcome: 'limit-reached' }).success).toBe(true)
+    expect(apply.response.safeParse({ outcome: 'added' }).success).toBe(false)
+  })
+
+  it('carries the text, the refused lines and the mode on the read', () => {
+    const answer = {
+      rules: [],
+      text: {},
+      source: '! note',
+      rejected: ['||ads.example^'],
+      session: true
+    }
+    expect(invokeContract['userrules:list'].response.safeParse(answer).success).toBe(true)
+    const { session: _session, ...withoutMode } = answer
+    expect(invokeContract['userrules:list'].response.safeParse(withoutMode).success).toBe(false)
+  })
+
+  it('has replaced the one-rule write channels rather than joined them', () => {
+    const channels: readonly string[] = INVOKE_CHANNELS
+    for (const gone of ['userrules:add', 'userrules:setEnabled', 'userrules:remove']) {
+      expect(channels, gone).not.toContain(gone)
+    }
+    const settings: readonly string[] = INTERNAL_PAGE_INVOKE_CHANNELS.settings
+    expect(settings.filter((channel) => channel.startsWith('userrules:')).sort()).toEqual([
+      'userrules:apply',
+      'userrules:list'
+    ])
+  })
+
+  it('gives the save to no internal page but settings', () => {
+    for (const [page, granted] of Object.entries(INTERNAL_PAGE_INVOKE_CHANNELS)) {
+      if (page === 'settings') continue
+      expect(granted as readonly string[], page).not.toContain('userrules:apply')
+    }
   })
 })
 

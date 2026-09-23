@@ -272,9 +272,12 @@ body {
   hosted by this page and by nothing else, so a chrome window would be parsing rules for a surface it cannot
   show.
 
-  The list is deliberately plain. Each row is a checkbox, the rule as written, one line of provenance and a
-  delete button — and the rule text is the widest thing in it, because recognising your own rule is the whole
-  job of this screen.
+  One text box over every rule, drawn twice so a line can carry a mark: the box on top with its background
+  taken away, and a mirror underneath in the same font, padding and border, whose text is transparent and
+  whose only visible parts are a tint behind a line and a tag after it. `UserRulesEditor` argues why.
+
+  Everything that decides where a character sits is declared on both layers together, in one rule, so
+  the two cannot drift: a mirror one pixel off draws the refusal beside the neighbouring rule.
 */
 
 .userrules__hint {
@@ -285,57 +288,109 @@ body {
   line-height: 1.45;
 }
 
-.userrules__add {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
+.userrules__editor {
+  position: relative;
+  max-width: 60rem;
+  border-radius: 6px;
+  background: var(--bg-input);
 }
 
-/*
-  Wider than `.field__text`'s 220px, and it overrides it deliberately: a rule is
-  `host##selector:has-text(word)` and a box that shows a third of it makes a typo impossible to find.
-*/
-.userrules__input {
-  flex: 1 1 auto;
-  width: auto;
-  min-width: 0;
-}
-
-.userrules__list {
+.userrules__mirror,
+.userrules__source {
+  box-sizing: border-box;
   margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.userrules__rule {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: start;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-}
-
-.userrules__body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-/*
-  Monospaced and wrapping, never truncated. A rule is identified by both of its ends — the host at the front
-  and the selector at the back — so an ellipsis in the middle of a list of rules for one site would leave
-  every entry looking the same. Same argument as `.prompt__site`.
-*/
-.userrules__text {
+  padding: 8px 10px;
+  border: 1px solid transparent;
   font-family: ui-monospace, SFMono-Regular, monospace;
   font-size: 12px;
-  overflow-wrap: anywhere;
+  line-height: 18px;
+  tab-size: 4;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.userrules__mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/*
+  Monospaced and never wrapping. A rule is identified by both of its ends — the host at the front and the
+  selector at the back — so a line broken in the middle would put half a rule beside the next one's mark.
+*/
+.userrules__source {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 160px;
+  border-color: var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  overflow: auto;
+  resize: vertical;
   user-select: text;
 }
 
-.userrules__meta {
+/*
+  A fixed height rather than a minimum, and the tag aligned to the top: a line box one half-pixel taller
+  than the text box's, from the tag's smaller font sitting on the baseline, is nothing on one line and a
+  whole line of drift by the fortieth. As wide as its text or the box, whichever is wider, so the tint
+  still sits behind a long rule scrolled into view.
+*/
+.userrules__line {
+  height: 18px;
+  width: max-content;
+  min-width: 100%;
+}
+
+.userrules__ghost {
+  color: transparent;
+}
+
+.userrules__line--match {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* Last, so a refused line that the search also matches reads as refused: that is the thing to fix. */
+.userrules__line--rejected {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+.userrules__tag {
+  vertical-align: top;
+  margin-left: 2ch;
   color: var(--fg-dim);
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
   font-size: 11px;
+}
+
+.userrules__line--rejected .userrules__tag {
+  color: var(--danger);
+}
+
+.userrules__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/*
+  Said to a screen reader and not drawn: the line numbers of the refused lines. A sighted reader has the
+  marks on the lines themselves, which is the point of drawing them there; somebody who cannot see them
+  needs the numbers, and they are the one place a number is the right answer.
+*/
+.userrules__spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

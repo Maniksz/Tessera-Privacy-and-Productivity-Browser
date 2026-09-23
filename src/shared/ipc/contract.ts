@@ -19,7 +19,10 @@ import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
 // The bound the store enforces, so the schema and the storage cannot disagree about what is too long.
-import { ADD_USER_RULE_OUTCOMES, MAX_USER_RULE_LENGTH } from '../filters/user-rules.js'
+import {
+  APPLY_USER_RULE_SOURCE_OUTCOMES,
+  MAX_USER_RULE_SOURCE_LENGTH
+} from '../filters/user-rules-source.js'
 import {
   PERMISSION_ANSWERS,
   PERMISSION_DEVICES,
@@ -681,57 +684,61 @@ export const invokeContract = {
     response: z.object({ taken: z.boolean() })
   },
   /**
-   * The user's own rules, and the words the editor renders them with.
+   * The user's own rules, the text the editor shows them as, and the words it renders them with.
    *
    * Both on one answer, on the precedent `settings:describe` set: the locale is known in the core, the screen
    * is fetching anyway, and a second channel would be a second round trip at the same moment. Why the prose
    * is in the core rather than the shared catalogue is argued in `main/settings/user-rules-text.ts` — it
    * comes down to a measured bundle budget that only one screen should be paying into.
    *
+   * `source` and `rejected` are computed in the core rather than in the page, and not for convenience: which
+   * line is a rule, which is a note and which is refused is `describeUserRule`'s decision, and a page that
+   * made it again would be a second opinion that can disagree — and would put the filter parser into the
+   * settings bundle to do so. The page only finds the refused lines again by their text.
+   *
    * `kind` per rule, because the two are not the same promise: a declarative rule is a line in a stylesheet
    * the browser matches, and a procedural one is script re-run on every mutation burst. An editor that
    * showed them identically would hide the one thing worth knowing about a rule just typed.
+   *
+   * `session` says the answer came from a private window's editor, whose changes are not saved and which
+   * cannot stop a stored rule from applying — something the screen has to say rather than leave to be found.
    */
   'userrules:list': {
     request: nothing,
     response: z.object({
-      rules: z.array(
-        userRuleSchema.extend({ kind: z.enum(['declarative', 'procedural']) })
-      ),
-      text: z.record(z.string(), z.string())
+      rules: z.array(userRuleSchema.extend({ kind: z.enum(['declarative', 'procedural']) })),
+      text: z.record(z.string(), z.string()),
+      source: z.string(),
+      rejected: z.array(z.string()),
+      session: z.boolean()
     })
   },
   /**
-   * A rule the user typed.
+   * The rule manager's text, saved whole (U8, R17).
    *
-   * The writing half, which had no channel at all: `UserRuleEditor.add` existed and the element picker was
-   * the only thing that could reach it, so a person could not write `example.com##.box:has-text(Anzeige)`
-   * anywhere in the browser.
+   * One channel in place of the three it replaces — `userrules:add`, `userrules:setEnabled` and
+   * `userrules:remove` — because a saved text is all three at once, and doing it as a sequence of them would
+   * be a write and an engine recompile per line and a limit that could be passed halfway. See
+   * `INTERNAL_PAGE_INVOKE_CHANNELS.settings` for why the three are gone rather than kept beside it.
    *
-   * The outcome is returned rather than thrown, because most of the answers are not errors: a duplicate
-   * means the rule is already there and the surface should point at it, `limit-reached` means the user has
-   * as many rules as this build will keep, and `invalid` means the line is not one this build can honour —
-   * all of which the editor has to say beside the text box rather than as a failed call. `describeUserRule`
-   * decides the last, and it refuses network syntax and scriptlets whatever the user types.
+   * Every line goes through `describeUserRule` in the core, a commented one *without* its `!` — so a
+   * commented network rule or scriptlet is kept as a note and never becomes a switched-off rule that could
+   * later be switched on unchecked. The outcome is returned rather than thrown, because neither answer is a
+   * failure of the browser: `applied` covers a text with refused lines in it (they are marked where they
+   * stand and the rest is taken), and `limit-reached` means nothing was written and nothing deleted (R18).
    *
-   * The enum comes from the model rather than being spelled again here, so an outcome cannot be added to
-   * the rule set and then fail to fit through the channel that reports it.
+   * Bounded in length because the text is stored as the user wrote it; see `MAX_USER_RULE_SOURCE_LENGTH`.
+   * Empty is allowed and means what it looks like: a box emptied and saved is a list with no rules.
    */
-  'userrules:add': {
-    request: z.object({ text: z.string().min(1).max(MAX_USER_RULE_LENGTH) }),
+  'userrules:apply': {
+    request: z.object({ text: z.string().max(MAX_USER_RULE_SOURCE_LENGTH) }),
     /*
       The outcome only. The editor re-reads through `userrules:list` afterwards rather than being handed the
-      new list here — the same rule the settings page follows for every write: the store may repair, dedupe or
-      trim, and a screen that displayed what it *sent* would disagree with what was kept.
+      new text here — the same rule the settings page follows for every write: the core folds, normalises
+      and keeps refused lines, and a screen that displayed what it *sent* would disagree with what was kept.
     */
-    response: z.object({ outcome: z.enum(ADD_USER_RULE_OUTCOMES) })
+    response: z.object({ outcome: z.enum(APPLY_USER_RULE_SOURCE_OUTCOMES) })
   },
-  /** Keeps the line and stops applying it, which is how a page the user broke gets un-broken. */
-  'userrules:setEnabled': {
-    request: z.object({ id: z.string(), enabled: z.boolean() }),
-    response: ok
-  },
-  'userrules:remove': { request: z.object({ id: z.string() }), response: ok },
 
   // --- media ---------------------------------------------------------------
   'media:setTileMuted': {

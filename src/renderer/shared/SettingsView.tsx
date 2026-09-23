@@ -97,7 +97,7 @@ export interface SettingsHost {
   /**
    * The user's own filter rules.
    *
-   * A nested host rather than four more methods here, because the rules are not settings: they have no
+   * A nested host rather than two more methods here, because the rules are not settings: they have no
    * default to go back to, no descriptor, and their own vocabulary of outcomes. Grouping them keeps this
    * interface about the settings table and lets the editor be driven on its own in a test.
    */

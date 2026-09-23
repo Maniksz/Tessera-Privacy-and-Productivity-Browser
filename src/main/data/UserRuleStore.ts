@@ -13,6 +13,13 @@ import {
   type UserRuleDocument,
   type UserRuleInput
 } from '@shared/filters/user-rules.js'
+import {
+  applyUserRuleSource,
+  projectUserRuleSource,
+  repairUserRuleSource,
+  type ApplyUserRuleSourceOutcome,
+  type UserRuleSourceView
+} from '@shared/filters/user-rules-source.js'
 import type { BrowsingMode } from './HistoryStore.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 
@@ -48,9 +55,15 @@ const userRuleSchema = z.object({
   origin: z.enum(['picker', 'manual'])
 })
 
+/*
+  `source` without a bound here, for the reason `rules` has none: a `.max()` would turn "a text that grew
+  too long" into "lost every rule the user wrote". `repairUserRuleSource` lets an oversized text go instead,
+  and what that costs is the notes, never a rule.
+*/
 const userRuleDocumentSchema = z.object({
   version: z.literal(1),
-  rules: z.array(userRuleSchema)
+  rules: z.array(userRuleSchema),
+  source: z.string().optional()
 })
 
 type SchemaRule = z.output<typeof userRuleSchema>
@@ -80,10 +93,14 @@ export interface AddRuleResult {
 }
 
 /**
- * The only way to change the rule set.
+ * The only way to change the rule set, one rule at a time.
  *
  * Reading is not behind this, because a private window has to *see* the rules to apply
  * them, and because a list the user can look at is the whole point.
+ *
+ * What the element picker is handed. It writes, undoes and switches back on one rule, and
+ * that is all it should be able to reach — the whole-text operations are on
+ * `UserRuleTextEditor` below, which only the settings page's channels are given.
  */
 export interface UserRuleEditor {
   add(input: UserRuleInput): AddRuleResult
@@ -100,6 +117,28 @@ export interface UserRuleEditor {
   onChange(listener: (rules: UserRule[]) => void): () => void
 }
 
+/**
+ * The rule set as one text: the rule manager's view of the same editor (U8, KTD7).
+ *
+ * A wider interface rather than two more methods on `UserRuleEditor`, so the element
+ * picker keeps being handed exactly the operations it performs. `editorFor` returns this;
+ * the picker's wiring narrows it.
+ */
+export interface UserRuleTextEditor extends UserRuleEditor {
+  /** The rules as the text the editor shows, and the lines in it the browser refuses. */
+  source(): UserRuleSourceView
+  /**
+   * A whole text, taken back: every line checked, unchanged lines traced to the rules
+   * they came from, and nothing at all written past the limit.
+   *
+   * Last write wins against anything else that changed the rules since the text was
+   * read — a rule the picker wrote in another window while this text was open is not in
+   * it, and saving deletes it. Named rather than solved (see the plan's risks); nothing
+   * is gained by a lock here that a second settings tab would not also need.
+   */
+  applySource(text: string): { readonly outcome: ApplyUserRuleSourceOutcome }
+}
+
 export interface UserRuleStoreOptions {
   filePath: string
   codec?: DocumentCodec
@@ -114,7 +153,7 @@ export class UserRuleStore {
   readonly #generateId: () => string
   readonly #now: () => number
   /** The one editor a normal window gets; see `editorFor`. */
-  readonly #stored: UserRuleEditor
+  readonly #stored: UserRuleTextEditor
   /** The one editor a private window gets, and the state of the private session; see `editorFor`. */
   readonly #session: SessionUserRuleEditor
 
@@ -133,10 +172,13 @@ export class UserRuleStore {
       list: () => this.rules(),
       forHost: (hostname) => userRulesForHost(this.rules(), hostname),
       enabledText: () => enabledUserRuleText(this.rules()),
-      onChange: (listener) => this.onChange(listener)
+      onChange: (listener) => this.onChange(listener),
+      source: () => projectUserRuleSource(this.rules(), this.#store.get().source),
+      applySource: (text) => this.#applySource(text)
     }
     this.#session = new SessionUserRuleEditor(
       () => this.rules(),
+      () => this.#store.get().source,
       () => this.#now()
     )
   }
@@ -148,7 +190,11 @@ export class UserRuleStore {
       fallback: emptyUserRuleDocument,
       // A line an older build could parse and this one cannot would otherwise sit in
       // the list looking active while blocking nothing.
-      repair: (document) => ({ ...document, rules: repairUserRules(document.rules) }),
+      repair: (document) =>
+        withSource(
+          { version: document.version, rules: repairUserRules(document.rules) },
+          repairUserRuleSource(document.source)
+        ),
       ...(options.codec === undefined ? {} : { codec: options.codec }),
       ...(options.debounceMs === undefined ? {} : { debounceMs: options.debounceMs })
     })
@@ -214,7 +260,7 @@ export class UserRuleStore {
    * the sharing is the smaller surprise. If that ever stops being true, the change is to
    * key the held editor by window here — the callers already resolve one.
    */
-  editorFor(mode: BrowsingMode): UserRuleEditor {
+  editorFor(mode: BrowsingMode): UserRuleTextEditor {
     return mode === 'private' ? this.#session : this.#stored
   }
 
@@ -252,10 +298,14 @@ export class UserRuleStore {
    * Everything. What a "clear my own filter rules" button runs, and deliberately not
    * behind `editorFor`: a user asking to clear from a private window means the stored
    * set, the same way clearing history does.
+   *
+   * The saved text goes too. Its notes are *about* the rules, and a box that came back
+   * after "clear" holding nothing but the notes and refused lines would read as a clear
+   * that half worked.
    */
   clear(): number {
     const before = this.#store.get().rules.length
-    this.#store.update((document) => ({ ...document, rules: [] }))
+    this.#store.update((document) => ({ version: document.version, rules: [] }))
     return before
   }
 
@@ -279,6 +329,28 @@ export class UserRuleStore {
     if (result.added === null) return { outcome: result.outcome, rule: result.existing }
     this.#store.update((document) => ({ ...document, rules: result.rules }))
     return { outcome: result.outcome, rule: result.added }
+  }
+
+  /*
+    One write for the whole text, and none for a text that changes nothing.
+
+    Not a sequence of `add`, `setEnabled` and `remove`: each of those is a write and a
+    notification, and every notification recompiles the engine's user rules and re-serves
+    every open page. Five hundred lines saved at once would have been five hundred of
+    both, and a limit checked rule by rule could have been passed halfway — having already
+    deleted the lines the text dropped.
+  */
+  #applySource(text: string): { readonly outcome: ApplyUserRuleSourceOutcome } {
+    const result = applyUserRuleSource(this.#store.get(), text, {
+      nextId: () => this.#generateId(),
+      now: this.#now()
+    })
+    if (result.changed) {
+      this.#store.update((document) =>
+        withSource({ version: document.version, rules: result.rules }, result.source)
+      )
+    }
+    return { outcome: result.outcome }
   }
 
   #setEnabled(id: string, enabled: boolean): boolean {
@@ -314,18 +386,28 @@ export class UserRuleStore {
  * ends a session, and `UserRuleStore.editorFor` argues why the object is the long-lived
  * one and the session is not.
  */
-class SessionUserRuleEditor implements UserRuleEditor {
+class SessionUserRuleEditor implements UserRuleTextEditor {
   readonly #stored: () => UserRule[]
+  readonly #storedSource: () => string | undefined
   readonly #now: () => number
   readonly #added: UserRule[] = []
+  /**
+   * The text this session saved, or undefined to read the stored one through.
+   *
+   * Read through until the session saves its own, so a private window opens its rule
+   * manager on the user's notes rather than on a bare list — and kept here, not written,
+   * once it does.
+   */
+  #source: string | undefined = undefined
   /** Ids the session disabled or deleted, whichever the stored rule was. */
   readonly #disabled = new Set<string>()
   readonly #removed = new Set<string>()
   readonly #listeners = new Set<(rules: UserRule[]) => void>()
   #sequence = 0
 
-  constructor(stored: () => UserRule[], now: () => number) {
+  constructor(stored: () => UserRule[], storedSource: () => string | undefined, now: () => number) {
     this.#stored = stored
+    this.#storedSource = storedSource
     this.#now = now
   }
 
@@ -386,6 +468,65 @@ class SessionUserRuleEditor implements UserRuleEditor {
     }
   }
 
+  source(): UserRuleSourceView {
+    return projectUserRuleSource(this.list(), this.#currentSource())
+  }
+
+  /**
+   * The text, taken back into the session's overlay rather than into the file.
+   *
+   * Computed against `list()` like `add`, so the limit counts the stored rules too, and
+   * then translated into the three things this overlay can hold: stored rules it hides or
+   * switches off, and its own rules. A stored rule's id never lands in `#added`, so the
+   * file's rules stay the file's however the text rearranges them.
+   *
+   * ## What this cannot do, said rather than papered over
+   *
+   * Commenting out or deleting a *stored* rule here changes this session's list and not
+   * what pages show. A private window's own rules reach its pages as an additive
+   * stylesheet per view (KTD3); the stored ones reach every window through the engine's
+   * one global slot, which is fed from the file and must stay that way (R20). So the
+   * stored rule goes on hiding its element in this window. The rule manager says so in a
+   * private window rather than pretending — see `sessionNote` in `user-rules-text.ts`.
+   * Making it true would mean a per-view *exception* stylesheet, which is a change to the
+   * injector and not to this editor.
+   */
+  applySource(text: string): { readonly outcome: ApplyUserRuleSourceOutcome } {
+    const result = applyUserRuleSource(
+      { rules: this.list(), source: this.#currentSource() },
+      text,
+      {
+        nextId: () => {
+          this.#sequence += 1
+          return `session-${this.#sequence}`
+        },
+        now: this.#now()
+      }
+    )
+    if (!result.changed) return { outcome: result.outcome }
+
+    const kept = new Map(result.rules.map((rule) => [rule.id, rule]))
+    const storedIds = new Set<string>()
+    for (const rule of this.#stored()) {
+      storedIds.add(rule.id)
+      const next = kept.get(rule.id)
+      if (next === undefined) this.#removed.add(rule.id)
+      else if (next.enabled) this.#disabled.delete(rule.id)
+      else this.#disabled.add(rule.id)
+    }
+    const own = result.rules.filter((rule) => !storedIds.has(rule.id))
+    // The session's own rules carry their switch on the record itself from here on.
+    for (const rule of own) this.#disabled.delete(rule.id)
+    this.#added.splice(0, this.#added.length, ...own)
+    this.#source = result.source
+    this.#notify()
+    return { outcome: result.outcome }
+  }
+
+  #currentSource(): string | undefined {
+    return this.#source ?? this.#storedSource()
+  }
+
   /**
    * Everything this session did, undone: its own rules, its switching off and its
    * hiding of stored ones.
@@ -400,10 +541,18 @@ class SessionUserRuleEditor implements UserRuleEditor {
    * the last session must not find it pointing at a different rule in the next one.
    */
   endSession(): void {
-    if (this.#added.length === 0 && this.#disabled.size === 0 && this.#removed.size === 0) return
+    if (
+      this.#added.length === 0 &&
+      this.#disabled.size === 0 &&
+      this.#removed.size === 0 &&
+      this.#source === undefined
+    ) {
+      return
+    }
     this.#added.length = 0
     this.#disabled.clear()
     this.#removed.clear()
+    this.#source = undefined
     this.#notify()
   }
 
@@ -411,6 +560,18 @@ class SessionUserRuleEditor implements UserRuleEditor {
     const rules = this.list()
     for (const listener of this.#listeners) listener(rules)
   }
+}
+
+/**
+ * A document with its saved text, or without one when there is none.
+ *
+ * Absent rather than `source: undefined`, and the difference is observable: the store's
+ * repair check compares key counts, so a document that gained an undefined key on the way
+ * in would be reported as repaired on every start — and a file that never had a text
+ * would stop being byte-identical to one written before the text box existed.
+ */
+function withSource(document: UserRuleDocument, source: string | undefined): UserRuleDocument {
+  return source === undefined ? document : { ...document, source }
 }
 
 let counter = 0

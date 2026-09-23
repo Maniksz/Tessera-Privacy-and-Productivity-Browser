@@ -59,22 +59,16 @@ export function SettingsPage(): React.ReactNode {
         setSettings(await invoke('settings:getAll'))
       },
       /*
-        The user's own filter rules, which this page is now the editor for.
+        The user's own filter rules, which this page is the editor for — as one text (U8).
 
-        Four channels the page was not granted before, and the comment beside them in `channels.ts` always
-        said "for the settings page and the blocker menu" — the intent was this; the grant and the screen
-        were what was missing. Every write goes through `describeUserRule` in the core, which refuses
-        request-blocking syntax and scriptlets whatever this page sends.
+        Two channels: the read, and the save of the whole text. The save replaced the three one-rule writes
+        this page used to hold; `INTERNAL_PAGE_INVOKE_CHANNELS.settings` argues why they went rather than
+        staying beside it. Every line goes through `describeUserRule` in the core, which refuses
+        request-blocking syntax and scriptlets whatever this page sends — a commented line included.
       */
       userRules: {
         list: () => invoke('userrules:list'),
-        add: async (text) => (await invoke('userrules:add', { text })).outcome,
-        setEnabled: async (id, enabled) => {
-          await invoke('userrules:setEnabled', { id, enabled })
-        },
-        remove: async (id) => {
-          await invoke('userrules:remove', { id })
-        }
+        apply: async (text) => (await invoke('userrules:apply', { text })).outcome
       },
       /*
         The way from the Passwords section to the passwords.
