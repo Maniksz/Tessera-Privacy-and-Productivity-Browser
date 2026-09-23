@@ -338,6 +338,12 @@ describe('the correction and the measurement', () => {
     expect(asPickerMeasureRequest({ sessionId: 'picker-1' })).toBeNull()
   })
 
+  it('refuses a measurement request that names no attempt', () => {
+    expect(asPickerMeasureRequest({ selector: '.ad' })).toBeNull()
+    expect(asPickerMeasureRequest({ sessionId: '', selector: '.ad' })).toBeNull()
+    expect(asPickerMeasureRequest(null)).toBeNull()
+  })
+
   it('accepts two counts and no verdict', () => {
     // "It worked" is a decision, and decisions belong to the session module: a hidden element still
     // matches its selector, so a count alone proves nothing either way.
