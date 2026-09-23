@@ -631,6 +631,44 @@ describe('the download button summary', () => {
     expect(b.chrome).toEqual([QUIET])
   })
 
+  it('does not mark on the inheriting button a pause the closing window had already shown', () => {
+    /*
+      A pause has no end time, so its time is the one this file stamped when it first saw it. The
+      successor's first look at `p` comes after A closed, which is after A's panel showed the pause —
+      a stamp of its own would mark what A had already shown. The two windows share a session, as two
+      normal windows do, and the time is the session's.
+    */
+    const clock = { now: T0 }
+    const session = { on: () => {} }
+    const a = { ...fakeWindow(1, false), viewer: { windowId: 1, mode: 'normal' as const, session } }
+    const b = { ...fakeWindow(3, false), viewer: { windowId: 3, mode: 'normal' as const, session } }
+    const running = [entry('p', { state: 'progressing', receivedBytes: 50, endedAt: null })]
+    const byWindow: Record<number, DownloadEntry[]> = { 1: running, 3: running }
+    const startedIn: Record<number, readonly string[]> = { 1: ['p'] }
+    const handedOn: Record<number, Record<string, number>> = {}
+    const manager = fakeManager({ byWindow, startedIn, handedOn })
+    const windows = [a, b]
+    const { present } = harness({ manager, windows, clock })
+
+    manager.fire()
+    clock.now = T0 + 3
+    const paused = [entry('p', { state: 'paused', receivedBytes: 50, endedAt: null })]
+    byWindow[1] = paused
+    byWindow[3] = paused
+    manager.fire()
+    present(a, T0 + 10)
+
+    // A closes and hands `p` to B, with the time A's panel last showed it.
+    windows.splice(0, 1)
+    delete startedIn[1]
+    startedIn[3] = ['p']
+    handedOn[3] = { p: T0 + 10 }
+    clock.now = T0 + 20
+    manager.fire()
+
+    expect(b.chrome.at(-1)).toEqual(QUIET)
+  })
+
   it('marks on the inheriting button what finished after the closing window last showed its panel', () => {
     const b = fakeWindow(3, false)
     const manager = fakeManager({

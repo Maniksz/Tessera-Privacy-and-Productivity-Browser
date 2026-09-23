@@ -169,16 +169,26 @@ export interface DownloadHandlerDeps {
 }
 
 /**
- * What this file remembers about one window, for its button.
+ * When each download entered the state it is in, as far as this file has seen.
  *
- * Only ids, states and times — no name, no address — and only for downloads the window started that
- * are still in its list. Held in a `WeakMap` on the window's object, so it is dropped with the window
+ * Only ids, states and times — no name, no address. Kept per *session* rather than per window,
+ * because the rows a window lists depend on its session alone, so every window of a session would
+ * stamp the same times anyway — and because a window's downloads outlive it. A normal window that
+ * closes hands its downloads to another window of the same session, and that window has to know
+ * when a paused download paused: a pause has no end time of its own, and the successor's first look
+ * is always later than the closed window's panel, which would mark a pause that panel had shown.
+ *
+ * Held in a `WeakMap` on the session's object, so a private session's times go with its partition
  * rather than by a teardown somebody has to remember to call.
  */
+type StateTimes = Map<string, { readonly state: DownloadState; readonly since: number }>
+
+/**
+ * What this file remembers about one window, for its button: what its chrome UI was last sent, so an
+ * unchanged summary is not sent again. Held in a `WeakMap` on the window's object, like the state
+ * times on the session's.
+ */
 interface ButtonMemory {
-  /** Per id, the state it was last seen in and when that state was first seen. */
-  readonly states: Map<string, { readonly state: DownloadState; readonly since: number }>
-  /** What the chrome UI was last sent, so an unchanged summary is not sent again. */
   last: DownloadButtonSummary
 }
 
@@ -197,9 +207,10 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   const { handle, downloads, windows } = deps
   const now = deps.now ?? Date.now
   const memory = new WeakMap<DownloadHandlerWindow, ButtonMemory>()
+  const stateTimes = new WeakMap<DownloadViewer['session'], StateTimes>()
 
   /*
-    The window's state times, brought up to date with these rows.
+    The session's state times, brought up to date with these rows.
 
     The state times are why this keeps memory at all. A paused record has no time of its own —
     `endedAt` belongs to terminal states — so the summary would have to take the start for the pause,
@@ -207,31 +218,42 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
     runs on every coalesced change, and `DownloadManager` never coalesces a state change away, so the
     first pass that sees a new state is within a tick of it happening: that pass stamps it.
 
-    Idempotent for the same rows — a state already remembered keeps its time — which is what lets the
-    change loop below stamp before it re-presents the panel and the summary stamp again after.
+    Every row, not only the ones this window started: the times are the session's (see `StateTimes`),
+    and the rows are the session's whole list, which is also what makes forgetting a row that is gone
+    exact. Idempotent for the same rows — a state already remembered keeps its time — which is what
+    lets the change loop below stamp before it re-presents the panel and the summary stamp again
+    after, and lets every window of a session run it in turn.
   */
   const rememberStates = (
     window: DownloadHandlerWindow,
-    entries: readonly DownloadEntry[],
-    startedHere: ReadonlySet<string> = downloads.idsStartedIn(window.viewer.windowId)
-  ): ButtonMemory => {
-    let remembered = memory.get(window)
-    if (remembered === undefined) {
-      // What a chrome UI shows before it has been told anything: no button.
-      remembered = { states: new Map(), last: NO_DOWNLOAD_BUTTON }
-      memory.set(window, remembered)
+    entries: readonly DownloadEntry[]
+  ): StateTimes => {
+    const { session } = window.viewer
+    let times = stateTimes.get(session)
+    if (times === undefined) {
+      times = new Map()
+      stateTimes.set(session, times)
     }
     const stillListed = new Set<string>()
     for (const entry of entries) {
-      if (!startedHere.has(entry.id)) continue
       stillListed.add(entry.id)
-      if (remembered.states.get(entry.id)?.state !== entry.state) {
-        remembered.states.set(entry.id, { state: entry.state, since: now() })
+      if (times.get(entry.id)?.state !== entry.state) {
+        times.set(entry.id, { state: entry.state, since: now() })
       }
     }
     // Forgotten with its row, so a cleared list leaves nothing behind here either.
-    for (const id of remembered.states.keys()) {
-      if (!stillListed.has(id)) remembered.states.delete(id)
+    for (const id of times.keys()) {
+      if (!stillListed.has(id)) times.delete(id)
+    }
+    return times
+  }
+
+  /** What a window's chrome UI was last sent; no button before it has been told anything. */
+  const buttonMemory = (window: DownloadHandlerWindow): ButtonMemory => {
+    let remembered = memory.get(window)
+    if (remembered === undefined) {
+      remembered = { last: NO_DOWNLOAD_BUTTON }
+      memory.set(window, remembered)
     }
     return remembered
   }
@@ -240,19 +262,17 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   const currentSummary = (
     window: DownloadHandlerWindow,
     entries: readonly DownloadEntry[]
-  ): { summary: DownloadButtonSummary; remembered: ButtonMemory } => {
+  ): DownloadButtonSummary => {
     const { windowId } = window.viewer
-    const startedHere = downloads.idsStartedIn(windowId)
-    const remembered = rememberStates(window, entries, startedHere)
-    const since = new Map([...remembered.states].map(([id, seen]) => [id, seen.since]))
-    const summary = summarizeWindowDownloads(
+    const times = rememberStates(window, entries)
+    const since = new Map([...times].map(([id, seen]) => [id, seen.since]))
+    return summarizeWindowDownloads(
       entries,
-      startedHere,
+      downloads.idsStartedIn(windowId),
       window.downloadsPanelPresentedAt,
       since,
       downloads.handedOnSeenAt(windowId)
     )
-    return { summary, remembered }
   }
 
   /** The summary pushed to the window's chrome UI, if it changed or if `always`. */
@@ -261,7 +281,8 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
     entries: readonly DownloadEntry[],
     always: boolean
   ): void => {
-    const { summary, remembered } = currentSummary(window, entries)
+    const summary = currentSummary(window, entries)
+    const remembered = buttonMemory(window)
     if (!always && sameSummary(summary, remembered.last)) return
     remembered.last = summary
     window.emit('downloads:summaryChanged', summary)
@@ -302,7 +323,7 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   */
   handle('downloads:summary', (_payload, event) => {
     const window = senderWindow(event)
-    return currentSummary(window, downloads.snapshot(window.viewer)).summary
+    return currentSummary(window, downloads.snapshot(window.viewer))
   })
 
   /*
