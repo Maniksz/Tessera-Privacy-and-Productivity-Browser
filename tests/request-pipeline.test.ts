@@ -75,6 +75,16 @@ describe('telemetry stage', () => {
     expect(outcome.action).toBe('continue')
   })
 
+  it("lets a page's embedded Google translator work", () => {
+    // The website translator widget loads from one host and translates through the other.
+    for (const url of [
+      'https://translate.googleapis.com/_/translate_http/_/js/k=translate_http.tr.en_GB',
+      'https://translate-pa.googleapis.com/v1/translateHtml'
+    ]) {
+      expect(evaluateStages(context({ url, resourceType: 'xhr' })).action, url).toBe('continue')
+    }
+  })
+
   it('respects the setting', () => {
     const outcome = evaluateStages(
       context({

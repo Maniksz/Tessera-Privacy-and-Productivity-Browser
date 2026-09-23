@@ -87,6 +87,11 @@ export interface FilterListEngine {
  * `accounts.google.com` is deliberately absent. It is Chrome's sync sign-in host, but it is also where
  * every Google login a page starts lands — YouTube, Gmail, "Sign in with Google" — and this list runs
  * on page requests too. Blocking it cancelled those navigations with `ERR_BLOCKED_BY_CLIENT`.
+ *
+ * `translate.googleapis.com` and `translate-pa.googleapis.com` are absent for the same reason, and with
+ * less to weigh: Electron does not ship Chrome's built-in translator, so the substrate never calls them.
+ * The only caller left is a page embedding Google's website translator, which loads from the first and
+ * translates through the second — blocking them took that widget away and protected nothing.
  */
 const TELEMETRY_HOSTS: readonly string[] = [
   'update.googleapis.com',
@@ -97,8 +102,6 @@ const TELEMETRY_HOSTS: readonly string[] = [
   'safebrowsing.google.com',
   'optimizationguide-pa.googleapis.com',
   'content-autofill.googleapis.com',
-  'translate.googleapis.com',
-  'translate-pa.googleapis.com',
   'chromewebstore.googleapis.com',
   'crashpad.chromium.org',
   'clients.l.google.com',
