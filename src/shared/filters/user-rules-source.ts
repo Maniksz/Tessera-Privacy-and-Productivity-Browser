@@ -62,6 +62,17 @@ export type ApplyUserRuleSourceOutcome = (typeof APPLY_USER_RULE_SOURCE_OUTCOMES
  */
 export const MAX_USER_RULE_SOURCE_LENGTH = 2 * MAX_USER_RULES * (MAX_USER_RULE_LENGTH + 3)
 
+/**
+ * The most rule ids a save may say it was written against.
+ *
+ * Twice the list, not once, because a private window's list is two lists: the stored rules read through,
+ * and the session's own. Each is held to `MAX_USER_RULES` where it is written, but the session's were
+ * counted against a stored set that a normal window may have grown since — so a private page can show up
+ * to twice the limit, and a bound of once would refuse its every save, deletions included. Bounded at all
+ * because the list arrives from a page.
+ */
+export const MAX_LOADED_USER_RULE_IDS = 2 * MAX_USER_RULES
+
 /** One line, read. */
 export type UserRuleLine =
   | { readonly kind: 'blank' }
@@ -145,6 +156,12 @@ export interface ApplyUserRuleSourceContext {
   /** Asked once per rule that is new, and only once the text is known to fit. */
   readonly nextId: () => string
   readonly now: number
+  /**
+   * The ids of the rules the text was written against — what the page was showing when it loaded.
+   *
+   * Only these can be deleted by a missing line; see "A text is written against a list" below.
+   */
+  readonly loaded: ReadonlySet<string>
 }
 
 export interface ApplyUserRuleSourceResult {
@@ -162,10 +179,25 @@ export interface ApplyUserRuleSourceResult {
  *
  * A line whose text a stored rule has *is* that rule, and keeps its id, age and origin; only its switch
  * follows the comment mark. A line nobody has is a new rule, typed by hand, stamped now. A stored rule no
- * line names is gone. There is no fuzzier matching than that, deliberately: an edited line is the old rule
- * deleted and a new one written, because a line in a text box has no identity except its text — and
- * guessing that `.advert` "is" the rule that used to say `.ad` would carry a picker origin onto a rule
- * somebody typed.
+ * line names is gone — if the text was written against it, which the next section is about. There is no
+ * fuzzier matching than that, deliberately: an edited line is the old rule deleted and a new one written,
+ * because a line in a text box has no identity except its text — and guessing that `.advert` "is" the rule
+ * that used to say `.ad` would carry a picker origin onto a rule somebody typed.
+ *
+ * ## A text is written against a list, and the list moves on
+ *
+ * The page loads the rules, the user edits for a minute, and meanwhile the element picker writes a rule in
+ * another window. The text has no line for that rule because there was none to show, not because the user
+ * deleted one — and a save that read the missing line as a deletion lost a rule the user had just made and
+ * never saw. So a stored rule is only deleted by its absence when its id is in `context.loaded`; a rule
+ * that appeared since is kept as it stands, switch included, and the projection adds its line at the end
+ * the next time the text is read. A loaded id that no stored rule has any more is a rule deleted elsewhere
+ * in the meantime: already gone, nothing to do.
+ *
+ * What stays last-write-wins is every line the text *does* name. A loaded rule switched on or off
+ * elsewhere since follows its line here; a loaded rule deleted elsewhere whose line is still in the text is
+ * written again, as a new rule typed by hand, because the text says it should exist and its old record is
+ * gone.
  *
  * ## Order
  *
@@ -207,7 +239,7 @@ export function applyUserRuleSource(
 
   const stored = new Set(state.rules.map((rule) => rule.text))
   const fresh = [...wanted].filter(([ruleText]) => !stored.has(ruleText))
-  const kept = state.rules.filter((rule) => wanted.has(rule.text))
+  const kept = state.rules.filter((rule) => wanted.has(rule.text) || !context.loaded.has(rule.id))
 
   if (kept.length + fresh.length > MAX_USER_RULES) {
     return {
@@ -220,7 +252,8 @@ export function applyUserRuleSource(
 
   const rules: UserRule[] = [
     ...kept.map((rule) => {
-      const enabled = wanted.get(rule.text) === true
+      // No line for it is a rule the page never showed, and it is kept exactly as it is.
+      const enabled = wanted.get(rule.text) ?? rule.enabled
       return rule.enabled === enabled ? rule : { ...rule, enabled }
     }),
     ...fresh.map(([ruleText, enabled]): UserRule => ({

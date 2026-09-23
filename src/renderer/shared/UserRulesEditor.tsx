@@ -80,7 +80,11 @@ export interface UserRulesAnswer {
  */
 export interface UserRulesHost {
   list(): Promise<UserRulesAnswer>
-  apply(text: string): Promise<ApplyUserRuleSourceOutcome>
+  /**
+   * `loadedIds` are the rules the text was written against: the ones on the answer the box was filled from.
+   * A missing line deletes only those, so a rule written while this page was open survives its save.
+   */
+  apply(text: string, loadedIds: readonly string[]): Promise<ApplyUserRuleSourceOutcome>
 }
 
 /** The tags after a line, in the order a reader wants them: the refusal first, then what the rule costs. */
@@ -197,7 +201,15 @@ export function UserRulesEditor({
 
   const save = async (): Promise<void> => {
     await run(async () => {
-      const outcome = await host.apply(draft)
+      /*
+        With the ids of the rules the box was filled from. The element picker can write a rule while this page
+        is open, and the draft has no line for it — not because the user deleted one, but because there was
+        none to show. Sent the ids, the core deletes only the rules this page showed and the user took out.
+      */
+      const outcome = await host.apply(
+        draft,
+        saved.rules.map((entry) => entry.id)
+      )
       setVerdict(outcome)
       /*
         Re-read after a save, and put what the core kept into the box — the same rule every write on this

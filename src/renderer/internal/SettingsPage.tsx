@@ -68,7 +68,8 @@ export function SettingsPage(): React.ReactNode {
       */
       userRules: {
         list: () => invoke('userrules:list'),
-        apply: async (text) => (await invoke('userrules:apply', { text })).outcome
+        apply: async (text, loadedIds) =>
+          (await invoke('userrules:apply', { text, loadedIds: [...loadedIds] })).outcome
       },
       /*
         The way from the Passwords section to the passwords.

@@ -480,12 +480,18 @@ export function registerIpcHandlers(deps: {
     it stands and the rest is taken), and `limit-reached` means nothing was written. A rejected promise would
     make both look like a failure of the browser.
 
-    Two rule managers open at once are last-write-wins: each saves the text it was shown, so a rule written
-    in one — or by the picker — after the other was opened is deleted by the other's save. Named rather than
-    solved in this round (see `UserRuleTextEditor.applySource`).
+    The page sends the ids of the rules it loaded with the text, and a missing line deletes only one of
+    those. So a rule written after the page was opened — by the picker, or by a second rule manager — is kept
+    by this page's save instead of being deleted by a text that never showed it, and a loaded rule deleted
+    elsewhere meanwhile is simply already gone.
+
+    What is still last-write-wins is every line the text names. Two rule managers that both show a rule's
+    line decide its switch by whichever saves last; a rule deleted elsewhere whose line is still in this text
+    comes back as a new rule typed here; and the notes and the order are the last saver's. The rules nobody
+    saw are safe, the lines everybody saw are not merged (see `applyUserRuleSource`).
   */
-  handle('userrules:apply', ({ text }, event) => ({
-    outcome: editorFor(event).applySource(text).outcome
+  handle('userrules:apply', ({ text, loadedIds }, event) => ({
+    outcome: editorFor(event).applySource(text, loadedIds).outcome
   }))
 
   // --- content blocker -----------------------------------------------------

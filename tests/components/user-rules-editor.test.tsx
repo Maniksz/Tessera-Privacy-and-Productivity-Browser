@@ -67,6 +67,8 @@ interface Harness {
   host: UserRulesHost
   applied: string[]
   rules: () => UserRule[]
+  /** A rule written behind the page's back — the element picker in another window. */
+  write: (entry: UserRule) => void
 }
 
 /** A core with the real projection in it; see the file's docblock for why. */
@@ -103,18 +105,22 @@ function harness(
   return {
     applied,
     rules: () => rules,
+    write: (entry) => {
+      rules = [...rules, entry]
+    },
     host: {
       list: () =>
         options.refuseList === undefined
           ? Promise.resolve(answer())
           : Promise.reject(new Error(options.refuseList)),
-      apply: (text) => {
+      apply: (text, loadedIds) => {
         applied.push(text)
         if (options.refuseApply !== undefined) return Promise.reject(new Error(options.refuseApply))
         if (options.outcome !== undefined) return Promise.resolve(options.outcome)
         const result = applyUserRuleSource({ rules, source }, text, {
           nextId: () => `n${(ids += 1)}`,
-          now: 99
+          now: 99,
+          loaded: new Set(loadedIds)
         })
         rules = result.rules
         source = result.source
@@ -185,6 +191,24 @@ describe('the rules as one text', () => {
     await waitFor(() => expect(box().value).toBe('example.com##.banner-ad\nnew.example##.x'))
     expect(applied).toEqual(['example.com##.banner-ad\n   new.example##.x   \nnew.example##.x\n'])
     expect(screen.getByRole('status').textContent).toBe('Saved.')
+  })
+
+  it('keeps a rule written while the page was open, and shows it after the save', async () => {
+    /*
+      The page's text has no line for a rule the picker wrote after it loaded, because there was none to
+      show. Saving that text must not read the missing line as a deletion — the rule would be gone without
+      the user ever having seen it.
+    */
+    const { host, rules, write } = harness({
+      rules: [rule(), rule({ id: 'r2', text: 'shop.example##.promo' })]
+    })
+    await editor(host)
+    write(rule({ id: 'late', text: 'late.example##.x', origin: 'picker' }))
+    type('example.com##.banner-ad')
+    save()
+
+    await waitFor(() => expect(box().value).toBe('example.com##.banner-ad\nlate.example##.x'))
+    expect(rules().map((entry) => entry.id)).toEqual(['r1', 'late'])
   })
 
   it('keeps notes and blank lines through a save', async () => {

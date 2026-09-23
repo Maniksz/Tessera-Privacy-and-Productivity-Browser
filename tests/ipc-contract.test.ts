@@ -15,7 +15,10 @@ import {
   KNOWN_CONFLICTS
 } from '@shared/shortcuts/bindings.js'
 import type { Platform } from '@shared/model.js'
-import { MAX_USER_RULE_SOURCE_LENGTH } from '@shared/filters/user-rules-source.js'
+import {
+  MAX_LOADED_USER_RULE_IDS,
+  MAX_USER_RULE_SOURCE_LENGTH
+} from '@shared/filters/user-rules-source.js'
 
 /**
  * Spec 6 requires the UI/core boundary to be defined once and checked
@@ -85,13 +88,34 @@ describe('the rule manager', () => {
   const apply = invokeContract['userrules:apply']
 
   it('takes a whole text, an empty one included, and nothing past the bound', () => {
-    expect(apply.request.safeParse({ text: '! note\nexample.com##.ad' }).success).toBe(true)
-    // An emptied box, saved, is a list with no rules — not a malformed request.
-    expect(apply.request.safeParse({ text: '' }).success).toBe(true)
     expect(
-      apply.request.safeParse({ text: 'x'.repeat(MAX_USER_RULE_SOURCE_LENGTH + 1) }).success
+      apply.request.safeParse({ text: '! note\nexample.com##.ad', loadedIds: ['r1'] }).success
+    ).toBe(true)
+    // An emptied box, saved, is a list with no rules — not a malformed request.
+    expect(apply.request.safeParse({ text: '', loadedIds: [] }).success).toBe(true)
+    expect(
+      apply.request.safeParse({
+        text: 'x'.repeat(MAX_USER_RULE_SOURCE_LENGTH + 1),
+        loadedIds: []
+      }).success
     ).toBe(false)
     expect(apply.request.safeParse({}).success).toBe(false)
+  })
+
+  it('says which rules the text was written against, and cannot leave that out', () => {
+    /*
+      Required: without the ids the only reading left is "the page showed every rule", which deletes a rule
+      the picker wrote while the page was open. Bounded, because the list arrives from a page.
+    */
+    expect(apply.request.safeParse({ text: '' }).success).toBe(false)
+    expect(apply.request.safeParse({ text: '', loadedIds: [''] }).success).toBe(false)
+    const ids = (count: number): string[] => Array.from({ length: count }, (_unused, i) => `r${i}`)
+    expect(
+      apply.request.safeParse({ text: '', loadedIds: ids(MAX_LOADED_USER_RULE_IDS) }).success
+    ).toBe(true)
+    expect(
+      apply.request.safeParse({ text: '', loadedIds: ids(MAX_LOADED_USER_RULE_IDS + 1) }).success
+    ).toBe(false)
   })
 
   it('answers with one of the two outcomes and nothing else', () => {

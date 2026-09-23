@@ -21,6 +21,7 @@ import { userRuleSchema } from '../filters/user-rules-schema.js'
 // The bound the store enforces, so the schema and the storage cannot disagree about what is too long.
 import {
   APPLY_USER_RULE_SOURCE_OUTCOMES,
+  MAX_LOADED_USER_RULE_IDS,
   MAX_USER_RULE_SOURCE_LENGTH
 } from '../filters/user-rules-source.js'
 import {
@@ -729,9 +730,19 @@ export const invokeContract = {
    *
    * Bounded in length because the text is stored as the user wrote it; see `MAX_USER_RULE_SOURCE_LENGTH`.
    * Empty is allowed and means what it looks like: a box emptied and saved is a list with no rules.
+   *
+   * `loadedIds` are the ids of the rules the page loaded — the list the text was written against. A missing
+   * line deletes only one of those, so a rule the element picker wrote while the page was open is kept
+   * rather than silently deleted by a text that never showed it. Required rather than defaulted: the only
+   * default that could stand in for it is "everything", which is the loss this field exists to prevent.
+   * Bounded in count by `MAX_LOADED_USER_RULE_IDS`, which says why twice the list; not in length, because an
+   * id is only looked up and never stored.
    */
   'userrules:apply': {
-    request: z.object({ text: z.string().max(MAX_USER_RULE_SOURCE_LENGTH) }),
+    request: z.object({
+      text: z.string().max(MAX_USER_RULE_SOURCE_LENGTH),
+      loadedIds: z.array(z.string().min(1)).max(MAX_LOADED_USER_RULE_IDS)
+    }),
     /*
       The outcome only. The editor re-reads through `userrules:list` afterwards rather than being handed the
       new text here — the same rule the settings page follows for every write: the core folds, normalises

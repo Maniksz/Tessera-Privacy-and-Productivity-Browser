@@ -116,7 +116,7 @@ export type PickerBarText = typeof en
 
 const de: PickerBarText = {
   label: 'Element in Kachel {index} blocken',
-  choosing: 'Fahren Sie über das Element, das verschwinden soll, und klicken Sie es an.',
+  choosing: 'Fahre über das Element, das verschwinden soll, und klicke es an.',
   counting: 'Zählt, was ausgeblendet würde …',
   matchesNone: 'Das trifft auf dieser Seite nichts.',
   matchesOne: 'Das würde 1 Element auf dieser Seite ausblenden.',
@@ -135,11 +135,11 @@ const de: PickerBarText = {
   'outcome.saved-ineffective':
     'Gespeichert, aber auf dieser Seite hat sich nichts geändert. Das Element kann später noch nachladen, oder die Seite baut es anders auf.',
   'outcome.invalid': 'Das ist keine Regel, die dieser Browser anwenden kann.',
-  'outcome.duplicate-active': 'Diese Regel haben Sie bereits, und sie ist eingeschaltet.',
+  'outcome.duplicate-active': 'Diese Regel hast du bereits, und sie ist eingeschaltet.',
   'outcome.duplicate-disabled':
-    'Diese Regel haben Sie bereits, und sie ist ausgeschaltet. Schalten Sie sie in Ihren Regeln wieder ein.',
+    'Diese Regel hast du bereits, und sie ist ausgeschaltet. Schalte sie in deinen Regeln wieder ein.',
   'outcome.limit-reached':
-    'Sie haben so viele Regeln, wie dieser Browser behält. Löschen Sie eine, die Sie nicht mehr brauchen, und blocken Sie das hier erneut.',
+    'Du hast so viele Regeln, wie dieser Browser behält. Lösche eine, die du nicht mehr brauchst, und blocke das hier erneut.',
   'outcome.no-host':
     'Dieses Dokument gehört zu keiner Website, es gibt also nichts, wofür sich eine Regel schreiben ließe.',
   'outcome.not-filterable':

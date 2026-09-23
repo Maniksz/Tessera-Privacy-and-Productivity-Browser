@@ -131,12 +131,16 @@ export interface UserRuleTextEditor extends UserRuleEditor {
    * A whole text, taken back: every line checked, unchanged lines traced to the rules
    * they came from, and nothing at all written past the limit.
    *
-   * Last write wins against anything else that changed the rules since the text was
-   * read — a rule the picker wrote in another window while this text was open is not in
-   * it, and saving deletes it. Named rather than solved (see the plan's risks); nothing
-   * is gained by a lock here that a second settings tab would not also need.
+   * `loadedIds` are the rules the text was written against — the ones the page was
+   * showing. A missing line deletes only one of those, so a rule the picker wrote in
+   * another window while the text was open survives the save, and one deleted elsewhere
+   * meanwhile is simply already gone. What is still last-write-wins is every line the
+   * text names: see `applyUserRuleSource`.
    */
-  applySource(text: string): { readonly outcome: ApplyUserRuleSourceOutcome }
+  applySource(
+    text: string,
+    loadedIds: readonly string[]
+  ): { readonly outcome: ApplyUserRuleSourceOutcome }
 }
 
 export interface UserRuleStoreOptions {
@@ -174,7 +178,7 @@ export class UserRuleStore {
       enabledText: () => enabledUserRuleText(this.rules()),
       onChange: (listener) => this.onChange(listener),
       source: () => projectUserRuleSource(this.rules(), this.#store.get().source),
-      applySource: (text) => this.#applySource(text)
+      applySource: (text, loadedIds) => this.#applySource(text, loadedIds)
     }
     this.#session = new SessionUserRuleEditor(
       () => this.rules(),
@@ -340,10 +344,14 @@ export class UserRuleStore {
     both, and a limit checked rule by rule could have been passed halfway — having already
     deleted the lines the text dropped.
   */
-  #applySource(text: string): { readonly outcome: ApplyUserRuleSourceOutcome } {
+  #applySource(
+    text: string,
+    loadedIds: readonly string[]
+  ): { readonly outcome: ApplyUserRuleSourceOutcome } {
     const result = applyUserRuleSource(this.#store.get(), text, {
       nextId: () => this.#generateId(),
-      now: this.#now()
+      now: this.#now(),
+      loaded: new Set(loadedIds)
     })
     if (result.changed) {
       this.#store.update((document) =>
@@ -490,8 +498,15 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
    * private window rather than pretending — see `sessionNote` in `user-rules-text.ts`.
    * Making it true would mean a per-view *exception* stylesheet, which is a change to the
    * injector and not to this editor.
+   *
+   * `loadedIds` works as it does for the stored editor, over both halves: a rule this
+   * session's picker wrote after the page opened, and a rule a normal window wrote to the
+   * file meanwhile, are neither hidden nor removed by a text that never showed them.
    */
-  applySource(text: string): { readonly outcome: ApplyUserRuleSourceOutcome } {
+  applySource(
+    text: string,
+    loadedIds: readonly string[]
+  ): { readonly outcome: ApplyUserRuleSourceOutcome } {
     const result = applyUserRuleSource(
       { rules: this.list(), source: this.#currentSource() },
       text,
@@ -500,7 +515,8 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
           this.#sequence += 1
           return `session-${this.#sequence}`
         },
-        now: this.#now()
+        now: this.#now(),
+        loaded: new Set(loadedIds)
       }
     )
     if (!result.changed) return { outcome: result.outcome }
