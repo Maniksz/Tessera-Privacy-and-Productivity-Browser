@@ -6,7 +6,7 @@ import {
   type DocumentFeatures,
   type GenericFeatureIndex
 } from './features.js'
-import type { CosmeticRule } from './model.js'
+import { canonicalHostname, type CosmeticRule } from './model.js'
 import { isSafeSelector } from './selector-safety.js'
 
 /**
@@ -69,9 +69,13 @@ export interface CosmeticSelectors {
  * `a.b.example.com` yields itself, `b.example.com` and `example.com`. The bare
  * public suffix is left out: `com##…` is not a rule anybody means, and stopping
  * short of it saves a lookup on every query.
+ *
+ * Canonicalised first, so `example.com.` walks the same chain as `example.com`
+ * rather than a chain of keys no rule was ever filed under. Every host-keyed query
+ * in this file, and the procedural and user-rule indexes, go through here.
  */
 export function hostChain(hostname: string): readonly string[] {
-  const host = hostname.toLowerCase()
+  const host = canonicalHostname(hostname)
   if (host === '') return []
   const labels = host.split('.')
   const chain: string[] = [host]

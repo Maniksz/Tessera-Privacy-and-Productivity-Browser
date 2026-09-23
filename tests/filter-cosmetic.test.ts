@@ -192,6 +192,29 @@ describe('hostChain', () => {
   it('yields nothing for an empty host', () => {
     expect(hostChain('')).toEqual([])
   })
+
+  it('drops the trailing dot of a fully-qualified host', () => {
+    // `example.com.` is the same site as `example.com`; keyed as written it would
+    // find none of the rules written for it.
+    expect(hostChain('WWW.Example.COM.')).toEqual(['www.example.com', 'example.com'])
+  })
+})
+
+describe('a host spelled with a trailing dot', () => {
+  const index = indexFrom(
+    'example.com##.ad',
+    '##.ad-banner',
+    'example.com#@#.ad-banner',
+    '~example.com##.promo'
+  )
+
+  it('gets the rules written for the host without it', () => {
+    expect(selectorsFor(index, 'example.com.').specific).toEqual(['.ad'])
+  })
+
+  it('keeps the exceptions and exclusions written for it too', () => {
+    expect(selectorsFor(index, 'example.com.').generic).toEqual([])
+  })
 })
 
 describe('cosmeticCss', () => {
