@@ -9,8 +9,10 @@ import {
   type DownloadSource,
   type DownloadViewer
 } from '@main/downloads/DownloadManager.js'
+import type { ForeignTransferRequest } from '@main/downloads/foreign-transfer.js'
 import type { BrowsingMode } from '@main/data/HistoryStore.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
+import { summarizeWindowDownloads } from '@shared/downloads/summary.js'
 import { FakeItem, FakeSession } from './download-fakes.js'
 
 /**
@@ -446,5 +448,206 @@ describe('DownloadManager, per window', () => {
     manager.releaseWindow(1, 2)
 
     expect(heard).toBe(1)
+  })
+})
+
+/**
+ * A transfer from outside Chromium — the media downloader is the first — as its producer would hand it
+ * over: a target the producer already chose, a cancel that aborts its own work, and no pause unless it
+ * says so.
+ */
+function transferIn(
+  manager: DownloadManager,
+  viewer: DownloadViewer,
+  overrides: Partial<ForeignTransferRequest> = {}
+) {
+  const calls: string[] = []
+  const transfer = manager.track({
+    windowId: viewer.windowId,
+    session: viewer.session,
+    url: 'https://media.example/watch',
+    fileName: 'clip.mp4',
+    targetPath: join('/downloads', 'clip.mp4'),
+    cancel: () => {
+      calls.push('cancel')
+    },
+    ...overrides
+  })
+  return { transfer, calls }
+}
+
+describe('DownloadManager, transfers that did not come from Chromium', () => {
+  it('lists a transfer and files it under the window that started it', async () => {
+    const { manager, store } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+
+    const { transfer } = transferIn(manager, normal)
+    transfer?.progress({ receivedBytes: 250, totalBytes: 1_000 })
+
+    expect(transfer?.id).toMatch(/^dl-/)
+    const [entry] = manager.snapshot(normal)
+    expect(entry).toMatchObject({
+      id: transfer?.id,
+      fileName: 'clip.mp4',
+      savePath: join('/downloads', 'clip.mp4'),
+      state: 'progressing',
+      receivedBytes: 250,
+      totalBytes: 1_000
+    })
+    expect([...manager.idsStartedIn(1)]).toEqual([transfer?.id])
+    expect(
+      summarizeWindowDownloads(manager.snapshot(normal), manager.idsStartedIn(1), null)
+    ).toEqual({
+      visible: true,
+      activity: { kind: 'fraction', fraction: 0.25 },
+      marker: null
+    })
+    // Written down like any normal download, and in the same namespace as Chromium's.
+    expect(store.list().map((record) => record.id)).toEqual([transfer?.id])
+    normal.session.download(new FakeItem('https://files.example/a.zip'))
+    expect(new Set(manager.snapshot(normal).map((row) => row.id)).size).toBe(2)
+  })
+
+  it('shows an unknown total as activity without a share', async () => {
+    const { manager } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+
+    const { transfer } = transferIn(manager, normal)
+    // What the media downloader reports for a segmented stream.
+    transfer?.progress({ receivedBytes: 4_096, totalBytes: null })
+
+    expect(manager.snapshot(normal)[0]).toMatchObject({ receivedBytes: 4_096, totalBytes: 0 })
+    expect(
+      summarizeWindowDownloads(manager.snapshot(normal), manager.idsStartedIn(1), null).activity
+    ).toEqual({ kind: 'indeterminate' })
+  })
+
+  it('cancels through the callback and reads as cancelled at once', async () => {
+    const { manager, store } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+    const { transfer, calls } = transferIn(manager, normal)
+    const id = transfer?.id ?? ''
+
+    expect(manager.cancel(id)).toBe(true)
+
+    expect(calls).toEqual(['cancel'])
+    expect(manager.snapshot(normal)[0]?.state).toBe('cancelled')
+    expect(store.find(id)?.state).toBe('cancelled')
+    expect(manager.cancel(id)).toBe(false)
+    // The producer's own abort reports late, as an aborted fetch does; the row stays what it was.
+    transfer?.fail()
+    expect(manager.snapshot(normal)[0]?.state).toBe('cancelled')
+  })
+
+  it('does nothing when asked to pause a transfer that cannot pause', async () => {
+    const { manager } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+    const { transfer, calls } = transferIn(manager, normal)
+    const id = transfer?.id ?? ''
+
+    expect(manager.pause(id)).toBe(false)
+    expect(manager.resume(id)).toBe(false)
+    expect(manager.snapshot(normal)[0]?.state).toBe('progressing')
+    expect(calls).toEqual([])
+  })
+
+  it('pauses and resumes a transfer that says it can', async () => {
+    const { manager } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+    const pausing: string[] = []
+    const { transfer } = transferIn(manager, normal, {
+      pausing: { pause: () => pausing.push('pause'), resume: () => pausing.push('resume') }
+    })
+    const id = transfer?.id ?? ''
+
+    expect(manager.pause(id)).toBe(true)
+    expect(manager.pause(id)).toBe(false)
+    expect(manager.snapshot(normal)[0]?.state).toBe('paused')
+    expect(manager.resume(id)).toBe(true)
+    expect(manager.snapshot(normal)[0]?.state).toBe('progressing')
+    expect(pausing).toEqual(['pause', 'resume'])
+  })
+
+  it('finishes as the producer says, and ignores anything after', async () => {
+    const { manager, store, onDisk } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+    const done = transferIn(manager, normal).transfer
+    const failed = transferIn(manager, normal, {
+      fileName: 'other.mp4',
+      targetPath: join('/downloads', 'other.mp4')
+    }).transfer
+
+    done?.progress({ receivedBytes: 1_000, totalBytes: 1_000 })
+    done?.complete()
+    failed?.fail()
+    done?.progress({ receivedBytes: 5, totalBytes: 1_000 })
+
+    expect(store.find(done?.id ?? '')?.state).toBe('completed')
+    expect(store.find(failed?.id ?? '')?.state).toBe('interrupted')
+    expect(manager.snapshot(normal).find((row) => row.id === done?.id)?.receivedBytes).toBe(1_000)
+    expect(manager.liveCount).toBe(0)
+    onDisk.add(join('/downloads', 'clip.mp4'))
+    expect(await manager.open(done?.id ?? '')).toBe(true)
+  })
+
+  it('keeps a private transfer out of the store and ends it with its window', async () => {
+    const { manager, store } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+    const priv = windowOf(manager, 2, 'private')
+    const other = windowOf(manager, 3, 'private')
+
+    const running = transferIn(manager, priv)
+    const finished = transferIn(manager, priv, {
+      fileName: 'other.mp4',
+      targetPath: join('/downloads', 'other.mp4')
+    })
+    finished.transfer?.complete()
+
+    expect(store.list()).toEqual([])
+    expect(
+      manager
+        .snapshot(priv)
+        .map((row) => row.state)
+        .sort()
+    ).toEqual(['completed', 'progressing'])
+    expect(urls(manager, other)).toEqual([])
+    expect(urls(manager, normal)).toEqual([])
+    expect(manager.idsStartedIn(2).size).toBe(2)
+
+    manager.releaseSession(priv.session)
+    manager.releaseWindow(2, undefined)
+
+    expect(running.calls).toEqual(['cancel'])
+    expect(finished.calls).toEqual([])
+    expect(manager.liveCount).toBe(0)
+    expect(urls(manager, priv)).toEqual([])
+    expect(manager.windowsWithDownloads).toBe(0)
+    expect(store.list()).toEqual([])
+  })
+
+  it.each([
+    ['a relative target', { targetPath: 'clip.mp4' }],
+    ['a target that is not normalised', { targetPath: '/downloads/x/../clip.mp4' }],
+    ['a target name the sanitiser would change', { targetPath: join('/downloads', '.clip.mp4') }],
+    ['a file name the sanitiser would change', { fileName: 'a/../clip.mp4' }]
+  ])('refuses %s, and never lists it', async (_label, overrides) => {
+    const { manager, store } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+
+    const { transfer } = transferIn(manager, normal, overrides)
+
+    expect(transfer).toBeNull()
+    expect(manager.snapshot(normal)).toEqual([])
+    expect(store.list()).toEqual([])
+    expect(manager.idsStartedIn(1).size).toBe(0)
+  })
+
+  it('refuses a transfer on a session nothing attached, whose mode nobody bound', async () => {
+    const { manager, store } = await fixture()
+    const stray: DownloadViewer = { windowId: 1, mode: 'normal', session: new FakeSession() }
+
+    expect(transferIn(manager, stray).transfer).toBeNull()
+    expect(manager.snapshot(stray)).toEqual([])
+    expect(store.list()).toEqual([])
   })
 })

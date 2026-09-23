@@ -15,6 +15,7 @@ import {
 } from '@shared/downloads/model.js'
 import type { BrowsingMode } from '../data/HistoryStore.js'
 import { resolveSavePath } from './target-path.js'
+import * as foreign from './foreign-transfer.js'
 import { DownloadOwnership } from './window-ownership.js'
 
 /**
@@ -188,7 +189,8 @@ export class DownloadManager {
   readonly #live = new Map<string, LiveDownload>()
   /** The recorder each live download was started with, so its updates go to the same place. */
   readonly #recorders = new Map<string, DownloadRecorder>()
-  readonly #attached = new WeakSet<DownloadSession>()
+  /** The mode each attached session was bound to, once; see `attach`. */
+  readonly #modes = new WeakMap<DownloadSession, BrowsingMode>()
   readonly #listeners = new Set<() => void>()
   /**
    * Memoised answers to "is that file still there", keyed by path.
@@ -218,12 +220,20 @@ export class DownloadManager {
    * `normal`; the guard exists for the shared default session, which several windows prepare.
    */
   attach(session: DownloadSession, mode: BrowsingMode): void {
-    if (this.#attached.has(session)) return
-    this.#attached.add(session)
-    const recorder = this.#options.store.recorderFor(mode)
+    if (this.#modes.has(session)) return
+    this.#modes.set(session, mode)
     session.on('will-download', (_event, item, source) => {
-      this.#begin(item, session, mode, recorder, source)
+      this.#begin(item, session, mode, source)
     })
+  }
+
+  /** A transfer from outside Chromium, or `null` when refused; see `foreign-transfer.ts`. */
+  track(request: foreign.ForeignTransferRequest): foreign.ForeignTransfer | null {
+    const { session, fileName, targetPath, windowId } = request
+    const mode = this.#modes.get(session)
+    if (mode === undefined || !foreign.acceptsForeignTarget(request)) return null
+    const item = new foreign.ForeignDownloadItem(request)
+    return item.handle(this.#track(item, session, mode, fileName, targetPath, windowId))
   }
 
   /**
@@ -292,7 +302,7 @@ export class DownloadManager {
 
   pause(id: string): boolean {
     const live = this.#live.get(id)
-    if (live === undefined || live.item.isPaused()) return false
+    if (live === undefined || live.item.isPaused() || !foreign.canPause(live.item)) return false
     live.item.pause()
     this.#note(live, { state: 'paused' })
     return true
@@ -459,12 +469,8 @@ export class DownloadManager {
     item: DownloadItemLike,
     session: DownloadSession,
     mode: BrowsingMode,
-    recorder: DownloadRecorder,
     source: DownloadSource | undefined
   ): void {
-    this.#counter += 1
-    const id = `dl-${this.#now().toString(36)}-${this.#counter.toString(36)}`
-
     /*
       Every name a server can influence goes through one function, and this is the call.
 
@@ -508,7 +514,23 @@ export class DownloadManager {
       // this line is a save dialogue the user did not ask for.
       item.setSavePath(savePath)
     }
+    // After `setSavePath`, which is the one call that may not wait for anything.
+    const windowId = this.#options.windowFor?.(source, session)
+    this.#track(item, session, mode, fileName, savePath, windowId)
+  }
 
+  /** Files a download under a fresh id, whichever route it arrived by, and records its start. */
+  #track(
+    item: DownloadItemLike,
+    session: DownloadSession,
+    mode: BrowsingMode,
+    fileName: string,
+    savePath: string,
+    windowId: number | undefined
+  ): string {
+    this.#counter += 1
+    const id = `dl-${this.#now().toString(36)}-${this.#counter.toString(36)}`
+    const recorder = this.#options.store.recorderFor(mode)
     const started: StartedDownload = {
       id,
       url: item.getURL(),
@@ -545,14 +567,12 @@ export class DownloadManager {
 
     this.#live.set(id, { record, item, mode, session, dispose })
     this.#recorders.set(id, recorder)
-    // After `setSavePath`, which is the one call that may not wait for anything; the resolver is
-    // synchronous too, but nothing is gained by putting even that in front of it.
-    const windowId = this.#options.windowFor?.(source, session)
     if (windowId !== undefined) this.#owners.claim(windowId, id)
     // A private window's recorder discards. That is the whole mechanism: there is no branch
     // here that decides whether to write, because the object handed over already decided.
     recorder.start(started)
     this.#emitNow()
+    return id
   }
 
   #advance(id: string): void {
