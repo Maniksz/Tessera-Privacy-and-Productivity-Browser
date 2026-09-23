@@ -2,6 +2,7 @@ import { z } from 'zod'
 import {
   MAX_USER_RULE_LENGTH,
   addUserRule,
+  describeUserRule,
   emptyUserRuleDocument,
   enabledUserRuleText,
   removeUserRule,
@@ -91,6 +92,15 @@ export interface UserRuleEditor {
   setEnabled(id: string, enabled: boolean): boolean
   /** True when a rule with that id was there to remove. */
   remove(id: string): boolean
+  /**
+   * Whether this editor may switch the rule off or remove it.
+   *
+   * Always, for the stored editor and a rule it has. Only for its own rules, for a private window's:
+   * the stored ones are the profile's, which a private window may read but not change — and a change
+   * it recorded anyway would be listed without reaching the page, which is served the stored rules by
+   * the engine whatever the session thinks of them.
+   */
+  mayChange(id: string): boolean
   /** Every rule, oldest first — storage order. */
   list(): UserRule[]
   /** Rules bearing on a host, newest first: the "why is this site broken" view. */
@@ -130,6 +140,7 @@ export class UserRuleStore {
       add: (input) => this.#add(input),
       setEnabled: (id, enabled) => this.#setEnabled(id, enabled),
       remove: (id) => this.#remove(id),
+      mayChange: (id) => this.#store.get().rules.some((rule) => rule.id === id),
       list: () => this.rules(),
       forHost: (hostname) => userRulesForHost(this.rules(), hostname),
       enabledText: () => enabledUserRuleText(this.rules()),
@@ -235,6 +246,17 @@ export class UserRuleStore {
     this.#session.endSession()
   }
 
+  /**
+   * The private session's own enabled rules as one filter-list body, and nothing of the stored set.
+   *
+   * What a private window's views are served on top of the engine's rules. The stored rules are left
+   * out because the engine serves them already — to every view, private ones included — and serving
+   * them here again made a private window's page apply each stored rule twice.
+   */
+  privateSessionText(): string {
+    return this.#session.ownText()
+  }
+
   /** Every stored rule, oldest first. Readable from any session. */
   rules(): UserRule[] {
     return [...this.#store.get().rules]
@@ -303,7 +325,7 @@ export class UserRuleStore {
 }
 
 /**
- * A private window's editor: the stored rules, plus this session's own changes.
+ * A private window's editor: the stored rules to read, plus this session's own to change.
  *
  * Holds a reader rather than the store, so there is no write path to forget to avoid.
  * Ids are local to the session and prefixed, so an interface listing them can tell the
@@ -317,10 +339,14 @@ export class UserRuleStore {
 class SessionUserRuleEditor implements UserRuleEditor {
   readonly #stored: () => UserRule[]
   readonly #now: () => number
-  readonly #added: UserRule[] = []
-  /** Ids the session disabled or deleted, whichever the stored rule was. */
-  readonly #disabled = new Set<string>()
-  readonly #removed = new Set<string>()
+  /**
+   * This session's own rules, each carrying whether it is switched on.
+   *
+   * The only rules this editor changes. The stored ones are read through `#stored` and never masked:
+   * a mask kept here would be listed and not applied, because the stored rules reach every page
+   * through the engine, which a session cannot speak to.
+   */
+  #added: UserRule[] = []
   readonly #listeners = new Set<(rules: UserRule[]) => void>()
   #sequence = 0
 
@@ -330,6 +356,17 @@ class SessionUserRuleEditor implements UserRuleEditor {
   }
 
   add(input: UserRuleInput): AddRuleResult {
+    /*
+      Refused before anything else, and as `invalid`, because a private window has no way to honour
+      either kind: its rules reach the page only as a per-view stylesheet (`viewStylesheet`), which
+      can hide an element and do nothing more. An exception would have to cancel a rule inside the
+      engine, and a procedural rule needs the matcher the engine feeds. Accepting them would list a
+      rule the page never sees.
+    */
+    const detail = describeUserRule(input.text)
+    if (detail !== null && (detail.isException || detail.kind === 'procedural')) {
+      return { outcome: 'invalid', rule: null }
+    }
     this.#sequence += 1
     /*
       Against `list()`, which is the stored rules plus this session's own — so the limit
@@ -351,24 +388,25 @@ class SessionUserRuleEditor implements UserRuleEditor {
   }
 
   setEnabled(id: string, enabled: boolean): boolean {
-    if (!this.list().some((rule) => rule.id === id)) return false
-    if (enabled) this.#disabled.delete(id)
-    else this.#disabled.add(id)
+    if (!this.#added.some((rule) => rule.id === id && rule.enabled !== enabled)) return false
+    this.#added = this.#added.map((rule) => (rule.id === id ? { ...rule, enabled } : rule))
     this.#notify()
     return true
   }
 
   remove(id: string): boolean {
-    if (!this.list().some((rule) => rule.id === id)) return false
-    this.#removed.add(id)
+    if (!this.mayChange(id)) return false
+    this.#added = this.#added.filter((rule) => rule.id !== id)
     this.#notify()
     return true
   }
 
+  mayChange(id: string): boolean {
+    return this.#added.some((rule) => rule.id === id)
+  }
+
   list(): UserRule[] {
     return [...this.#stored(), ...this.#added]
-      .filter((rule) => !this.#removed.has(rule.id))
-      .map((rule) => (this.#disabled.has(rule.id) ? { ...rule, enabled: false } : rule))
   }
 
   forHost(hostname: string): UserRule[] {
@@ -379,6 +417,11 @@ class SessionUserRuleEditor implements UserRuleEditor {
     return enabledUserRuleText(this.list())
   }
 
+  /** This session's own enabled rules, without the stored ones. See `UserRuleStore.privateSessionText`. */
+  ownText(): string {
+    return enabledUserRuleText(this.#added)
+  }
+
   onChange(listener: (rules: UserRule[]) => void): () => void {
     this.#listeners.add(listener)
     return () => {
@@ -387,8 +430,7 @@ class SessionUserRuleEditor implements UserRuleEditor {
   }
 
   /**
-   * Everything this session did, undone: its own rules, its switching off and its
-   * hiding of stored ones.
+   * Everything this session did, undone: its own rules.
    *
    * The listeners are kept — they belong to the wiring, not to the session — and are
    * told, because a private window that is still open (the mode ends with the *last*
@@ -400,10 +442,8 @@ class SessionUserRuleEditor implements UserRuleEditor {
    * the last session must not find it pointing at a different rule in the next one.
    */
   endSession(): void {
-    if (this.#added.length === 0 && this.#disabled.size === 0 && this.#removed.size === 0) return
-    this.#added.length = 0
-    this.#disabled.clear()
-    this.#removed.clear()
+    if (this.#added.length === 0) return
+    this.#added = []
     this.#notify()
   }
 

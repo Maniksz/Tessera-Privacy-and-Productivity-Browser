@@ -47,6 +47,12 @@ const en = {
   /** Said when the line cannot be honoured, with the reason the syntax is refused. */
   invalid:
     'This is not a rule this browser can apply. Request-blocking rules and ##+js(…) countermeasures cannot be added here, and a rule using :has-text() or :upward() has to name a site.',
+  /**
+   * The same refusal in a private window, which can apply fewer rules: its own reach the page as a
+   * stylesheet for that window only, so they can hide an element and nothing else.
+   */
+  invalidPrivate:
+    'A private window can only add rules that hide an element, such as example.com##.banner. Exceptions (#@#) and rules using :has-text() or :upward() can be added in a normal window.',
   duplicate: 'You already have that rule.',
   /**
    * The same rule, switched off — which looks from the outside exactly like the browser ignoring the
@@ -66,7 +72,9 @@ const en = {
   /** Where the rule came from, so a picked rule can be told from a typed one. */
   originPicker: 'from the element picker',
   originManual: 'typed',
-  disabled: 'not applied'
+  disabled: 'not applied',
+  /** A stored rule seen from a private window, which may read it but not change it. */
+  locked: 'saved in your profile, change it in a normal window'
 } satisfies Record<string, string>
 
 export type UserRulesText = typeof en
@@ -79,6 +87,8 @@ const de: UserRulesText = {
   empty: 'Noch keine eigenen Regeln.',
   invalid:
     'Das ist keine Regel, die dieser Browser anwenden kann. Regeln, die Anfragen blockieren, und ##+js(…)-Gegenmaßnahmen lassen sich hier nicht hinzufügen, und eine Regel mit :has-text() oder :upward() muss eine Seite nennen.',
+  invalidPrivate:
+    'Ein privates Fenster kann nur Regeln hinzufügen, die ein Element ausblenden, etwa example.com##.banner. Ausnahmen (#@#) und Regeln mit :has-text() oder :upward() lassen sich in einem normalen Fenster hinzufügen.',
   duplicate: 'Diese Regel hast du schon.',
   duplicateDisabled:
     'Diese Regel hast du schon, sie ist aber ausgeschaltet. Schalte sie in der Liste unten wieder ein.',
@@ -90,7 +100,8 @@ const de: UserRulesText = {
   kindProcedural: 'per Skript gesucht',
   originPicker: 'per Element-Auswahl',
   originManual: 'getippt',
-  disabled: 'nicht angewendet'
+  disabled: 'nicht angewendet',
+  locked: 'im Profil gespeichert, in einem normalen Fenster änderbar'
 }
 
 export function userRulesText(locale: Locale): UserRulesText {

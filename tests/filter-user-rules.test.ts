@@ -72,6 +72,7 @@ describe('describeUserRule', () => {
   it('reads a picker rule through the lists’ own parser', () => {
     expect(describeUserRule('example.com##.ad-slot')).toEqual({
       hosts: ['example.com'],
+      excludedHosts: [],
       selector: '.ad-slot',
       isException: false,
       kind: 'declarative'
@@ -117,6 +118,7 @@ describe('describeUserRule', () => {
     */
     expect(describeUserRule('example.com#?#.ad:has-text(Anzeige)')).toEqual({
       hosts: ['example.com'],
+      excludedHosts: [],
       selector: '.ad',
       isException: false,
       kind: 'procedural'
@@ -621,37 +623,72 @@ describe('a private window', () => {
     expect(editor.list().map((rule) => rule.text)).toEqual(['example.com##.stored'])
   })
 
-  it('can switch a stored rule off without the file changing', async () => {
-    // The escape hatch has to work in a private window too — a page broken by a rule is
-    // broken there as well — and it must not become a write.
+  it('may not switch a stored rule off, which the page would go on applying', async () => {
+    /*
+      The stored rules reach every page through the engine, which a private session cannot speak to. A
+      switch-off recorded here was listed as off while the element stayed hidden — the list and the page
+      disagreeing — so the stored rules are the profile's to change, from a normal window.
+    */
     const { path, store, editor } = await privateEditor()
     const stored = store
       .editorFor('normal')
       .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
     await store.flush()
 
-    expect(editor.setEnabled(stored.id, false)).toBe(true)
-    expect(editor.enabledText()).toBe('')
-    expect(editor.list().map((rule) => rule.enabled)).toEqual([false])
-    // And switching it back on inside the session is the same operation, not a write.
-    expect(editor.setEnabled(stored.id, true)).toBe(true)
-    expect(editor.enabledText()).toBe('example.com##.ad')
-    expect(editor.setEnabled(stored.id, false)).toBe(true)
+    expect(editor.mayChange(stored.id)).toBe(false)
+    expect(editor.setEnabled(stored.id, false)).toBe(false)
+    expect(editor.list().map((rule) => rule.enabled)).toEqual([true])
     await store.flush()
-    const onDisk = await readRules(path)
-    expect(onDisk).toMatchObject({ rules: [{ id: stored.id, enabled: true }] })
-    // And the stored set is untouched, so the next normal window still has it.
-    expect(store.enabledText()).toBe('example.com##.ad')
+    expect(await readRules(path)).toMatchObject({ rules: [{ id: stored.id, enabled: true }] })
   })
 
-  it('can hide a stored rule from the session without deleting it', async () => {
+  it('may not remove a stored rule either', async () => {
     const { store, editor } = await privateEditor()
     const stored = store
       .editorFor('normal')
       .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
-    expect(editor.remove(stored.id)).toBe(true)
-    expect(editor.list()).toEqual([])
+
+    expect(editor.remove(stored.id)).toBe(false)
+    expect(editor.list().map((rule) => rule.id)).toEqual([stored.id])
     expect(store.rules()).toHaveLength(1)
+  })
+
+  it('switches off and removes its own rules', async () => {
+    const { editor } = await privateEditor()
+    const own = editor.add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+
+    expect(editor.mayChange(own.id)).toBe(true)
+    expect(editor.setEnabled(own.id, false)).toBe(true)
+    expect(editor.setEnabled(own.id, false), 'no change, no answer that says one').toBe(false)
+    expect(editor.list().map((rule) => rule.enabled)).toEqual([false])
+    expect(editor.remove(own.id)).toBe(true)
+    expect(editor.list()).toEqual([])
+  })
+
+  it('serves its own enabled rules and none of the stored ones', async () => {
+    // The stored rules come from the engine for every view, private ones included; serving them in the
+    // per-view addition as well applied each one twice.
+    const { store, editor } = await privateEditor()
+    store.editorFor('normal').add({ text: 'example.com##.stored', origin: 'picker' })
+    editor.add({ text: 'example.com##.own', origin: 'picker' })
+    const off = editor.add({ text: 'example.com##.off', origin: 'picker' }).rule!
+    editor.setEnabled(off.id, false)
+
+    expect(store.privateSessionText()).toBe('example.com##.own')
+  })
+
+  it('refuses exceptions and procedural rules, which its page could never apply', async () => {
+    // Its rules reach the page as a per-view stylesheet, which can hide an element and nothing more.
+    const { store, editor } = await privateEditor()
+
+    expect(editor.add({ text: 'example.com#@#.ad', origin: 'manual' }).outcome).toBe('invalid')
+    expect(editor.add({ text: 'example.com##.box:has-text(Ad)', origin: 'manual' }).outcome).toBe(
+      'invalid'
+    )
+    expect(editor.list()).toEqual([])
+    expect(store.editorFor('normal').add({ text: 'example.com#@#.ad', origin: 'manual' }).outcome).toBe(
+      'added'
+    )
   })
 
   it('refuses the same lines the stored set refuses', async () => {
@@ -668,7 +705,7 @@ describe('a private window', () => {
     const stored = store
       .editorFor('normal')
       .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
-    editor.setEnabled(stored.id, false)
+    store.editorFor('normal').setEnabled(stored.id, false)
     const result = editor.add({ text: 'example.com##.ad', origin: 'picker' })
     expect(result.outcome).toBe('duplicate-disabled')
     expect(result.rule?.id).toBe(stored.id)

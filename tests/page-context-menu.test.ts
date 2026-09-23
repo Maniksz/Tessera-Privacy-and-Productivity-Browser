@@ -313,6 +313,7 @@ function blocker(overrides: Partial<BlockerMenuDeps> = {}): BlockerMenuDeps {
     locale: 'en',
     blockedOnPage: 12,
     userRules: userRules(),
+    mayChangeRule: () => true,
     blockerEnabled: true,
     host: 'shop.example',
     blockerEnabledOnSite: true,
@@ -522,6 +523,22 @@ describe('the user\'s own rules, which nothing could show before', () => {
     const onRemoveRules = vi.fn()
     click(rulesSubmenu(blocker({ onRemoveRules })), 'Delete my rules for this site (2)')
     expect(onRemoveRules).toHaveBeenCalledWith(['r1', 'r2'])
+  })
+
+  it('greys out, and does not offer to delete, a rule this window may not change', () => {
+    // A private window lists the profile's stored rules, because the page applies them, and may change
+    // only its own. A switch that changed nothing on the page would be worse than no switch.
+    const onRemoveRules = vi.fn()
+    const menu = rulesSubmenu(blocker({ mayChangeRule: (id) => id === 'r2', onRemoveRules }))
+
+    const [first, second] = menu
+    expect(first?.enabled, 'a stored rule in a private window').toBe(false)
+    expect(second?.enabled).toBe(true)
+    click(menu, 'Delete my rules for this site (1)')
+    expect(onRemoveRules).toHaveBeenCalledWith(['r2'])
+
+    const locked = rulesSubmenu(blocker({ mayChangeRule: () => false }))
+    expect(labels(locked).some((label) => label.startsWith('Delete my rules'))).toBe(false)
   })
 
   it('offers the settings page whether or not there are rules', () => {

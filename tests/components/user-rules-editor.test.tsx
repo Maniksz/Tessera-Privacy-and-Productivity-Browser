@@ -44,7 +44,8 @@ const TEXT: Record<string, string> = {
   kindProcedural: 'matched by script',
   originPicker: 'from the element picker',
   originManual: 'typed',
-  disabled: 'not applied'
+  disabled: 'not applied',
+  locked: 'saved in your profile, change it in a normal window'
 }
 
 function rule(overrides: Partial<EditableUserRule> = {}): EditableUserRule {
@@ -55,6 +56,7 @@ function rule(overrides: Partial<EditableUserRule> = {}): EditableUserRule {
     createdAt: 10,
     origin: 'manual',
     kind: 'declarative',
+    locked: false,
     ...overrides
   }
 }
@@ -287,6 +289,21 @@ describe('the rules already stored', () => {
     await waitFor(() => expect(toggled).toEqual([{ id: 'r1', enabled: false }]))
     // Re-read after the write, so the row shows what was stored rather than what was sent.
     await waitFor(() => expect(screen.getByText(/not applied/)).toBeTruthy())
+  })
+
+  it('shows a locked rule without a switch that works or a delete button', async () => {
+    // A stored rule seen from a private window: the page applies it, so it is listed, and the window may
+    // not change it, so neither control is offered.
+    const { host } = harness({ rules: [rule({ locked: true })] })
+    await editor(host)
+    await waitFor(() => expect(screen.getByText('example.com##.banner-ad')).toBeTruthy())
+
+    expect(screen.getByLabelText('Apply this rule: example.com##.banner-ad')).toHaveProperty(
+      'disabled',
+      true
+    )
+    expect(screen.queryByLabelText('Delete this rule: example.com##.banner-ad')).toBeNull()
+    expect(screen.getByText(/saved in your profile/)).toBeTruthy()
   })
 
   it('deletes the rule it was asked to', async () => {

@@ -240,6 +240,10 @@ class FakeEditor implements UserRuleEditor {
     return true
   }
 
+  mayChange(): boolean {
+    return true
+  }
+
   list(): UserRule[] {
     return []
   }

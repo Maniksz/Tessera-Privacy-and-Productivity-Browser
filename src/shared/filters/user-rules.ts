@@ -68,6 +68,11 @@ export const MAX_USER_RULE_LENGTH = 512
 export interface UserRuleDetail {
   /** Hosts the rule is scoped to; empty for a rule that applies everywhere. */
   readonly hosts: readonly string[]
+  /**
+   * Hosts the rule is kept off, from `~host` in its domain list — `~example.com##.promo` applies
+   * everywhere but there. Empty for most rules.
+   */
+  readonly excludedHosts: readonly string[]
   readonly selector: string
   /** True for `#@#`: the rule cancels a selector rather than adding one. */
   readonly isException: boolean
@@ -117,12 +122,14 @@ export function describeUserRule(text: string): UserRuleDetail | null {
   const detail: UserRuleDetail[] = [
     ...parsed.cosmetic.map((rule): UserRuleDetail => ({
       hosts: rule.includeHosts,
+      excludedHosts: rule.excludeHosts,
       selector: rule.selector,
       isException: rule.isException,
       kind: 'declarative'
     })),
     ...parsed.procedural.map((rule): UserRuleDetail => ({
       hosts: rule.includeHosts,
+      excludedHosts: rule.excludeHosts,
       // The CSS the chain starts from, which is the part of a procedural rule that reads as a selector.
       selector: rule.selector.css,
       // `#@#` never reaches the procedural parser; an exception is declarative by construction.

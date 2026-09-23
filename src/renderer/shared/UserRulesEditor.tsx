@@ -32,9 +32,13 @@ import { useCoreCall } from './useCoreCall.js'
  * measured budget, and sixteen sentences about filter syntax should not be downloaded by the start page.
  */
 
-/** A rule with what the core worked out about it. `kind` decides which cost the row reports. */
+/**
+ * A rule with what the core worked out about it. `kind` decides which cost the row reports; `locked`
+ * is a stored rule seen from a private window, which lists it and may not change it.
+ */
 export interface EditableUserRule extends UserRule {
   readonly kind: 'declarative' | 'procedural'
+  readonly locked: boolean
 }
 
 /**
@@ -286,6 +290,7 @@ export function UserRulesEditor({
                 type="checkbox"
                 className="field__toggle"
                 checked={rule.enabled}
+                disabled={rule.locked}
                 aria-label={`${word('toggle')}: ${rule.text}`}
                 onChange={(event) => act(() => host.setEnabled(rule.id, event.target.checked))}
               />
@@ -296,20 +301,23 @@ export function UserRulesEditor({
                   {[
                     rule.kind === 'procedural' ? word('kindProcedural') : word('kindDeclarative'),
                     rule.origin === 'picker' ? word('originPicker') : word('originManual'),
-                    rule.enabled ? null : word('disabled')
+                    rule.enabled ? null : word('disabled'),
+                    rule.locked ? word('locked') : null
                   ]
                     .filter((part) => part !== null && part !== '')
                     .join(' · ')}
                 </span>
               </div>
-              <button
-                type="button"
-                className="field__reset"
-                aria-label={`${word('remove')}: ${rule.text}`}
-                onClick={() => act(() => host.remove(rule.id))}
-              >
-                ✕
-              </button>
+              {!rule.locked && (
+                <button
+                  type="button"
+                  className="field__reset"
+                  aria-label={`${word('remove')}: ${rule.text}`}
+                  onClick={() => act(() => host.remove(rule.id))}
+                >
+                  ✕
+                </button>
+              )}
             </li>
           ))}
         </ul>

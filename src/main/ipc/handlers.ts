@@ -90,8 +90,10 @@ export function registerIpcHandlers(deps: {
    * back here and reaches nothing else — not the file, not the normal profile, not the engine's
    * global slot. Every `userrules:*` channel goes through this, reads included (R16).
    */
+  const isPrivateSender = (event: IpcMainInvokeEvent): boolean =>
+    windows.resolve(event)?.privateMode === true
   const editorFor = (event: IpcMainInvokeEvent): UserRuleEditor =>
-    deps.userRules.editorFor(windows.resolve(event)?.privateMode === true ? 'private' : 'normal')
+    deps.userRules.editorFor(isPrivateSender(event) ? 'private' : 'normal')
 
   // The router must know which renderers are the trusted chrome UI before any
   // handler can run; everything else is refused or restricted to the internal
@@ -383,6 +385,8 @@ export function registerIpcHandlers(deps: {
       // profile while hiding the ones the picker had just written in this window — the list and the
       // switch disagreeing about what "my rules" are.
       userRules: editor.list(),
+      // A private window lists the stored rules and may change only its own (see `mayChange`).
+      mayChangeRule: (id) => editor.mayChange(id),
       blockerEnabled: settings.get('privacy.blockerEnabled'),
       host,
       blockerEnabledOnSite: !filteringExemptFor(state.url, exemptSites),
@@ -438,14 +442,29 @@ export function registerIpcHandlers(deps: {
     `repairUserRules`; the editor shows it until then, which is better than hiding it.
   */
   const userRulesAnswer = (
-    rules: readonly UserRule[]
-  ): { rules: Array<UserRule & { kind: 'declarative' | 'procedural' }>; text: Record<string, string> } => ({
-    rules: rules.map((rule) => ({
-      ...rule,
-      kind: describeUserRule(rule.text)?.kind ?? 'declarative'
-    })),
-    text: userRulesText(activeLocale(settings.get('appearance.uiLanguage')))
-  })
+    editor: UserRuleEditor,
+    privateMode: boolean
+  ): {
+    rules: Array<UserRule & { kind: 'declarative' | 'procedural'; locked: boolean }>
+    text: Record<string, string>
+  } => {
+    const text = userRulesText(activeLocale(settings.get('appearance.uiLanguage')))
+    return {
+      rules: editor.list().map((rule) => ({
+        ...rule,
+        kind: describeUserRule(rule.text)?.kind ?? 'declarative',
+        // A stored rule seen from a private window: listed, because the page applies it, and not
+        // changeable, because it is the profile's. See `UserRuleEditor.mayChange`.
+        locked: !editor.mayChange(rule.id)
+      })),
+      /*
+        A private window refuses more than the syntax does — exceptions and procedural rules, which
+        its per-view stylesheet cannot carry — so its refusal says so rather than calling a valid line
+        one this browser cannot apply.
+      */
+      text: privateMode ? { ...text, invalid: text.invalidPrivate } : text
+    }
+  }
 
   /*
     Through the mode-bound editor, like the three channels that write (R16).
@@ -455,7 +474,9 @@ export function registerIpcHandlers(deps: {
     everything except the rule they had just made — and offered to delete rules belonging to a profile
     that window is not allowed to touch. One editor per mode, read and written through the same seam.
   */
-  handle('userrules:list', (_request, event) => userRulesAnswer(editorFor(event).list()))
+  handle('userrules:list', (_request, event) =>
+    userRulesAnswer(editorFor(event), isPrivateSender(event))
+  )
   /*
     Through the mode-bound editor like the other two, so a private window's settings page writes nothing
     into the rules the normal profile keeps.

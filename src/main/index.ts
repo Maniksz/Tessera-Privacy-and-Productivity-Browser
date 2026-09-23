@@ -584,13 +584,14 @@ async function main(): Promise<void> {
       view. Asking the window each time cannot be forgotten.
 
       `null` for an ordinary window, and not because it has nothing to say — its rules are the stored
-      ones, which every view already gets from the engine. Answering with them here would serve them
-      twice.
+      ones, which every view already gets from the engine. A private window's answer leaves them out for
+      the same reason: its views get them from the engine too, and answering with the whole list served
+      each one twice.
     */
     sessionStylesFor: (contents) => {
       const controller = windows?.controllerForWebContents(contents.id)
       if (controller?.privateMode !== true) return null
-      return userRules?.editorFor('private').enabledText() ?? null
+      return userRules?.privateSessionText() ?? null
     }
   })
   cosmeticInjector.install()

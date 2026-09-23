@@ -74,7 +74,8 @@ export const ADDITION_REFUSALS = [
    */
   'procedural',
   /**
-   * A good rule, scoped to a host this document is not.
+   * A good rule, scoped to a host this document is not — or kept off this one by a `~host` in its
+   * domain list.
    *
    * R20 from the other side: a preview cannot follow the page. The view navigates, the injector
    * re-serves, and the rule the picker is still holding no longer belongs to what is open.
@@ -235,7 +236,10 @@ function readLine(line: string, chain: ReadonlySet<string>): LineVerdict {
   // name this one, matched against the host's parent domains exactly as `cosmeticSelectorsFor`
   // matches a list's rules — a rule for `example.com` applies on `www.example.com`.
   const scoped = detail.hosts.length > 0 && !detail.hosts.some((host) => chain.has(host))
-  return scoped
+  // And a `~host` keeps it off that host and below, as the engine's own matching does
+  // (`isExcluded` in cosmetic.ts) — so the same line behaves the same in a private window.
+  const excluded = detail.excludedHosts.some((host) => chain.has(host))
+  return scoped || excluded
     ? { taken: false, reason: 'other-host' }
     : { taken: true, selector: detail.selector }
 }

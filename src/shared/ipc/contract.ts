@@ -772,7 +772,7 @@ export const invokeContract = {
     request: nothing,
     response: z.object({
       rules: z.array(
-        userRuleSchema.extend({ kind: z.enum(['declarative', 'procedural']) })
+        userRuleSchema.extend({ kind: z.enum(['declarative', 'procedural']), locked: z.boolean() })
       ),
       text: z.record(z.string(), z.string())
     })

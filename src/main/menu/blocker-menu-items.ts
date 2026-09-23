@@ -87,6 +87,11 @@ export interface BlockerMenuDeps {
   blockedOnPage: number
   /** Every rule the user has, of which only this site's are listed. */
   userRules: readonly UserRule[]
+  /**
+   * Whether the menu may switch a rule off or remove it. False for a stored rule in a private window,
+   * which lists it — the page applies it — without being allowed to change it.
+   */
+  mayChangeRule(id: string): boolean
   /** False when the blocker is off entirely — picking an element would write a rule nothing applies. */
   blockerEnabled: boolean
   /**
@@ -224,17 +229,22 @@ function myRulesSubmenu(
     label: ruleMenuLabel(rule.text),
     type: 'checkbox',
     checked: rule.enabled,
+    // Shown greyed rather than hidden: the rule is applied on this page, and a list without it would
+    // leave the user looking for what hides the element.
+    enabled: deps.mayChangeRule(rule.id),
     click: () => deps.onSetRuleEnabled(rule.id, !rule.enabled)
   }))
 
-  items.push(
-    { type: 'separator' },
-    {
-      label: t('blocker.forgetSiteRules', { count: rules.length }),
-      click: () => deps.onRemoveRules(rules.map((rule) => rule.id))
-    },
-    { label: t('blocker.openSettings'), click: () => deps.onOpenSettings() }
-  )
+  // Only the rules this menu may remove, so the count on the item is what it will actually do.
+  const removable = rules.filter((rule) => deps.mayChangeRule(rule.id))
+  items.push({ type: 'separator' })
+  if (removable.length > 0) {
+    items.push({
+      label: t('blocker.forgetSiteRules', { count: removable.length }),
+      click: () => deps.onRemoveRules(removable.map((rule) => rule.id))
+    })
+  }
+  items.push({ label: t('blocker.openSettings'), click: () => deps.onOpenSettings() })
 
   return items
 }

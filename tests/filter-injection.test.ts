@@ -406,6 +406,21 @@ describe('what a view’s addition is not allowed to be', () => {
     ])
   })
 
+  it('keeps a rule off a host its domain list excludes, as the engine does', () => {
+    // `~host` is honoured by the engine's matching; the per-view path dropped it, so the same line hid
+    // things in a private window that it hid nowhere else.
+    const on = (documentUrl: string, preview: string): string | null =>
+      viewStylesheet({ documentUrl, hostStyles: null, preview }).css
+
+    expect(on('https://example.com/', '~example.com##.promo')).toBeNull()
+    expect(on('https://www.example.com/', '~example.com##.promo'), 'a subdomain is excluded too').toBeNull()
+    expect(on('https://other.test/', '~example.com##.promo')).toContain('.promo')
+
+    const scoped = 'example.com,~shop.example.com##.x'
+    expect(on('https://shop.example.com/', scoped)).toBeNull()
+    expect(on('https://www.example.com/', scoped)).toContain('.x')
+  })
+
   it('has no host to match a scoped rule against on a document that has none', () => {
     const result = viewStylesheet({
       documentUrl: 'about:blank',
@@ -739,7 +754,7 @@ describe('a private window’s own rules, through the store the core uses', () =
       scriptletsFor: () => [],
       proceduralFor: () => [],
       sessionStylesFor: (contents) =>
-        privateViews.has(contents.id) ? store.editorFor('private').enabledText() : null
+        privateViews.has(contents.id) ? store.privateSessionText() : null
     })
     injector.install()
     return injector
@@ -776,6 +791,23 @@ describe('a private window’s own rules, through the store the core uses', () =
     expect(engine.userRuleCount).toBe(0)
     await store.flush()
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ version: 1, rules: [] })
+  })
+
+  it('serves a stored rule to a private window once, from the engine, like any other window', async () => {
+    // The per-view addition used to carry the stored rules as well, so a private window's page got each
+    // of them twice — and a switch-off in the session changed the list and neither copy.
+    const { store } = await storeInTemp()
+    const engine = engineFor()
+    store.editorFor('normal').add({ text: 'example.com##.stored-row', origin: 'picker' })
+    engine.replaceUserRules(store.enabledText())
+    injectorOver(engine, store, new Set([1]))
+
+    const inPrivateWindow = viewOn(DOCUMENT, 1)
+    const inNormalWindow = viewOn(DOCUMENT, 2)
+    const served = inNormalWindow.ask()
+
+    expect(served).toContain('.stored-row')
+    expect(inPrivateWindow.ask()).toBe(served)
   })
 
   it('serves them to a tab opened later, and takes them back when the session ends', async () => {

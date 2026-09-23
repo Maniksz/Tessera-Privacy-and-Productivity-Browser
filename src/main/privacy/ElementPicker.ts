@@ -91,8 +91,9 @@ import type { UserRuleEditor } from '../data/UserRuleStore.js'
  *
  * `duplicate-disabled` names a rule that is already stored and switched off, and the bar's route out
  * of it is the rule manager. In a *private* window that route cannot finish the job: the session
- * editor is an overlay that adds and masks, and switching a rule stored on disk back on is a write to
- * the stored set, which a private window may not make. So the rule stays off there. The wording sends
+ * editor adds rules of its own and changes only those, and switching a rule stored on disk back on is
+ * a write to the stored set, which a private window may not make — the rule manager shows it there as
+ * the profile's, without a switch. So the rule stays off there. The wording sends
  * the user to their rules rather than claiming a switch that would not take, and this is the note
  * saying why rather than a promise nobody could keep.
  */
