@@ -1,4 +1,4 @@
-import { internalUrl } from '../product.js'
+import { internalUrl, queryParamOf } from '../product.js'
 import { registrableDomain, registrableDomainOfUrl } from '../url/domain.js'
 
 /**
@@ -356,15 +356,6 @@ export function faviconSiteOf(url: string): string | null {
   const site = queryParamOf(url, FAVICON_SITE_PARAM)
   if (site === null) return null
   return faviconDomainKey(site)
-}
-
-/** One query parameter of an address, or `null` when it is absent or the address is not one. */
-function queryParamOf(url: string, name: string): string | null {
-  try {
-    return new URL(url).searchParams.get(name)
-  } catch {
-    return null
-  }
 }
 
 // --- choosing which candidate to follow --------------------------------------

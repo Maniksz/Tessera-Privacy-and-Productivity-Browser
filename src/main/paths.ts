@@ -215,6 +215,19 @@ export function filterListCacheDir(): string {
  * reset the baseline would reset the check with it. Not beside the filter lists either: their store
  * prunes every file its manifest does not name.
  */
+/**
+ * The note a quit leaves when its clearing did not finish, read and removed at the next start.
+ *
+ * A file of its own rather than a key in one that exists. Not `settings.json`: that is encrypted and
+ * is itself one of the writes the same shutdown is racing. Not `startup-flags.json`: every settings
+ * change rewrites it from the settings alone and would drop the note. Unencrypted, like the flags,
+ * and for the same reason — it holds category names such as `cookies`, which say that the user
+ * clears on exit and nothing about what they browsed.
+ */
+export function pendingClearFile(): string {
+  return join(userDataDir(), 'clear-on-exit-pending.json')
+}
+
 export function publicSuffixDir(): string {
   return join(userDataDir(), PUBLIC_SUFFIX_DIRNAME)
 }

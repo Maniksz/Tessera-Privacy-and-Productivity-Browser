@@ -1,6 +1,7 @@
 import { readFile, readdir, rm } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname } from 'node:path'
 import {
+  removeMatching,
   removeTempFilesOf,
   writeFileAtomically,
   type AtomicFileSystem,
@@ -135,12 +136,11 @@ export async function removeCopiesOf(
 ): Promise<void> {
   await removeTempFilesOf(filePath, fs.writer)
   const prefix = `${basename(filePath)}.`
-  const directory = dirname(filePath)
-  for (const name of await namesIn(directory, fs)) {
-    if (name.startsWith(prefix) && COPY_SUFFIX.test(name.slice(prefix.length))) {
-      await fs.rm(join(directory, name), { force: true })
-    }
-  }
+  await removeMatching(
+    dirname(filePath),
+    (name) => name.startsWith(prefix) && COPY_SUFFIX.test(name.slice(prefix.length)),
+    fs
+  )
 }
 
 /** Owner-only, like the files they copy, through the injected writer when there is one. */

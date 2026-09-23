@@ -160,10 +160,14 @@ export async function removeTempFilesIn(
   await removeMatching(directory, (name) => name.endsWith('.tmp'), fs)
 }
 
-async function removeMatching(
+/**
+ * Removes every file in `directory` whose name `matches`; nothing when the directory does not exist.
+ * Shared with `quarantine.ts`, whose copies are swept the same way.
+ */
+export async function removeMatching(
   directory: string,
   matches: (name: string) => boolean,
-  fs: AtomicFileSystem
+  fs: Pick<AtomicFileSystem, 'readdir' | 'rm'> = nodeFileSystem
 ): Promise<void> {
   let names: string[]
   try {

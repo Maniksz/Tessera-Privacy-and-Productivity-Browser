@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { domainToASCII, pathToFileURL } from 'node:url'
 import {
@@ -51,6 +50,7 @@ import {
   permissionsFile,
   passwordsFile,
   passwordVaultKeyFile,
+  pendingClearFile,
   publicSuffixDir,
   quickLinksFile,
   sessionStateFile,
@@ -59,7 +59,6 @@ import {
   tabGroupsFile,
   thumbnailCacheDir,
   unencryptedDataNoticeFile,
-  userDataDir,
   userRulesFile
 } from './paths.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
@@ -403,7 +402,7 @@ async function main(): Promise<void> {
   registerAsDefaultBrowser()
 
   quickLinks = await QuickLinkStore.open({ filePath: quickLinksFile(), codec: protection.codec })
-  flushOnExit.push(() => quickLinks?.flush() ?? Promise.resolve(), 'quick links')
+  flushOnExit.push(() => quickLinks?.flush() ?? Promise.resolve(), 'quicklinks')
   warnAboutStoreLoad('quicklinks', quickLinks.loadReport)
   if (quickLinks.recoveredFromInvalidFile) {
     console.warn('[quicklinks] file could not be used; started from an empty set')
@@ -456,7 +455,7 @@ async function main(): Promise<void> {
   settings.onChange(({ snapshot }) => persistStartupFlags(snapshot))
 
   tabGroups = await TabGroupStore.open({ filePath: tabGroupsFile(), codec: protection.codec })
-  flushOnExit.push(() => tabGroups?.flush() ?? Promise.resolve(), 'tab groups')
+  flushOnExit.push(() => tabGroups?.flush() ?? Promise.resolve(), 'tabgroups')
   warnAboutStoreLoad('tabgroups', tabGroups.loadReport)
   if (tabGroups.recoveredFromInvalidFile) {
     console.warn('[tabgroups] file could not be used; started with no groups')
@@ -694,7 +693,7 @@ async function main(): Promise<void> {
     hand-made rule changes far more often than a published list does.
   */
   userRules = await UserRuleStore.open({ filePath: userRulesFile(), codec: protection.codec })
-  flushOnExit.push(() => userRules?.flush() ?? Promise.resolve(), 'user rules')
+  flushOnExit.push(() => userRules?.flush() ?? Promise.resolve(), 'user-rules')
   warnAboutStoreLoad('user-rules', userRules.loadReport)
   if (userRules.recoveredFromInvalidFile) {
     // Worth a warning rather than a shrug: these are rules the user made by hand, and nothing else
@@ -1279,18 +1278,6 @@ function warnAboutStoreLoad(label: string, report: StoreLoadReport): void {
   if (message !== null) console.warn(`[${label}] ${message}`)
 }
 
-/**
- * The note a quit leaves when its clearing did not finish, read and removed at the next start.
- *
- * A file of its own rather than a key in one that exists. Not `settings.json`: that is encrypted and
- * is itself one of the writes the same shutdown is racing. Not `startup-flags.json`: every settings
- * change rewrites it from the settings alone and would drop the note. Unencrypted, like the flags,
- * and for the same reason — it holds category names such as `cookies`, which say that the user
- * clears on exit and nothing about what they browsed.
- */
-function pendingClearFile(): string {
-  return join(userDataDir(), 'clear-on-exit-pending.json')
-}
 
 /**
  * What a note is read as when it cannot be read: everything `clearDataOnExit` knows how to clear.
