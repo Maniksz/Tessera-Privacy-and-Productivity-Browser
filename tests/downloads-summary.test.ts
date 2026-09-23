@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DownloadEntry, DownloadState } from '@shared/downloads/model.js'
 import { summarizeWindowDownloads } from '@shared/downloads/summary.js'
+import { downloadEntry } from './download-fakes.js'
 
 /**
  * What the toolbar's download button says, for one window.
@@ -16,21 +17,17 @@ let nextId = 0
 
 function entry(overrides: Partial<DownloadEntry> & { state: DownloadState }): DownloadEntry {
   nextId += 1
-  return {
-    id: `d${String(nextId)}`,
+  return downloadEntry(`d${String(nextId)}`, {
     url: 'https://example.com/file.zip',
     fileName: 'file.zip',
     savePath: '/downloads/file.zip',
-    mimeType: 'application/zip',
     totalBytes: 100,
     receivedBytes: 0,
     startedAt: 1_000,
-    endedAt: null,
-    interruptReason: '',
     onDisk: true,
     canPause: false,
     ...overrides
-  }
+  })
 }
 
 function startedHere(...entries: DownloadEntry[]): ReadonlySet<string> {

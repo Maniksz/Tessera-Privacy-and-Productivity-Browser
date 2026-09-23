@@ -8,6 +8,7 @@ import {
   type DownloadHandlerManager,
   type DownloadHandlerWindow
 } from '@main/ipc/download-handlers.js'
+import { downloadEntry } from './download-fakes.js'
 
 /**
  * The `downloads:*` handler bodies.
@@ -22,22 +23,18 @@ import {
 const T0 = 1_700_000_000_000
 
 function entry(id: string, overrides: Partial<DownloadEntry> = {}): DownloadEntry {
-  return {
-    id,
+  return downloadEntry(id, {
     url: `https://example.com/${id}.zip`,
-    fileName: `${id}.zip`,
     savePath: `/tmp/${id}.zip`,
-    mimeType: 'application/zip',
     totalBytes: 100,
     receivedBytes: 100,
     state: 'completed',
     startedAt: T0,
     endedAt: T0 + 1,
-    interruptReason: '',
     onDisk: true,
     canPause: false,
     ...overrides
-  }
+  })
 }
 
 interface FakeManager extends DownloadHandlerManager {

@@ -1,6 +1,10 @@
 import type { IpcMainInvokeEvent } from 'electron'
 import type { DownloadEntry, DownloadState } from '@shared/downloads/model.js'
-import { summarizeWindowDownloads, type DownloadButtonSummary } from '@shared/downloads/summary.js'
+import {
+  NO_DOWNLOAD_BUTTON,
+  summarizeWindowDownloads,
+  type DownloadButtonSummary
+} from '@shared/downloads/summary.js'
 import type { EventPayload, InvokeHandlerArg, InvokeResponse } from '@shared/ipc/contract.js'
 import type { DownloadViewer } from '../downloads/DownloadManager.js'
 
@@ -176,9 +180,6 @@ interface ButtonMemory {
   last: DownloadButtonSummary
 }
 
-/** What a chrome UI shows before it has been told anything: no button. */
-const NOTHING_SENT: DownloadButtonSummary = { visible: false, activity: null, marker: null }
-
 function sameSummary(left: DownloadButtonSummary, right: DownloadButtonSummary): boolean {
   if (left.visible !== right.visible || left.marker !== right.marker) return false
   if (left.activity === null || right.activity === null) return left.activity === right.activity
@@ -210,7 +211,8 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   ): { summary: DownloadButtonSummary; remembered: ButtonMemory } => {
     let remembered = memory.get(window)
     if (remembered === undefined) {
-      remembered = { states: new Map(), last: NOTHING_SENT }
+      // What a chrome UI shows before it has been told anything: no button.
+      remembered = { states: new Map(), last: NO_DOWNLOAD_BUTTON }
       memory.set(window, remembered)
     }
     const startedHere = downloads.idsStartedIn(window.viewer.windowId)
@@ -332,9 +334,21 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
     the same reason.
   */
   downloads.onChange(() => {
+    /*
+      One snapshot per session, not per window. What `snapshot` answers depends on the viewer's session
+      alone — the stored list, plus the live rows that arrived on that session — so every window of the
+      shared default session would otherwise rebuild the same list. Local to one firing, so nothing
+      outlives the moment it describes; and safe to share because nothing below edits the array or
+      its rows.
+    */
+    const bySession = new Map<DownloadViewer['session'], DownloadEntry[]>()
     for (const window of windows.downloadWindows) {
       // One snapshot for all three, so the page, the panel and the button describe the same moment.
-      const entries = downloads.snapshot(window.viewer)
+      let entries = bySession.get(window.viewer.session)
+      if (entries === undefined) {
+        entries = downloads.snapshot(window.viewer)
+        bySession.set(window.viewer.session, entries)
+      }
       window.emitToInternalPages('downloads:changed', {
         downloads: entries,
         privateWindow: window.viewer.mode === 'private'

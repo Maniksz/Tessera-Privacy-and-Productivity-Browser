@@ -8,6 +8,7 @@ import {
   type DownloadEntry
 } from '@shared/downloads/model.js'
 import {
+  DOWNLOAD_ACTION_GLYPHS,
   DOWNLOAD_STATE_LABELS,
   downloadNumberFormat,
   downloadProgressText
@@ -216,14 +217,14 @@ export function DownloadsPage(): React.ReactNode {
                       aria-label={tp('downloads.open', { name: entry.fileName })}
                       onClick={() => openEntry(entry)}
                     >
-                      ⤢
+                      {DOWNLOAD_ACTION_GLYPHS.open}
                     </button>
                     <button
                       type="button"
                       aria-label={tp('downloads.reveal', { name: entry.fileName })}
                       onClick={() => revealEntry(entry)}
                     >
-                      📂
+                      {DOWNLOAD_ACTION_GLYPHS.reveal}
                     </button>
                   </>
                 )}
@@ -238,7 +239,7 @@ export function DownloadsPage(): React.ReactNode {
                       })
                     }
                   >
-                    ⏸
+                    {DOWNLOAD_ACTION_GLYPHS.pause}
                   </button>
                 )}
 
@@ -256,7 +257,7 @@ export function DownloadsPage(): React.ReactNode {
                       })
                     }
                   >
-                    ▶
+                    {DOWNLOAD_ACTION_GLYPHS.resume}
                   </button>
                 )}
 
@@ -271,7 +272,7 @@ export function DownloadsPage(): React.ReactNode {
                       })
                     }
                   >
-                    ⏹
+                    {DOWNLOAD_ACTION_GLYPHS.cancel}
                   </button>
                 )}
 
@@ -285,7 +286,7 @@ export function DownloadsPage(): React.ReactNode {
                     })
                   }
                 >
-                  ×
+                  {DOWNLOAD_ACTION_GLYPHS.remove}
                 </button>
               </span>
             </li>

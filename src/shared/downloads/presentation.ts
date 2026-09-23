@@ -82,6 +82,25 @@ export const DOWNLOAD_STATE_LABELS = {
   interrupted: 'downloads.state.interrupted'
 } as const satisfies Readonly<Record<DownloadState, `downloads.state.${DownloadState}`>>
 
+/** What a row can offer, on the page and in the panel alike. */
+export type DownloadAction = 'open' | 'reveal' | 'pause' | 'resume' | 'cancel' | 'remove'
+
+/**
+ * The glyph each action's button shows.
+ *
+ * Here for the reason the words are: the page and the panel draw the same buttons, and one action
+ * that looked different in the two places would read as two different actions. The button's name is
+ * its translated `aria-label`; the glyph is only the picture.
+ */
+export const DOWNLOAD_ACTION_GLYPHS: Readonly<Record<DownloadAction, string>> = {
+  open: '⤢',
+  reveal: '📂',
+  pause: '⏸',
+  resume: '▶',
+  cancel: '⏹',
+  remove: '×'
+}
+
 /** Every key the text functions below ask a translator for. */
 export type DownloadTextKey = 'downloads.byteSize' | 'downloads.progress' | 'downloads.progressUnknown'
 

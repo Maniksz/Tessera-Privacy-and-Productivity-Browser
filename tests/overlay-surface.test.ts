@@ -28,12 +28,12 @@ import {
   type PickerBarPresentation,
   type TileBarPresentation
 } from '@shared/overlay/surface.js'
-import type { DownloadEntry } from '@shared/downloads/model.js'
 import { invokeContract, eventContract } from '@shared/ipc/contract.js'
 import { TILE_BAR_HEIGHT } from '@shared/split/tile-bar.js'
 import { FIND_BAR_HEIGHT, FIND_BAR_WIDTH } from '@shared/find/bar.js'
 import { PICKER_BAR_HEIGHT, PICKER_BAR_WIDTH } from '@shared/overlay/picker-bar.js'
 import { MIN_MASTER_PASSWORD_LENGTH } from '@shared/passwords/vault.js'
+import { downloadEntry } from './download-fakes.js'
 
 /**
  * How much of the window the overlay layer takes, and who gets it when two things want it.
@@ -84,26 +84,6 @@ function pickerBarSample(overrides: Partial<PickerBarPresentation> = {}): Picker
   if (sample.kind !== 'picker-bar')
     throw new Error('the picker-bar sample is no longer a picker bar')
   return { ...sample, ...overrides }
-}
-
-/** One row of the downloads list, as the core would put it in the panel. */
-function download(id: string, overrides: Partial<DownloadEntry> = {}): DownloadEntry {
-  return {
-    id,
-    url: `https://files.example/${id}.zip`,
-    fileName: `${id}.zip`,
-    savePath: `/downloads/${id}.zip`,
-    mimeType: 'application/zip',
-    totalBytes: 1000,
-    receivedBytes: 400,
-    state: 'progressing',
-    startedAt: 1_700_000_000_000,
-    endedAt: null,
-    interruptReason: '',
-    onDisk: false,
-    canPause: true,
-    ...overrides
-  }
 }
 
 const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
@@ -194,7 +174,7 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
   'downloads-panel': {
     kind: 'downloads-panel',
     anchor: { x: 1300, y: 44, width: 32, height: 32 },
-    downloads: [download('a')]
+    downloads: [downloadEntry('a')]
   }
 }
 
@@ -625,7 +605,10 @@ describe('the downloads panel', () => {
 
   it('is one surface however its rows change', () => {
     const later = downloadsPanelSample({
-      downloads: [download('b'), download('a', { state: 'completed', receivedBytes: 1000 })]
+      downloads: [
+        downloadEntry('b'),
+        downloadEntry('a', { state: 'completed', receivedBytes: 1000 })
+      ]
     })
     expect(surfaceIdentity(later)).toBe(surfaceIdentity(SAMPLES['downloads-panel']))
   })
@@ -643,7 +626,7 @@ describe('whether an update takes the keyboard again', () => {
   })
 
   it('does not focus it again when the same panel is re-presented with fresh rows (KTD8)', () => {
-    const update = downloadsPanelSample({ downloads: [download('a', { receivedBytes: 900 })] })
+    const update = downloadsPanelSample({ downloads: [downloadEntry('a', { receivedBytes: 900 })] })
     expect(movesFocus(update, SAMPLES['downloads-panel'])).toBe(false)
   })
 
@@ -666,7 +649,7 @@ describe('whether an update takes the keyboard again', () => {
 
 describe('the panel the core builds', () => {
   const anchor = { x: 1300, y: 44, width: 32, height: 32 }
-  const many = ['g', 'f', 'e', 'd', 'c', 'b', 'a'].map((id) => download(id))
+  const many = ['g', 'f', 'e', 'd', 'c', 'b', 'a'].map((id) => downloadEntry(id))
 
   it('lists the newest few of the list it is given, in its order', () => {
     const panel = downloadsPanelPresentation(anchor, many)
@@ -705,7 +688,8 @@ describe('what the chrome UI may send, and what the layer is sent', () => {
 
   it('refuses a request that brings its own rows (KTD2)', () => {
     expect(
-      request.safeParse({ kind: 'downloads-panel', anchor, downloads: [download('a')] }).success
+      request.safeParse({ kind: 'downloads-panel', anchor, downloads: [downloadEntry('a')] })
+        .success
     ).toBe(false)
   })
 
@@ -720,7 +704,7 @@ describe('what the chrome UI may send, and what the layer is sent', () => {
     expect(presented.safeParse({ presentation: SAMPLES['downloads-panel'] }).success).toBe(true)
     const tooMany = downloadsPanelSample({
       downloads: Array.from({ length: DOWNLOADS_PANEL_ROWS + 1 }, (_, index) =>
-        download(`${index}`)
+        downloadEntry(`${index}`)
       )
     })
     expect(presented.safeParse({ presentation: tooMany }).success).toBe(false)

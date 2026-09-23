@@ -88,7 +88,18 @@ export interface DownloadButtonSummary {
   marker: DownloadMarker | null
 }
 
-const HIDDEN: DownloadButtonSummary = { visible: false, activity: null, marker: null }
+/**
+ * The summary that says "no button": nothing started here, or nothing of it still in the list.
+ *
+ * One frozen object, shared by every side that has to name it — this function's answer, the IPC layer's
+ * "nothing sent yet", and what the chrome UI draws before the core has said anything. Compared by value
+ * wherever it is compared, so being the same object is a convenience and never a signal.
+ */
+export const NO_DOWNLOAD_BUTTON: Readonly<DownloadButtonSummary> = Object.freeze({
+  visible: false,
+  activity: null,
+  marker: null
+})
 
 const NO_OBSERVATIONS: ReadonlyMap<string, number> = new Map()
 
@@ -109,7 +120,7 @@ export function summarizeWindowDownloads(
   stateChangedAt: ReadonlyMap<string, number> = NO_OBSERVATIONS
 ): DownloadButtonSummary {
   const mine = entries.filter((entry) => startedHere.has(entry.id))
-  if (mine.length === 0) return HIDDEN
+  if (mine.length === 0) return NO_DOWNLOAD_BUTTON
 
   const running = mine.filter((entry) => entry.state === 'progressing')
   if (running.length > 0) return { visible: true, activity: activityOf(running), marker: null }

@@ -3,6 +3,7 @@ import type {
   DownloadSession,
   DownloadSource
 } from '@main/downloads/DownloadManager.js'
+import type { DownloadEntry } from '@shared/downloads/model.js'
 
 /**
  * A `DownloadItem` and a `Session` as plain objects, for the manager's tests and the download scenarios.
@@ -125,5 +126,32 @@ export class FakeSession implements DownloadSession {
     if (this.#listener === null) throw new Error('nothing attached to this session')
     this.#listener({}, item, source === undefined ? undefined : { id: source })
     return item
+  }
+}
+
+/**
+ * One row of a window's download list, as the core would hand it out.
+ *
+ * Shared for the fakes' own reason: every test that needs a row needs every field of one, and a copy of
+ * the shape per file is a copy per file to update when a field is added. The defaults are an unremarkable
+ * download partway through; a test says what it depends on through `overrides`, which win over everything
+ * here, the id included.
+ */
+export function downloadEntry(id: string, overrides: Partial<DownloadEntry> = {}): DownloadEntry {
+  return {
+    id,
+    url: `https://files.example/${id}.zip`,
+    fileName: `${id}.zip`,
+    savePath: `/downloads/${id}.zip`,
+    mimeType: 'application/zip',
+    totalBytes: 1000,
+    receivedBytes: 400,
+    state: 'progressing',
+    startedAt: 1_700_000_000_000,
+    endedAt: null,
+    interruptReason: '',
+    onDisk: false,
+    canPause: true,
+    ...overrides
   }
 }

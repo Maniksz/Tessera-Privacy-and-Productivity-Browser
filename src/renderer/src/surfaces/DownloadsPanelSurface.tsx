@@ -7,10 +7,12 @@ import {
   type DownloadEntry
 } from '@shared/downloads/model.js'
 import {
+  DOWNLOAD_ACTION_GLYPHS,
   DOWNLOAD_STATE_LABELS,
   downloadNumberFormat,
   downloadProgressText,
-  downloadSizeText
+  downloadSizeText,
+  type DownloadAction
 } from '@shared/downloads/presentation.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { DOWNLOADS_PANEL_ROWS, type DownloadsPanelPresentation } from '@shared/overlay/surface.js'
@@ -51,8 +53,6 @@ import { useI18n } from '../i18n.js'
  */
 
 /** The row's actions, by the key that names them. Each is a `downloads.*` key taking `{name}`. */
-type RowAction = 'open' | 'reveal' | 'pause' | 'resume' | 'cancel' | 'remove'
-
 const ACTION_LABELS = {
   open: 'downloads.open',
   reveal: 'downloads.reveal',
@@ -60,17 +60,7 @@ const ACTION_LABELS = {
   resume: 'downloads.resume',
   cancel: 'downloads.cancel',
   remove: 'downloads.remove'
-} as const satisfies Readonly<Record<RowAction, MessageKey>>
-
-/** The page's own glyphs, so one action looks the same in both places. */
-const ACTION_GLYPHS: Readonly<Record<RowAction, string>> = {
-  open: '⤢',
-  reveal: '📂',
-  pause: '⏸',
-  resume: '▶',
-  cancel: '⏹',
-  remove: '×'
-}
+} as const satisfies Readonly<Record<DownloadAction, MessageKey>>
 
 /**
  * What a row offers, in the order it draws them: the page's rules, plus one of the panel's own.
@@ -80,8 +70,8 @@ const ACTION_GLYPHS: Readonly<Record<RowAction, string>> = {
  * "nothing changed" is not one to put in a panel. Remove is on every row, failed ones included — the page
  * offers it everywhere, and it is how a row that says nothing useful any more goes away.
  */
-function actionsFor(entry: DownloadEntry): RowAction[] {
-  const actions: RowAction[] = []
+function actionsFor(entry: DownloadEntry): DownloadAction[] {
+  const actions: DownloadAction[] = []
   if (canOpenDownload(entry)) actions.push('open', 'reveal')
   if (entry.canPause && entry.state === 'progressing') actions.push('pause')
   if (entry.canPause && entry.state === 'paused') actions.push('resume')
@@ -94,7 +84,7 @@ function actionsFor(entry: DownloadEntry): RowAction[] {
 interface FocusMark {
   id: string
   /** `null` for the row itself. */
-  action: RowAction | null
+  action: DownloadAction | null
   /** The row's position then, for the one case the id cannot answer: the row itself has gone. */
   index: number
 }
@@ -188,7 +178,8 @@ export function DownloadsPanelSurface({
       focusMark.current = null
       return
     }
-    const action = target === row ? null : ((target.dataset.action ?? null) as RowAction | null)
+    const action =
+      target === row ? null : ((target.dataset.action ?? null) as DownloadAction | null)
     const index = [...(panelRef.current?.querySelectorAll(ROW) ?? [])].indexOf(row)
     focusMark.current = { id, action, index }
   }
@@ -239,7 +230,7 @@ export function DownloadsPanelSurface({
   const askForFreshRows = (): Promise<unknown> =>
     invoke('overlay:present', { kind: 'downloads-panel', anchor: presentation.anchor })
 
-  const perform = (action: RowAction, entry: DownloadEntry): void => {
+  const perform = (action: DownloadAction, entry: DownloadEntry): void => {
     const { id } = entry
     run(async () => {
       switch (action) {
@@ -352,7 +343,7 @@ export function DownloadsPanelSurface({
                       title={t(ACTION_LABELS[action], { name: entry.fileName })}
                       onClick={() => perform(action, entry)}
                     >
-                      {ACTION_GLYPHS[action]}
+                      {DOWNLOAD_ACTION_GLYPHS[action]}
                     </button>
                   ))}
                 </span>

@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { DOWNLOAD_STATE_LABELS } from '@shared/downloads/presentation.js'
-import type { DownloadButtonSummary, DownloadMarker } from '@shared/downloads/summary.js'
+import {
+  NO_DOWNLOAD_BUTTON,
+  type DownloadButtonSummary,
+  type DownloadMarker
+} from '@shared/downloads/summary.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import type { OverlayKind, OverlayState } from '@shared/overlay/surface.js'
 import type { Rect } from '@shared/ui/anchor.js'
@@ -51,9 +55,6 @@ export function presentDownloadsPanel(anchor: Rect): void {
   void invoke('overlay:present', { kind: DOWNLOADS_PANEL_KIND, anchor })
 }
 
-/** What the chrome UI draws before the core has said anything: no button. */
-const NO_BUTTON: DownloadButtonSummary = { visible: false, activity: null, marker: null }
-
 /**
  * The window's button summary: the one it has now, then every change.
  *
@@ -64,7 +65,8 @@ const NO_BUTTON: DownloadButtonSummary = { visible: false, activity: null, marke
  * both are simply applied as they come.
  */
 export function useDownloadSummary(): DownloadButtonSummary {
-  const [summary, setSummary] = useState(NO_BUTTON)
+  // What the chrome UI draws before the core has said anything: no button.
+  const [summary, setSummary] = useState<DownloadButtonSummary>(NO_DOWNLOAD_BUTTON)
   useEffect(() => {
     let cancelled = false
     void invoke('downloads:summary').then((current) => {
@@ -148,14 +150,18 @@ export function DownloadsButton({
   if (!summary.visible) return null
 
   const { activity, marker } = summary
-  const label =
-    activity?.kind === 'fraction'
-      ? t('toolbar.downloadsProgress', { percent: percentOf(activity.fraction) })
-      : activity?.kind === 'indeterminate'
-        ? t('toolbar.downloadsStatus', { status: t(DOWNLOAD_STATE_LABELS.progressing) })
-        : marker !== null
-          ? t('toolbar.downloadsStatus', { status: t(MARKER_LABELS[marker]) })
-          : t('downloads.title')
+  // In the order the button draws them: progress first, then the mark, then just its name.
+  const labelOf = (): string => {
+    if (activity?.kind === 'fraction') {
+      return t('toolbar.downloadsProgress', { percent: percentOf(activity.fraction) })
+    }
+    if (activity?.kind === 'indeterminate') {
+      return t('toolbar.downloadsStatus', { status: t(DOWNLOAD_STATE_LABELS.progressing) })
+    }
+    if (marker !== null) return t('toolbar.downloadsStatus', { status: t(MARKER_LABELS[marker]) })
+    return t('downloads.title')
+  }
+  const label = labelOf()
 
   const toggle = (): void => {
     if (open) {
