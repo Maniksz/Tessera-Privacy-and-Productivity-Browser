@@ -743,6 +743,96 @@ describe('the idle lock', () => {
   })
 })
 
+describe('a lock on the way out', () => {
+  /*
+    The last window closing on Windows locks the vault and asks to quit in the same breath, and the
+    quit's flush arrived while the lock was still writing. The lock had already let go of the store,
+    so the flush found nothing to wait for, answered at once, and the process ended mid-write: the
+    password changed a minute before closing the window was not there at the next start (AE7).
+  */
+  it('makes a flush wait until the lock has written the document', async () => {
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    await seedMasterProtected({ profile: where, safeStorage, masterPassword: MASTER })
+    const { vault } = await openVault({ profile: where, safeStorage, debounceMs: 60_000 })
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+
+    // Not awaited, exactly as `window-all-closed` does it.
+    void vault.lock()
+    await vault.flush()
+
+    const written = await readFile(where.documentPath)
+    expect(isSealedDocument(written), 'the flush did not wait for the lock').toBe(true)
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    expect(vault.secretOf('pw-1')).toBe(SECRET)
+  })
+
+  it('makes a flush wait for a lock the idle timer started, too', async () => {
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    await seedMasterProtected({ profile: where, safeStorage, masterPassword: MASTER })
+    const clock = clockAt(T0)
+    const { vault } = await openVault({
+      profile: where,
+      safeStorage,
+      now: clock.now,
+      idleTimeoutMs: 60_000,
+      debounceMs: 60_000
+    })
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+
+    clock.set(T0 + 61_000)
+    vault.sweepIdle()
+    expect(vault.isUnlocked()).toBe(false)
+    await vault.flush()
+
+    const written = await readFile(where.documentPath)
+    expect(isSealedDocument(written), 'the flush did not wait for the lock').toBe(true)
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    expect(vault.secretOf('pw-1')).toBe(SECRET)
+  })
+
+  it('does not zero the key under a lock that is still writing when a second lock arrives', async () => {
+    /*
+      The window closing and the idle timer can both lock within the same moment. The second lock
+      used to find the store already gone and drop the key at once — the very buffer the first lock's
+      pending write was about to seal the document with, which is the "thirty-two zero bytes" loss the
+      order inside `lock` exists to prevent.
+    */
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    await seedMasterProtected({ profile: where, safeStorage, masterPassword: MASTER })
+    const { vault } = await openVault({ profile: where, safeStorage, debounceMs: 60_000 })
+    const locks: string[] = []
+    vault.onLock(() => locks.push('lock'))
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+
+    const first = vault.lock()
+    const second = vault.lock()
+    await second
+    // The second lock finished only after the first had, listeners included.
+    expect(locks).toEqual(['lock', 'lock'])
+    await first
+
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    expect(vault.secretOf('pw-1')).toBe(SECRET)
+  })
+
+  it('answers a flush at once once the lock is over, and flushes an open vault as before', async () => {
+    const { vault, documentPath } = await openVault({ debounceMs: 60_000 })
+    await vault.lock()
+    await vault.flush()
+    expect(await vault.unlock('')).toBe('not-protected')
+
+    expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+    await vault.flush()
+    expect(isSealedDocument(await readFile(documentPath))).toBe(true)
+  })
+})
+
 describe('a vault that cannot be opened', () => {
   it('starts normally and locked when the key file is damaged, and never replaces it', async () => {
     /*

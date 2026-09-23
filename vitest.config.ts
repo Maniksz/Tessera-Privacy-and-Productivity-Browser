@@ -355,6 +355,17 @@ export default defineConfig({
           file or the new one, never half of each, is this module's promise, and every branch in it is
           a failure stage: a floor below all of it would leave room for exactly the stage nobody tested.
         */
+        /*
+          The shutdown sequence: hold a second quit, give up on a write after ten seconds and on the
+          clearing after thirty, leave a note for the next start. Every branch is either a lost last
+          change or a browser that cannot be closed, and each is reachable with an injected timer.
+        */
+        'src/main/shutdown.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         'src/main/data/atomic-write.ts': {
           lines: 100,
           functions: 100,

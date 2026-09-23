@@ -133,6 +133,8 @@ export class PasswordVault implements AutofillVault, ImportTarget {
   #lastActivityAt: number | null = null
   #unreadable = false
   #sweep: ReturnType<typeof setInterval> | null = null
+  /** The lock still writing, if any. See `lock` and `flush`. */
+  #locking: Promise<void> | null = null
 
   private constructor(options: PasswordVaultOptions) {
     this.#options = options
@@ -334,16 +336,46 @@ export class PasswordVault implements AutofillVault, ImportTarget {
    * Closes the vault: the document is written, the store is released, the key is overwritten.
    *
    * The order matters and is easy to get wrong. The store reference is dropped *first*, so no write
-   * can be scheduled while the flush is in flight, and the key is zeroed *last*, because the codec
+   * can be scheduled while the flush is in flight, and the key buffer is zeroed *last*, because the codec
    * holding it is the thing that seals the pending document — zeroing before the flush would encrypt
    * the vault under thirty-two zero bytes and lose it.
+   *
+   * ## Why the running lock is remembered
+   *
+   * The store is gone the moment this is called, but its write is not finished, and two callers need
+   * to know that. `flush` does: the last window closing locks the vault and asks to quit in the same
+   * breath, and a flush that saw no store answered at once and let the process end mid-write — the
+   * password changed a minute earlier was missing at the next start. And a second `lock` does: it
+   * found no store either and zeroed the key straight away, which is the buffer the first lock's
+   * write was about to seal with. So each lock takes the key it will zero at the moment it is called,
+   * and waits for any lock before it, and the latest is kept for `flush` to wait on.
    */
-  async lock(): Promise<void> {
+  lock(): Promise<void> {
     const store = this.#store
+    const key = this.#key
     this.#store = null
+    this.#key = null
     this.#lastActivityAt = null
+    const locking = this.#finishLock(this.#locking, store, key)
+    this.#locking = locking
+    void locking.then(() => {
+      if (this.#locking === locking) this.#locking = null
+    })
+    return locking
+  }
+
+  async #finishLock(
+    previous: Promise<void> | null,
+    store: PasswordStore | null,
+    key: Uint8Array | null
+  ): Promise<void> {
+    // Cannot reject: the store reports a failed write rather than throwing it, and every listener
+    // below is caught. So waiting on it never stops this lock from dropping its own key.
+    if (previous !== null) await previous
     if (store !== null) await store.flush()
-    this.#dropKey()
+    // Zeroed here rather than through `#dropKey`, which would reach whatever key an unlock since has
+    // put in its place. Same reasoning as there about what zeroing is worth.
+    if (key !== null) key.fill(0)
     for (const listener of this.#lockListeners) {
       try {
         listener()
@@ -679,8 +711,16 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     return this.#store?.onChange(listener) ?? ((): void => {})
   }
 
-  flush(): Promise<void> {
-    return this.#store?.flush() ?? Promise.resolve()
+  /**
+   * Writes what is pending, including what a lock still in flight is writing.
+   *
+   * The shutdown's flush of the vault is usually the second half of a lock: see `lock` for why
+   * answering "no store, nothing to do" there lost the last change.
+   */
+  async flush(): Promise<void> {
+    const locking = this.#locking
+    if (locking !== null) await locking
+    await this.#store?.flush()
   }
 
   /** Stops the idle timer. For shutdown, and for a test that must not leave a handle behind. */

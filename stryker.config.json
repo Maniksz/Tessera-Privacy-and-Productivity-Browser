@@ -139,6 +139,7 @@
     "src/main/updates/version.ts",
     "src/shared/gestures/**/*.ts",
     "src/main/startup-flags.ts",
+    "src/main/shutdown.ts",
     "src/shared/media/**/*.ts",
     "src/main/media/**/*.ts",
     "!**/*.d.ts"
