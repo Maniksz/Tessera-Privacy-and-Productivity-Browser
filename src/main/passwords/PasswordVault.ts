@@ -610,6 +610,10 @@ export class PasswordVault implements AutofillVault, ImportTarget {
    */
   async resetVault(confirmation: string): Promise<boolean> {
     if (confirmation !== RESET_VAULT_CONFIRMATION) return false
+    // A lock still writing would rename the old document back in after the deletions below, sealed
+    // under a key the new vault does not have. See `lock`.
+    const locking = this.#locking
+    if (locking !== null) await locking
 
     this.#store = null
     this.#lastActivityAt = null

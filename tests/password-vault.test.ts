@@ -829,6 +829,31 @@ describe('a lock on the way out', () => {
     expect(vault.secretOf('pw-1')).toBe(SECRET)
   })
 
+  it('makes a reset wait until the lock has written, so the old document cannot come back', async () => {
+    /*
+      A reset confirmed while a lock was still writing deleted the document and its temporaries under
+      the lock's feet. The write then renamed the old sealed document into place, and the new key the
+      reset made could not open it: the "start again" left a vault that was unreadable at every start.
+    */
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    await seedMasterProtected({ profile: where, safeStorage, masterPassword: MASTER })
+    const { vault } = await openVault({ profile: where, safeStorage, debounceMs: 60_000 })
+    expect(await vault.unlock(MASTER)).toBe('unlocked')
+    expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+
+    const locking = vault.lock()
+    expect(await vault.resetVault(RESET_VAULT_CONFIRMATION)).toBe(true)
+    await locking
+    await vault.flush()
+
+    // The profile as the next start finds it: the new key, and no document it cannot open.
+    const next = await openVault({ profile: where, safeStorage })
+    expect(next.vault.status().unreadable, 'the old document came back after the reset').toBe(false)
+    expect(next.vault.isUnlocked()).toBe(true)
+    expect(next.vault.list()).toEqual([])
+  })
+
   it('answers a flush at once once the lock is over, and flushes an open vault as before', async () => {
     const { vault, documentPath } = await openVault({ debounceMs: 60_000 })
     await vault.lock()
