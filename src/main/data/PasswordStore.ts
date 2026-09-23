@@ -25,6 +25,8 @@ import {
 } from '@shared/passwords/model.js'
 import type { StoredCredentialState } from '@shared/passwords/save-policy.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 
 /**
  * Persistence for saved passwords.
@@ -65,17 +67,19 @@ import { JsonStore, type DocumentCodec } from './JsonStore.js'
  * What the file must look like to be usable.
  *
  * The same line `HistoryStore` draws: wrong *kinds* of data are rejected, wrong *amounts* are
- * healed. A number where a string belongs means the file is not ours and defaults are the only
- * safe answer. Too many entries, or a duplicate, is a quantity — and since a validation failure
- * throws the whole document away, a `.max()` here would turn "grew larger than expected" into
- * "lost every password the user had". Those go to `repairPasswords` instead.
+ * healed. Too many entries, or a duplicate, is a quantity — and a `.max()` here would turn "grew
+ * larger than expected" into "lost the passwords past the limit". Those go to `repairPasswords`.
  *
- * `password: z.string().min(1)` is the one exception, and it is a kind rather than an amount: an
- * entry with an empty password cannot be filled, so it is not a smaller credential but a
- * different thing. `repairPasswords` drops those, so this only has to be strict enough to stop a
- * hand-written `null` becoming a credential.
+ * A wrong kind costs the entry that has it and not the vault (R3): `credentials` is parsed entry by
+ * entry, and one that fails — a number where a string belongs, a field a newer version changed — is
+ * kept raw and written back at its index, and never listed, filled or compared. See
+ * `main/data/store-load.ts`. Only a wrong envelope makes the file one this build cannot use.
+ *
+ * `password: z.string().min(1)` is a kind rather than an amount: an entry with an empty password
+ * cannot be filled, so it is not a smaller credential but a different thing, and it is kept raw
+ * like any other entry this build cannot interpret.
  */
-const credentialSchema = z.object({
+const credentialSchema = z.looseObject({
   id: z.string().min(1),
   origin: z.string().min(1),
   username: z.string(),
@@ -85,7 +89,7 @@ const credentialSchema = z.object({
   lastUsedAt: z.number().int().nonnegative().nullable()
 })
 
-const passwordDocumentSchema = z.object({
+const passwordDocumentSchema = z.looseObject({
   version: z.literal(1),
   credentials: z.array(credentialSchema),
   /*
@@ -104,8 +108,8 @@ const passwordDocumentSchema = z.object({
  * live next to the interface because the passwords page is a renderer and zod must not reach its
  * bundle.
  */
-type SchemaCredential = z.output<typeof credentialSchema>
-type SchemaDocument = z.output<typeof passwordDocumentSchema>
+type SchemaCredential = KnownFields<z.output<typeof credentialSchema>>
+type SchemaDocument = KnownFields<z.output<typeof passwordDocumentSchema>>
 
 const _credentialMatchesModel: SchemaCredential = null as unknown as PasswordCredential
 const _modelMatchesCredential: PasswordCredential = null as unknown as SchemaCredential
@@ -145,6 +149,13 @@ export class PasswordStore {
       filePath: options.filePath,
       schema: passwordDocumentSchema,
       fallback: emptyPasswordDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      // What the user made and cannot get back: a newer file is shown read-only and every write
+      // refused, rather than accepted and lost at exit. See `StoreCriticality`.
+      criticality: 'critical',
+      // One broken credential costs that credential; see `credentialSchema`.
+      tolerant: { field: 'credentials', entry: credentialSchema },
       // A file written by an older build, edited by hand, or cut short by a crash must not leave
       // two entries for one account or two entries with one id — the first makes autofill offer a
       // password that no longer works, the second makes "reveal this one" ambiguous.
@@ -239,6 +250,9 @@ export class PasswordStore {
    */
   writerFor(mode: BrowsingMode): PasswordWriter {
     if (mode === 'private') return discardingPasswordWriter
+    // A read-only vault gets the same writer, for the reason a private window does: autofill's save
+    // bar then records nothing and reports `'rejected'`, rather than throwing mid-fill.
+    if (this.#store.readOnly) return discardingPasswordWriter
     return {
       save: (input: SaveCredentialInput) => this.#save(input),
       neverSaveFor: (url: string) => {
@@ -266,6 +280,8 @@ export class PasswordStore {
    * anything.
    */
   create(input: SaveCredentialInput): SaveOutcome {
+    // `'rejected'` is the answer the page already renders as "not saved", which is the truth.
+    if (this.#store.readOnly) return 'rejected'
     return this.#save(input)
   }
 
@@ -293,9 +309,16 @@ export class PasswordStore {
     }))
   }
 
-  /** Everything. What a "clear passwords" action would run, and what a test resets with. */
+  /**
+   * Everything. What a "clear passwords" action would run, and what a test resets with.
+   *
+   * The raw entries too, first: they are credentials the user cannot see, and a "delete every
+   * password" that wrote them back would leave exactly those in a file believed empty. On a
+   * read-only vault this throws before anything is forgotten.
+   */
   clear(): number {
     const before = this.#store.get().credentials.length
+    this.#store.discardUnreadableEntries()
     this.#store.update((document) => ({ ...document, credentials: [], neverSaved: [] }))
     return before
   }
@@ -317,6 +340,28 @@ export class PasswordStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
+  }
+
+  /**
+   * True when nothing is written in this run: the file is from a newer version, or it could not be
+   * copied aside. Every write other than `create` and the writer then throws `ReadOnlyStoreError`
+   * before changing anything. See `store-load.ts`.
+   */
+  get readOnly(): boolean {
+    return this.#store.readOnly
+  }
+
+  /**
+   * How many credentials were kept raw because they failed their schema. A count and never the
+   * entries: nothing outside this store may hold data it cannot interpret.
+   */
+  get unreadableEntryCount(): number {
+    return this.#store.unreadableEntries.length
   }
 
   /**

@@ -33,6 +33,8 @@ import {
 } from '@shared/thumbnails/model.js'
 import { removeTempFilesIn, writeFileAtomically } from './atomic-write.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 import type { BrowsingMode } from './HistoryStore.js'
 
 /**
@@ -127,7 +129,7 @@ export type PageCapturer = (target: CaptureTarget) => Promise<CapturedImage | nu
  * `thumbnailTitleOf` caps the title, `planThumbnail` never exceeds the target size,
  * and the encoder refuses anything past the byte cap.
  */
-const thumbnailEntrySchema = z.object({
+const thumbnailEntrySchema = z.looseObject({
   url: z.string().min(1).max(MAX_THUMBNAIL_URL_LENGTH),
   title: z.string().max(MAX_THUMBNAIL_TITLE_LENGTH),
   width: z.number().int().positive().max(THUMBNAIL_TARGET.width),
@@ -136,7 +138,7 @@ const thumbnailEntrySchema = z.object({
   capturedAt: z.number().int().nonnegative()
 })
 
-const thumbnailIndexSchema = z.object({
+const thumbnailIndexSchema = z.looseObject({
   version: z.literal(1),
   shots: z.array(thumbnailEntrySchema)
 })
@@ -146,8 +148,8 @@ const thumbnailIndexSchema = z.object({
  * assignment each way per shape. The schema cannot live next to the interface, because
  * the start page imports the interface and zod must not reach a renderer bundle.
  */
-type SchemaEntry = z.output<typeof thumbnailEntrySchema>
-type SchemaIndex = z.output<typeof thumbnailIndexSchema>
+type SchemaEntry = KnownFields<z.output<typeof thumbnailEntrySchema>>
+type SchemaIndex = KnownFields<z.output<typeof thumbnailIndexSchema>>
 
 const _entryMatchesModel: SchemaEntry = null as unknown as ThumbnailEntry
 const _modelMatchesEntry: ThumbnailEntry = null as unknown as SchemaEntry
@@ -266,6 +268,9 @@ export class ThumbnailStore {
       filePath: join(options.directory, INDEX_FILE_NAME),
       schema: thumbnailIndexSchema,
       fallback: emptyThumbnailIndex,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A file cut short by a crash, or written by an older build, must not leave two
       // entries for one page: the write path assumes one, and the extra would claim
       // dimensions and a byte length for a file the other one has overwritten.
@@ -339,6 +344,11 @@ export class ThumbnailStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   onChange(listener: (shots: ThumbnailEntry[]) => void): () => void {

@@ -18,6 +18,8 @@ import {
   type VisitInput
 } from '@shared/history/model.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 
 /**
  * Persistence for the browsing history.
@@ -42,7 +44,7 @@ import { JsonStore, type DocumentCodec } from './JsonStore.js'
  * expected" into "lost the user's entire history". Those cases go to `repairHistory`
  * instead, which trims and merges.
  */
-const historyVisitSchema = z.object({
+const historyVisitSchema = z.looseObject({
   url: z.string().min(1),
   title: z.string(),
   firstVisitedAt: z.number().int().nonnegative(),
@@ -50,7 +52,7 @@ const historyVisitSchema = z.object({
   visitCount: z.number().int().nonnegative()
 })
 
-const historyDocumentSchema = z.object({
+const historyDocumentSchema = z.looseObject({
   version: z.literal(1),
   visits: z.array(historyVisitSchema)
 })
@@ -61,8 +63,8 @@ const historyDocumentSchema = z.object({
  * direction, and the schema cannot live next to the interface here because the history
  * page is a renderer and zod must not reach its bundle.
  */
-type SchemaVisit = z.output<typeof historyVisitSchema>
-type SchemaDocument = z.output<typeof historyDocumentSchema>
+type SchemaVisit = KnownFields<z.output<typeof historyVisitSchema>>
+type SchemaDocument = KnownFields<z.output<typeof historyDocumentSchema>>
 
 const _visitMatchesModel: SchemaVisit = null as unknown as HistoryVisit
 const _modelMatchesVisit: HistoryVisit = null as unknown as SchemaVisit
@@ -103,6 +105,9 @@ export class HistoryStore {
       filePath: options.filePath,
       schema: historyDocumentSchema,
       fallback: emptyHistoryDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A file written by an older build, edited by hand, or cut short by a crash
       // must not leave duplicate entries or an unordered list, because the write path
       // relies on both.
@@ -160,6 +165,15 @@ export class HistoryStore {
     return this.#replace(() => [])
   }
 
+  /**
+   * Removes the history's backup and quarantine copies and its temporaries, after writing what is
+   * pending. The second half of clearing it: a `.v1.bak` from last month's migration is last month's
+   * history. See `JsonStore.discardCopies`.
+   */
+  discardCopies(): Promise<void> {
+    return this.#store.discardCopies()
+  }
+
   onChange(listener: (visits: HistoryVisit[]) => void): () => void {
     return this.#store.onChange((document) => listener([...document.visits]))
   }
@@ -170,6 +184,11 @@ export class HistoryStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   #recordVisit(input: VisitInput): void {

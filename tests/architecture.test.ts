@@ -2649,3 +2649,155 @@ describe('chrome surface guard', () => {
     expect(router).toMatch(/isMainFrame: frame\.parent === null/)
   })
 })
+
+describe('store loading', () => {
+  /*
+    A file that failed its schema used to become defaults that the next write put over it, and a
+    file from a newer version counted as failed. `store-load.ts` decides what a file is before
+    anything is written; these keep every store on it and every deletion path taking the copies too.
+  */
+  it('classes every JSON store as critical or degradable, and only bookmarks and passwords as critical', async () => {
+    const critical: string[] = []
+    const unclassed: string[] = []
+    for (const file of await collect('src/main/data')) {
+      const code = withoutComments(file.text)
+      if (!/JsonStore\.open(?:<[^>]*>)?\(/.test(code)) continue
+      const name = file.relative.split(sep).join('/')
+      if (!code.includes('criticality:')) unclassed.push(name)
+      if (/criticality:\s*'critical'/.test(code)) critical.push(name)
+    }
+    expect(unclassed, 'a store that says nothing about what losing it costs').toEqual([])
+    expect(critical.sort()).toEqual([
+      'src/main/data/BookmarkStore.ts',
+      'src/main/data/PasswordStore.ts'
+    ])
+  })
+
+  it('removes a category’s copies wherever the category is deleted', () => {
+    const handlers = withoutComments(readFileSync(join(ROOT, 'src/main/ipc/handlers.ts'), 'utf8'))
+    const downloads = withoutComments(
+      readFileSync(join(ROOT, 'src/main/ipc/download-handlers.ts'), 'utf8')
+    )
+    const index = withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const vault = withoutComments(
+      readFileSync(join(ROOT, 'src/main/passwords/PasswordVault.ts'), 'utf8')
+    )
+    expect(handlers).toMatch(/handle\('history:clear'[\s\S]*?await history\.discardCopies\(\)/)
+    expect(downloads).toMatch(/handle\('downloads:clear'[\s\S]*?await discardCopies\(\)/)
+    expect(index).toMatch(/discardDownloadCopies:\s*\(\)\s*=>\s*downloads\?\.discardCopies\(\)/)
+    expect(vault).toMatch(/resetVault[\s\S]*?removeCopiesOf\(this\.#options\.documentPath\)/)
+  })
+})
+
+describe('public suffix list', () => {
+  /*
+    `configurePublicSuffixes` existed from the first commit and nothing called it, so every site
+    under an unlisted suffix — `com.sg`, `myshopify.com` — was one site with its neighbours, and
+    autofill offered passwords across them. These pin the wiring that finally installs a list.
+  */
+  const index = (): string => withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+
+  it('installs the list after the settings and before anything keyed on a site opens', () => {
+    const entry = index()
+    const load = entry.indexOf('await publicSuffixes.load()')
+    expect(load, 'the list is never installed').toBeGreaterThan(-1)
+    expect(load).toBeGreaterThan(entry.indexOf('SettingsStore.open('))
+    expect(load).toBeLessThan(entry.indexOf('FaviconStore.open('))
+    expect(load).toBeLessThan(entry.indexOf('UserRuleStore.open('))
+    expect(entry).toMatch(/flushOnExit\.push\(\(\) => publicSuffixes\.whenIdle\(\)/)
+  })
+
+  it('fetches it through Chromium, in the filter lists’ channel and moment', () => {
+    const entry = index()
+    expect(entry).toMatch(/readPublicSuffixBody\(await net\.fetch\(/)
+    expect(entry).toMatch(/toAscii: domainToASCII/)
+    expect(entry.indexOf('publicSuffixes.refresh()')).toBeGreaterThan(
+      entry.indexOf('filterSubscription.start()')
+    )
+  })
+
+  it('lets only the subscription install a list, and keeps it with the profile', async () => {
+    const callers = (await collect('src'))
+      .filter((file) => /\bconfigurePublicSuffixes\(/.test(codeOnly(file.text)))
+      .map((file) => file.relative.split(sep).join('/'))
+      .filter((name) => name !== 'src/shared/url/domain.ts')
+    expect(callers).toEqual(['src/main/privacy/PublicSuffixSubscription.ts'])
+    const paths = withoutComments(readFileSync(join(ROOT, 'src/main/paths.ts'), 'utf8'))
+    expect(paths).toMatch(/function publicSuffixDir\(\)[^{]*\{\s*return join\(userDataDir\(\)/)
+  })
+})
+
+describe('image cache', () => {
+  it('checks the image cache token before it asks a store', () => {
+    /*
+      Any web page may point an <img> at `tessera://favicon` or `tessera://thumbnail`, so a hit it
+      could tell from a miss would say which sites the user has seen. The token is the only thing a
+      page cannot supply, and it has to be checked before the store is asked.
+    */
+    const protocol = codeOnly(readFileSync(join(ROOT, 'src/main/protocol.ts'), 'utf8'))
+    const body =
+      /async function serveCachedImage\([\s\S]*?\{([\s\S]*?)\n\}/.exec(protocol)?.[1] ?? ''
+    const check = body.indexOf('if (!route.tokenMatches(url)) return noImage()')
+    expect(check, 'serveCachedImage no longer checks the token').toBeGreaterThanOrEqual(0)
+    expect(
+      body.indexOf('route.keyOf('),
+      'the token is checked after the key is read'
+    ).toBeGreaterThan(check)
+    expect(
+      body.indexOf('route.resolve('),
+      'the token is checked after the store is asked'
+    ).toBeGreaterThan(check)
+    expect(protocol).toMatch(/tokenMatches: faviconTokenMatches, keyOf: faviconSiteOf/)
+    expect(protocol).toMatch(/tokenMatches: thumbnailTokenMatches, keyOf: thumbnailPageOf/)
+  })
+
+  it('draws both image cache tokens per start, before the protocol can answer', () => {
+    const entry = codeOnly(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const registered = entry.search(/registerInternalProtocol\(\{/)
+    const favicon = entry.search(/configureFaviconToken\(randomBytes\(16\)\.toString\(''\)\)/)
+    const thumbnail = entry.search(/configureThumbnailToken\(randomBytes\(16\)\.toString\(''\)\)/)
+    expect(registered, 'could not find registerInternalProtocol').toBeGreaterThanOrEqual(0)
+    expect(favicon, 'no fresh favicon token per start').toBeGreaterThanOrEqual(0)
+    expect(thumbnail, 'no fresh thumbnail token per start').toBeGreaterThanOrEqual(0)
+    expect(favicon).toBeLessThan(registered)
+    expect(thumbnail).toBeLessThan(registered)
+  })
+
+  it('lets no picture be dragged out of the interface', async () => {
+    // Every <img>, not only cached ones: a cache address carries this run's token, and an image
+    // dragged into a web page hands the page its address.
+    let seen = 0
+    for (const file of await collect('src/renderer', ['.tsx'])) {
+      for (const element of withoutComments(file.text).match(/<img\b[\s\S]*?\/>/g) ?? []) {
+        seen += 1
+        expect(element, `${file.relative} has a draggable <img>`).toMatch(/draggable=\{false\}/)
+      }
+    }
+    expect(seen, 'found no <img> at all, so the pattern no longer matches').toBeGreaterThanOrEqual(
+      2
+    )
+  })
+})
+
+describe('permission host', () => {
+  it('lets the window controller carry the whole permission host', () => {
+    /*
+      A dialog raised by a background tab once sat over whatever page was in front. The arbiter now
+      waits for the asking tab; that only works while the controller reports every change it needs.
+    */
+    const controller = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/BrowserWindowController.ts'), 'utf8')
+    )
+    const registry = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    )
+    expect(controller).toMatch(/export class BrowserWindowController implements PermissionHost\b/)
+    expect(controller).toMatch(/this\.#tellPermissionListeners\(\{ kind: '' \}\)/)
+    expect(controller).toMatch(/this\.#tellPermissionListeners\(\{ kind: '',/)
+    expect(controller).toMatch(/this\.#reportNavigation\(source\)/)
+    expect(controller).toMatch(/this\.#reportActiveTab\(\)/)
+    expect(registry).toMatch(
+      /this\.#deps\.permissions\.ask\(\s*request,\s*this\.controllerForWebContents\(webContents\.id\) \?\? null,\s*webContents\.id\s*\)/
+    )
+  })
+})

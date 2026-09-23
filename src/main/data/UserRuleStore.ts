@@ -7,6 +7,7 @@ import {
   removeUserRule,
   repairUserRules,
   setUserRuleEnabled,
+  tooBroadUserRules,
   userRulesForHost,
   type AddUserRuleOutcome,
   type UserRule,
@@ -15,6 +16,8 @@ import {
 } from '@shared/filters/user-rules.js'
 import type { BrowsingMode } from './HistoryStore.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 
 /**
  * Persistence for the rules the user wrote themselves — the element picker's output.
@@ -40,7 +43,7 @@ import { JsonStore, type DocumentCodec } from './JsonStore.js'
  * longer than this is a paste accident, and one bad line must not cost the file.
  * `repairUserRules` drops the line, the rest survives.
  */
-const userRuleSchema = z.object({
+const userRuleSchema = z.looseObject({
   id: z.string().min(1),
   text: z.string().min(1).max(MAX_USER_RULE_LENGTH),
   enabled: z.boolean(),
@@ -48,13 +51,13 @@ const userRuleSchema = z.object({
   origin: z.enum(['picker', 'manual'])
 })
 
-const userRuleDocumentSchema = z.object({
+const userRuleDocumentSchema = z.looseObject({
   version: z.literal(1),
   rules: z.array(userRuleSchema)
 })
 
-type SchemaRule = z.output<typeof userRuleSchema>
-type SchemaDocument = z.output<typeof userRuleDocumentSchema>
+type SchemaRule = KnownFields<z.output<typeof userRuleSchema>>
+type SchemaDocument = KnownFields<z.output<typeof userRuleDocumentSchema>>
 
 const _ruleMatchesModel: SchemaRule = null as unknown as UserRule
 const _modelMatchesRule: UserRule = null as unknown as SchemaRule
@@ -120,12 +123,27 @@ export class UserRuleStore {
       filePath: options.filePath,
       schema: userRuleDocumentSchema,
       fallback: emptyUserRuleDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A line an older build could parse and this one cannot would otherwise sit in
       // the list looking active while blocking nothing.
       repair: (document) => ({ ...document, rules: repairUserRules(document.rules) }),
       ...(options.codec === undefined ? {} : { codec: options.codec }),
       ...(options.debounceMs === undefined ? {} : { debounceMs: options.debounceMs })
     })
+
+    /*
+      Said once, when the rules are read, rather than per compile: the list does not change during a
+      run (see `configurePublicSuffixes`), so neither does the answer.
+    */
+    const tooBroad = tooBroadUserRules(store.get().rules)
+    if (tooBroad.length > 0) {
+      console.warn(
+        '[user-rules] not applied, because each names a public suffix rather than a site:',
+        tooBroad.map((rule) => rule.text)
+      )
+    }
 
     return new UserRuleStore(
       store,
@@ -197,6 +215,11 @@ export class UserRuleStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   #add(input: UserRuleInput): AddRuleResult {

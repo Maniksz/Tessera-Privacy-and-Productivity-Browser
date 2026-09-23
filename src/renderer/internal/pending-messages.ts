@@ -56,7 +56,9 @@ const bookmarksEn = {
   'bookmarks.address': 'Address',
   'bookmarks.addressInvalid': 'That is not an address. Enter a domain or a full URL.',
   'bookmarks.save': 'Save',
-  'bookmarks.cancel': 'Cancel'
+  'bookmarks.cancel': 'Cancel',
+  'bookmarks.unreadableEntry': 'One bookmark could not be read and is kept unchanged.',
+  'bookmarks.unreadableEntries': '{count} bookmarks could not be read and are kept unchanged.'
 } as const satisfies Record<string, string>
 
 const bookmarksDe = {
@@ -92,7 +94,11 @@ const bookmarksDe = {
   'bookmarks.address': 'Adresse',
   'bookmarks.addressInvalid': 'Das ist keine Adresse. Gib eine Domain oder eine vollständige URL ein.',
   'bookmarks.save': 'Speichern',
-  'bookmarks.cancel': 'Abbrechen'
+  'bookmarks.cancel': 'Abbrechen',
+  'bookmarks.unreadableEntry':
+    'Ein Lesezeichen konnte nicht gelesen werden und bleibt unverändert erhalten.',
+  'bookmarks.unreadableEntries':
+    '{count} Lesezeichen konnten nicht gelesen werden und bleiben unverändert erhalten.'
 } as const satisfies Record<keyof typeof bookmarksEn, string>
 
 const downloadsEn = {

@@ -57,6 +57,8 @@ export function registerIpcHandlers(deps: {
   bookmarks: BookmarkStore
   /** Subscribed to every session, and the only thing that knows a live download; see `attach`. */
   downloads: DownloadManager
+  /** Removes the download list's backup and quarantine copies; see `DownloadStore.discardCopies`. */
+  discardDownloadCopies: () => Promise<void>
   /** Everything a passwords page may perform, already measured; see `PasswordApi`. */
   passwords: PasswordApi
   /** Raises the master-password prompt and holds the pending question; see `MasterPasswordPrompt`. */
@@ -256,7 +258,12 @@ export function registerIpcHandlers(deps: {
     // Read per call, so a language change reaches the next refusal rather than the next restart.
     locale: () => activeLocale(settings.get('appearance.uiLanguage'))
   })
-  registerDownloadHandlers({ handle, downloads: deps.downloads, windows })
+  registerDownloadHandlers({
+    handle,
+    downloads: deps.downloads,
+    windows,
+    discardCopies: deps.discardDownloadCopies
+  })
   /*
     The vault, in its own module for the reason permissions are: the thirteen channels and the two
     subscriptions the master-password prompt needs are one mechanism, and a build that registered the
@@ -800,7 +807,13 @@ export function registerIpcHandlers(deps: {
   handle('history:removeVisit', ({ url }) => ({ removed: history.removeVisit(url) }))
   handle('history:removeDomain', ({ domain }) => ({ removed: history.removeDomain(domain) }))
   handle('history:removeRange', ({ from, to }) => ({ removed: history.removeRange(from, to) }))
-  handle('history:clear', () => ({ removed: history.clear() }))
+  // The copies go too, and before the answer: a history the page reports as cleared must not live on
+  // in a `.v1.bak` or an `.unreadable` beside the file. A failed removal rejects the call.
+  handle('history:clear', async () => {
+    const removed = history.clear()
+    await history.discardCopies()
+    return { removed }
+  })
 
   // --- bookmarks -----------------------------------------------------------
   /*
@@ -812,6 +825,7 @@ export function registerIpcHandlers(deps: {
     the person did and can undo.
   */
   handle('bookmarks:list', () => bookmarks.list())
+  handle('bookmarks:status', () => ({ unreadableEntries: bookmarks.unreadableEntryCount }))
   // Rebuilt key by key: `exactOptionalPropertyTypes` treats an absent field and one holding
   // `undefined` as different types, and a request that crossed IPC has the second shape.
   handle('bookmarks:create', (payload) =>

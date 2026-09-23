@@ -84,6 +84,8 @@ async function openStore(filePath: string, key: Uint8Array): Promise<JsonStore<D
     filePath,
     schema: docSchema,
     fallback,
+    migrations: [],
+    criticality: 'degradable',
     debounceMs: 0,
     codec: createEncryptedDocumentCodec(key)
   })

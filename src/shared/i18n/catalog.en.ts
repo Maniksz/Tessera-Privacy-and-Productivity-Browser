@@ -258,6 +258,8 @@ export const en = {
   'bookmarks.addressInvalid': 'That is not an address. Enter a domain or a full URL.',
   'bookmarks.save': 'Save',
   'bookmarks.cancel': 'Cancel',
+  'bookmarks.unreadableEntry': 'One bookmark could not be read and is kept unchanged.',
+  'bookmarks.unreadableEntries': '{count} bookmarks could not be read and are kept unchanged.',
 
   // downloads
   'downloads.title': 'Downloads',
@@ -348,6 +350,16 @@ export const en = {
   'passwords.lockNow': 'Lock now',
   'passwords.idleNotice':
     'The vault locks itself after {minutes} minutes without use, when you lock it, and when the last window closes.',
+  'passwords.unreadableEntry':
+    '1 entry could not be read. It is kept unchanged and never filled in.',
+  'passwords.unreadableEntries':
+    '{count} entries could not be read. They are kept unchanged and never filled in.',
+  'passwords.documentNewer':
+    'A newer version saved this vault. It is shown here but cannot be changed.',
+  'passwords.documentInvalid':
+    'The vault file could not be read and is kept as passwords.json.unreadable. The vault started empty.',
+  'passwords.documentReadOnly':
+    'The vault file could not be backed up, so nothing can be changed until the next start.',
 
   /*
     The master password.

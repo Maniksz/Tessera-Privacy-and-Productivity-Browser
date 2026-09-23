@@ -2,6 +2,24 @@ import { mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { z } from 'zod'
 import { removeTempFilesOf, writeFileAtomically } from './atomic-write.js'
+import {
+  backupBeforeMigration,
+  quarantineCopy,
+  removeCopiesOf,
+  type CopyFileSystem
+} from './quarantine.js'
+import {
+  isReadOnlyLoad,
+  restoreEntries,
+  settleStoreDocument,
+  type SettledDocument,
+  type StoreCriticality,
+  type StoreLoadOutcome,
+  type StoreLoadReport,
+  type StoreMigrations,
+  type TolerantEntries,
+  type UnreadableEntry
+} from './store-load.js'
 
 /**
  * A validated JSON document on disk, with atomic writes and change notification.
@@ -64,16 +82,48 @@ export const plainJsonDocumentCodec: DocumentCodec = {
   decode: (bytes) => JSON.parse(new TextDecoder().decode(bytes)) as unknown
 }
 
+/**
+ * Thrown by `update` on a critical store that must not write in this run.
+ *
+ * Thrown before anything changes, so the call that asked — an IPC request from the bookmarks or the
+ * passwords page — fails and the page shows an error. The alternative for a critical store would be
+ * accepting the change in memory and losing it at exit, which reports a success the next start
+ * contradicts. See `StoreCriticality` for why degradable stores do exactly that instead.
+ */
+export class ReadOnlyStoreError extends Error {
+  constructor(filePath: string) {
+    super(`${filePath} is read-only in this run; the change was not made`)
+    this.name = 'ReadOnlyStoreError'
+  }
+}
+
 export interface JsonStoreOptions<T> {
   filePath: string
   schema: z.ZodType<T>
   /** Used when the file is missing, unreadable or fails validation. */
   fallback: () => T
-  /** Last chance to fix a document that validates but is internally inconsistent. */
-  repair?: (document: T) => T
+  /**
+   * The steps from each older version to the next, oldest first. Empty while the store is at
+   * version 1, and required anyway, so that no store can be added without its author deciding what
+   * an older file means to it. See `StoreMigrations`.
+   */
+  migrations: StoreMigrations
+  /** What a file this build cannot write back costs. See `StoreCriticality`. */
+  criticality: StoreCriticality
+  /** One list parsed entry by entry, keeping the entries that fail. See `TolerantEntries`. */
+  tolerant?: TolerantEntries
+  /**
+   * Last chance to fix a document that validates but is internally inconsistent.
+   *
+   * Handed the `tolerant` entries that failed as well, because a repair that cannot see them would
+   * heal their absence: a bookmark inside an unreadable folder looks exactly like an orphan.
+   */
+  repair?: (document: T, unreadable: readonly UnreadableEntry[]) => T
   codec?: DocumentCodec
   /** Milliseconds to coalesce writes; 0 writes on every change. */
   debounceMs?: number
+  /** Where the backup and quarantine copies are written. A test hands in one that fails. */
+  copies?: CopyFileSystem
 }
 
 export type JsonStoreListener<T> = (document: T) => void
@@ -85,6 +135,8 @@ export interface JsonStoreDiagnostics {
   repairedOnLoad: boolean
   /** True when the file was rewritten because the codec called its encoding stale. */
   migratedEncodingOnLoad: boolean
+  /** Which of the four outcomes loading had, and where the original went. See `store-load.ts`. */
+  load: StoreLoadOutcome
 }
 
 export class JsonStore<T> {
@@ -92,6 +144,8 @@ export class JsonStore<T> {
   readonly #listeners = new Set<JsonStoreListener<T>>()
   #writeQueue: Promise<void> = Promise.resolve()
   #pendingWrite: ReturnType<typeof setTimeout> | null = null
+  #unreadable: readonly UnreadableEntry[]
+  readonly #readOnly: boolean
 
   readonly diagnostics: JsonStoreDiagnostics
 
@@ -99,13 +153,19 @@ export class JsonStore<T> {
     private readonly options: Required<Pick<JsonStoreOptions<T>, 'filePath' | 'schema' | 'fallback'>> &
       JsonStoreOptions<T>,
     document: T,
-    diagnostics: JsonStoreDiagnostics
+    diagnostics: JsonStoreDiagnostics,
+    unreadable: readonly UnreadableEntry[]
   ) {
     this.#document = document
     this.diagnostics = diagnostics
+    this.#unreadable = unreadable
+    this.#readOnly = isReadOnlyLoad(diagnostics.load)
   }
 
   /**
+   * Reads the file and decides what it is, keeping a copy of the original before anything may
+   * replace it. The decision is `settleStoreDocument`'s; what is here is the reading and the copying.
+   *
    * @throws UnreadableDocumentError when the codec refuses to decode an existing
    * file. See that class for why this one failure is not recovered from.
    */
@@ -113,10 +173,13 @@ export class JsonStore<T> {
     const diagnostics: JsonStoreDiagnostics = {
       recoveredFromInvalidFile: false,
       repairedOnLoad: false,
-      migratedEncodingOnLoad: false
+      migratedEncodingOnLoad: false,
+      load: { kind: 'missing' }
     }
     const codec = options.codec ?? plainJsonDocumentCodec
     let document = options.fallback()
+    let unreadable: readonly UnreadableEntry[] = []
+    let rewrite = false
 
     // Before the first write, which is the only moment nothing of this store can be mid-rename. A
     // leftover is a copy of the document from before a crash, and nothing else will ever remove it.
@@ -125,46 +188,104 @@ export class JsonStore<T> {
       console.warn(`[store] could not remove temporary files beside ${options.filePath}:`, error)
     })
 
+    let bytes: Uint8Array | null = null
+    let settled: SettledDocument<T> | null = null
     try {
-      const bytes = await readFile(options.filePath)
-      const raw = await codec.decode(bytes)
-      const parsed = options.schema.safeParse(raw)
-      if (parsed.success) {
-        document = parsed.data
-        // Only a document that actually loaded is rewritten. Migrating one that
-        // fell back to defaults would encrypt the defaults over a file the user
-        // might still have wanted to look at.
-        diagnostics.migratedEncodingOnLoad = codec.isStaleEncoding?.(bytes) ?? false
-      } else {
-        // A corrupt file must not stop the browser from starting; the user can
-        // recover their links from a backup, but not from an app that refuses to
-        // launch.
-        diagnostics.recoveredFromInvalidFile = true
-        console.warn(`[store] ${options.filePath} failed validation, using defaults`)
+      bytes = await readFile(options.filePath)
+      settled = settleStoreDocument(await codec.decode(bytes), options)
+      if (settled.kind === 'invalid') {
+        console.warn(`[store] ${options.filePath} failed validation: ${settled.reason}`)
       }
     } catch (error) {
       if (error instanceof UnreadableDocumentError) throw error
-      const code = (error as { code?: string }).code
-      if (code !== 'ENOENT') {
-        diagnostics.recoveredFromInvalidFile = true
+      if ((error as { code?: string }).code !== 'ENOENT') {
+        // Unparseable, or unreadable for a reason other than absence. Either way not a document, and
+        // the same treatment as one that fails its schema: copied aside, then replaced.
         console.warn(`[store] could not read ${options.filePath}:`, error)
+        settled = { kind: 'invalid', reason: String(error) }
+      }
+    }
+
+    const stale = bytes !== null && (codec.isStaleEncoding?.(bytes) ?? false)
+
+    switch (settled?.kind) {
+      case undefined:
+        break
+      case 'current':
+        document = settled.document
+        unreadable = settled.unreadable
+        // Only a document that actually loaded is rewritten. Migrating one that
+        // fell back to defaults would encrypt the defaults over a file the user
+        // might still have wanted to look at.
+        diagnostics.migratedEncodingOnLoad = stale
+        diagnostics.load = { kind: 'current' }
+        rewrite = stale
+        break
+      case 'migrated': {
+        document = settled.document
+        unreadable = settled.unreadable
+        // The bytes as read, not re-encoded: restoring the backup must give back exactly the file
+        // that was there, under the same codec and key. A migrated document always came from bytes.
+        const backup = await backupBeforeMigration(
+          options.filePath,
+          settled.fromVersion,
+          bytes!,
+          options.copies
+        ).catch((error: unknown) => {
+          // Kept migrated in memory and never written: the upgraded document is what this build can
+          // work with, and the original on disk stays the only copy of what the user had.
+          console.warn(`[store] could not back up ${options.filePath} before migrating it:`, error)
+          return null
+        })
+        diagnostics.load = { kind: 'migrated', fromVersion: settled.fromVersion, backup }
+        diagnostics.migratedEncodingOnLoad = stale && backup !== null
+        rewrite = backup !== null
+        break
+      }
+      case 'newer':
+        // Read-only from here on, and the file is never written; see `isReadOnlyLoad`.
+        document = settled.readable ?? document
+        unreadable = settled.unreadable
+        diagnostics.load = { kind: 'newer', version: settled.version }
+        break
+      case 'invalid': {
+        // A corrupt file must not stop the browser from starting; the user can recover their data
+        // from the copy, but not from an app that refuses to launch.
+        diagnostics.recoveredFromInvalidFile = true
+        // The bytes as read when there were any; otherwise the copy reads the file itself, and a file
+        // that could not be read the first time most likely fails again, which leaves the store
+        // read-only rather than writing over something nobody has looked at.
+        const copy = await quarantineCopy(options.filePath, {
+          ...(bytes === null ? {} : { bytes }),
+          ...(options.copies === undefined ? {} : { fs: options.copies })
+        }).catch((error: unknown) => {
+          // Read-only with defaults rather than a refusal to start, unlike `SettingsStore`: without
+          // settings the browser cannot build its command line, without these it can run.
+          console.warn(`[store] could not copy ${options.filePath} aside:`, error)
+          return null
+        })
+        diagnostics.load = { kind: 'invalid', reason: settled.reason, copy }
+        rewrite = copy !== null
+        break
       }
     }
 
     if (options.repair) {
-      const repaired = options.repair(document)
+      // Never a reason to write by itself. A repair can drop what it cannot place, and the file as
+      // it is keeps what was dropped until the user changes something.
+      const repaired = options.repair(document, unreadable)
       if (!deepEqual(repaired, document)) {
         diagnostics.repairedOnLoad = true
         document = repaired
       }
     }
 
-    const store = new JsonStore<T>({ ...options, codec }, document, diagnostics)
-    if (diagnostics.migratedEncodingOnLoad) {
-      // Awaited, so a caller that reads the file straight after `open` sees the new
-      // form. `flush` reports a failed write rather than throwing, which is right
-      // here too: a migration that cannot be written leaves the old file readable
-      // and is retried on the next start.
+    const store = new JsonStore<T>({ ...options, codec }, document, diagnostics, unreadable)
+    if (rewrite && !store.#readOnly) {
+      // One write for everything open decided: the migrated document, the new encoding, the defaults
+      // that replace a file now safely copied aside. Awaited, so a caller that reads the file straight
+      // after `open` sees the new form. `flush` reports a failed write rather than throwing, which is
+      // right here too: the old file stays readable and the same decision is made on the next start.
       await store.flush()
     }
     return store
@@ -175,13 +296,56 @@ export class JsonStore<T> {
   }
 
   /**
+   * True when nothing of this store is written in this run — a newer file, or an original that could
+   * not be copied. See `isReadOnlyLoad`.
+   */
+  get readOnly(): boolean {
+    return this.#readOnly
+  }
+
+  /** What `index.ts` warns about, and what the vault's status reports. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return { outcome: this.diagnostics.load, criticality: this.options.criticality }
+  }
+
+  /**
+   * The entries of the `tolerant` list that failed their schema, as they were stored.
+   *
+   * Written back where they were on every flush, and handed to nothing else by this class: a raw
+   * entry is data this build cannot interpret, so it must never be offered, exported or searched.
+   */
+  get unreadableEntries(): readonly UnreadableEntry[] {
+    return this.#unreadable
+  }
+
+  /**
+   * Forgets the unreadable entries a deletion covers — all of them by default, which is what
+   * "delete every password" means.
+   *
+   * Without this a deletion would leave behind exactly the entries the user cannot see, and the next
+   * flush would write them back into a file they believe they emptied.
+   */
+  discardUnreadableEntries(covers: (entry: UnreadableEntry) => boolean = () => true): void {
+    this.#refuseIfReadOnly()
+    const kept = this.#unreadable.filter((entry) => !covers(entry))
+    if (kept.length === this.#unreadable.length) return
+    this.#unreadable = kept
+    if (!this.#readOnly) this.#scheduleWrite()
+  }
+
+  /**
    * Applies a change and persists it.
    *
    * The result is validated before it is accepted, so a bug in a caller produces
    * a thrown error and an unchanged document rather than an invalid file that
    * fails to load on the next start.
+   *
+   * On a read-only store a critical one throws `ReadOnlyStoreError` before anything changes, and a
+   * degradable one applies the change in memory only — the run goes on, and the file stays as the
+   * newer version or the uncopied original left it.
    */
   update(mutate: (current: T) => T): T {
+    this.#refuseIfReadOnly()
     const next = mutate(this.#document)
     const parsed = this.options.schema.safeParse(next)
     if (!parsed.success) {
@@ -192,7 +356,7 @@ export class JsonStore<T> {
     }
 
     this.#document = parsed.data
-    this.#scheduleWrite()
+    if (!this.#readOnly) this.#scheduleWrite()
     for (const listener of this.#listeners) {
       try {
         listener(this.#document)
@@ -211,6 +375,12 @@ export class JsonStore<T> {
     }
   }
 
+  #refuseIfReadOnly(): void {
+    if (this.#readOnly && this.options.criticality === 'critical') {
+      throw new ReadOnlyStoreError(this.options.filePath)
+    }
+  }
+
   #scheduleWrite(): void {
     const delay = this.options.debounceMs ?? 250
     if (delay === 0) {
@@ -224,13 +394,19 @@ export class JsonStore<T> {
     }, delay)
   }
 
-  /** Writes pending changes and resolves once they are on disk. */
+  /**
+   * Writes pending changes and resolves once they are on disk.
+   *
+   * A read-only store resolves at once and writes nothing. That is also what keeps the shutdown from
+   * waiting on it: a store that will never write has nothing a timeout could be waiting for.
+   */
   flush(): Promise<void> {
+    if (this.#readOnly) return Promise.resolve()
     if (this.#pendingWrite !== null) {
       clearTimeout(this.#pendingWrite)
       this.#pendingWrite = null
     }
-    const snapshot = this.#document
+    const snapshot = this.#forDisk(this.#document)
     const codec = this.options.codec ?? plainJsonDocumentCodec
 
     this.#writeQueue = this.#writeQueue.then(async () => {
@@ -245,6 +421,32 @@ export class JsonStore<T> {
       }
     })
     return this.#writeQueue
+  }
+
+  /**
+   * Removes every backup, quarantine copy and temporary of this store's file, after writing what is
+   * pending. For the deletion paths: clearing a category must take the copies of it along.
+   *
+   * Queued behind the store's own writes rather than run beside them, because removing temporaries
+   * while a write is in flight would take the one it is about to rename. Rejects when a copy could not
+   * be removed, so the caller does not report as deleted what is still on disk.
+   */
+  discardCopies(): Promise<void> {
+    void this.flush()
+    const removal = this.#writeQueue.then(() =>
+      removeCopiesOf(this.options.filePath, this.options.copies)
+    )
+    this.#writeQueue = removal.catch(() => undefined)
+    return removal
+  }
+
+  /** The document as the file gets it: with the unreadable entries back where they were. */
+  #forDisk(document: T): unknown {
+    const tolerant = this.options.tolerant
+    if (tolerant === undefined || this.#unreadable.length === 0) return document
+    // An array: the schema names it one, and only a document that passed the schema gets here.
+    const entries = (document as Record<string, unknown>)[tolerant.field] as readonly unknown[]
+    return { ...document, [tolerant.field]: restoreEntries(entries, this.#unreadable) }
   }
 }
 

@@ -901,6 +901,15 @@ export const invokeContract = {
    */
   'bookmarks:list': { request: nothing, response: z.array(bookmarkSchema) },
   /**
+   * How many nodes the core kept raw because this version could not read them (R3).
+   *
+   * Only the count: a raw node is data nothing here can interpret, so it never leaves the store.
+   */
+  'bookmarks:status': {
+    request: nothing,
+    response: z.object({ unreadableEntries: z.number().int().nonnegative() })
+  },
+  /**
    * `url` is raw user input. The core normalises it with the same classifier the address bar uses
    * and rejects a search term, so a row can never silently become a search for whatever was typed.
    * Ignored for a folder, which has no address.

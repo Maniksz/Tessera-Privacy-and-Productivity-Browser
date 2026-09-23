@@ -592,12 +592,18 @@ describe('TabGroupStore repairing a damaged file', () => {
     expect(store.list()).toHaveLength(MAX_TAB_GROUPS)
   })
 
-  it('starts from defaults when the version is not one it knows', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { store } = await openStore({ seed: { version: 2, groups: [] } })
+  it('starts from defaults on a newer version, without writing over its file', async () => {
+    const seed = { version: 2, groups: [] }
+    const { store, filePath } = await openStore({ seed })
     expect(store.list()).toEqual([])
-    expect(store.recoveredFromInvalidFile).toBe(true)
-    warn.mockRestore()
+    expect(store.recoveredFromInvalidFile).toBe(false)
+    expect(store.loadReport.outcome).toEqual({ kind: 'newer', version: 2 })
+
+    // Kept in memory for this run, never on disk.
+    store.create({ tabIds: ['tab-1'], name: 'Neu' })
+    expect(store.list()).toHaveLength(1)
+    await store.flush()
+    expect(await readFile(filePath, 'utf8')).toBe(JSON.stringify(seed))
   })
 })
 

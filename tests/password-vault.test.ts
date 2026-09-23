@@ -13,10 +13,12 @@ import {
 } from '@main/crypto/vault-key.js'
 import { createEncryptedDocumentCodec } from '@main/data/encrypted-codec.js'
 import {
+  ReadOnlyStoreError,
   UnreadableDocumentError,
   plainJsonDocumentCodec,
   type DocumentCodec
 } from '@main/data/JsonStore.js'
+import { PasswordStore } from '@main/data/PasswordStore.js'
 import { PasswordVault } from '@main/passwords/PasswordVault.js'
 import { createVaultDocumentCodec } from '@main/passwords/vault-codec.js'
 import { discardingPasswordWriter, type PasswordDocument } from '@shared/passwords/model.js'
@@ -1010,6 +1012,223 @@ describe('keeping a copy before a reset', () => {
   })
 })
 
+describe('a vault document this version cannot write back', () => {
+  it('reports a document it could not use once unlocked, with the original copied aside', async () => {
+    // A locked vault has not read its document, so there is nothing to report until the unlock.
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    await seedMasterProtected({ profile: where, safeStorage, masterPassword: MASTER })
+    const broken = JSON.stringify({ version: 1, credentials: 'not a list', neverSaved: [] })
+    await writeFile(where.documentPath, broken)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { vault } = await openVault({ profile: where, safeStorage })
+      expect(vault.status()).not.toHaveProperty('invalid')
+
+      expect(await vault.unlock(MASTER)).toBe('unlocked')
+      expect(vault.status()).toMatchObject({ unlocked: true, invalid: true })
+      expect(vault.status()).not.toHaveProperty('readOnly')
+      expect(await readFile(`${where.documentPath}.unreadable`, 'utf8')).toBe(broken)
+      expect(vault.list()).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('shows a newer version’s credentials read-only and refuses every change', async () => {
+    const where = await profile()
+    // A first run makes the key; the newer version then wrote its document.
+    const first = await openVault({ profile: where })
+    first.vault.dispose()
+    const newer = JSON.stringify({ ...seededDocument(), version: 2 })
+    await writeFile(where.documentPath, newer)
+
+    const { vault } = await openVault({ profile: where })
+
+    expect(vault.status()).toMatchObject({ unlocked: true, newer: true, readOnly: true })
+    expect(vault.list().map((entry) => entry.username)).toEqual(['alice'])
+    // Refused before the page could report success, and nothing reaches the file.
+    expect(vault.create({ url: SITE, username: 'bob', password: 'another' })).toBe('rejected')
+    expect(vault.writerFor('normal')).toBe(discardingPasswordWriter)
+    expect(() => vault.remove('pw-seeded')).toThrow(ReadOnlyStoreError)
+    expect(() => vault.update('pw-seeded', { username: 'mallory' })).toThrow(ReadOnlyStoreError)
+    await vault.flush()
+    expect(await readFile(where.documentPath, 'utf8')).toBe(newer)
+    vault.dispose()
+  })
+
+  it('answers exactly the four fields for a document that loaded cleanly', async () => {
+    const { vault } = await openVault()
+    expect(Object.keys(vault.status()).sort()).toEqual(
+      ['idleTimeoutMs', 'protection', 'unlocked', 'unreadable'].sort()
+    )
+    vault.dispose()
+  })
+})
+
+describe('a credential this version cannot read', () => {
+  /*
+    R3 and AE2: one broken entry costs that entry. It is kept exactly as stored and written back at its
+    index, and it never reaches anything that offers, fills or lists a password.
+  */
+  const credential = (index: number): PasswordDocument['credentials'][number] => ({
+    id: `pw-${index}`,
+    origin: `https://site${index}.example`,
+    username: `user${index}`,
+    password: `secret-${index}`,
+    createdAt: T0,
+    updatedAt: T0,
+    lastUsedAt: null
+  })
+  /** An empty password: not a smaller credential but one that cannot be filled. */
+  const broken = {
+    id: 'pw-broken',
+    origin: 'https://example.com',
+    username: 'bob',
+    password: '',
+    createdAt: T0,
+    updatedAt: T0,
+    lastUsedAt: null
+  }
+
+  async function plainStore(document: unknown): Promise<{ store: PasswordStore; path: string }> {
+    const where = await profile()
+    await writeFile(where.documentPath, JSON.stringify(document))
+    const store = await PasswordStore.open({
+      filePath: where.documentPath,
+      codec: plainJsonDocumentCodec,
+      debounceMs: 0,
+      generateId: () => 'pw-new',
+      now: () => T0
+    })
+    return { store, path: where.documentPath }
+  }
+
+  it('loads 39 of 40, reports the 40th and writes it back unchanged at its index (AE2)', async () => {
+    const credentials: unknown[] = Array.from({ length: 39 }, (_unused, index) => credential(index))
+    credentials.splice(17, 0, broken)
+    const { store, path } = await plainStore({ version: 1, credentials, neverSaved: [] })
+
+    expect(store.list()).toHaveLength(39)
+    expect(store.unreadableEntryCount).toBe(1)
+
+    expect(store.create({ url: SITE, username: 'carol', password: SECRET })).toBe('created')
+    await store.flush()
+    const written = JSON.parse(await readFile(path, 'utf8')) as PasswordDocument
+    expect(written.credentials).toHaveLength(41)
+    expect(written.credentials[17]).toEqual(broken)
+  })
+
+  it('offers the entry to nothing that fills, compares or lists', async () => {
+    const where = await profile()
+    // A first run makes the key; the document is then one an earlier build left in plain text.
+    const first = await openVault({ profile: where })
+    first.vault.dispose()
+    const document = { ...seededDocument(), credentials: [...seededDocument().credentials, broken] }
+    await writeFile(where.documentPath, JSON.stringify(document))
+
+    const { vault } = await openVault({ profile: where })
+    expect(vault.status()).toMatchObject({ unlocked: true, unreadableEntries: 1 })
+    expect(vault.status()).not.toHaveProperty('readOnly')
+    expect(vault.list().map((entry) => entry.id)).toEqual(['pw-seeded'])
+    expect(vault.count()).toBe(1)
+    expect(vault.summaryOf('pw-broken')).toBeNull()
+    expect(vault.secretOf('pw-broken')).toBeNull()
+    expect(vault.compareStored(SITE, 'bob', '')).toBe('none')
+    // The import collides against what the vault lists, so the raw entry is not "already stored".
+    expect(
+      vault.importChromeCsv(`name,url,username,password\nEx,${SITE},bob,bobs-password\n`)
+    ).toMatchObject({ imported: 1 })
+    await vault.flush()
+    vault.dispose()
+
+    // Kept through the rewrite under the vault's own key, so the next start reports it again.
+    const reopened = await openVault({ profile: where })
+    expect(reopened.vault.status().unreadableEntries).toBe(1)
+    expect(
+      reopened.vault
+        .list()
+        .map((entry) => entry.username)
+        .sort()
+    ).toEqual(['alice', 'bob'])
+    reopened.vault.dispose()
+  })
+
+  it('takes the entry along when every password is deleted', async () => {
+    const { store, path } = await plainStore({
+      version: 1,
+      credentials: [credential(1), broken],
+      neverSaved: ['https://never.example']
+    })
+
+    expect(store.clear()).toBe(1)
+    expect(store.unreadableEntryCount).toBe(0)
+    await store.flush()
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+      version: 1,
+      credentials: [],
+      neverSaved: []
+    })
+  })
+
+  it('takes the entry along when the vault is reset', async () => {
+    const where = await profile()
+    const first = await openVault({ profile: where })
+    first.vault.dispose()
+    const document = { ...seededDocument(), credentials: [broken] }
+    await writeFile(where.documentPath, JSON.stringify(document))
+
+    const { vault } = await openVault({ profile: where })
+    expect(vault.status().unreadableEntries).toBe(1)
+    expect(await vault.resetVault(RESET_VAULT_CONFIRMATION)).toBe(true)
+    expect(vault.status()).not.toHaveProperty('unreadableEntries')
+    expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+    await vault.flush()
+    vault.dispose()
+
+    const reopened = await openVault({ profile: where })
+    expect(reopened.vault.status()).not.toHaveProperty('unreadableEntries')
+    expect(reopened.vault.list().map((entry) => entry.username)).toEqual(['alice'])
+    reopened.vault.dispose()
+  })
+
+  it('refuses to delete everything from a vault that is read-only this run', async () => {
+    const { store, path } = await plainStore({
+      version: 2,
+      credentials: [credential(1), broken],
+      neverSaved: []
+    })
+    const before = await readFile(path, 'utf8')
+
+    // What the current schema reads of a newer file is shown, raw entries counted, and nothing goes.
+    expect(store.list()).toHaveLength(1)
+    expect(store.unreadableEntryCount).toBe(1)
+    expect(() => store.clear()).toThrow(ReadOnlyStoreError)
+    expect(store.unreadableEntryCount).toBe(1)
+    await store.flush()
+    expect(await readFile(path, 'utf8')).toBe(before)
+  })
+
+  it('reports a document it could neither use nor copy aside as read-only', async () => {
+    const where = await profile()
+    const first = await openVault({ profile: where })
+    first.vault.dispose()
+    await writeFile(where.documentPath, JSON.stringify({ version: 1, credentials: 'not a list' }))
+    // Something that is not a file where the copy would go, so the copy cannot be made.
+    await mkdir(`${where.documentPath}.unreadable`)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { vault } = await openVault({ profile: where })
+      expect(vault.status()).toMatchObject({ unlocked: true, invalid: true, readOnly: true })
+      expect(vault.status()).not.toHaveProperty('newer')
+      expect(vault.create({ url: SITE, username: 'bob', password: 'another' })).toBe('rejected')
+      vault.dispose()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe('resetting the vault', () => {
   it('refuses a wrong confirmation token and deletes nothing', async () => {
     // So an empty or mistaken invoke cannot destroy a vault.
@@ -1028,7 +1247,7 @@ describe('resetting the vault', () => {
     expect(vault.list()).toHaveLength(1)
   })
 
-  it('destroys the document, its temporaries and the key, then opens an empty vault', async () => {
+  it('destroys the document, its temporaries, its copies and the key, then opens an empty vault', async () => {
     const { vault, dir, keyFilePath, documentPath } = await openVault()
     expect(vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
     await vault.flush()
@@ -1041,6 +1260,9 @@ describe('resetting the vault', () => {
     await writeFile(`${documentPath}.4242-0a1b2c3d4e5f.tmp`, await readFile(documentPath))
     await writeFile(`${documentPath}.tmp`, await readFile(documentPath))
     await writeFile(`${keyFilePath}.4242-abcdef012345.tmp`, await readFile(keyFilePath))
+    // And the copies a load keeps: the original before a migration, a document that could not be used.
+    await writeFile(`${documentPath}.v1.bak`, await readFile(documentPath))
+    await writeFile(`${documentPath}.unreadable`, await readFile(documentPath))
     const keyBefore = await readFile(keyFilePath)
 
     const ran: string[] = []

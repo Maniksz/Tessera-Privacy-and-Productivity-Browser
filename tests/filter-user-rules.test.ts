@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DocumentCodec } from '@main/data/JsonStore.js'
 import { UserRuleStore, type UserRuleEditor } from '@main/data/UserRuleStore.js'
 import { compileFilterLists } from '@shared/filters/compile.js'
@@ -12,12 +12,15 @@ import {
   describeUserRule,
   emptyUserRuleDocument,
   enabledUserRuleText,
+  isTooBroadUserRule,
   removeUserRule,
   repairUserRules,
   setUserRuleEnabled,
+  tooBroadUserRules,
   userRulesForHost,
   type UserRule
 } from '@shared/filters/user-rules.js'
+import { configurePublicSuffixes, resetPublicSuffixes } from '@shared/url/domain.js'
 
 /**
  * The user's own rules: the model, and the store that decides who may write.
@@ -441,9 +444,24 @@ describe('UserRuleStore', () => {
   })
 
   it('starts from defaults when the file is not ours, rather than refusing to start', async () => {
-    const { store } = await storeAt('user-rules.json', '{"version":2,"rules":"nope"}')
+    const { path, store } = await storeAt('user-rules.json', '{"version":1,"rules":"nope"}')
     expect(store.rules()).toEqual([])
     expect(store.recoveredFromInvalidFile).toBe(true)
+    // And the rules the user wrote by hand are set aside, not written over.
+    expect(await readFile(`${path}.unreadable`, 'utf8')).toBe('{"version":1,"rules":"nope"}')
+  })
+
+  it('leaves a newer version’s file alone and keeps this run’s rules in memory only', async () => {
+    // Version 2 is not a broken file, it is one a newer Tessera wrote. Running an older build must
+    // not cost the user the rules that newer build holds.
+    const newer = '{"version":2,"rules":[]}'
+    const { path, store } = await storeAt('user-rules.json', newer)
+    expect(store.recoveredFromInvalidFile).toBe(false)
+    expect(store.loadReport.outcome).toEqual({ kind: 'newer', version: 2 })
+
+    store.editorFor('normal').add({ text: 'example.com##.ad', origin: 'manual' })
+    await store.flush()
+    expect(await readFile(path, 'utf8')).toBe(newer)
   })
 
   it('repairs a hand-edited file on the way in', async () => {
@@ -557,5 +575,58 @@ describe('a private window', () => {
     stop()
     editor.add({ text: 'example.com##.promo', origin: 'picker' })
     expect(seen).toEqual([1, 1, 0])
+  })
+})
+
+describe('a picked rule whose site became a public suffix', () => {
+  /*
+    A profile that ran on the bootstrap stored `com.sg##…` for a page on `bank.com.sg`, because the
+    bootstrap does not know `com.sg`. Once the full list is in force, that line would hide the element
+    on every site under `com.sg`.
+  */
+  const stale = ruleOf({ id: 'stale', text: 'com.sg##.promo', origin: 'picker' })
+  const typed = ruleOf({ id: 'typed', text: 'com.sg##.cookie-bar', origin: 'manual' })
+  const fine = ruleOf({ id: 'fine', text: 'bank.com.sg##.ad', origin: 'picker' })
+
+  afterEach(() => {
+    resetPublicSuffixes()
+  })
+
+  it('applies as before while the bootstrap is in force', () => {
+    expect(isTooBroadUserRule(stale)).toBe(false)
+    expect(enabledUserRuleText([stale])).toBe('com.sg##.promo')
+  })
+
+  it('is held back once the full list is in force, and stays enabled', () => {
+    configurePublicSuffixes(['com.sg'])
+    expect(isTooBroadUserRule(stale)).toBe(true)
+    expect(tooBroadUserRules([stale, typed, fine])).toEqual([stale])
+    expect(enabledUserRuleText([stale, typed, fine])).toBe('com.sg##.cookie-bar\nbank.com.sg##.ad')
+    expect(stale.enabled).toBe(true)
+  })
+
+  it('leaves a line the parser cannot read to the rest of the pipeline', () => {
+    configurePublicSuffixes(['com.sg'])
+    expect(isTooBroadUserRule(ruleOf({ text: '||com.sg^', origin: 'picker' }))).toBe(false)
+  })
+
+  it('is reported when the store opens, and kept in the list unchanged', async () => {
+    configurePublicSuffixes(['com.sg'])
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const { store } = await storeAt(
+        'user-rules.json',
+        JSON.stringify({ version: 1, rules: [stale, fine] })
+      )
+      expect(spy).toHaveBeenCalledWith(
+        '[user-rules] not applied, because each names a public suffix rather than a site:',
+        ['com.sg##.promo']
+      )
+      expect(store.rules()).toEqual([stale, fine])
+      expect(store.enabledText()).toBe('bank.com.sg##.ad')
+      expect(store.editorFor('private').enabledText()).toBe('bank.com.sg##.ad')
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

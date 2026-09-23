@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { MAX_QUICK_LINKS, MAX_TITLE_LENGTH, QUICK_LINK_KINDS } from './model.js'
 import type { QuickLink, QuickLinkDocument } from './model.js'
 import type { QuickLinkCard } from './cards.js'
+import type { KnownFields } from '../known-fields.js'
 
 /**
  * Runtime validation for quick links.
@@ -40,14 +41,19 @@ export const quickLinkCardSchema = quickLinkSchema.extend({
   faviconUrl: z.string().nullable()
 })
 
-export const quickLinkDocumentSchema = z.object({
+/**
+ * The file. Unlike `quickLinkSchema`, which is also the wire shape, both levels keep fields this build
+ * does not know, so a field a newer version added to its links survives an older one saving the file.
+ * The wire stays strict: the page is told exactly the fields it renders.
+ */
+export const quickLinkDocumentSchema = z.looseObject({
   version: z.literal(1),
-  links: z.array(quickLinkSchema).max(MAX_QUICK_LINKS)
+  links: z.array(quickLinkSchema.loose()).max(MAX_QUICK_LINKS)
 })
 
 // Keeps the schema and the interface from drifting apart in either direction.
 type SchemaLink = z.output<typeof quickLinkSchema>
-type SchemaDocument = z.output<typeof quickLinkDocumentSchema>
+type SchemaDocument = KnownFields<z.output<typeof quickLinkDocumentSchema>>
 
 type SchemaCard = z.output<typeof quickLinkCardSchema>
 

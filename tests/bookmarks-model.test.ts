@@ -25,11 +25,14 @@ import {
   moveBookmark,
   normalizeBookmarkUrl,
   queryBookmarks,
+  rawBookmarkLinkOf,
+  rawBookmarkLinks,
   relocateBookmark,
   removeBookmark,
   removeChildrenOf,
   repairBookmarks,
   rootIdOf,
+  unusedBookmarkId,
   updateBookmark,
   type Bookmark
 } from '@shared/bookmarks/model.js'
@@ -661,5 +664,101 @@ describe('repairing a document that arrived wrong', () => {
     for (const entry of repaired) {
       expect(rootIdOf(repaired, entry.id), entry.id).not.toBeNull()
     }
+  })
+})
+
+describe('entries kept raw', () => {
+  /*
+    A node the schema refused is kept as it was stored, and this build cannot interpret it — but it
+    can still read where the node sits. Every rule below is about not letting that node's absence
+    from the tree look like a fault the repair must heal, or a slot a new node may take.
+  */
+  const node = (overrides: Partial<Bookmark> & { id: string }): Bookmark => ({
+    kind: 'bookmark',
+    title: 'T',
+    url: 'https://example.com/',
+    parentId: BOOKMARK_OTHER_ID,
+    createdAt: T0,
+    ...overrides
+  })
+
+  it('reads the id and the parent of an entry it cannot otherwise read', () => {
+    expect(rawBookmarkLinkOf({ id: 'r', kind: 'separator', parentId: BOOKMARK_BAR_ID })).toEqual({
+      id: 'r',
+      parentId: BOOKMARK_BAR_ID
+    })
+    // A parent that cannot be read hangs the entry from nothing: '' is no id and no root.
+    expect(rawBookmarkLinkOf({ id: 'r', parentId: 7 })).toEqual({ id: 'r', parentId: '' })
+    // No id, no place in the tree.
+    expect(rawBookmarkLinkOf({ id: '' })).toBeNull()
+    expect(rawBookmarkLinkOf({ id: 3 })).toBeNull()
+    expect(rawBookmarkLinkOf('a string')).toBeNull()
+    expect(rawBookmarkLinkOf(null)).toBeNull()
+    expect(rawBookmarkLinks([{ id: 'r', parentId: 'bar' }, 42])).toEqual([
+      { id: 'r', parentId: 'bar' }
+    ])
+  })
+
+  it('leaves a child of an unreadable folder where it is instead of moving it to other', () => {
+    const repaired = repairBookmarks(
+      [node({ id: 'child', parentId: 'raw-folder' })],
+      [{ id: 'raw-folder', parentId: BOOKMARK_BAR_ID }]
+    )
+    expect(repaired[0]?.parentId).toBe('raw-folder')
+  })
+
+  it('keeps a child of an unreadable folder whose own parent cannot be read', () => {
+    // The walk up from the child ends at the raw folder, which hangs from nothing: no ring, no move.
+    const repaired = repairBookmarks(
+      [node({ id: 'child', parentId: 'raw' })],
+      [{ id: 'raw', parentId: '' }]
+    )
+    expect(repaired[0]?.parentId).toBe('raw')
+  })
+
+  it('drops a node that claims the id of an unreadable one', () => {
+    // The raw node is written back unchanged, so keeping both would put one id in the file twice.
+    const repaired = repairBookmarks(
+      [node({ id: 'r' }), node({ id: 'kept' })],
+      [{ id: 'r', parentId: BOOKMARK_BAR_ID }]
+    )
+    expect(repaired.map((entry) => entry.id)).toEqual(['kept'])
+  })
+
+  it('breaks a ring that runs through an unreadable folder', () => {
+    // a → raw → a: without the raw link the walk from `a` stops at an unknown id and the ring,
+    // unreachable from either root, would survive every start.
+    const repaired = repairBookmarks(
+      [node({ id: 'a', kind: 'folder', url: '', parentId: 'raw' })],
+      [{ id: 'raw', parentId: 'a' }]
+    )
+    expect(repaired[0]?.parentId).toBe(BOOKMARK_OTHER_ID)
+  })
+
+  it('refuses a move that would close a ring through an unreadable folder', () => {
+    const nodes = [
+      node({ id: 'a', kind: 'folder', url: '', parentId: BOOKMARK_BAR_ID }),
+      node({ id: 'c', kind: 'folder', url: '', parentId: 'raw' })
+    ]
+    const raw = [{ id: 'raw', parentId: 'a' }]
+    expect(() => moveBookmark(nodes, 'a', 'c', 0, raw)).toThrow(BookmarkNestingError)
+    expect(moveBookmark(nodes, 'a', 'c', 0).map((entry) => entry.parentId)).toContain('c')
+  })
+
+  it('removes what sits below an unreadable folder when its ancestor goes', () => {
+    const nodes = [
+      node({ id: 'top', kind: 'folder', url: '', parentId: BOOKMARK_BAR_ID }),
+      node({ id: 'deep', parentId: 'raw' }),
+      node({ id: 'elsewhere' })
+    ]
+    const raw = [{ id: 'raw', parentId: 'top' }]
+    expect(removeBookmark(nodes, 'top', raw).map((entry) => entry.id)).toEqual(['elsewhere'])
+    expect(descendantIdsOf([...nodes, ...raw], 'top')).toEqual(new Set(['raw', 'deep']))
+  })
+
+  it('never hands out an id that is taken or reserved', () => {
+    expect(unusedBookmarkId('b1', new Set())).toBe('b1')
+    expect(unusedBookmarkId('b1', new Set(['b1', 'b1-1']))).toBe('b1-2')
+    expect(unusedBookmarkId(BOOKMARK_BAR_ID, new Set())).toBe(`${BOOKMARK_BAR_ID}-1`)
   })
 })

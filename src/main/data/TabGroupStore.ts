@@ -27,6 +27,8 @@ import {
   type TabGroupColor
 } from '@shared/tabgroups/palette.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 // The same named pair, imported rather than redeclared, so `'private'` means one thing
 // across the core. `recorderFor` there and `bookFor` here are the same idea.
 import type { BrowsingMode } from './HistoryStore.js'
@@ -74,7 +76,7 @@ import type { BrowsingMode } from './HistoryStore.js'
  * unreachable from a caller — but it does mean this schema is a repair pass rather than
  * a second assertion of the model's invariants. Those are asserted by the model.
  */
-const tabGroupSchema = z.object({
+const tabGroupSchema = z.looseObject({
   id: z.string().min(1),
   name: z.string().catch(''),
   color: z.enum(TAB_GROUP_COLORS).catch(FALLBACK_TAB_GROUP_COLOR),
@@ -82,7 +84,7 @@ const tabGroupSchema = z.object({
   tabIds: z.array(z.string().min(1)),
   createdAt: z.number().int().nonnegative().catch(0),
   layout: z
-    .object({ id: z.enum(LAYOUT_IDS), tiles: z.array(z.string().min(1).nullable()) })
+    .looseObject({ id: z.enum(LAYOUT_IDS), tiles: z.array(z.string().min(1).nullable()) })
     .optional()
     // Placed on the whole object rather than on its fields, because half an arrangement is
     // not a lesser arrangement: a layout id with no tiles, or tiles with no layout, would
@@ -90,7 +92,7 @@ const tabGroupSchema = z.object({
     .catch(undefined)
 })
 
-const tabGroupDocumentSchema = z.object({
+const tabGroupDocumentSchema = z.looseObject({
   version: z.literal(1),
   groups: z.array(tabGroupSchema)
 })
@@ -101,8 +103,8 @@ const tabGroupDocumentSchema = z.object({
  * direction, and the schema cannot live next to the interfaces: the tab strip is a
  * renderer, and zod must not reach its bundle.
  */
-type SchemaGroup = z.output<typeof tabGroupSchema>
-type SchemaDocument = z.output<typeof tabGroupDocumentSchema>
+type SchemaGroup = KnownFields<z.output<typeof tabGroupSchema>>
+type SchemaDocument = KnownFields<z.output<typeof tabGroupDocumentSchema>>
 
 const _groupMatchesModel: SchemaGroup = null as unknown as TabGroup
 const _modelMatchesGroup: TabGroup = null as unknown as SchemaGroup
@@ -152,6 +154,7 @@ export interface TabGroupBook {
   onChange(listener: (groups: TabGroup[]) => void): () => void
   flush(): Promise<void>
   readonly recoveredFromInvalidFile: boolean
+  readonly loadReport: StoreLoadReport
 }
 
 /**
@@ -169,6 +172,7 @@ interface GroupCell {
   onChange(listener: (groups: TabGroup[]) => void): () => void
   flush(): Promise<void>
   readonly recoveredFromInvalidFile: boolean
+  readonly loadReport: StoreLoadReport
 }
 
 export interface TabGroupStoreOptions {
@@ -196,6 +200,9 @@ export class TabGroupStore implements TabGroupBook {
       filePath: options.filePath,
       schema: tabGroupDocumentSchema,
       fallback: emptyTabGroupDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A file written by an older build, edited by hand, or cut short by a crash must
       // not leave an empty group, a tab in two groups or a tab twice in one — the write
       // path and the tab strip both rely on none of those existing.
@@ -305,6 +312,11 @@ export class TabGroupStore implements TabGroupBook {
   get recoveredFromInvalidFile(): boolean {
     return this.#cell.recoveredFromInvalidFile
   }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#cell.loadReport
+  }
 }
 
 /** A cell over the document on disk. */
@@ -317,7 +329,8 @@ function persistedCell(store: JsonStore<TabGroupDocument>): GroupCell {
     onChange: (listener) => store.onChange((document) => listener(snapshot(document.groups))),
     flush: () => store.flush(),
     // Fixed at open: `JsonStore` decides it while reading the file and never revisits it.
-    recoveredFromInvalidFile: store.diagnostics.recoveredFromInvalidFile
+    recoveredFromInvalidFile: store.diagnostics.recoveredFromInvalidFile,
+    loadReport: store.loadReport
   }
 }
 
@@ -353,7 +366,8 @@ function memoryCell(): GroupCell {
     // Nothing to write and nothing to wait for. Present so shutdown can await every
     // book it holds without first asking which kind each one is.
     flush: () => Promise.resolve(),
-    recoveredFromInvalidFile: false
+    recoveredFromInvalidFile: false,
+    loadReport: { outcome: { kind: 'missing' }, criticality: 'degradable' }
   }
 }
 

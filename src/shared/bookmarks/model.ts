@@ -116,6 +116,56 @@ export function isBookmarkRootId(value: string): value is BookmarkRootId {
   return rootIdSet.has(value)
 }
 
+/**
+ * Where a node sits, and nothing else: all a traversal needs.
+ *
+ * A type of its own because the tree has members that are not `Bookmark`s. An entry the schema
+ * refused is kept raw by the store and written back exactly where it was (see
+ * `main/data/store-load.ts`), and although this build cannot interpret it, it can usually still read
+ * its id and its parent. That is enough for the three rules that must not ignore it: a deletion takes
+ * it along, a move cannot close a ring through it, and its readable children are not orphans.
+ */
+export interface BookmarkLink {
+  readonly id: string
+  readonly parentId: string
+}
+
+/**
+ * The place in the tree of an entry kept raw, or `null` when not even its id can be read.
+ *
+ * A parent that cannot be read becomes `''`, which is no id and no root: the entry then hangs from
+ * nothing, so it is nobody's descendant, but its id still counts — as taken, and as a parent.
+ */
+export function rawBookmarkLinkOf(value: unknown): BookmarkLink | null {
+  if (typeof value !== 'object' || value === null) return null
+  const { id, parentId } = value as Record<string, unknown>
+  if (typeof id !== 'string' || id === '') return null
+  return { id, parentId: typeof parentId === 'string' ? parentId : '' }
+}
+
+/** `rawBookmarkLinkOf` over a list, leaving out the entries with no readable id. */
+export function rawBookmarkLinks(values: readonly unknown[]): BookmarkLink[] {
+  return values.flatMap((value) => {
+    const link = rawBookmarkLinkOf(value)
+    return link === null ? [] : [link]
+  })
+}
+
+/**
+ * `candidate`, or the first `candidate-N` that is neither taken nor a root id.
+ *
+ * A suffix rather than asking the generator again, so this terminates whatever the generator does:
+ * `taken` is finite. What it guards is an id a raw entry already carries — the store cannot see that
+ * entry, so nothing else would notice the collision until the file held one id twice.
+ */
+export function unusedBookmarkId(candidate: string, taken: ReadonlySet<string>): string {
+  const free = (id: string): boolean => !taken.has(id) && !isBookmarkRootId(id)
+  if (free(candidate)) return candidate
+  let suffix = 1
+  while (!free(`${candidate}-${suffix}`)) suffix += 1
+  return `${candidate}-${suffix}`
+}
+
 // --- errors ------------------------------------------------------------------
 // Named types rather than bare strings, so an IPC handler can turn each into a message
 // the user can act on instead of a generic failure.
@@ -162,7 +212,10 @@ export function childrenOf<T extends Bookmark>(nodes: readonly T[], parentId: st
   return nodes.filter((node) => node.parentId === parentId)
 }
 
-export function findBookmark<T extends Bookmark>(nodes: readonly T[], id: string): T | undefined {
+export function findBookmark<T extends BookmarkLink>(
+  nodes: readonly T[],
+  id: string
+): T | undefined {
   return nodes.find((node) => node.id === id)
 }
 
@@ -184,7 +237,7 @@ export function countChildren(nodes: readonly Bookmark[], folderId: string): num
  * this function is called by the deletion path — the one place where not terminating means
  * a hung main process while the user waits for a folder to disappear.
  */
-export function descendantIdsOf(nodes: readonly Bookmark[], folderId: string): Set<string> {
+export function descendantIdsOf(nodes: readonly BookmarkLink[], folderId: string): Set<string> {
   const found = new Set<string>()
   const queue: string[] = [folderId]
   while (queue.length > 0) {
@@ -208,7 +261,7 @@ export function descendantIdsOf(nodes: readonly Bookmark[], folderId: string): S
  * guard, for the same reason.
  */
 export function isDescendantOf(
-  nodes: readonly Bookmark[],
+  nodes: readonly BookmarkLink[],
   candidateId: string,
   ancestorId: string
 ): boolean {
@@ -465,12 +518,20 @@ export function relocateBookmark(nodes: readonly Bookmark[], id: string, url: st
  * that count against the limit, appear in no listing, and come back the moment `repair`
  * re-parents them somewhere unexpected. That reads as data loss followed by data
  * resurrection, which is worse than either.
+ *
+ * `raw` are the entries kept raw, which are part of the tree even though they are not in `nodes`:
+ * a readable bookmark inside an unreadable folder inside the one deleted goes too. The store drops
+ * the raw entries themselves; see `BookmarkStore.remove`.
  */
-export function removeBookmark(nodes: readonly Bookmark[], id: string): Bookmark[] {
+export function removeBookmark(
+  nodes: readonly Bookmark[],
+  id: string,
+  raw: readonly BookmarkLink[] = []
+): Bookmark[] {
   const existing = findBookmark(nodes, id)
   if (existing === undefined) throw new BookmarkNotFoundError(id)
 
-  const doomed = descendantIdsOf(nodes, id)
+  const doomed = descendantIdsOf([...nodes, ...raw], id)
   doomed.add(id)
   return nodes.filter((node) => !doomed.has(node.id))
 }
@@ -486,18 +547,22 @@ export function removeBookmark(nodes: readonly Bookmark[], id: string): Bookmark
  *     about, and it is silent: the write succeeds, the folder vanishes from the tree, and
  *     only a traversal without a `seen` set would reveal it — by hanging;
  *   - into a bookmark, which is not a container.
+ *
+ * The descendant check walks through the entries kept raw (`raw`), because a ring closed through one
+ * of them is as unreachable as any other.
  */
 export function moveBookmark(
   nodes: readonly Bookmark[],
   id: string,
   parentId: string,
-  toIndex: number
+  toIndex: number,
+  raw: readonly BookmarkLink[] = []
 ): Bookmark[] {
   const existing = findBookmark(nodes, id)
   if (existing === undefined) throw new BookmarkNotFoundError(id)
 
   if (parentId === id) throw new BookmarkNestingError('Cannot move an item into itself')
-  if (isDescendantOf(nodes, parentId, id)) {
+  if (isDescendantOf([...nodes, ...raw], parentId, id)) {
     throw new BookmarkNestingError('Cannot move a folder into one of its own folders')
   }
   assertUsableParent(nodes, parentId)
@@ -633,18 +698,32 @@ export function queryBookmarks(nodes: readonly Bookmark[], query: BookmarkQuery)
  * `classifyOmniboxInput`. Narrowing what counts as an address later would then delete every
  * affected bookmark on the next start — a data-loss trap disguised as a cleanup. The same
  * decision `repairHistory` documents.
+ *
+ * `raw` are the entries the store kept raw. They are not repaired — nothing here may change them —
+ * but every rule above has to know they exist:
+ *
+ *   - **A node claiming a raw entry's id goes**, as one claiming a root id does. The raw entry is
+ *     written back unchanged, so it is the one whose id is fixed; keeping both would put one id in
+ *     the file twice.
+ *   - **A child of a raw entry is not an orphan.** It keeps its `parentId`, because moving it to
+ *     `other` would take it out of the folder a newer build — or a fixed file — will show it in.
+ *   - **A ring through a raw entry is still a ring**, so the walk follows its readable parent.
  */
-export function repairBookmarks(nodes: readonly Bookmark[]): Bookmark[] {
+export function repairBookmarks(
+  nodes: readonly Bookmark[],
+  raw: readonly BookmarkLink[] = []
+): Bookmark[] {
+  const rawIds: ReadonlySet<string> = new Set(raw.map((link) => link.id))
   const byId = new Map<string, Bookmark>()
   for (const node of nodes) {
     // A node claiming a reserved root id is a node that would shadow a root; treated as a
-    // duplicate, which drops it.
-    if (isBookmarkRootId(node.id)) continue
+    // duplicate, which drops it. The same for a raw entry's id.
+    if (isBookmarkRootId(node.id) || rawIds.has(node.id)) continue
     if (byId.has(node.id)) continue
     byId.set(node.id, node.kind === 'folder' && node.url !== '' ? { ...node, url: '' } : node)
   }
 
-  const acyclic = breakCycles(reparentOrphans([...byId.values()]))
+  const acyclic = breakCycles(reparentOrphans([...byId.values()], rawIds), raw)
   /*
     Orphans are healed a second time, after pruning, and that is not belt-and-braces.
 
@@ -653,14 +732,19 @@ export function repairBookmarks(nodes: readonly Bookmark[]): Bookmark[] {
     can take a folder and leave its children, which is exactly the dangling `parentId` the
     first pass just fixed.
   */
-  return reparentOrphans(pruneToLimit(acyclic))
+  return reparentOrphans(pruneToLimit(acyclic), rawIds)
 }
 
-/** Anything whose parent is neither a root nor an existing folder lands in `other`. */
-function reparentOrphans(nodes: readonly Bookmark[]): Bookmark[] {
+/**
+ * Anything whose parent is neither a root, an existing folder nor a raw entry lands in `other`.
+ *
+ * A raw entry counts as a parent whatever its `kind` says, because its `kind` is exactly what this
+ * build may not be able to read.
+ */
+function reparentOrphans(nodes: readonly Bookmark[], rawIds: ReadonlySet<string>): Bookmark[] {
   const folders = new Set(nodes.filter((node) => node.kind === 'folder').map((node) => node.id))
   return nodes.map((node) =>
-    isBookmarkRootId(node.parentId) || folders.has(node.parentId)
+    isBookmarkRootId(node.parentId) || folders.has(node.parentId) || rawIds.has(node.parentId)
       ? node
       : { ...node, parentId: BOOKMARK_OTHER_ID }
   )
@@ -672,9 +756,12 @@ function reparentOrphans(nodes: readonly Bookmark[]): Bookmark[] {
  * Walking up from every node and stopping at a root is the whole test: a chain that never
  * reaches a root is a ring. Cheap enough to run on load — at the cap, ten thousand walks
  * over a tree that is a few levels deep.
+ *
+ * The raw entries' parents are part of the walk, so a ring through one is found; only readable nodes
+ * are re-parented, because a raw entry is written back as it was.
  */
-function breakCycles(nodes: readonly Bookmark[]): Bookmark[] {
-  const parents = new Map(nodes.map((node) => [node.id, node.parentId]))
+function breakCycles(nodes: readonly Bookmark[], raw: readonly BookmarkLink[]): Bookmark[] {
+  const parents = new Map([...raw, ...nodes].map((node) => [node.id, node.parentId]))
   const looping = new Set<string>()
 
   for (const node of nodes) {

@@ -509,6 +509,31 @@ export function PasswordsPage(): React.ReactNode {
           )
         )}
 
+        {/*
+          What opening the document found, when it was not a clean load. Only ever set on an unlocked vault,
+          and each line only when it is true, so a vault that loaded normally shows none of them.
+
+          The read-only line is not repeated for a newer file, whose own sentence already says it; and a
+          document that could not be used is only said to have been kept when the copy was made — that is
+          exactly the case in which the vault is *not* read-only. See `VaultStatus`.
+        */}
+        {vault.newer === true && (
+          <p className="passwords__lockBody">{t('passwords.documentNewer')}</p>
+        )}
+        {vault.invalid === true && vault.readOnly !== true && (
+          <p className="passwords__lockBody">{t('passwords.documentInvalid')}</p>
+        )}
+        {vault.readOnly === true && vault.newer !== true && (
+          <p className="passwords__lockBody">{t('passwords.documentReadOnly')}</p>
+        )}
+        {vault.unreadableEntries !== undefined && (
+          <p className="passwords__lockBody">
+            {vault.unreadableEntries === 1
+              ? t('passwords.unreadableEntry')
+              : t('passwords.unreadableEntries', { count: vault.unreadableEntries })}
+          </p>
+        )}
+
         <div className="passwords__vaultActions">
           {/*
             Locking is offered only when there is something to lock back to.

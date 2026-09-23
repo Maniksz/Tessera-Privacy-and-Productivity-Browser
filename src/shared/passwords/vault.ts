@@ -136,6 +136,26 @@ export interface VaultStatus {
   readonly unreadable: boolean
   /** Shown to the user, so a vault that locks itself is not read as a fault. */
   readonly idleTimeoutMs: number
+  /*
+    What opening the document found, when it was not a clean load. Only ever present on an *unlocked*
+    vault — a locked one has not read its document, and the count below must not reach anything that
+    can ask while it is closed — and only when set, so a vault that loaded normally answers exactly the
+    four fields above.
+  */
+  /**
+   * The document was written by a newer Tessera. What this version can read of it is shown, the file
+   * is left untouched, and every change is refused. See `main/data/store-load.ts`.
+   */
+  readonly newer?: true
+  /**
+   * The document could not be used at all. It was copied aside as `passwords.json.unreadable` and the
+   * vault started empty — or, when even the copy failed, the vault is empty and refuses changes.
+   */
+  readonly invalid?: true
+  /** Nothing is written this run, for either reason above or a backup that could not be made. */
+  readonly readOnly?: true
+  /** Entries kept as they were stored because they failed their schema; never offered or exported. */
+  readonly unreadableEntries?: number
 }
 
 /** Why a proposed master password was refused. Never carries the candidate. */

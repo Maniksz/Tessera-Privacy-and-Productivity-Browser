@@ -41,6 +41,7 @@ import {
 } from '../crypto/vault-key.js'
 import { removeTempFilesOf } from '../data/atomic-write.js'
 import { UnreadableDocumentError, type DocumentCodec } from '../data/JsonStore.js'
+import { removeCopiesOf } from '../data/quarantine.js'
 import { PasswordStore } from '../data/PasswordStore.js'
 import type { AutofillVault } from './AutofillService.js'
 import { applyChromeImport, type ImportTarget } from './import.js'
@@ -291,7 +292,8 @@ export class PasswordVault implements AutofillVault, ImportTarget {
           : vaultKeyProtectionOf(file),
       unlocked: this.#store !== null,
       unreadable: this.#unreadable,
-      idleTimeoutMs: this.#idleTimeoutMs()
+      idleTimeoutMs: this.#idleTimeoutMs(),
+      ...documentStatusOf(this.#store)
     }
   }
 
@@ -597,10 +599,11 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     this.#unreadable = false
 
     await rm(this.#options.documentPath, { force: true })
-    // The store writes through temporaries beside the document, each with a unique name; a leftover
-    // one would be picked up by nothing, but leaving a file full of credentials behind a "delete
-    // everything" is not on.
-    await removeTempFilesOf(this.#options.documentPath)
+    // Everything else that holds credentials beside the document: the temporaries its writes go
+    // through, the `.v<N>.bak` a migration kept, the `.unreadable` copy of a document that could not
+    // be used. A leftover one would be picked up by nothing, but leaving a file full of credentials
+    // behind a "delete everything" is not on. See `quarantine.ts`.
+    await removeCopiesOf(this.#options.documentPath)
     await deleteVaultKeyFile(this.#options.keyFilePath)
 
     await this.#createFreshVault()
@@ -751,5 +754,24 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     const key = this.#key
     this.#key = null
     if (key !== null) key.fill(0)
+  }
+}
+
+/**
+ * The part of `VaultStatus` about the document, from an open store; nothing from a locked vault.
+ *
+ * Only the fields that are set, so a vault whose document loaded cleanly answers exactly what it
+ * answered before these existed. The count in particular is only ever read off an open store: a locked
+ * vault has not read its document, and a status reply is answered while it may be closed.
+ */
+function documentStatusOf(store: PasswordStore | null): Partial<VaultStatus> {
+  if (store === null) return {}
+  const outcome = store.loadReport.outcome.kind
+  const unreadable = store.unreadableEntryCount
+  return {
+    ...(outcome === 'newer' ? { newer: true } : {}),
+    ...(outcome === 'invalid' ? { invalid: true } : {}),
+    ...(store.readOnly ? { readOnly: true } : {}),
+    ...(unreadable > 0 ? { unreadableEntries: unreadable } : {})
   }
 }

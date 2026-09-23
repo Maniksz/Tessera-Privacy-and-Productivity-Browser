@@ -97,7 +97,12 @@ export const vaultStatusSchema = z.object({
   /** The key file exists and cannot be opened at all — no master password will help. */
   unreadable: z.boolean(),
   /** Shown to the user, so a vault that locks itself is not read as a fault. */
-  idleTimeoutMs: z.number()
+  idleTimeoutMs: z.number(),
+  /** The following four only on an unlocked vault whose document did not load cleanly. */
+  newer: z.literal(true).exactOptional(),
+  invalid: z.literal(true).exactOptional(),
+  readOnly: z.literal(true).exactOptional(),
+  unreadableEntries: z.number().int().positive().exactOptional()
 })
 
 const _vaultStatusWireMatchesModel: SameShape<z.output<typeof vaultStatusSchema>, VaultStatus> = true

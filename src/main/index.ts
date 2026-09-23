@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { randomBytes } from 'node:crypto'
+import { domainToASCII, pathToFileURL } from 'node:url'
 import {
   app,
   BrowserWindow,
@@ -14,6 +15,9 @@ import {
   webContents
 } from 'electron'
 import { resolveLocale, translate, type Locale } from '@shared/i18n/catalog.js'
+import { configureFaviconToken } from '@shared/favicons/model.js'
+import { configureThumbnailToken } from '@shared/thumbnails/model.js'
+import { PublicSuffixSubscription, readPublicSuffixBody } from './privacy/PublicSuffixSubscription.js'
 import { SettingsStore } from './settings/SettingsStore.js'
 import { WindowRegistry } from './browser/WindowRegistry.js'
 import { registerIpcHandlers } from './ipc/handlers.js'
@@ -31,6 +35,7 @@ import {
   writeStartupFlags
 } from './startup-flags.js'
 import { openLocalDataProtection } from './data/local-data-protection.js'
+import { describeStoreLoad, type StoreLoadReport } from './data/store-load.js'
 import { applySecureDns } from './session/hardening.js'
 import { registerAsDefaultBrowser, registerInternalProtocol, registerInternalSchemePrivileges } from './protocol.js'
 import {
@@ -46,6 +51,7 @@ import {
   permissionsFile,
   passwordsFile,
   passwordVaultKeyFile,
+  publicSuffixDir,
   quickLinksFile,
   sessionStateFile,
   settingsFile,
@@ -302,6 +308,21 @@ async function main(): Promise<void> {
   applySecureDns(settings.snapshot())
 
   /*
+    The Public Suffix List decides what counts as one site, and several things below key on that:
+    the favicon index, the user's element rules, password autofill, the third-party test. So it is
+    installed here, before any of them opens, from disk only; the download that keeps it current
+    runs later, in the filter lists' channel, and only ever takes effect at the next start, so a site
+    means the same thing from the first key to the last in one run.
+  */
+  const publicSuffixes = new PublicSuffixSubscription({
+    directory: publicSuffixDir(),
+    fetchList: async (url) => readPublicSuffixBody(await net.fetch(url)),
+    toAscii: domainToASCII
+  })
+  await publicSuffixes.load()
+  flushOnExit.push(() => publicSuffixes.whenIdle(), 'public suffix list')
+
+  /*
     Opened before the protocol is registered, and that ordering is load-bearing.
 
     `tessera://favicon` is served by the handler below, so the cache it reads from has to exist by
@@ -319,6 +340,7 @@ async function main(): Promise<void> {
   })
   favicons = faviconStore
   flushOnExit.push(() => faviconStore.flush(), 'favicons')
+  warnAboutStoreLoad('favicons', faviconStore.loadReport)
   if (faviconStore.recoveredFromInvalidFile) {
     console.warn('[favicons] index could not be used; icons will be fetched again')
   }
@@ -348,9 +370,18 @@ async function main(): Promise<void> {
   })
   thumbnails = thumbnailStore
   flushOnExit.push(() => thumbnailStore.flush(), 'thumbnails')
+  warnAboutStoreLoad('thumbnails', thumbnailStore.loadReport)
   if (thumbnailStore.recoveredFromInvalidFile) {
     console.warn('[thumbnails] index could not be used; pictures will be taken again')
   }
+
+  /*
+    Drawn fresh per start, before the protocol can answer. A web page can point an <img> at either
+    cache and learn from load or error whether the user has been somewhere; the token is the one part
+    of the address no page can know, and a new one per start means no address outlives the run.
+  */
+  configureFaviconToken(randomBytes(16).toString('base64url'))
+  configureThumbnailToken(randomBytes(16).toString('base64url'))
 
   // Closed over as locals, not read from the module variables: the handler runs long after this
   // line, and a `?.` there would say a store might be missing when the ordering above is exactly
@@ -371,6 +402,7 @@ async function main(): Promise<void> {
 
   quickLinks = await QuickLinkStore.open({ filePath: quickLinksFile(), codec: protection.codec })
   flushOnExit.push(() => quickLinks?.flush() ?? Promise.resolve(), 'quick links')
+  warnAboutStoreLoad('quicklinks', quickLinks.loadReport)
   if (quickLinks.recoveredFromInvalidFile) {
     console.warn('[quicklinks] file could not be used; started from an empty set')
   }
@@ -383,6 +415,7 @@ async function main(): Promise<void> {
    */
   extensions = await ExtensionStore.open({ filePath: extensionsFile(), codec: protection.codec })
   flushOnExit.push(() => extensions?.flush() ?? Promise.resolve(), 'extensions')
+  warnAboutStoreLoad('extensions', extensions.loadReport)
   const extensionFailures = await extensions.attach(session.defaultSession)
   for (const failure of extensionFailures) {
     console.warn('[extensions] could not reload, dropped from the list:', failure)
@@ -390,6 +423,7 @@ async function main(): Promise<void> {
 
   history = await HistoryStore.open({ filePath: historyFile(), codec: protection.codec })
   flushOnExit.push(() => history?.flush() ?? Promise.resolve(), 'history')
+  warnAboutStoreLoad('history', history.loadReport)
   if (history.recoveredFromInvalidFile) {
     console.warn('[history] file could not be used; started from an empty history')
   }
@@ -421,6 +455,7 @@ async function main(): Promise<void> {
 
   tabGroups = await TabGroupStore.open({ filePath: tabGroupsFile(), codec: protection.codec })
   flushOnExit.push(() => tabGroups?.flush() ?? Promise.resolve(), 'tab groups')
+  warnAboutStoreLoad('tabgroups', tabGroups.loadReport)
   if (tabGroups.recoveredFromInvalidFile) {
     console.warn('[tabgroups] file could not be used; started with no groups')
   }
@@ -439,6 +474,7 @@ async function main(): Promise<void> {
   */
   bookmarks = await BookmarkStore.open({ filePath: bookmarksFile(), codec: protection.codec })
   flushOnExit.push(() => bookmarks?.flush() ?? Promise.resolve(), 'bookmarks')
+  warnAboutStoreLoad('bookmarks', bookmarks.loadReport)
   if (bookmarks.recoveredFromInvalidFile) {
     // Worth a warning rather than a shrug: a bookmark collection is built by hand over years and
     // nothing else can recreate it.
@@ -446,6 +482,7 @@ async function main(): Promise<void> {
   }
   downloads = await DownloadStore.open({ filePath: downloadsFile(), codec: protection.codec })
   flushOnExit.push(() => downloads?.flush() ?? Promise.resolve(), 'downloads')
+  warnAboutStoreLoad('downloads', downloads.loadReport)
 
   /*
     The vault, which owns its own `PasswordStore` rather than being one.
@@ -627,6 +664,7 @@ async function main(): Promise<void> {
 
   sessionStore = await SessionStore.open({ filePath: sessionStateFile(), codec: protection.codec })
   flushOnExit.push(() => sessionStore?.flush() ?? Promise.resolve(), 'session')
+  warnAboutStoreLoad('session', sessionStore.loadReport)
   if (sessionStore.recoveredFromInvalidFile) {
     console.warn('[session] file could not be used; started with no session to restore')
   }
@@ -653,6 +691,7 @@ async function main(): Promise<void> {
   */
   userRules = await UserRuleStore.open({ filePath: userRulesFile(), codec: protection.codec })
   flushOnExit.push(() => userRules?.flush() ?? Promise.resolve(), 'user rules')
+  warnAboutStoreLoad('user-rules', userRules.loadReport)
   if (userRules.recoveredFromInvalidFile) {
     // Worth a warning rather than a shrug: these are rules the user made by hand, and nothing else
     // can recreate them.
@@ -747,6 +786,7 @@ async function main(): Promise<void> {
     codec: protection.codec
   })
   flushOnExit.push(() => permissionStore?.flush() ?? Promise.resolve(), 'permissions')
+  warnAboutStoreLoad('permissions', permissionStore.loadReport)
   if (permissionStore.recoveredFromInvalidFile) {
     console.warn('[permissions] file could not be used; every site will be asked again')
   }
@@ -867,6 +907,7 @@ async function main(): Promise<void> {
     history,
     bookmarks,
     downloads: downloadManager,
+    discardDownloadCopies: () => downloads?.discardCopies() ?? Promise.resolve(),
     passwords: passwordApi,
     prompt: masterPasswordPrompt,
     permissions: permissionArbiter,
@@ -1007,6 +1048,11 @@ async function main(): Promise<void> {
   */
   void filterSubscription.start().catch((error: unknown) => {
     console.warn('[filters] lists could not be compiled:', String(error))
+  })
+  // Same moment and same channel as the filter lists: after the session, its proxy and kill switch
+  // exist. What it fetches is only cached here; the list in force changes at the next start.
+  void publicSuffixes.refresh().catch((error: unknown) => {
+    console.warn('[public-suffix] refresh failed:', String(error))
   })
 
   /*
@@ -1214,6 +1260,19 @@ function nodeAfter(ms: number, callback: () => void): ReturnType<After> {
   return () => {
     clearTimeout(timer)
   }
+}
+
+/**
+ * The one line about a store's load, when there is one: a newer version's file left alone, an older
+ * one upgraded, a broken one copied aside — and whether this run's changes will be kept.
+ *
+ * Next to every store's own `recoveredFromInvalidFile` warning rather than instead of it: that one says
+ * what the store lost, this one says where the original is and what the run may write. The wording is
+ * `describeStoreLoad`'s, so the dozen stores cannot describe one situation a dozen ways.
+ */
+function warnAboutStoreLoad(label: string, report: StoreLoadReport): void {
+  const message = describeStoreLoad(report)
+  if (message !== null) console.warn(`[${label}] ${message}`)
 }
 
 /**
