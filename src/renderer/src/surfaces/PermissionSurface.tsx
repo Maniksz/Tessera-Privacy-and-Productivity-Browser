@@ -30,7 +30,28 @@ import { useI18n } from '../i18n.js'
  * - **The site is named before any button is offered.** Everything rendered comes from the
  *   presentation, so there is no state in which a button exists and the text it agrees to does
  *   not.
+ * - **The buttons wait before they listen.** See `INPUT_DELAY_MS`.
  */
+
+/**
+ * How long the buttons ignore input after the dialogue appears, and again after the window regains
+ * focus.
+ *
+ * A dialogue that answers the first click it receives can be answered by a click aimed at something
+ * else. A page asks at the moment it expects one — it draws a button under where the dialogue will
+ * open, or keeps the user clicking fast — and the click lands on "Allow". Focus is the same trick by
+ * another door: the click that brings the window back to the front is the first click the dialogue
+ * sees. Half a second is longer than a click that was already on its way and shorter than anybody
+ * takes to read the site's name.
+ *
+ * Every button, not only the granting ones: a refusal is remembered too, and a page tricking one out
+ * of the user is still a decision nobody made. Escape is not held — it is a key, it only refuses, and
+ * a page gains nothing by timing it.
+ *
+ * Ignored rather than `disabled`: a disabled button cannot take focus, and focus has to be on Block
+ * from the first frame (see the focus effect below).
+ */
+const INPUT_DELAY_MS = 500
 
 const SUBJECT_LABELS: Readonly<Record<PermissionSubject, MessageKey>> = {
   camera: 'permission.subject.camera',
@@ -67,6 +88,36 @@ export function PermissionSurface({
     },
     [presentation.requestId]
   )
+
+  /*
+    Held for `INPUT_DELAY_MS` from each new request and from each focus the window regains.
+
+    A ref rather than state: nothing on screen changes when the buttons start listening, so there is
+    nothing to render. Keyed on the request id like the focus effect, so the next queued prompt
+    replacing this one in place is a new dialogue to read, while an update that only changes the
+    waiting count leaves the buttons as they were.
+  */
+  const accepting = useRef(false)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const hold = (): void => {
+      accepting.current = false
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        accepting.current = true
+      }, INPUT_DELAY_MS)
+    }
+    hold()
+    window.addEventListener('focus', hold)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('focus', hold)
+    }
+  }, [presentation.requestId])
+
+  const choose = (choice: PermissionAnswer): void => {
+    if (accepting.current) answer(choice)
+  }
 
   /*
     Focus lands on the refusing button, and lands there again for each queued request.
@@ -173,21 +224,17 @@ export function PermissionSurface({
             ref={blockRef}
             type="button"
             className="prompt__button prompt__button--block"
-            onClick={() => answer('block')}
+            onClick={() => choose('block')}
           >
             {t('permission.block')}
           </button>
-          <button
-            type="button"
-            className="prompt__button"
-            onClick={() => answer('allow-once')}
-          >
+          <button type="button" className="prompt__button" onClick={() => choose('allow-once')}>
             {t('permission.allowOnce')}
           </button>
           <button
             type="button"
             className="prompt__button prompt__button--always"
-            onClick={() => answer('allow-always')}
+            onClick={() => choose('allow-always')}
           >
             {t('permission.allowAlways')}
           </button>

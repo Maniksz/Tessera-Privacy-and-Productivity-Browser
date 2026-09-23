@@ -5,8 +5,8 @@ import {
   PERMISSION_SETTINGS,
   decideMediaPermission,
   decidePermission,
-  requestOrigin,
-  toDecision
+  toDecision,
+  topLevelOrigin
 } from '@main/session/permission-policy.js'
 import {
   UNIFORM_IDENTITY,
@@ -16,7 +16,15 @@ import {
   isSameSite,
   normalizeRequestHeaders
 } from '@main/session/headers.js'
-import { classifySender, decideAccess, internalPageOf, isInternalPageUrl } from '@main/ipc/sender-policy.js'
+import {
+  classifySender,
+  decideAccess,
+  internalPageOf,
+  isChromeAddress,
+  isDevServerAddress,
+  isInternalPageUrl,
+  type ChromeAddresses
+} from '@main/ipc/sender-policy.js'
 import {
   INTERNAL_PAGES,
   INTERNAL_PAGE_INVOKE_CHANNELS,
@@ -163,26 +171,47 @@ describe('decideMediaPermission', () => {
   })
 })
 
-describe('requestOrigin', () => {
-  it('prefers the requesting URL', () => {
-    expect(requestOrigin('https://a.example/page', 'https://b.example/')).toBe('https://a.example')
+describe('topLevelOrigin', () => {
+  it("gives a main frame's request the page's origin", () => {
+    expect(
+      topLevelOrigin({ frame: 'https://a.example/page', topLevel: 'https://a.example/other' })
+    ).toBe('https://a.example')
   })
 
-  it('falls back to the sender URL', () => {
-    expect(requestOrigin(null, 'https://b.example/page')).toBe('https://b.example')
+  it('attributes a same-origin subframe to the page', () => {
+    expect(
+      topLevelOrigin({ frame: 'https://a.example/frame', topLevel: 'https://a.example/' })
+    ).toBe('https://a.example')
   })
 
-  it('skips an empty requesting URL', () => {
-    expect(requestOrigin('', 'https://b.example/page')).toBe('https://b.example')
+  it('refuses a frame embedded from another site', () => {
+    // No delegation signal reaches either handler, so the embedded site is never asked for as the page.
+    expect(
+      topLevelOrigin({ frame: 'https://ads.example.net/x', topLevel: 'https://a.example/' })
+    ).toBeNull()
+    // The port is part of the origin.
+    expect(
+      topLevelOrigin({ frame: 'https://a.example:8443/', topLevel: 'https://a.example/' })
+    ).toBeNull()
   })
 
-  it('skips an unparseable candidate', () => {
-    expect(requestOrigin('not a url', 'https://b.example/')).toBe('https://b.example')
+  it('takes the frame as its own top level when there is no page to compare with', () => {
+    // A service worker's check arrives with no webContents.
+    expect(topLevelOrigin({ frame: 'https://a.example', topLevel: null })).toBe('https://a.example')
   })
 
   it('returns null rather than something misleading', () => {
-    expect(requestOrigin(null, null)).toBeNull()
-    expect(requestOrigin('not a url', 'also not a url')).toBeNull()
+    expect(topLevelOrigin({ frame: null, topLevel: 'https://a.example/' })).toBeNull()
+    expect(topLevelOrigin({ frame: null, topLevel: null })).toBeNull()
+    expect(topLevelOrigin({ frame: '', topLevel: 'https://a.example/' })).toBeNull()
+    expect(topLevelOrigin({ frame: 'not a url', topLevel: 'https://a.example/' })).toBeNull()
+    expect(topLevelOrigin({ frame: 'https://a.example/', topLevel: 'not a url' })).toBeNull()
+  })
+
+  it('refuses an opaque origin rather than sharing one answer between all of them', () => {
+    // `new URL('data:…').origin` is the string "null"; remembering under it would cover every such page.
+    expect(topLevelOrigin({ frame: 'data:text/html,hi', topLevel: 'data:text/html,hi' })).toBeNull()
+    expect(topLevelOrigin({ frame: 'about:blank', topLevel: null })).toBeNull()
   })
 })
 
@@ -440,26 +469,176 @@ describe('isInternalPageUrl', () => {
   })
 })
 
-describe('classifySender', () => {
-  it('recognises the chrome UI by identity, not by URL', () => {
-    // In development the chrome UI is served over http; a URL rule loose enough to
-    // accept that would accept a web page too.
+/*
+  Where the chrome surfaces were loaded from, in the two shapes the router can hand over.
+
+  `PACKAGED` is `loadFile` of the bundle: the window's `index.html` and the overlay's `overlay.html`,
+  as `file:` addresses. `DEVELOPMENT` is `pnpm dev`, where both come from electron-vite's server; the
+  bundle is listed there too, because the router computes it either way and the dev server must win.
+*/
+const BUNDLE = ['file:///app/out/renderer/index.html', 'file:///app/out/renderer/overlay.html']
+const PACKAGED: ChromeAddresses = { devServer: null, bundle: BUNDLE }
+const DEVELOPMENT: ChromeAddresses = { devServer: 'http://localhost:5173', bundle: BUNDLE }
+
+/** A main-frame sender that is not the chrome UI, at `frameUrl`. */
+function contentAt(frameUrl: string | null): {
+  frameUrl: string | null
+  isChromeRenderer: boolean
+  isMainFrame: boolean
+} {
+  return { frameUrl, isChromeRenderer: false, isMainFrame: frameUrl !== null }
+}
+
+/** A sender with the chrome UI's identity, at `frameUrl`, in the main frame unless told otherwise. */
+function chromeAt(
+  frameUrl: string | null,
+  isMainFrame = frameUrl !== null
+): { frameUrl: string | null; isChromeRenderer: boolean; isMainFrame: boolean } {
+  return { frameUrl, isChromeRenderer: true, isMainFrame }
+}
+
+describe('isDevServerAddress', () => {
+  it('matches any page of the dev server by origin', () => {
+    // The window loads the root and the overlay loads `/overlay.html`; both are the same server.
+    expect(isDevServerAddress('http://localhost:5173/', 'http://localhost:5173')).toBe(true)
+    expect(isDevServerAddress('http://localhost:5173/overlay.html', 'http://localhost:5173')).toBe(
+      true
+    )
+  })
+
+  it('refuses another port, host or scheme', () => {
+    expect(isDevServerAddress('http://localhost:5174/', 'http://localhost:5173')).toBe(false)
+    expect(isDevServerAddress('http://127.0.0.1:5173/', 'http://localhost:5173')).toBe(false)
+    expect(isDevServerAddress('https://localhost:5173/', 'http://localhost:5173')).toBe(false)
+  })
+
+  it('refuses addresses with no origin to compare, on either side', () => {
+    /*
+      Every `file:` address has the opaque origin "null", and so do most custom schemes. Comparing
+      those as strings would make a dev server named `file:///x` match every file on the disk, so an
+      opaque origin never matches anything — nor does an address that does not parse.
+    */
+    expect(isDevServerAddress('file:///evil/index.html', 'file:///app/')).toBe(false)
+    expect(isDevServerAddress('not a url', 'http://localhost:5173')).toBe(false)
+    expect(isDevServerAddress('http://localhost:5173/', 'not a url')).toBe(false)
+  })
+})
+
+describe('isChromeAddress', () => {
+  it('accepts exactly the bundled chrome documents in a packaged build', () => {
+    expect(isChromeAddress('file:///app/out/renderer/index.html', PACKAGED)).toBe(true)
+    expect(isChromeAddress('file:///app/out/renderer/overlay.html', PACKAGED)).toBe(true)
+  })
+
+  it("refuses every other file, including the bundle's own neighbours", () => {
+    // A downloaded HTML file is a `file:` document too; being local makes nothing trusted.
+    expect(isChromeAddress('file:///app/out/renderer/internal/settings.html', PACKAGED)).toBe(false)
+    expect(isChromeAddress('file:///Users/me/Downloads/index.html', PACKAGED)).toBe(false)
+    expect(isChromeAddress('file://server/app/out/renderer/index.html', PACKAGED)).toBe(false)
+  })
+
+  it('refuses anything that is not a file in a packaged build', () => {
+    expect(isChromeAddress('http://localhost:5173/', PACKAGED)).toBe(false)
+    expect(isChromeAddress('tessera://settings', PACKAGED)).toBe(false)
+    expect(isChromeAddress('not a url', PACKAGED)).toBe(false)
+  })
+
+  it('reads the path the way Chromium and Node may each have spelled it', () => {
+    /*
+      The expected address comes from Node (`pathToFileURL`), the actual one from Chromium's URL
+      canonicaliser, and the two do not percent-encode the same characters or keep a Windows drive
+      letter in the same case. Refusing the chrome UI over an apostrophe in the user's home folder
+      would lock the browser out of its own interface, so both sides are decoded before comparing.
+    */
+    const quoted: ChromeAddresses = { devServer: null, bundle: ["file:///Users/it's/index.html"] }
+    expect(isChromeAddress('file:///Users/it%27s/index.html', quoted)).toBe(true)
+    const windows: ChromeAddresses = {
+      devServer: null,
+      bundle: ['file:///C:/Program%20Files/tessera/resources/app.asar/out/renderer/index.html']
+    }
     expect(
-      classifySender({ frameUrl: 'http://localhost:5173/index.html', isChromeRenderer: true })
-    ).toBe('chrome')
+      isChromeAddress(
+        'file:///c:/Program Files/tessera/resources/app.asar/out/renderer/index.html',
+        windows
+      )
+    ).toBe(true)
+  })
+
+  it('ignores the fragment and the query, which move without a navigation', () => {
+    // Same-document changes never reach the navigation guard, so they say nothing about who is there.
+    expect(isChromeAddress('file:///app/out/renderer/index.html#tab', PACKAGED)).toBe(true)
+    expect(isChromeAddress('file:///app/out/renderer/index.html?x=1', PACKAGED)).toBe(true)
+  })
+
+  it('refuses a path whose escapes do not decode', () => {
+    // `decodeURIComponent` throws on a broken escape, and a throw in a privilege check must end in "no".
+    const broken: ChromeAddresses = { devServer: null, bundle: ['file:///app/%E0%A4%A/index.html'] }
+    expect(isChromeAddress('file:///app/%E0%A4%A/index.html', broken)).toBe(false)
+  })
+
+  it('accepts only the dev server in development, never the bundle beside it', () => {
+    // The window loaded from the server; a `file:` document there is not what the controller loaded.
+    expect(isChromeAddress('http://localhost:5173/', DEVELOPMENT)).toBe(true)
+    expect(isChromeAddress('http://localhost:5173/overlay.html', DEVELOPMENT)).toBe(true)
+    expect(isChromeAddress('file:///app/out/renderer/index.html', DEVELOPMENT)).toBe(false)
+    expect(isChromeAddress('https://evil.example/', DEVELOPMENT)).toBe(false)
+  })
+})
+
+describe('classifySender', () => {
+  it('recognises the chrome UI by identity and by the address it was loaded from', () => {
+    /*
+      Identity first, as before: in development the chrome UI is served over http, and a URL rule
+      loose enough to accept that on its own would accept a web page too. But identity alone is not
+      enough — the navigation guard cannot see a load the core starts, so the router also checks the
+      chrome is still showing what the controller put there.
+    */
+    expect(classifySender(chromeAt('http://localhost:5173/index.html'), DEVELOPMENT)).toBe('chrome')
+    expect(classifySender(chromeAt('file:///app/out/renderer/index.html'), PACKAGED)).toBe('chrome')
+    expect(classifySender(chromeAt('file:///app/out/renderer/overlay.html'), PACKAGED)).toBe(
+      'chrome'
+    )
+  })
+
+  it('does not trust the chrome identity at a foreign address', () => {
+    // The chrome webContents showing a web page is exactly the case the guard exists for; if it
+    // happens anyway, that page must not inherit every channel.
+    expect(classifySender(chromeAt('https://evil.example/'), PACKAGED)).toBe('web-content')
+    expect(classifySender(chromeAt('https://evil.example/'), DEVELOPMENT)).toBe('web-content')
+    // Nor at an internal address: the chrome UI is never an internal page.
+    expect(classifySender(chromeAt('tessera://settings'), PACKAGED)).toBe('web-content')
+  })
+
+  it('does not trust the chrome identity from a subframe', () => {
+    // Even at the chrome's own address: nothing in the chrome UI embeds a frame that should speak.
+    expect(classifySender(chromeAt('file:///app/out/renderer/index.html', false), PACKAGED)).toBe(
+      'web-content'
+    )
+  })
+
+  it('does not trust the chrome identity without a frame', () => {
+    // `senderFrame` is null once the frame has navigated away or gone; no frame, no evidence.
+    expect(classifySender(chromeAt(null), PACKAGED)).toBe('web-content')
+    expect(classifySender(chromeAt(null), DEVELOPMENT)).toBe('web-content')
+    // A main-frame claim with no address to check is still no evidence of where the frame is.
+    expect(classifySender(chromeAt(null, true), PACKAGED)).toBe('web-content')
+  })
+
+  it("does not grant the chrome's address without the chrome's identity", () => {
+    // A tab that loads the dev server in `pnpm dev`, or a downloaded copy of the bundle.
+    expect(classifySender(contentAt('http://localhost:5173/'), DEVELOPMENT)).toBe('web-content')
+    expect(classifySender(contentAt('file:///app/out/renderer/index.html'), PACKAGED)).toBe(
+      'web-content'
+    )
   })
 
   it('recognises an internal page', () => {
-    expect(classifySender({ frameUrl: 'tessera://start', isChromeRenderer: false })).toBe(
-      'internal-page'
-    )
+    expect(classifySender(contentAt('tessera://start'), PACKAGED)).toBe('internal-page')
   })
 
   it('treats everything else as web content', () => {
-    expect(classifySender({ frameUrl: 'https://example.com/', isChromeRenderer: false })).toBe(
-      'web-content'
-    )
-    expect(classifySender({ frameUrl: null, isChromeRenderer: false })).toBe('web-content')
+    expect(classifySender(contentAt('https://example.com/'), PACKAGED)).toBe('web-content')
+    expect(classifySender(contentAt(null), PACKAGED)).toBe('web-content')
   })
 })
 
@@ -511,13 +690,13 @@ describe('internalPageOf', () => {
 })
 
 describe('decideAccess', () => {
-  const chrome = { frameUrl: 'file:///app/index.html', isChromeRenderer: true }
-  const web = { frameUrl: 'https://evil.example/', isChromeRenderer: false }
-  const asPage = (page: string) => ({ frameUrl: `tessera://${page}`, isChromeRenderer: false })
+  const chrome = chromeAt('file:///app/out/renderer/index.html')
+  const web = contentAt('https://evil.example/')
+  const asPage = (page: string) => contentAt(`tessera://${page}`)
 
   it('lets the chrome UI use every channel', () => {
     for (const channel of INVOKE_CHANNELS) {
-      expect(decideAccess(channel, chrome).allowed, channel).toBe(true)
+      expect(decideAccess(channel, chrome, PACKAGED).allowed, channel).toBe(true)
     }
   })
 
@@ -532,7 +711,7 @@ describe('decideAccess', () => {
       const granted = INTERNAL_PAGE_INVOKE_CHANNELS[page] as readonly string[]
       const sender = asPage(page)
       for (const channel of INVOKE_CHANNELS) {
-        expect(decideAccess(channel, sender).allowed, `${page}: ${channel}`).toBe(
+        expect(decideAccess(channel, sender, PACKAGED).allowed, `${page}: ${channel}`).toBe(
           granted.includes(channel)
         )
       }
@@ -544,7 +723,9 @@ describe('decideAccess', () => {
     // become a bridge just by having the right scheme.
     for (const host of ['favicon', 'nope', 'https-only']) {
       for (const channel of INVOKE_CHANNELS) {
-        expect(decideAccess(channel, asPage(host)).allowed, `${host}: ${channel}`).toBe(false)
+        expect(decideAccess(channel, asPage(host), PACKAGED).allowed, `${host}: ${channel}`).toBe(
+          false
+        )
       }
     }
   })
@@ -552,9 +733,9 @@ describe('decideAccess', () => {
   it('serves the bare internal address as the start page, not as nothing', () => {
     // `tessera://` is what the protocol handler resolves to the start page. If the privilege
     // check disagreed, that address would load a start page with no bridge and fail silently.
-    const bare = { frameUrl: 'tessera://', isChromeRenderer: false }
-    expect(decideAccess('quicklinks:list', bare).allowed).toBe(true)
-    expect(decideAccess('settings:set', bare).allowed).toBe(false)
+    const bare = contentAt('tessera://')
+    expect(decideAccess('quicklinks:list', bare, PACKAGED).allowed).toBe(true)
+    expect(decideAccess('settings:set', bare, PACKAGED).allowed).toBe(false)
   })
 
   it('is not fooled by a web address that mentions an internal page', () => {
@@ -564,35 +745,52 @@ describe('decideAccess', () => {
       'https://evil.example/?u=tessera://settings',
       'tessera://x@evil.example'
     ]) {
-      expect(
-        decideAccess('settings:set', { frameUrl: url, isChromeRenderer: false }).allowed,
-        url
-      ).toBe(false)
+      expect(decideAccess('settings:set', contentAt(url), PACKAGED).allowed, url).toBe(false)
     }
   })
 
   it('refuses web content every channel there is', () => {
     for (const channel of INVOKE_CHANNELS) {
-      expect(decideAccess(channel, web).allowed, channel).toBe(false)
+      expect(decideAccess(channel, web, PACKAGED).allowed, channel).toBe(false)
     }
   })
 
   it('refuses a channel name that does not exist', () => {
-    expect(decideAccess('made:up', asPage('start')).allowed).toBe(false)
-    expect(decideAccess('made:up', web).allowed).toBe(false)
+    expect(decideAccess('made:up', asPage('start'), PACKAGED).allowed).toBe(false)
+    expect(decideAccess('made:up', web, PACKAGED).allowed).toBe(false)
   })
 
   it('names both the page and the channel in a refusal', () => {
     // The reason reaches the caller as a thrown error, so it is the only clue anyone gets when a
     // page is missing a permission it ought to have. "internal page may not call X" left out the
     // one detail that now matters.
-    expect(decideAccess('settings:set', web).reason).toContain('web content')
-    const refusal = decideAccess('settings:set', asPage('start')).reason ?? ''
+    expect(decideAccess('settings:set', web, PACKAGED).reason).toContain('web content')
+    const refusal = decideAccess('settings:set', asPage('start'), PACKAGED).reason ?? ''
     expect(refusal).toContain('start')
     expect(refusal).toContain('settings:set')
   })
 
   it('gives no reason when the call is allowed', () => {
-    expect(decideAccess('settings:set', chrome).reason).toBeNull()
+    expect(decideAccess('settings:set', chrome, PACKAGED).reason).toBeNull()
+  })
+
+  it('says why the chrome identity was not enough', () => {
+    // A chrome UI that suddenly cannot call anything is a bug report waiting to happen; the reason
+    // has to say it was the address, not the channel, that failed.
+    const foreign = decideAccess('settings:set', chromeAt('https://evil.example/'), PACKAGED)
+    expect(foreign.allowed).toBe(false)
+    expect(foreign.reason).toContain('chrome UI')
+    expect(foreign.reason).toContain('https://evil.example/')
+    const frameless = decideAccess('settings:set', chromeAt(null), PACKAGED)
+    expect(frameless.allowed).toBe(false)
+    expect(frameless.reason).toContain('no frame')
+  })
+
+  it('lets the chrome UI in development use every channel', () => {
+    for (const channel of INVOKE_CHANNELS) {
+      expect(decideAccess(channel, chromeAt('http://localhost:5173/'), DEVELOPMENT).allowed).toBe(
+        true
+      )
+    }
   })
 })

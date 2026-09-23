@@ -57,6 +57,8 @@ export function registerIpcHandlers(deps: {
   bookmarks: BookmarkStore
   /** Subscribed to every session, and the only thing that knows a live download; see `attach`. */
   downloads: DownloadManager
+  /** Removes the download list's backup and quarantine copies; see `DownloadStore.discardCopies`. */
+  discardDownloadCopies: () => Promise<void>
   /** Everything a passwords page may perform, already measured; see `PasswordApi`. */
   passwords: PasswordApi
   /** Raises the master-password prompt and holds the pending question; see `MasterPasswordPrompt`. */
@@ -83,9 +85,18 @@ export function registerIpcHandlers(deps: {
 }): void {
   const { settings, windows, quickLinks, extensions, history, bookmarks, passwords } = deps
 
-  /** The rule editor for the sending window's browsing mode; a private window's discards. */
-  const editorFor = (event: IpcMainInvokeEvent): UserRuleEditor =>
-    deps.userRules.editorFor(windows.resolve(event)?.privateMode === true ? 'private' : 'normal')
+  /**
+   * The rule editor for the sending window's browsing mode; a private window's discards.
+   *
+   * Refuses when the sender has no window rather than defaulting to `'normal'`: the default is
+   * the one mode that writes to disk, so a settings page whose private window had just closed
+   * would have put its rule into the normal profile.
+   */
+  const editorFor = (event: IpcMainInvokeEvent): UserRuleEditor => {
+    const controller = windows.resolve(event)
+    if (!controller) throw new Error('No window for this request')
+    return deps.userRules.editorFor(controller.privateMode ? 'private' : 'normal')
+  }
 
   // The router must know which renderers are the trusted chrome UI before any
   // handler can run; everything else is refused or restricted to the internal
@@ -247,7 +258,12 @@ export function registerIpcHandlers(deps: {
     // Read per call, so a language change reaches the next refusal rather than the next restart.
     locale: () => activeLocale(settings.get('appearance.uiLanguage'))
   })
-  registerDownloadHandlers({ handle, downloads: deps.downloads, windows })
+  registerDownloadHandlers({
+    handle,
+    downloads: deps.downloads,
+    windows,
+    discardCopies: deps.discardDownloadCopies
+  })
   /*
     The vault, in its own module for the reason permissions are: the thirteen channels and the two
     subscriptions the master-password prompt needs are one mechanism, and a build that registered the
@@ -722,9 +738,12 @@ export function registerIpcHandlers(deps: {
 
   handle('extensions:load', async (_payload, event) => {
     const controller = windows.resolve(event)
+    // Refused rather than shown unparented: a picker for a page whose window is gone would float
+    // over whatever window happens to be in front, answering a question nobody there asked.
+    if (!controller) throw new Error('No window for this request')
     // The path comes from the OS picker, never from the renderer: loading a directory
     // means executing the code in it, so the choice has to be the user's.
-    const result = await dialog.showOpenDialog(controller?.window ?? undefined as never, {
+    const result = await dialog.showOpenDialog(controller.window, {
       properties: ['openDirectory'],
       message: 'Choose an unpacked extension folder'
     })
@@ -788,7 +807,13 @@ export function registerIpcHandlers(deps: {
   handle('history:removeVisit', ({ url }) => ({ removed: history.removeVisit(url) }))
   handle('history:removeDomain', ({ domain }) => ({ removed: history.removeDomain(domain) }))
   handle('history:removeRange', ({ from, to }) => ({ removed: history.removeRange(from, to) }))
-  handle('history:clear', () => ({ removed: history.clear() }))
+  // The copies go too, and before the answer: a history the page reports as cleared must not live on
+  // in a `.v1.bak` or an `.unreadable` beside the file. A failed removal rejects the call.
+  handle('history:clear', async () => {
+    const removed = history.clear()
+    await history.discardCopies()
+    return { removed }
+  })
 
   // --- bookmarks -----------------------------------------------------------
   /*
@@ -800,6 +825,7 @@ export function registerIpcHandlers(deps: {
     the person did and can undo.
   */
   handle('bookmarks:list', () => bookmarks.list())
+  handle('bookmarks:status', () => ({ unreadableEntries: bookmarks.unreadableEntryCount }))
   // Rebuilt key by key: `exactOptionalPropertyTypes` treats an absent field and one holding
   // `undefined` as different types, and a request that crossed IPC has the second shape.
   handle('bookmarks:create', (payload) =>
@@ -846,8 +872,10 @@ export function registerIpcHandlers(deps: {
    */
   handle('bookmarks:import', async (_payload, event) => {
     const controller = windows.resolve(event)
+    // Refused for the same reason as `extensions:load`: no window, nothing to parent the picker to.
+    if (!controller) throw new Error('No window for this request')
     const locale = activeLocale(settings.get('appearance.uiLanguage'))
-    const chosen = await dialog.showOpenDialog(controller?.window ?? (undefined as never), {
+    const chosen = await dialog.showOpenDialog(controller.window, {
       properties: ['openFile'],
       title: translate(locale, 'bookmarks.import'),
       filters: [{ name: 'HTML', extensions: ['html', 'htm'] }]

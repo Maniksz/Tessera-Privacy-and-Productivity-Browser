@@ -1,4 +1,4 @@
-import { WebContentsView, type BrowserWindow } from 'electron'
+import { app, WebContentsView, type BrowserWindow } from 'electron'
 import { join } from 'node:path'
 import {
   capturesKeyboard,
@@ -13,6 +13,8 @@ import {
 } from '@shared/overlay/surface.js'
 import type { Rect, Size } from '@shared/ui/anchor.js'
 import { preloadFile, preloadRoleArgument } from '../paths.js'
+import { devServerUrl } from '../startup-flags.js'
+import { decideChromeNavigation, pendingNavigationOf } from './navigation-policy.js'
 import { notifyOverlayKey } from '../passwords/overlay-keys.js'
 import { notifyOverlayVacancy, type OverlayVacancyReason } from '../permissions/vacancy.js'
 
@@ -262,6 +264,33 @@ export class OverlayLayer {
     this.options.window.contentView.addChildView(view)
 
     /*
+      The overlay shows only the document `#load` puts there.
+
+      It carries the chrome preload and so every IPC channel, which makes it the same prize as the
+      chrome UI and guarded the same way — see `BrowserWindowController.#guardChrome` for the three
+      doors and why each is shut. Here rather than once in the constructor because this is where the
+      view is made: after a crash `#ensureView` builds a new one, and a guard attached to the old
+      `webContents` would leave the replacement open.
+    */
+    const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
+    view.webContents.on('will-frame-navigate', (details) => {
+      const pending = pendingNavigationOf(details, 'frame')
+      if (pending === null) {
+        details.preventDefault()
+        return
+      }
+      const decision = decideChromeNavigation(pending, devServer)
+      if (decision.allowed) return
+      pending.prevent()
+      console.warn(`[overlay] refused: ${decision.reason}`)
+    })
+    view.webContents.on('will-attach-webview', (event) => {
+      event.preventDefault()
+      console.warn('[overlay] refused: the overlay may not attach a <webview>')
+    })
+    view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+
+    /*
       Keystrokes for the surfaces that must not receive their own.
 
       One surface on this layer is a master-password field, and the whole point of it is that the
@@ -306,8 +335,8 @@ export class OverlayLayer {
   }
 
   #load(view: WebContentsView): void {
-    const devServer = process.env.ELECTRON_RENDERER_URL
-    if (devServer !== undefined && devServer !== '') {
+    const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
+    if (devServer !== null) {
       void view.webContents.loadURL(`${devServer}/overlay.html`)
     } else {
       void view.webContents.loadFile(join(__dirname, '../renderer/overlay.html'))

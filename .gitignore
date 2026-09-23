@@ -6,6 +6,9 @@ dist/
 # summary worth reviewing in a diff, the coverage directory is a few thousand generated HTML files.
 coverage/
 .stryker-tmp/
+# Agent worktrees and throwaway spikes live inside the checkout but are never part of it.
+.claude/worktrees/
+scripts/spike-mux/
 *.tsbuildinfo
 .DS_Store
 .env

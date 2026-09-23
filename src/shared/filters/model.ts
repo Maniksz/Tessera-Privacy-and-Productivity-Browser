@@ -75,16 +75,32 @@ export function filterResourceTypeOf(electronResourceType: string): FilterResour
 }
 
 /**
- * Lower-cased hostname of a URL, or null when it has no usable host.
+ * A hostname in the one spelling rules are keyed on: lower case, and without the
+ * trailing dot of its fully-qualified form.
+ *
+ * `example.com.` reaches the same server as `example.com`, so a page can use it to
+ * step out from under every rule written for the host — the network map, the
+ * cosmetic chain and the scriptlet lookup all key on the bare name. One dot and
+ * no more, the same as `normalizeHost` in `shared/url/domain.ts`: `example.com..`
+ * has an empty label and resolves nowhere.
+ */
+export function canonicalHostname(hostname: string): string {
+  const host = hostname.toLowerCase()
+  return host.endsWith('.') ? host.slice(0, -1) : host
+}
+
+/**
+ * Canonical hostname of a URL, or null when it has no usable host.
  *
  * `shared/url/domain.ts` deals in registrable domains, and `$domain=` has to be
  * matched against the full host — `domain=news.yahoo.com` must not be satisfied by
  * any other `yahoo.com` subdomain — so the raw hostname is what is needed here.
+ * Credentials are already gone: `URL` keeps them out of `hostname`.
  */
 export function hostnameOfUrl(url: string): string | null {
   try {
-    const { hostname } = new URL(url)
-    return hostname === '' ? null : hostname.toLowerCase()
+    const host = canonicalHostname(new URL(url).hostname)
+    return host === '' ? null : host
   } catch {
     return null
   }

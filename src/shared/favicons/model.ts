@@ -1,4 +1,4 @@
-import { internalUrl } from '../product.js'
+import { internalUrl, queryParamOf } from '../product.js'
 import { registrableDomain, registrableDomainOfUrl } from '../url/domain.js'
 
 /**
@@ -283,6 +283,38 @@ export const FAVICON_PAGE = 'favicon'
 export const FAVICON_SITE_PARAM = 'site'
 /** Query parameter carrying the retrieval time, so a refreshed icon is a new address. */
 export const FAVICON_VERSION_PARAM = 'v'
+/** Query parameter carrying this run's token; see `configureFaviconToken`. */
+export const FAVICON_TOKEN_PARAM = 't'
+/** The shortest token `configureFaviconToken` takes: anything shorter is guessable. */
+export const MIN_FAVICON_TOKEN_LENGTH = 16
+
+/** `null` until the core configures one, and then no address is accepted at all. */
+let faviconToken: string | null = null
+
+/**
+ * Sets the token every icon address of this run carries, and the only one the handler accepts.
+ *
+ * Without it the cache was a history oracle. Any web page may put
+ * `tessera://favicon?site=bank.example` in an `<img>`, and whether that fired `load` or `error`
+ * told the page whether the user had been to the site. With it, only an address the core built
+ * itself finds anything; a page cannot guess the token, so every address it makes up answers like a
+ * miss.
+ *
+ * The core draws a fresh value per start. An address from an earlier run therefore stops working
+ * with the restart, which is also what keeps the handler's `immutable` caching honest: the address a
+ * new run builds is a new address. A seam rather than a value drawn here, like
+ * `configurePublicSuffixes`: `shared` must stay free of Node built-ins, and the renderers that
+ * import this module only ever receive finished addresses, so they never need the token.
+ *
+ * Refuses a short token rather than storing it, because an empty one would match an address that
+ * says `t=` — the exact guess a page would try first.
+ */
+export function configureFaviconToken(token: string): void {
+  if (token.length < MIN_FAVICON_TOKEN_LENGTH) {
+    throw new RangeError(`a favicon token needs at least ${MIN_FAVICON_TOKEN_LENGTH} characters`)
+  }
+  faviconToken = token
+}
 
 /**
  * The address a renderer puts in an `<img>`.
@@ -290,13 +322,28 @@ export const FAVICON_VERSION_PARAM = 'v'
  * Built from the entry rather than from the domain alone, because the version parameter
  * matters: the file name is stable per site, so without it a refreshed icon would keep
  * the address it already had and Chromium would go on drawing the copy in its memory
- * cache. The handler ignores the parameter; its only job is to change.
+ * cache. The handler ignores the version; its only job is to change.
+ *
+ * Before `configureFaviconToken` the token is empty, which `faviconTokenMatches` never
+ * accepts: an unconfigured core serves no icons rather than serving them to anyone.
  */
 export function faviconUrl(entry: Pick<FaviconEntry, 'domain' | 'fetchedAt'>): string {
   return internalUrl(FAVICON_PAGE, {
     [FAVICON_SITE_PARAM]: entry.domain,
-    [FAVICON_VERSION_PARAM]: entry.fetchedAt.toString(36)
+    [FAVICON_VERSION_PARAM]: entry.fetchedAt.toString(36),
+    [FAVICON_TOKEN_PARAM]: faviconToken ?? ''
   })
+}
+
+/**
+ * Whether an icon address carries this run's token.
+ *
+ * Separate from `faviconSiteOf` so the handler can ask it first, before anything about the
+ * address reaches the store: a wrong token must cost exactly what a miss costs, with no lookup in
+ * between whose timing could tell the two apart.
+ */
+export function faviconTokenMatches(url: string): boolean {
+  return faviconToken !== null && queryParamOf(url, FAVICON_TOKEN_PARAM) === faviconToken
 }
 
 /**
@@ -306,13 +353,7 @@ export function faviconUrl(entry: Pick<FaviconEntry, 'domain' | 'fetchedAt'>): s
  * `faviconDomainKey`, so what comes back is a key to look up and never a path fragment.
  */
 export function faviconSiteOf(url: string): string | null {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return null
-  }
-  const site = parsed.searchParams.get(FAVICON_SITE_PARAM)
+  const site = queryParamOf(url, FAVICON_SITE_PARAM)
   if (site === null) return null
   return faviconDomainKey(site)
 }

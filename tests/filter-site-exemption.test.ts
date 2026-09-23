@@ -30,6 +30,11 @@ describe('which documents an exemption can be keyed on', () => {
     expect(exemptionHostOf('https://Shop.EXAMPLE/')).toBe('shop.example')
   })
 
+  it('drops the trailing dot of a fully-qualified host, so one site is stored one way', () => {
+    expect(exemptionHostOf('https://u:p@Shop.Example./a')).toBe('shop.example')
+    expect(exemptionHostOf('https://./')).toBeNull()
+  })
+
   it('refuses anything that is not a web page', () => {
     /*
       The same boundary the element picker uses, and for the same reason: there is nothing to key a rule
@@ -86,6 +91,9 @@ describe('toggling a site', () => {
 
   it('normalises what it stores', () => {
     expect(withSiteExemption([], '  Shop.EXAMPLE ', true)).toEqual(['shop.example'])
+    expect(withSiteExemption([], 'shop.example.', true)).toEqual(['shop.example'])
+    const kept = ['shop.example']
+    expect(withSiteExemption(kept, ' . ', true)).toBe(kept)
   })
 
   it('does not add a host something already covers', () => {

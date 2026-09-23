@@ -73,34 +73,53 @@ export const MAX_MASTER_PASSWORD_LENGTH = 1024
 /**
  * How `passwords.key` is protected on this machine.
  *
- * Four values rather than a pair of booleans, because these are the four sentences the passwords
- * page has to be able to say, and a boolean pair invites a fifth that means nothing.
+ * Named values rather than a set of booleans, because these are the sentences the passwords page has
+ * to be able to say, and booleans invite a combination that means nothing.
  *
  *   - `keystore+master` — both layers. What the design is for.
+ *   - `weak-keystore+master` — both layers on paper, but the key store is Linux's basic text, which
+ *     wraps with a key built into the browser. In effect the master password alone.
  *   - `master` — a master password and no key store. The Linux-without-a-keyring case, and the one
  *     where a master password matters most: it is the only thing between the profile directory and
  *     the vault.
  *   - `keystore` — the key store alone. Today's protection, and the honest description of it is
  *     that anyone already logged in as this user can read the vault.
+ *   - `weak-keystore` — basic text alone. Anyone who can read the profile directory can unwrap the
+ *     key, so this is `plain` with an extra step, and the page says so as loudly.
  *   - `plain` — neither. The key sits in the profile directory in readable form beside the document
  *     it protects, which is to say the vault is not protected at all. It is still *offered*, because
  *     a browser that refuses to run on a keyring-less desktop is not private, only unavailable —
  *     the same trade `local-data-protection.ts` makes, and it has to be said out loud in the same
  *     way.
+ *
+ * The two weak values come from this run's key store, not from the file (`classifyKeystore` in
+ * `main/crypto/keystore-strength.ts`): the file records that a key store wrapped the key, and that
+ * stays true however little the key store turned out to be worth.
  */
-export type VaultKeyProtection = 'keystore+master' | 'master' | 'keystore' | 'plain'
+export type VaultKeyProtection =
+  'keystore+master' | 'weak-keystore+master' | 'master' | 'keystore' | 'weak-keystore' | 'plain'
 
 export function vaultKeyProtection(options: {
   readonly keystore: boolean
+  /** The key store this run has is Linux's basic text or one this build cannot vouch for. */
+  readonly weakKeystore: boolean
   readonly masterPassword: boolean
 }): VaultKeyProtection {
-  if (options.masterPassword) return options.keystore ? 'keystore+master' : 'master'
-  return options.keystore ? 'keystore' : 'plain'
+  if (options.masterPassword) {
+    if (!options.keystore) return 'master'
+    return options.weakKeystore ? 'weak-keystore+master' : 'keystore+master'
+  }
+  if (!options.keystore) return 'plain'
+  return options.weakKeystore ? 'weak-keystore' : 'keystore'
 }
 
 /** Whether a master password guards the key. The one question the lock panel turns on. */
 export function vaultHasMasterPassword(protection: VaultKeyProtection): boolean {
-  return protection === 'keystore+master' || protection === 'master'
+  return (
+    protection === 'keystore+master' ||
+    protection === 'weak-keystore+master' ||
+    protection === 'master'
+  )
 }
 
 /**
@@ -111,7 +130,7 @@ export function vaultHasMasterPassword(protection: VaultKeyProtection): boolean 
  * page the place that knows which of four values is the bad one.
  */
 export function vaultKeyIsExposed(protection: VaultKeyProtection): boolean {
-  return protection === 'plain'
+  return protection === 'plain' || protection === 'weak-keystore'
 }
 
 /**
@@ -136,6 +155,29 @@ export interface VaultStatus {
   readonly unreadable: boolean
   /** Shown to the user, so a vault that locks itself is not read as a fault. */
   readonly idleTimeoutMs: number
+  /*
+    What opening the document found, when it was not a clean load. Only ever present on an *unlocked*
+    vault — a locked one has not read its document, and the count below must not reach anything that
+    can ask while it is closed — and only when set, so a vault that loaded normally answers exactly the
+    four fields above. The exception is `newer` for a key file, which says nothing about the contents.
+  */
+  /**
+   * The document was written by a newer Tessera. What this version can read of it is shown, the file
+   * is left untouched, and every change is refused. See `main/data/store-load.ts`.
+   *
+   * The one case on a *locked* vault: the key file itself is from a newer Tessera. `unreadable` is
+   * then true as well, and the page offers no reset, because the newer version can still open it.
+   */
+  readonly newer?: true
+  /**
+   * The document could not be used at all. It was copied aside as `passwords.json.unreadable` and the
+   * vault started empty — or, when even the copy failed, the vault is empty and refuses changes.
+   */
+  readonly invalid?: true
+  /** Nothing is written this run, for either reason above or a backup that could not be made. */
+  readonly readOnly?: true
+  /** Entries kept as they were stored because they failed their schema; never offered or exported. */
+  readonly unreadableEntries?: number
 }
 
 /** Why a proposed master password was refused. Never carries the candidate. */

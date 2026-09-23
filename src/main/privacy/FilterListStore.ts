@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { writeFileAtomically } from '../data/atomic-write.js'
 
 /**
  * Filter lists on disk, with a refresh that runs rarely.
@@ -67,6 +68,16 @@ export interface FilterListStoreOptions {
   /** Injected so staleness is decidable in a test without waiting five days. */
   readonly now: () => number
   readonly maxAgeMs?: number
+  /**
+   * Decides whether a downloaded body may replace the cached copy: the reason for refusing it, or
+   * `null` to accept.
+   *
+   * Runs before anything is written, and a refusal is handled exactly like a failed download — the
+   * copy on disk and its manifest entry stay as they were. That ordering is the point: a body that
+   * is written first and judged afterwards is a body the next start reads. The Public Suffix List
+   * needs this; filter lists pass none and keep everything they fetch.
+   */
+  readonly verify?: (text: string, url: string) => string | null
 }
 
 function messageOf(error: unknown): string {
@@ -95,11 +106,11 @@ function cacheFileName(url: string): string {
 }
 
 async function writeAtomically(path: string, contents: string): Promise<void> {
-  // Write then rename: a crash mid-write leaves the previous list intact rather
-  // than a truncated one that would parse into a blocker with holes in it.
-  const temporary = `${path}.tmp`
-  await writeFile(temporary, contents, 'utf8')
-  await rename(temporary, path)
+  // A crash mid-write leaves the previous list intact rather than a truncated one
+  // that would parse into a blocker with holes in it. No mode: this is a public
+  // list in a cache directory. A leftover temporary needs no sweep of its own,
+  // because `#prune` removes every file the manifest does not name.
+  await writeFileAtomically(path, contents)
 }
 
 export class FilterListStore {
@@ -107,12 +118,14 @@ export class FilterListStore {
   readonly #fetchList: (url: string) => Promise<string>
   readonly #now: () => number
   readonly #maxAgeMs: number
+  readonly #verify: (text: string, url: string) => string | null
 
   constructor(options: FilterListStoreOptions) {
     this.#directory = options.directory
     this.#fetchList = options.fetchList
     this.#now = options.now
     this.#maxAgeMs = options.maxAgeMs ?? DEFAULT_LIST_MAX_AGE_MS
+    this.#verify = options.verify ?? ((): null => null)
   }
 
   #manifestPath(): string {
@@ -170,6 +183,10 @@ export class FilterListStore {
       }
       try {
         const text = await this.#fetchList(url)
+        const refusal = this.#verify(text, url)
+        // Thrown into the failure path below, so a refused body keeps the old copy for the same
+        // reason a failed download does.
+        if (refusal !== null) throw new Error(refusal)
         const file = cacheFileName(url)
         await writeAtomically(join(this.#directory, file), text)
         next[url] = { file, fetchedAt: this.#now() }

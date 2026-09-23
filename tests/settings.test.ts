@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -184,7 +184,23 @@ describe('SettingsStore', () => {
 
     const contents: unknown = JSON.parse(await readFile(file, 'utf8'))
     expect((contents as Record<string, unknown>)['appearance.theme']).toBe('dark')
-    await expect(readFile(`${file}.tmp`, 'utf8')).rejects.toThrow()
+    // The listing, not one guessed name: temporaries are uniquely named (`atomic-write.ts`).
+    expect(await readdir(dir)).toEqual(['settings.json'])
+  })
+
+  it('removes the temporaries a crash left behind when it opens', async () => {
+    // One from before temporaries had unique names and one from after; both are copies of the
+    // settings that nothing else would ever remove.
+    const dir = await mkdtemp(join(tmpdir(), 'tessera-settings-'))
+    const file = join(dir, 'settings.json')
+    await writeFile(file, JSON.stringify({ 'appearance.theme': 'dark' }), 'utf8')
+    await writeFile(`${file}.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${file}.4242-0a1b2c3d4e5f.tmp`, 'interrupted', 'utf8')
+
+    const store = await SettingsStore.open(file)
+
+    expect(store.get('appearance.theme')).toBe('dark')
+    expect(await readdir(dir)).toEqual(['settings.json'])
   })
 
   it('keeps unknown keys from the file and reports them', async () => {

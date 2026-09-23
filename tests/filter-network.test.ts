@@ -157,6 +157,163 @@ describe('$important', () => {
   })
 })
 
+describe('an important exception', () => {
+  // `@@…$important` is the one thing a list can say to overrule an important
+  // block. Filed with the ordinary exceptions it was unreachable: important blocks
+  // are settled before that bucket is ever consulted.
+  it('outranks an important block', () => {
+    const index = indexFrom('||x.net^$important', '@@||x.net^$important')
+    expect(blocks(index, 'https://cdn.x.net/a.js')).toBe(false)
+    expect(decidingRule(index, 'https://cdn.x.net/a.js')).toBe('@@||x.net^$important')
+  })
+
+  it('is needed for that: an ordinary exception does not outrank one', () => {
+    const index = indexFrom('||x.net^$important', '@@||x.net^')
+    expect(blocks(index, 'https://cdn.x.net/a.js')).toBe(true)
+  })
+
+  it('still beats an ordinary block, being an exception first of all', () => {
+    const index = indexFrom('||x.net^', '@@||x.net^$important')
+    expect(blocks(index, 'https://cdn.x.net/a.js')).toBe(false)
+    expect(decidingRule(index, 'https://cdn.x.net/a.js')).toBe('@@||x.net^$important')
+  })
+
+  it('does nothing on its own', () => {
+    expect(decidingRule(indexFrom('@@||x.net^$important'), 'https://cdn.x.net/a.js')).toBeNull()
+  })
+})
+
+describe('an exception for a whole page ($document)', () => {
+  /*
+    `@@||example.com^$document` says "do not filter on example.com", which is a
+    statement about the *page* a request belongs to, not about the request's own
+    address. Read as a type option it only ever let the page's own navigation
+    through, and every tracker the page pulled in was blocked regardless.
+  */
+  const index = indexFrom('@@||example.com^$document', '||tracker.net^')
+  const tracker = 'https://cdn.tracker.net/t.js'
+
+  it('lets the page it names load what it asks for', () => {
+    expect(blocks(index, tracker, { documentUrl: 'https://example.com/article' })).toBe(false)
+  })
+
+  it('covers a subdomain of that page, as its host anchor says', () => {
+    expect(blocks(index, tracker, { documentUrl: 'https://www.example.com/' })).toBe(false)
+  })
+
+  it('leaves every other page filtered', () => {
+    expect(blocks(index, tracker, { documentUrl: 'https://other.com/' })).toBe(true)
+  })
+
+  it('is named as the deciding rule when it wins', () => {
+    expect(decidingRule(index, tracker, { documentUrl: 'https://example.com/' })).toBe(
+      '@@||example.com^$document'
+    )
+  })
+
+  it('does nothing for a request whose page is unknown', () => {
+    expect(blocks(index, tracker, { documentUrl: null })).toBe(true)
+  })
+
+  it('does not wave through a navigation away from the page it names', () => {
+    // For a navigation the page is the request itself; `documentUrl` names the page
+    // being left, and an exception for that one says nothing about the next.
+    const strict = indexFrom('@@||example.com^$document', '||tracker.net^$document')
+    expect(
+      blocks(strict, 'https://tracker.net/', {
+        documentUrl: 'https://example.com/',
+        type: 'document'
+      })
+    ).toBe(true)
+  })
+
+  it('still lets the page it names load itself', () => {
+    const strict = indexFrom('||example.com^$document', '@@||example.com^$document')
+    expect(blocks(strict, 'https://example.com/', { type: 'document' })).toBe(false)
+  })
+
+  it('needs the option: a plain exception covers only its own requests', () => {
+    const plain = indexFrom('@@||example.com^', '||tracker.net^')
+    expect(blocks(plain, tracker, { documentUrl: 'https://example.com/' })).toBe(true)
+  })
+
+  it('matches the page by its whole pattern, not only by its host', () => {
+    const scoped = indexFrom('@@|https://example.com/app/$document', '||tracker.net^')
+    expect(blocks(scoped, tracker, { documentUrl: 'https://example.com/app/x' })).toBe(false)
+    expect(blocks(scoped, tracker, { documentUrl: 'https://example.com/blog/' })).toBe(true)
+  })
+
+  it('reads the page through the same spellings a request is read through', () => {
+    expect(blocks(index, tracker, { documentUrl: 'https://u:p@example.com./' })).toBe(false)
+  })
+
+  it('does not outrank an important block', () => {
+    const important = indexFrom('@@||example.com^$document', '||tracker.net^$important')
+    expect(blocks(important, tracker, { documentUrl: 'https://example.com/' })).toBe(true)
+  })
+
+  it('outranks one when it is important itself', () => {
+    const both = indexFrom('@@||example.com^$document,important', '||tracker.net^$important')
+    expect(blocks(both, tracker, { documentUrl: 'https://example.com/' })).toBe(false)
+    expect(blocks(both, tracker, { documentUrl: 'https://other.com/' })).toBe(true)
+  })
+
+  it('beats an ordinary block when it is important', () => {
+    const important = indexFrom('@@||example.com^$document,important', '||tracker.net^')
+    expect(blocks(important, tracker, { documentUrl: 'https://example.com/' })).toBe(false)
+  })
+})
+
+describe('a URL spelled to slip past a rule', () => {
+  /*
+    Both spellings reach the same server, so both have to meet the same rules. A
+    trailing dot is the fully-qualified form of a host name, and credentials in
+    front of the host are not part of it; either one used to move the host out from
+    under `||domain^`.
+  */
+  const index = indexFrom('||doubleclick.net^', '||ads.example.com/banner/')
+
+  it('blocks a host written with the trailing dot of its fully-qualified form', () => {
+    expect(blocks(index, 'https://ads.doubleclick.net./x.js')).toBe(true)
+  })
+
+  it('blocks it with a port after the dot', () => {
+    expect(blocks(index, 'https://ads.doubleclick.net.:8443/x.js')).toBe(true)
+  })
+
+  it('blocks a host behind credentials', () => {
+    expect(blocks(index, 'https://u:p@ads.doubleclick.net/x.js')).toBe(true)
+  })
+
+  it('anchors a path rule after the credentials rather than inside them', () => {
+    expect(blocks(index, 'https://u:p@ads.example.com/banner/1.gif')).toBe(true)
+  })
+
+  it('takes the last @ as the end of the credentials', () => {
+    expect(blocks(index, 'https://a@b@ads.doubleclick.net/x.js')).toBe(true)
+  })
+
+  it('files a rule written with the trailing dot under the host it names', () => {
+    // A hosts file or a list may spell the host fully qualified. Requests are looked
+    // up under the dotless form, so a key that kept its dot would never be met.
+    const dotted = indexFrom('||tracker.example.^', '0.0.0.0 hosts.example.')
+    expect(blocks(dotted, 'https://tracker.example/x.js')).toBe(true)
+    expect(blocks(dotted, 'https://hosts.example/x.js')).toBe(true)
+  })
+
+  it('does not mistake credentials for the host', () => {
+    expect(blocks(index, 'https://doubleclick.net@example.com/x.js')).toBe(false)
+  })
+
+  it('does not read an @ in the path as credentials', () => {
+    expect(blocks(index, 'https://example.com/@ads.doubleclick.net/x.js')).toBe(false)
+  })
+
+  it('strips only a dot that ends the host', () => {
+    expect(blocks(index, 'https://doubleclick.net.example.com/x.js')).toBe(false)
+  })
+})
+
 describe('$third-party', () => {
   const index = indexFrom('||0emm.com^$third-party')
 
@@ -557,7 +714,25 @@ describe('the index itself', () => {
     expect(index.block.size).toBe(3)
     expect(index.allow.size).toBe(1)
     expect(index.important.size).toBe(1)
+    expect(index.importantAllow.size).toBe(0)
+    expect(index.pageAllow.size).toBe(0)
+    expect(index.importantPageAllow.size).toBe(0)
     expect(index.ruleCount).toBe(5)
+  })
+
+  it('files each exception by its rank, and a page exception once more for its page', () => {
+    // A `$document` exception is asked about twice: by the page's own navigation,
+    // which is an ordinary request, and by everything the page then loads.
+    const shaped = indexFrom(
+      '@@||a.com^$important',
+      '@@||b.com^$document',
+      '@@||c.com^$document,important'
+    )
+    expect(shaped.allow.size).toBe(1)
+    expect(shaped.importantAllow.size).toBe(2)
+    expect(shaped.pageAllow.size).toBe(1)
+    expect(shaped.importantPageAllow.size).toBe(1)
+    expect(shaped.ruleCount).toBe(3)
   })
 
   it('files plain host rules in the hostname map, not under a token', () => {

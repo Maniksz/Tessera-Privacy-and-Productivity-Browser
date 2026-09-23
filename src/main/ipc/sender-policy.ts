@@ -8,7 +8,8 @@
  * Two kinds of sender exist:
  *
  *   - the **chrome UI**, our own trusted window renderer, which may call
- *     everything;
+ *     everything — but only from its main frame, at the address the core
+ *     loaded it from;
  *   - an **internal page** (`tessera://…`), our own code but rendered in a
  *     sandboxed content process, which may call only the narrow allowlist in
  *     `INTERNAL_INVOKE_CHANNELS`.
@@ -33,6 +34,25 @@ export interface SenderDescription {
   frameUrl: string | null
   /** True when the sender is the window's own chrome renderer. */
   isChromeRenderer: boolean
+  /**
+   * True when the sending frame is its page's main frame. False for a subframe, and false when
+   * there is no frame to ask — `senderFrame` is null once the frame has navigated or gone.
+   */
+  isMainFrame: boolean
+}
+
+/**
+ * Where the chrome surfaces — the window's UI and its overlay layer — were loaded from.
+ *
+ * Handed in by the router rather than worked out here, so this file stays free of Electron and of
+ * `__dirname`. Exactly one of the two applies: with a dev server, `BrowserWindowController` and
+ * `OverlayLayer` load from it and the bundle is never loaded; without one, they `loadFile` the bundle.
+ */
+export interface ChromeAddresses {
+  /** electron-vite's server in `pnpm dev`, as `devServerUrl` reads it; `null` everywhere else. */
+  devServer: string | null
+  /** The `file:` addresses of the bundled chrome documents, `index.html` and `overlay.html`. */
+  bundle: readonly string[]
 }
 
 /**
@@ -41,12 +61,84 @@ export interface SenderDescription {
  * The chrome check comes first and is identity-based (the caller matches the
  * sender against its own window list) rather than URL-based: in development the
  * chrome UI is served from an http dev server, and a URL rule that accepted that
- * would accept any http page.
+ * on its own would accept any http page.
+ *
+ * Identity is necessary but no longer sufficient. The chrome webContents is trusted because of
+ * what the core loaded into it, and the navigation guard in `BrowserWindowController` and
+ * `OverlayLayer` keeps it there only for navigations the page starts — a load the core itself
+ * starts never reaches that guard. So the identity counts only from the main frame, at the address
+ * the controller loaded. Anything else with the chrome's identity is treated as what it then is:
+ * content that has no business with IPC. It does not fall through to the internal-page rule
+ * either; the chrome UI is never an internal page, whatever address it shows.
  */
-export function classifySender(sender: SenderDescription): SenderKind {
-  if (sender.isChromeRenderer) return 'chrome'
+export function classifySender(sender: SenderDescription, chrome: ChromeAddresses): SenderKind {
+  if (sender.isChromeRenderer) {
+    const atHome =
+      sender.isMainFrame && sender.frameUrl !== null && isChromeAddress(sender.frameUrl, chrome)
+    return atHome ? 'chrome' : 'web-content'
+  }
   if (sender.frameUrl !== null && isInternalPageUrl(sender.frameUrl)) return 'internal-page'
   return 'web-content'
+}
+
+/**
+ * Whether `frameUrl` is where the chrome surfaces were loaded from.
+ *
+ * With a dev server, any page of it counts — the window loads its root and the overlay
+ * `/overlay.html` — and nothing else does, the bundle included, because in that mode the bundle is
+ * not what the controller loaded. Without one, exactly the bundled chrome documents count.
+ */
+export function isChromeAddress(frameUrl: string, chrome: ChromeAddresses): boolean {
+  if (chrome.devServer !== null) return isDevServerAddress(frameUrl, chrome.devServer)
+  const document = bundledDocumentOf(frameUrl)
+  return (
+    document !== null && chrome.bundle.some((expected) => bundledDocumentOf(expected) === document)
+  )
+}
+
+/**
+ * Whether `url` is a page of the dev server, compared by origin.
+ *
+ * An opaque origin never matches. Every `file:` address has the origin "null", so comparing those
+ * as strings would make a dev server named `file:///x` match every file on the disk.
+ */
+export function isDevServerAddress(url: string, devServer: string): boolean {
+  const origin = webOriginOf(url)
+  return origin !== null && origin === webOriginOf(devServer)
+}
+
+function webOriginOf(url: string): string | null {
+  if (!URL.canParse(url)) return null
+  const { origin } = new URL(url)
+  return origin === 'null' ? null : origin
+}
+
+/**
+ * A `file:` address reduced to the document it names, or `null` for anything else.
+ *
+ * The expected address is Node's (`pathToFileURL`) and the actual one Chromium's, and the two do
+ * not percent-encode the same characters or keep a Windows drive letter in the same case. A
+ * mismatch there would lock the browser out of its own interface over an apostrophe in a folder
+ * name, so the path is decoded and the drive letter upper-cased before comparing. Query and
+ * fragment are dropped: both can change without a navigation, so they say nothing about which
+ * document is loaded. A path whose escapes do not decode is `null`, never a crash in a privilege
+ * check.
+ */
+function bundledDocumentOf(url: string): string | null {
+  if (!URL.canParse(url)) return null
+  const parsed = new URL(url)
+  if (parsed.protocol !== 'file:') return null
+  let path: string
+  try {
+    path = decodeURIComponent(parsed.pathname)
+  } catch {
+    return null
+  }
+  const withDrive = path.replace(
+    /^\/([a-z]):/i,
+    (_match, drive: string) => `/${drive.toUpperCase()}:`
+  )
+  return `${parsed.host}${withDrive}`
 }
 
 export function isInternalPageUrl(url: string): boolean {
@@ -90,8 +182,12 @@ export interface AccessDecision {
 /**
  * Decides whether `channel` may be invoked by this sender.
  */
-export function decideAccess(channel: string, sender: SenderDescription): AccessDecision {
-  const kind = classifySender(sender)
+export function decideAccess(
+  channel: string,
+  sender: SenderDescription,
+  chrome: ChromeAddresses
+): AccessDecision {
+  const kind = classifySender(sender, chrome)
 
   if (kind === 'chrome') return { allowed: true, reason: null }
 
@@ -112,6 +208,16 @@ export function decideAccess(channel: string, sender: SenderDescription): Access
     return {
       allowed: false,
       reason: `internal page ${page} may not call ${channel}`
+    }
+  }
+
+  if (sender.isChromeRenderer) {
+    // Said separately, because "web content may not use IPC" from the chrome UI would send whoever
+    // reads it looking for the wrong bug.
+    const where = sender.frameUrl ?? 'no frame'
+    return {
+      allowed: false,
+      reason: `the chrome UI may call ${channel} only from its own document in its main frame (sender: ${where})`
     }
   }
 

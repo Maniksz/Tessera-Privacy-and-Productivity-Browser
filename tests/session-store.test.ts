@@ -378,7 +378,10 @@ describe('a run beginning', () => {
     await store.beginRun(RESTORE)
     expect((await stored(filePath)).pendingRestores).toBe(1)
 
+    // The timer fires after a millisecond; its write goes through the fsyncing helper, which under a
+    // loaded run can take longer than any fixed wait. Flushing waits for that write itself.
     await settle()
+    await store.flush()
     expect((await stored(filePath)).pendingRestores).toBe(0)
   })
 
@@ -507,9 +510,15 @@ describe('a file this build did not write', () => {
     expect(await store.beginRun(RESTORE)).toEqual({ kind: 'skip', reason: 'nothing-to-restore' })
   })
 
-  it('starts clean from a version it does not know', async () => {
-    const { store } = await openStore({ seed: { version: 2, windows: [SAVED_WINDOW] } })
-    expect(store.recoveredFromInvalidFile).toBe(true)
+  it('starts clean from a newer version, and leaves that file as it found it', async () => {
+    // Not a broken file but one a newer Tessera wrote: it must still be there, unchanged, when the
+    // user goes back to that version.
+    const seed = { version: 2, windows: [SAVED_WINDOW] }
+    const { store, filePath } = await openStore({ seed })
+    expect(store.recoveredFromInvalidFile).toBe(false)
+    expect(store.loadReport.outcome).toEqual({ kind: 'newer', version: 2 })
+    await store.flush()
+    expect(await readFile(filePath, 'utf8')).toBe(JSON.stringify(seed))
   })
 
   it('refuses to let two tabs share an id across two windows', async () => {

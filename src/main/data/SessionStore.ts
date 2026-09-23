@@ -17,6 +17,8 @@ import {
 } from '@shared/session/model.js'
 import { planRestore, type RestorePlan, type RestoreSettings } from '@shared/session/restore.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 // The same named pair, imported rather than redeclared, so `'private'` means one thing
 // across the core. `recorderFor` here and there are the same idea.
 import type { BrowsingMode } from './HistoryStore.js'
@@ -63,7 +65,7 @@ import type { BrowsingMode } from './HistoryStore.js'
  * and an id that is not a string is precisely the input that could produce two tabs
  * answering to one name once ids start coming back across a restart.
  */
-const sessionTabSchema = z.object({
+const sessionTabSchema = z.looseObject({
   id: z.string().min(1),
   url: z.string().catch(''),
   pendingUrl: z.string().nullable().catch(null),
@@ -73,7 +75,7 @@ const sessionTabSchema = z.object({
   zoomPercent: z.number().int().nullable().catch(null)
 })
 
-const sessionWindowSchema = z.object({
+const sessionWindowSchema = z.looseObject({
   id: z.string().min(1),
   open: z.boolean().catch(false),
   layout: z.enum(LAYOUT_IDS).catch('1x1'),
@@ -82,7 +84,7 @@ const sessionWindowSchema = z.object({
   tabs: z.array(sessionTabSchema)
 })
 
-const sessionDocumentSchema = z.object({
+const sessionDocumentSchema = z.looseObject({
   version: z.literal(1),
   windows: z.array(sessionWindowSchema),
   pendingRestores: z.number().int().nonnegative().catch(0)
@@ -94,9 +96,9 @@ const sessionDocumentSchema = z.object({
  * direction, and the schema cannot live next to the interfaces: a restored strip is drawn
  * by a renderer, and zod must not reach its bundle.
  */
-type SchemaTab = z.output<typeof sessionTabSchema>
-type SchemaWindow = z.output<typeof sessionWindowSchema>
-type SchemaDocument = z.output<typeof sessionDocumentSchema>
+type SchemaTab = KnownFields<z.output<typeof sessionTabSchema>>
+type SchemaWindow = KnownFields<z.output<typeof sessionWindowSchema>>
+type SchemaDocument = KnownFields<z.output<typeof sessionDocumentSchema>>
 
 const _tabMatchesModel: SchemaTab = null as unknown as SessionTab
 const _modelMatchesTab: SessionTab = null as unknown as SchemaTab
@@ -155,6 +157,9 @@ export class SessionStore {
       filePath: options.filePath,
       schema: sessionDocumentSchema,
       fallback: emptySessionDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A file written by an older build, edited by hand, or cut short by a crash must
       // not leave two tabs claiming one id, two tabs claiming one tile, or a tile the
       // layout does not have — the restore path and the split layout both rely on none
@@ -254,6 +259,11 @@ export class SessionStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   /**

@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type { SafeStorage } from 'electron'
@@ -58,10 +58,12 @@ async function tempPath(name = 'doc.json'): Promise<string> {
  * read by another, which is exactly the failure a copied profile or a reinstalled OS
  * produces.
  */
-function fakeKeystore(options: { available?: boolean; brand?: string } = {}): SafeStorageLike {
+function fakeKeystore(
+  options: { available?: boolean; brand?: string; backend?: string } = {}
+): SafeStorageLike {
   const available = options.available ?? true
   const brand = Buffer.from(options.brand ?? 'keychain-a', 'utf8')
-  return {
+  const store: SafeStorageLike = {
     isEncryptionAvailable: () => available,
     encryptString: (plainText) => Buffer.concat([brand, Buffer.from(plainText, 'utf8')]),
     decryptString: (encrypted) => {
@@ -71,6 +73,10 @@ function fakeKeystore(options: { available?: boolean; brand?: string } = {}): Sa
       return encrypted.subarray(brand.length).toString('utf8')
     }
   }
+  const backend = options.backend
+  // Linux's backend, when a test is about it. The same brand either way: `basic_text` still unwraps
+  // what it wrapped, which is exactly why a profile made under it stays readable.
+  return backend === undefined ? store : { ...store, getSelectedStorageBackend: () => backend }
 }
 
 /** Edits one byte in place, the way an attacker with write access to the profile would. */
@@ -84,6 +90,8 @@ async function openStore(filePath: string, key: Uint8Array): Promise<JsonStore<D
     filePath,
     schema: docSchema,
     fallback,
+    migrations: [],
+    criticality: 'degradable',
     debounceMs: 0,
     codec: createEncryptedDocumentCodec(key)
   })
@@ -314,6 +322,18 @@ describe('local data key', () => {
     expect(info.mode & 0o777).toBe(0o600)
   })
 
+  it('removes what a crash while creating the key left behind', async () => {
+    // A wrapped key under a name nothing reads, and — with unique temporary names — nothing would
+    // ever guess either.
+    const keyFilePath = await tempPath('local-data.key')
+    await writeFile(`${keyFilePath}.4242-0a1b2c3d4e5f.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${keyFilePath}.tmp`, 'interrupted', 'utf8')
+
+    await loadOrCreateLocalDataKey({ safeStorage: fakeKeystore(), keyFilePath })
+
+    expect(await readdir(dirname(keyFilePath))).toEqual([basename(keyFilePath)])
+  })
+
   it('returns the same key on the next start', async () => {
     const keyFilePath = await tempPath('local-data.key')
     const safeStorage = fakeKeystore()
@@ -396,11 +416,20 @@ describe('local data key', () => {
 })
 
 describe('local data protection', () => {
-  async function paths(): Promise<{ keyFilePath: string; noticeFilePath: string }> {
+  /*
+    macOS unless a test says otherwise: the backend is only asked on Linux, so these are the cases a
+    platform key store is taken at its word. The Linux ones below pass `platform: 'linux'` over it.
+  */
+  async function paths(): Promise<{
+    keyFilePath: string
+    noticeFilePath: string
+    platform: NodeJS.Platform
+  }> {
     const dir = await tempDir()
     return {
       keyFilePath: join(dir, 'local-data.key'),
-      noticeFilePath: join(dir, 'LOCAL-DATA-NOT-ENCRYPTED.txt')
+      noticeFilePath: join(dir, 'LOCAL-DATA-NOT-ENCRYPTED.txt'),
+      platform: 'darwin'
     }
   }
 
@@ -409,8 +438,21 @@ describe('local data protection', () => {
     const protection = await openLocalDataProtection({ safeStorage: fakeKeystore(), ...where })
 
     expect(protection.mode).toBe('os-keystore')
+    expect(protection.keystore).toBe('os')
     expect(isSealedDocument(await protection.codec.encode({ version: 1 }))).toBe(true)
     expect(await localDataKeyExists(where.keyFilePath)).toBe(true)
+  })
+
+  it('trusts a Linux keyring as it trusts the other platforms', async () => {
+    const where = await paths()
+    const protection = await openLocalDataProtection({
+      safeStorage: fakeKeystore({ backend: 'gnome_libsecret' }),
+      ...where,
+      platform: 'linux'
+    })
+    expect(protection.mode).toBe('os-keystore')
+    expect(protection.keystore).toBe('os')
+    await expect(readFile(where.noticeFilePath)).rejects.toThrow(/ENOENT/)
   })
 
   it('withdraws an earlier notice once a key store appears', async () => {
@@ -436,6 +478,7 @@ describe('local data protection', () => {
     warn.mockRestore()
 
     expect(protection.mode).toBe('unencrypted')
+    expect(protection.keystore).toBe('none')
     expect(isSealedDocument(await protection.codec.encode({ version: 1 }))).toBe(false)
     expect(warnings.join('\n')).toMatch(/unencrypted/)
 
@@ -458,6 +501,85 @@ describe('local data protection', () => {
     await expect(readFile(where.noticeFilePath)).rejects.toThrow(/ENOENT/)
   })
 
+  it('starts a fresh profile unencrypted under basic text, and says why', async () => {
+    /*
+      `isEncryptionAvailable()` answers `true` under basic text, so the branch above for "no key store"
+      never ran and a new profile was sealed with a key that anyone with this folder can unwrap —
+      reported to the user as encrypted. Plain text that says so is the honest version of the same
+      exposure; encryption for show is the one this module promises never to invent.
+    */
+    for (const backend of ['basic_text', 'unknown']) {
+      const where = await paths()
+      const warnings: string[] = []
+      const warn = vi.spyOn(console, 'warn').mockImplementation((line: unknown) => {
+        warnings.push(String(line))
+      })
+      const protection = await openLocalDataProtection({
+        safeStorage: fakeKeystore({ backend }),
+        ...where,
+        platform: 'linux'
+      })
+      warn.mockRestore()
+
+      expect(protection.mode, backend).toBe('unencrypted')
+      expect(protection.keystore, backend).toBe('weak')
+      expect(isSealedDocument(await protection.codec.encode({ version: 1 })), backend).toBe(false)
+      // No key is made that a later start would then have to honour.
+      expect(await localDataKeyExists(where.keyFilePath), backend).toBe(false)
+      expect(warnings.join('\n'), backend).toMatch(/basic text/)
+
+      const notice = await readFile(where.noticeFilePath, 'utf8')
+      expect(notice).toMatch(/NOT encrypted/)
+      expect(notice).toMatch(/NICHT verschlüsselt/)
+      expect(notice).toMatch(/--password-store=basic/)
+    }
+  })
+
+  it('keeps a profile encrypted under basic text readable, and says the key store is weak', async () => {
+    // The profile was made while a key store wrapped its key; the same one now answers as basic text.
+    // Its documents are ciphertext, so going plain would lose them — they stay sealed, with a notice.
+    const where = await paths()
+    const before = await openLocalDataProtection({ safeStorage: fakeKeystore(), ...where })
+    const sealed = await before.codec.encode({ version: 1, items: ['kept'] })
+
+    const warnings: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation((line: unknown) => {
+      warnings.push(String(line))
+    })
+    const protection = await openLocalDataProtection({
+      safeStorage: fakeKeystore({ backend: 'basic_text' }),
+      ...where,
+      platform: 'linux'
+    })
+    warn.mockRestore()
+
+    expect(protection.mode).toBe('os-keystore')
+    expect(protection.keystore).toBe('weak')
+    expect(await protection.codec.decode(sealed)).toMatchObject({ items: ['kept'] })
+    expect(isSealedDocument(await protection.codec.encode({ version: 1 }))).toBe(true)
+    expect(warnings.join('\n')).toMatch(/basic text/)
+
+    const notice = await readFile(where.noticeFilePath, 'utf8')
+    expect(notice).toMatch(/NOT protected by a key store/)
+    expect(notice).toMatch(/NICHT durch einen Schlüsselspeicher geschützt/)
+  })
+
+  it('reports an unusable key file under basic text instead of starting from defaults', async () => {
+    const where = await paths()
+    await loadOrCreateLocalDataKey({
+      safeStorage: fakeKeystore({ brand: 'other-machine' }),
+      keyFilePath: where.keyFilePath
+    })
+    await expect(
+      openLocalDataProtection({
+        safeStorage: fakeKeystore({ backend: 'basic_text' }),
+        ...where,
+        platform: 'linux'
+      })
+    ).rejects.toThrow(KeyMaterialUnreadableError)
+    await expect(readFile(where.noticeFilePath)).rejects.toThrow(/ENOENT/)
+  })
+
   it('reports an unusable key file instead of starting from defaults', async () => {
     const where = await paths()
     await loadOrCreateLocalDataKey({
@@ -476,6 +598,7 @@ describe('local data protection', () => {
     const filePath = join(dir, 'quicklinks.json')
     const protection = await openLocalDataProtection({
       safeStorage: fakeKeystore(),
+      platform: 'darwin',
       keyFilePath: join(dir, 'local-data.key'),
       noticeFilePath: join(dir, 'LOCAL-DATA-NOT-ENCRYPTED.txt')
     })

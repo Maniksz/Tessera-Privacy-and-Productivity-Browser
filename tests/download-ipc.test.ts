@@ -122,6 +122,8 @@ function harness(options: {
   windows: FakeWindow[]
   /** False for the case where the sender belongs to no window at all. */
   resolves?: boolean
+  /** Stands in for `DownloadStore.discardCopies`. Resolves by default. */
+  discardCopies?: () => Promise<void>
 }) {
   const handlers = new Map<string, AnyHandler>()
   const handle: DownloadHandle = (channel, handler) => {
@@ -136,7 +138,8 @@ function harness(options: {
       get controllers() {
         return options.windows
       }
-    }
+    },
+    discardCopies: options.discardCopies ?? (() => Promise.resolve())
   })
 
   return {
@@ -225,6 +228,35 @@ describe('downloads IPC', () => {
     expect(await invoke('downloads:remove', { id: 'gone' })).toEqual({ removed: false })
     expect(await invoke('downloads:remove', { id: 'a' })).toEqual({ removed: true })
     expect(await invoke('downloads:clear')).toEqual({ removed: 3 })
+  })
+
+  it('removes the copies of the list before it answers that the list was cleared', async () => {
+    // A `.v1.bak` or an `.unreadable` beside the file is an older state of the very list the user just
+    // cleared. Waited for, so the answer cannot arrive while the copies are still on disk.
+    const events: string[] = []
+    const manager = fakeManager({ byMode: { normal: [entry('a')] } })
+    const { invoke } = harness({
+      manager,
+      windows: [fakeWindow(false)],
+      discardCopies: async () => {
+        await Promise.resolve()
+        events.push('copies removed')
+      }
+    })
+
+    const answer = await invoke('downloads:clear')
+    events.push('answered')
+    expect(answer).toEqual({ removed: 3 })
+    expect(events).toEqual(['copies removed', 'answered'])
+  })
+
+  it('fails the clear when a copy could not be removed', async () => {
+    const { invoke } = harness({
+      manager: fakeManager(),
+      windows: [fakeWindow(false)],
+      discardCopies: () => Promise.reject(new Error('EACCES'))
+    })
+    await expect(invoke('downloads:clear')).rejects.toThrow('EACCES')
   })
 
   it('pushes each window its own list, with its own privacy flag', () => {

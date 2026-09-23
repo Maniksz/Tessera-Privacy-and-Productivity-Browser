@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { removeTempFilesOf, writeFileAtomically } from '../data/atomic-write.js'
 import { DOCUMENT_KEY_BYTES } from './envelope.js'
 
 /**
@@ -31,6 +32,11 @@ export interface SafeStorageLike {
   isEncryptionAvailable(): boolean
   encryptString(plainText: string): Buffer
   decryptString(encrypted: Buffer): string
+  /**
+   * Which backend Chromium chose on Linux, and only meaningful there and after `ready`. Read by
+   * `keystore-strength.ts` alone. Optional so a fake key store for any other question need not name one.
+   */
+  getSelectedStorageBackend?(): string
 }
 
 /** No key store to protect a key with. The caller decides what that means. */
@@ -89,6 +95,10 @@ export async function loadOrCreateLocalDataKey(options: LocalDataKeyOptions): Pr
     )
   }
 
+  // What a crash during `createLocalDataKey` left behind is a wrapped key under a name nothing reads
+  // or would ever remove. Before the read, so a first run that writes the key starts from a clean
+  // directory; a failure is let out for the same reason `readFileOrNull` lets one out.
+  await removeTempFilesOf(options.keyFilePath)
   const stored = await readFileOrNull(options.keyFilePath)
   if (stored === null) return createLocalDataKey(options)
 
@@ -122,12 +132,10 @@ async function createLocalDataKey(options: LocalDataKeyOptions): Promise<Uint8Ar
   const wrapped = options.safeStorage.encryptString(key.toString('base64'))
 
   await mkdir(dirname(options.keyFilePath), { recursive: true })
-  // Write-then-rename, as for every other file here: a crash between the two
-  // leaves no key file at all, which is a first run again, rather than a truncated
-  // one that would look like corruption for ever.
-  const temp = `${options.keyFilePath}.tmp`
-  await writeFile(temp, wrapped, { mode: 0o600 })
-  await rename(temp, options.keyFilePath)
+  // Atomic, as for every other file here: a crash mid-write leaves no key file at
+  // all, which is a first run again, rather than a truncated one that would look
+  // like corruption for ever. See `atomic-write.ts`.
+  await writeFileAtomically(options.keyFilePath, wrapped, { mode: 0o600 })
   return key
 }
 

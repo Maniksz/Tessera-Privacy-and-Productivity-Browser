@@ -383,7 +383,8 @@ let firstCompile: { readonly compiled: Promise<void>; readonly release: () => vo
  */
 export function holdMainFrameRequests(): () => void {
   if (firstCompile === null) {
-    let release = (): void => {}
+    // Assigned before the constructor returns: a promise executor runs synchronously.
+    let release!: () => void
     const compiled = new Promise<void>((resolve) => {
       release = resolve
     })

@@ -165,6 +165,60 @@ describe('FilterEngine cosmetic queries', () => {
   })
 })
 
+describe('FilterEngine procedural queries', () => {
+  const LIST = 'shop.example##.teaser:has-text(Anzeige)'
+  const USER = 'shop.example##.promo:has-text(Sponsored)'
+
+  function engineWithUserRules(settings: SettingsSnapshot = defaultSettings()): FilterEngine {
+    return new FilterEngine({ lists: [LIST], userRules: USER, getSettings: () => settings })
+  }
+
+  it('counts the rules from the lists and the user’s own together', () => {
+    expect(engineWithUserRules().proceduralRuleCount).toBe(2)
+  })
+
+  it('answers with the lists’ selectors first and the user’s last', () => {
+    // Last, so the rule the user wrote is the one they find when they ask why a page still shows something.
+    const selectors = engineWithUserRules().proceduralSelectorsFor('https://www.shop.example/')
+    expect(selectors.map((selector) => selector.css)).toEqual(['.teaser', '.promo'])
+  })
+
+  it('honours privacy.cosmeticFiltering, because a procedural rule hides like any cosmetic one', () => {
+    // No switch of its own: someone who turned cosmetic filtering off must not still have script
+    // rearranging their pages.
+    const off = engineWithUserRules(withSettings({ 'privacy.cosmeticFiltering': false }))
+    expect(off.proceduralSelectorsFor('https://www.shop.example/')).toEqual([])
+  })
+
+  it('answers with nothing for a document that has no host', () => {
+    expect(engineWithUserRules().proceduralSelectorsFor('about:blank')).toEqual([])
+  })
+})
+
+describe('FilterEngine scriptlet queries', () => {
+  const LIST = 'shop.example##+js(set, canRunAds, true)'
+
+  it('answers with the scriptlets the lists give the document’s host', () => {
+    const engine = engineFor([LIST])
+    expect(engine.scriptletsFor('https://www.shop.example/')).toEqual([
+      { name: 'set-constant', args: ['canRunAds', 'true'] }
+    ])
+  })
+
+  it('honours privacy.scriptletInjection, and not privacy.cosmeticFiltering', () => {
+    // Different powers: agreeing to have a layout altered is not agreeing to have code run in the page.
+    const off = engineFor([LIST], withSettings({ 'privacy.scriptletInjection': false }))
+    expect(off.scriptletsFor('https://www.shop.example/')).toEqual([])
+
+    const cosmeticOff = engineFor([LIST], withSettings({ 'privacy.cosmeticFiltering': false }))
+    expect(cosmeticOff.scriptletsFor('https://www.shop.example/')).toHaveLength(1)
+  })
+
+  it('answers with nothing for a document that has no host', () => {
+    expect(engineFor([LIST]).scriptletsFor('about:blank')).toEqual([])
+  })
+})
+
 describe('FilterEngine.replaceLists', () => {
   it('recompiles in place, so the pipeline’s single listener stays installed', () => {
     // `privacy.blockerLists` applies live. Reinstalling the pipeline to pick up a
@@ -392,6 +446,46 @@ describe('FilterListStore', () => {
     await store.refresh([LIST_URL])
     expect((await readdir(directory)).filter((name) => name.endsWith('.txt'))).toHaveLength(1)
     expect(await store.load([PRIVACY_URL])).toEqual([])
+  })
+
+  it('keeps the file and the manifest as they were when the check refuses a body', async () => {
+    const { store, directory } = await harness({ [LIST_URL]: EASYLIST_SLICE })
+    await store.refresh([LIST_URL])
+    const snapshot = async (): Promise<string[][]> => {
+      const names = (await readdir(directory)).sort()
+      return Promise.all(
+        names.map(async (name) => [name, await readFile(join(directory, name), 'utf8')])
+      )
+    }
+    const before = await snapshot()
+
+    const verify = vi.fn((text: string, url: string): string | null =>
+      text.includes('||') && url === LIST_URL ? 'looks wrong' : null
+    )
+    const checked = new FilterListStore({
+      directory,
+      fetchList: () => Promise.resolve('||replacement.example^'),
+      now: () => 1_000_000 + DEFAULT_LIST_MAX_AGE_MS,
+      verify
+    })
+    expect(await checked.refresh([LIST_URL])).toEqual([
+      { url: LIST_URL, status: 'failed', reason: 'looks wrong' }
+    ])
+    expect(verify).toHaveBeenCalledWith('||replacement.example^', LIST_URL)
+    expect(await snapshot()).toEqual(before)
+    expect((await checked.load([LIST_URL]))[0]!.text).toBe(EASYLIST_SLICE)
+  })
+
+  it('stores a body the check accepts', async () => {
+    const { directory } = await harness({})
+    const checked = new FilterListStore({
+      directory,
+      fetchList: () => Promise.resolve('##.banner'),
+      now: () => 0,
+      verify: () => null
+    })
+    expect((await checked.refresh([LIST_URL]))[0]!.status).toBe('fetched')
+    expect((await checked.load([LIST_URL]))[0]!.text).toBe('##.banner')
   })
 
   it('leaves something in the cache directory it cannot remove', async () => {

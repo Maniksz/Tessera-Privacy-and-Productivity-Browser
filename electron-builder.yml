@@ -11,6 +11,41 @@ files:
   - '!**/*.map'
   - '!**/*.ts'
 
+# --- Fuses -------------------------------------------------------------------
+# Switches compiled into the Electron binary itself, flipped at packaging time, so that nothing a
+# launcher can set — an environment variable, a command-line flag — turns the shipped browser into
+# something else. Development builds run the unflipped binary from node_modules and are unaffected.
+#
+# Off, because each one is a way to run arbitrary code as this browser without touching its files:
+# `ELECTRON_RUN_AS_NODE=1` makes the executable a plain Node interpreter, `NODE_OPTIONS` injects
+# `--require` into the main process, and Node's inspect switches open a debugger on it. Nothing in
+# this repository uses any of them. Chromium's own remote debugging switches are not a fuse;
+# `refusedDebugSwitch` in `src/main/startup-flags.ts` closes those.
+#
+# On: cookie encryption is a one-way transition — existing plaintext cookies are encrypted on write,
+# and switching the fuse back off later leaves an unreadable cookie store — accepted deliberately,
+# because a browser whose cookie jar is readable by any process running as the user is not
+# privacy-first. The two asar fuses make the archive the only place app code can come from, and
+# check its integrity on load (macOS and Windows; Linux ignores both, harmlessly).
+#
+# `resetAdHocDarwinSignature` because the macOS build is not signed with a Developer ID: flipping a
+# fuse changes the binary, and on Apple Silicon a binary whose ad-hoc signature no longer matches
+# does not launch.
+#
+# `grantFileProtocolExtraPrivileges` is left at its default on purpose. The chrome UI loads from
+# `file://` (`BrowserWindowController.#loadChrome`), and turning the fuse off before that UI moves to
+# a scheme of its own is the change most likely to leave the packaged window blank. The cost of
+# leaving it — a `file://` document in a tab can `fetch` its neighbours — is recorded under Risks and
+# Open Questions in `docs/plans/2026-09-23-002-fix-review-hardening-plan.md`.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableCookieEncryption: true
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  resetAdHocDarwinSignature: true
+
 # Every platform is a first-class target (spec 7): same feature set, built and
 # shipped in the format that platform's users expect.
 

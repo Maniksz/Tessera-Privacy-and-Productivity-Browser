@@ -220,6 +220,12 @@ export function HistoryPage(): React.ReactNode {
                         "forget https://example.com/deep/page" — indistinguishable from the button
                         beside it, which forgets exactly that one page. Two controls with different
                         consequences must not read the same.
+
+                        The label is worked out here with the built-in suffixes, not the downloaded
+                        list, which only the core loads (`PublicSuffixSubscription`). So for a host
+                        like `bank.com.sg` it may name `com.sg`. That difference is cosmetic and
+                        accepted: the button sends the address, and the core decides what "this
+                        site" is with the list it runs on.
                       */
                       aria-label={t('history.removeDomain', {
                         domain: registrableDomainOfUrl(entry.url) ?? readableUrl(entry.url)

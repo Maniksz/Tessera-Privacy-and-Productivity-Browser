@@ -10,6 +10,16 @@ import './overlay.css'
  * way browser UI can be drawn over page content.
  */
 
+// Nothing may be dropped onto the overlay either, for the reasons given in `main.tsx`: a drop is a
+// navigation by default, and this surface holds the same channels as the chrome UI.
+window.addEventListener('dragover', (event) => {
+  event.preventDefault()
+  if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'none'
+})
+window.addEventListener('drop', (event) => {
+  event.preventDefault()
+})
+
 const container = document.getElementById('root')
 if (container === null) throw new Error('overlay surface root element is missing')
 

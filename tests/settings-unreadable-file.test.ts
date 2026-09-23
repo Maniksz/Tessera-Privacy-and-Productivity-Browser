@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -102,6 +102,33 @@ describe('an unreadable settings file', () => {
     expect(second).not.toBe(first)
     expect(await readFile(first!, 'utf8')).toBe('first bad file')
     expect(await readFile(second!, 'utf8')).toBe('second bad file')
+  })
+
+  it('does not copy the same bad file twice', async () => {
+    // The file stays broken until a setting changes, so every start in between sees it again. One
+    // copy per launch would bury the one worth having.
+    const filePath = await tempFile()
+    await writeFile(filePath, 'still the same bad file')
+    const first = (await SettingsStore.open(filePath)).quarantinedFileOnLoad
+    const second = (await SettingsStore.open(filePath)).quarantinedFileOnLoad
+
+    expect(second).toBe(first)
+    expect(await readdir(join(filePath, '..'))).toEqual([
+      'settings.json',
+      'settings.json.unreadable'
+    ])
+  })
+
+  it('refuses to start when the copy cannot be made', async () => {
+    // Unlike every other store: without the copy the next write would destroy the file, and the
+    // browser cannot run without its settings, so not starting is the only way not to. A directory
+    // under the copy's name is a copy that cannot be made on any platform.
+    const filePath = await tempFile()
+    await writeFile(filePath, 'bad file')
+    await mkdir(`${filePath}.unreadable`)
+
+    await expect(SettingsStore.open(filePath)).rejects.toThrow()
+    expect(await readFile(filePath, 'utf8')).toBe('bad file')
   })
 })
 

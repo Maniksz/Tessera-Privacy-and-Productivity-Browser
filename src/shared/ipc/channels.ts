@@ -238,6 +238,8 @@ export const INVOKE_CHANNELS = [
     none of it. See `BookmarksPage`.
   */
   'bookmarks:list',
+  /** How many nodes the core kept raw because it could not read them. A count, never the nodes. */
+  'bookmarks:status',
   'bookmarks:create',
   /** Title only. The address goes through `bookmarks:relocate`, which keeps folder and position. */
   'bookmarks:update',
@@ -449,7 +451,7 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'history:clear'
   ],
   /*
-    Eight bookmark channels and nothing else — no setting, no tab, no window.
+    Nine bookmark channels and nothing else — no setting, no tab, no window.
 
     `bookmarks:open` rather than `nav:navigate` for the reason stated above: the core resolves the
     target from the sender, so the page steers itself and nothing else.
@@ -457,6 +459,7 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
   bookmarks: [
     'i18n:getCatalog',
     'bookmarks:list',
+    'bookmarks:status',
     'bookmarks:create',
     'bookmarks:update',
     'bookmarks:remove',

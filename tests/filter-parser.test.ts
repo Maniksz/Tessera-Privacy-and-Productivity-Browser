@@ -284,6 +284,10 @@ describe('counted rather than swallowed', () => {
   it('counts an entity domain, which needs a public-suffix expansion', () => {
     expect(reasonsFor('||cacheserve.com^$domain=example.*')).toEqual({ 'domain-entity': 1 })
     expect(reasonsFor('crazygames.*##[class*="MpuContainer_"]')).toEqual({ 'domain-entity': 1 })
+    // The scriptlet and procedural parsers read their host lists on their own, so each has to refuse
+    // an entity as well — or the one syntax that runs code would be the one that accepted `example.*`.
+    expect(reasonsFor('crazygames.*##+js(set, canRunAds, true)')).toEqual({ 'domain-entity': 1 })
+    expect(reasonsFor('crazygames.*##.box:has-text(Anzeige)')).toEqual({ 'domain-entity': 1 })
   })
 
   it('counts a rule with no pattern left to match on', () => {
@@ -426,8 +430,16 @@ describe('hostnameOfUrl', () => {
     expect(hostnameOfUrl('https://Ads.Example.COM/x')).toBe('ads.example.com')
   })
 
+  it('drops the trailing dot of a fully-qualified host, and only that one', () => {
+    // `$domain=`, cosmetic and scriptlet lookups all key on this; the same site
+    // spelled with its trailing dot must not fall out of every one of them.
+    expect(hostnameOfUrl('https://u:p@Ads.Example.COM.:8443/x')).toBe('ads.example.com')
+    expect(hostnameOfUrl('https://ads.example.com../x')).toBe('ads.example.com.')
+  })
+
   it('returns null when there is no host to speak of', () => {
     expect(hostnameOfUrl('data:text/html,<p>x')).toBeNull()
     expect(hostnameOfUrl('not a url')).toBeNull()
+    expect(hostnameOfUrl('https://./x')).toBeNull()
   })
 })

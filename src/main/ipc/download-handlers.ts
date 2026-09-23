@@ -100,6 +100,12 @@ export interface DownloadHandlerDeps {
   readonly handle: DownloadHandle
   readonly downloads: DownloadHandlerManager
   readonly windows: DownloadHandlerWindows
+  /**
+   * Removes the stored list's backup, quarantine and temporary copies. A closure over the store rather
+   * than a method on the manager, because the copies are the file's business and the manager's is the
+   * live transfers. See `DownloadStore.discardCopies`.
+   */
+  readonly discardCopies: () => Promise<void>
 }
 
 /**
@@ -114,7 +120,7 @@ function modeOf(window: DownloadHandlerWindow): BrowsingMode {
 }
 
 export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
-  const { handle, downloads, windows } = deps
+  const { handle, downloads, windows, discardCopies } = deps
 
   /**
    * The window this request is about.
@@ -146,7 +152,15 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   handle('downloads:resume', ({ id }) => ({ changed: downloads.resume(id) }))
   handle('downloads:cancel', ({ id }) => ({ changed: downloads.cancel(id) }))
   handle('downloads:remove', ({ id }) => ({ removed: downloads.remove(id) }))
-  handle('downloads:clear', () => ({ removed: downloads.clear() }))
+  /*
+    The copies go too, and before the answer: an older state of the list in a `.v1.bak` or an
+    `.unreadable` would keep what the user just cleared. A failed removal rejects the call.
+  */
+  handle('downloads:clear', async () => {
+    const removed = downloads.clear()
+    await discardCopies()
+    return { removed }
+  })
 
   /*
     The authoritative presence checks, both of them.

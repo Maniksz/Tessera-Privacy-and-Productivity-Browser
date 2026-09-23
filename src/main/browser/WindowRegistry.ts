@@ -1,4 +1,4 @@
-import { session as electronSession, webContents, type Session } from 'electron'
+import { session as electronSession, type Session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import type { SettingsStore } from '../settings/SettingsStore.js'
 import type { QuickLinkStore } from '../data/QuickLinkStore.js'
@@ -16,8 +16,11 @@ import type { Tab } from './Tab.js'
 import { quickLinkCards, type QuickLinkCard } from '@shared/quicklinks/cards.js'
 import type { QuickLink } from '@shared/quicklinks/model.js'
 import { applySessionHardening } from '../session/hardening.js'
+import type { PermissionCheck, PermissionRequestDetails } from '../session/permission-policy.js'
+import type { PermissionHost } from '../permissions/PermissionArbiter.js'
 import { installRequestPipeline } from '../privacy/RequestPipeline.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
+import { windowOfSender, windowOfTab } from './sender-window.js'
 
 /**
  * Owns every window and every session.
@@ -47,6 +50,22 @@ export interface DownloadSubscriber {
   attach(session: Session, mode: BrowsingMode): void
   /** Drops what a session left in memory. The last piece of "a private window leaves no record". */
   releaseSession(session: Session): void
+}
+
+/**
+ * Permission decisions, as far as this class needs them. `PermissionArbiter` satisfies it.
+ *
+ * Structural for the reason `DownloadSubscriber` is: the two calls say what the coupling is. This
+ * class contributes the two facts only it has — which window a tab belongs to, for the dialogue, and
+ * which kind of window a session serves, for the memory a check reads.
+ */
+export interface PermissionDecider {
+  ask(
+    request: PermissionRequestDetails,
+    host: PermissionHost | null,
+    webContentsId: number
+  ): Promise<boolean>
+  check(check: PermissionCheck, mode: BrowsingMode): boolean
 }
 
 export interface WindowRegistryDeps {
@@ -84,6 +103,13 @@ export interface WindowRegistryDeps {
    */
   downloads: DownloadSubscriber
   /**
+   * Permission requests and checks, installed per session in `#prepareSession`.
+   *
+   * Required rather than optional: a session hardened without it still decides from the settings,
+   * but a user who chose "ask" would never see a dialogue, and nothing would say why.
+   */
+  permissions: PermissionDecider
+  /**
    * The user right-clicked a page.
    *
    * Passed through from the entry point rather than decided here, because the menu needs the language, the
@@ -95,6 +121,8 @@ export interface WindowRegistryDeps {
 
 export class WindowRegistry {
   readonly #controllers = new Set<BrowserWindowController>()
+  /** The same windows, most recently focused first; see `byRecentFocus`. */
+  #focusOrder: BrowserWindowController[] = []
   readonly #preparedSessions = new WeakSet<Session>()
   #privateSessionCounter = 0
 
@@ -189,6 +217,18 @@ export class WindowRegistry {
     return this.#controllers.size
   }
 
+  /**
+   * Every open window, the one focused most recently first.
+   *
+   * `focused()` answers for this instant, and the instant a link arrives from another application is
+   * exactly the one where it has no answer: that application is in front, so no window of ours is. The
+   * old fallback, `controllers[0]`, was then the *oldest* window rather than the last one used. A new
+   * window counts as focused when it is created, before its first `focus` event arrives.
+   */
+  get byRecentFocus(): readonly BrowserWindowController[] {
+    return this.#focusOrder.filter((controller) => !controller.window.isDestroyed())
+  }
+
   createWindow(options: {
     privateMode: boolean
     /** Set only by session restore; see `WindowControllerOptions.initialSplit`. */
@@ -200,6 +240,9 @@ export class WindowRegistry {
     const mode: BrowsingMode = options.privateMode ? 'private' : 'normal'
     this.#prepareSession(session, mode)
 
+    const onFocus = (): void => {
+      this.#noteFocus(controller)
+    }
     const controller = new BrowserWindowController({
       session,
       privateMode: options.privateMode,
@@ -221,6 +264,8 @@ export class WindowRegistry {
       getSettings: () => this.#deps.settings.snapshot(),
       onClosed: (closed) => {
         this.#controllers.delete(closed)
+        this.#focusOrder = this.#focusOrder.filter((other) => other !== closed)
+        closed.window.removeListener('focus', onFocus)
         // A private session's data exists only for the life of its window
         // (spec 4): nothing may outlive it on disk or in memory.
         if (closed.privateMode) {
@@ -249,7 +294,13 @@ export class WindowRegistry {
     })
 
     this.#controllers.add(controller)
+    controller.window.on('focus', onFocus)
+    this.#noteFocus(controller)
     return controller
+  }
+
+  #noteFocus(controller: BrowserWindowController): void {
+    this.#focusOrder = [controller, ...this.#focusOrder.filter((other) => other !== controller)]
   }
 
   /**
@@ -267,7 +318,25 @@ export class WindowRegistry {
 
     applySessionHardening({
       session,
-      getSettings: () => this.#deps.settings.snapshot()
+      getSettings: () => this.#deps.settings.snapshot(),
+      /*
+        The window a request is shown in is the one owning the tab that asked. `null` when none does —
+        a view already detached — and the arbiter then lets the settings answer and asks nobody.
+
+        The tab's id travels with it, because the dialogue appears only while that tab is in front.
+      */
+      requestFromUser: (request, webContents) =>
+        this.#deps.permissions.ask(
+          request,
+          this.controllerForWebContents(webContents.id) ?? null,
+          webContents.id
+        ),
+      /*
+        Bound to the mode here, once, like the download subscription below: a check can arrive with no
+        `webContents` at all, and this is the only place that knows which kind of window the session
+        is for.
+      */
+      checkPermission: (check) => this.#deps.permissions.check(check, mode)
     })
 
     /*
@@ -335,30 +404,6 @@ export class WindowRegistry {
   }
 
   /**
-   * Which window an IPC call came from.
-   *
-   * Resolved from the sender rather than from "the focused window": during a
-   * rapid focus change those differ, and acting on the wrong window is the kind
-   * of bug that only shows up under real use.
-   */
-  fromEvent(event: IpcMainInvokeEvent): BrowserWindowController | undefined {
-    const senderId = event.sender.id
-    for (const controller of this.#controllers) {
-      if (controller.window.isDestroyed()) continue
-      if (controller.ownsChromeWebContents(senderId)) return controller
-    }
-
-    // The sender may be a tab's view rather than the chrome UI.
-    const sender = webContents.fromId(senderId)
-    if (!sender) return undefined
-    for (const controller of this.#controllers) {
-      if (controller.window.isDestroyed()) continue
-      if (controller.window.webContents.id === sender.hostWebContents?.id) return controller
-    }
-    return undefined
-  }
-
-  /**
    * True when the message came from one of a window's own trusted UI renderers.
    *
    * That is the chrome renderer and the overlay surface — both are our browser UI, and
@@ -384,27 +429,26 @@ export class WindowRegistry {
   /**
    * The window owning a content view, by web-contents id.
    *
-   * Deliberately *not* falling back to the focused window, unlike `resolve` below. The caller is the
-   * element picker, which acts on the page a message came from; guessing a different window would write a
-   * rule for a site the user was not looking at — and, worse, could write from a private window's page
-   * into the normal profile's rules.
+   * Tabs only, and no fallback: the callers are the element picker and the password manager,
+   * which act on the page a message came from. Guessing a different window would write a rule for
+   * a site the user was not looking at — and, worse, could write from a private window's page into
+   * the normal profile's rules. The walk is `windowOfTab`, which steps over destroyed windows and
+   * tabs.
    */
   controllerForWebContents(webContentsId: number): BrowserWindowController | undefined {
-    for (const controller of this.#controllers) {
-      for (const tab of controller.tabs) {
-        if (tab.view.webContents.id === webContentsId) return controller
-      }
-    }
-    return undefined
+    return windowOfTab(this.#controllers, webContentsId)
   }
 
-  /** Sender's window, falling back to the focused one. */
-  resolve(event?: IpcMainInvokeEvent): BrowserWindowController | undefined {
-    if (event) {
-      const fromSender = this.fromEvent(event)
-      if (fromSender) return fromSender
-    }
-    return this.focused() ?? [...this.#controllers][0]
+  /**
+   * Which window an IPC call came from — and no other.
+   *
+   * Resolved from the sender rather than from "the focused window": during a rapid focus change
+   * those differ, and an internal page in a private window acting for the normal window in front
+   * of it is a privacy leak rather than a slip. `undefined` means the sender or its window is gone,
+   * and a caller refuses or does nothing on it; `sender-window.ts` says why there is no fallback.
+   */
+  resolve(event: IpcMainInvokeEvent): BrowserWindowController | undefined {
+    return windowOfSender(this.#controllers, event.sender)
   }
 
   closeAll(): void {

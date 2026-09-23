@@ -142,7 +142,7 @@ tatsächliche Netzwerkverkehr — der einzige Beweis, der zählt.
 
 | # | Schritt | Erwartung |
 |---|---|---|
-| 6.1 | Mitschnitt (Wireshark/mitmproxy) beim Kaltstart, keine Seite geöffnet | **Keine** Verbindung zu Google-, Update- oder Telemetrie-Hosts |
+| 6.1 | Mitschnitt (Wireshark/mitmproxy) beim Kaltstart, keine Seite geöffnet | **Keine** Verbindung zu Google-, Update- oder Telemetrie-Hosts; `publicsuffix.org` höchstens einmal pro Tag und im selben Kanal wie die Filterlisten |
 | 6.2 | Eine Seite öffnen, Anfragen vergleichen | Nur was die Seite braucht; kein Extra-Verkehr aus dem Unterbau |
 | 6.3 | Verschlüsselte Namensauflösung an, DNS-Port 53 beobachten | Kein Klartext-DNS |
 | 6.4 | Kill-Switch: VPN während des Ladens trennen | Verkehr stoppt, Statusanzeige wechselt |
@@ -151,10 +151,28 @@ tatsächliche Netzwerkverkehr — der einzige Beweis, der zählt.
 | 6.7 | Auf einer Fingerprint-Testseite Werte vergleichen | Betriebssystem, Version, Sprache und Bildschirmwerte sind widerspruchsfrei |
 | 6.8 | Privates Fenster: Seite besuchen, Fenster schließen, Profilordner prüfen | Keine neuen Dateien |
 | 6.9 | „Beim Beenden löschen" an, beenden, Profilordner prüfen | Ausgewählte Kategorien sind weg |
+| 6.10 | Bestandsprofil mit Element-Regel auf einer `.com.sg`-Seite: zweimal starten (der erste Start lädt die volle Public Suffix List, der zweite spielt sie ein) | Die Regel steht weiter aktiviert in der Liste, wird aber nicht angewendet; das Log nennt sie als zu breit |
 
 **Zu 6.7:** ein *widersprüchlicher* Fingerprint ist schlechter als keine Maßnahme
 (Abschnitt 4). Wenn die Browser-Kennung Windows meldet und die Zeitzone Europa/Berlin
 sagt, ist das ein Befund und kein Detail.
+
+**Zu 6.1:** Die Public Suffix List (`https://publicsuffix.org/list/public_suffix_list.dat`)
+wird über `net.fetch` geholt, also mit Proxy, Kill-Switch und sicherem DNS wie die
+Filterlisten. Ein Versuch pro 24 Stunden, und keiner, solange die angenommene Liste
+jünger als sieben Tage ist. Im Mitschnitt muss die Anfrage denselben Weg nehmen wie die
+Filterlisten-Downloads; eine Umleitung auf einen anderen Host wird abgelehnt. Eine
+heruntergeladene Liste gilt erst ab dem nächsten Start.
+
+**Zu 6.10 — der einmalige Wechsel:** Bisher bildete jedes Profil seine Site-Schlüssel mit
+den eingebauten Suffixen. Der erste Start mit voller Liste ordnet deshalb einmal neu zu.
+Betroffen sind Element-Regeln des Pickers (eine Regel für `com.sg` war gemeint für eine
+Seite unter `com.sg` und würde jetzt alle treffen — sie wird erkannt, im Log gemeldet und
+nicht angewendet, `enabled` bleibt unverändert; von Hand löschen oder neu picken) und der
+Favicon-Index (Symbole unter dem alten Schlüssel werden beim nächsten Besuch neu geholt).
+Nicht betroffen sind Site-Ausnahmen (nach Hostname geschlüsselt) und der
+Fingerprint-Seed aus 6.7. Ein neues Profil läuft offline mit den eingebauten Suffixen,
+bis ein Download gelingt.
 
 ## 7. Datenhaltung und Wiederherstellung
 
@@ -165,6 +183,28 @@ sagt, ist das ein Befund und kein Detail.
 | 7.3 | Fremden Schlüssel in `settings.json` schreiben, starten, Einstellung ändern | Fremder Schlüssel bleibt in der Datei |
 | 7.4 | Split-Layout einrichten, beenden, starten | Layout, Trennerpositionen und Stummschaltung wiederhergestellt |
 | 7.5 | Während eines Schreibvorgangs hart beenden | Keine halb geschriebene Datei; `.tmp` bleibt nicht liegen |
+| 7.6 | `bookmarks.json` von Hand beschädigen (z. B. `"nodes": "x"`), starten | Startet mit leerem Satz; die Originaldatei liegt unverändert als `bookmarks.json.unreadable` daneben, das Log nennt den Pfad |
+| 7.7 | Dieselbe beschädigte Datei zweimal hintereinander starten lassen, ohne etwas zu ändern | Nur eine `.unreadable`-Kopie |
+| 7.8 | In `history.json` die Version auf `2` setzen (unverschlüsseltes Profil), starten, Seiten besuchen, beenden | Log meldet „newer version … changes made in this run are discarded“; die Datei ist danach byte-gleich |
+| 7.9 | Dasselbe mit `bookmarks.json`, dann ein Lesezeichen anlegen | Vorhandene Lesezeichen sichtbar; Anlegen schlägt mit Fehler fehl; Datei byte-gleich |
+| 7.10 | Neben `history.json` eine `history.json.v1.bak` und eine `history.json.unreadable` ablegen, im Verlauf „Alles löschen“ | Beide Kopien sind danach weg; ebenso für Downloads („Liste leeren“) und den Tresor („Tresor zurücksetzen“) |
+| 7.11 | Windows: Tresor entsperren, ein Passwort ändern, das letzte Fenster per X schließen, neu starten | Die Änderung ist da; der Prozess ist nach dem Schließen ohne Hänger beendet |
+
+### Wiederherstellen aus einer Sicherung oder Quarantäne-Kopie
+
+Tessera legt eine Kopie an, bevor es eine Store-Datei ersetzt, und fasst die Kopie danach nicht mehr an:
+
+- **`<datei>.v<N>.bak`** — die Datei in Version `N`, bevor eine Migration sie auf die aktuelle Version gehoben hat. Byte-gleich mit dem Original, also mit demselben Schlüssel verschlüsselt. Höchstens eine je Version; die erste bleibt.
+- **`<datei>.unreadable`**, **`<datei>.unreadable.1`**, … — eine Datei, die diese Version gar nicht verwenden konnte (kaputtes JSON, falsche Form, eine Migration, die scheiterte). Byte-gleich mit dem Original; eine inhaltsgleiche Kopie wird nicht erneut angelegt.
+
+Zurückspielen, wenn eine Migration oder eine Reparatur das falsche Ergebnis hatte:
+
+1. Tessera beenden (nicht nur das Fenster schließen) und warten, bis der Prozess weg ist.
+2. Die aktuelle Datei zur Seite legen, nicht löschen: `history.json` → `history.json.aktuell`.
+3. Die Kopie unter den Originalnamen kopieren: `history.json.v1.bak` → `history.json`. Kopieren statt Umbenennen, damit die Sicherung erhalten bleibt, falls der Versuch wieder scheitert.
+4. Starten. Eine `.v<N>.bak` wird erneut migriert; die vorhandene Sicherung dieser Version bleibt, wie sie ist. Eine `.unreadable`-Kopie wird nur gelesen, wenn sie vorher von Hand repariert wurde; sonst liegt sie danach wieder als Kopie daneben.
+
+Grenzen: Eine Kopie ist nur mit dem Schlüssel lesbar, mit dem das Original verschlüsselt war; in einem verschlüsselten Profil lassen sich `.unreadable`-Kopien daher nicht von Hand reparieren, nur zurückspielen, sobald eine Version sie lesen kann. Zu `passwords.json` gehört der Tresor-Schlüssel `passwords.key`. Verlauf löschen, Downloads-Liste leeren und Tresor zurücksetzen entfernen die Kopien ihrer Kategorie; „Beim Beenden löschen“ tut das für Verlauf und Downloads noch nicht.
 
 ## 8. Auslieferung
 

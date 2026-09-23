@@ -77,6 +77,14 @@ describe('telemetry stage', () => {
     )
     expect(outcome.action).toBe('continue')
   })
+
+  it('lets a request through whose address names no host', () => {
+    // Nothing to compare against the list. `file:` has an empty host and a malformed address has none at
+    // all; neither is a telemetry endpoint, and treating "unknown" as "blocked" would break local pages.
+    for (const url of ['file:///Users/me/page.html', 'not a url']) {
+      expect(evaluateStages(context({ url, resourceType: 'xhr' })).action, url).toBe('continue')
+    }
+  })
 })
 
 describe('blocker stage', () => {
@@ -356,6 +364,52 @@ describe('redirect stage', () => {
     expect(outcome.action).toBe('continue')
   })
 
+  it('judges a navigation with no document behind it on the redirector alone', () => {
+    // A link opened from outside the browser, or typed. There is no site to be "the same site" as, so the
+    // same-site exemption cannot apply.
+    const outcome = evaluateStages(
+      context({ url: 'https://anrdoezrs.net/click-1234-5678', documentUrl: null })
+    )
+    expect(outcome).toEqual({ action: 'block', reason: 'redirect' })
+  })
+
+  it('leaves a navigation alone whose address names no host', () => {
+    const outcome = evaluateStages(
+      context({
+        url: 'file:///Users/me/page.html',
+        documentUrl: null
+      })
+    )
+    expect(outcome.action).toBe('continue')
+  })
+
+  it('follows only a destination that is a real web address', () => {
+    /*
+      The parameter is attacker-controlled text. A `javascript:` value must not become a navigation, and one
+      that merely *starts* like a web address but does not parse must not be handed to the network stack —
+      in both cases the next candidate parameter is tried, and with none left the redirector is blocked.
+    */
+    const skipped = evaluateStages(
+      context({
+        url: 'https://out.reddit.com/?url=javascript:alert(1)&u=https%3A%2F%2Fexample.org%2Fstory',
+        documentUrl: 'https://news.example.org/article'
+      })
+    )
+    expect(skipped).toEqual({
+      action: 'redirect',
+      url: 'https://example.org/story',
+      reason: 'redirect'
+    })
+
+    const unparseable = evaluateStages(
+      context({
+        url: 'https://out.reddit.com/?url=http%3A%2F%2F',
+        documentUrl: 'https://news.example.org/article'
+      })
+    )
+    expect(unparseable).toEqual({ action: 'block', reason: 'redirect' })
+  })
+
   it('does not block a newsletter click host', () => {
     const outcome = evaluateStages(
       context({
@@ -577,6 +631,29 @@ describe('holding navigations until the lists compile', () => {
     release = null
     await vi.waitFor(() => {
       expect(answer).toHaveBeenCalledWith({ redirectURL: 'https://example.com/a' })
+    })
+  })
+
+  it('does not let a release from an earlier hold open the one after it', async () => {
+    /*
+      "Calling the release twice is harmless" has to hold across holds as well. A release kept from a
+      first subscription and called again once a second one is waiting must not clear the second gate —
+      or navigations would stop waiting for lists that have not compiled yet.
+    */
+    const stale = holdMainFrameRequests()
+    stale()
+    const listener = listenerOnHeldPipeline()
+    stale()
+
+    const answer = vi.fn()
+    listener({ url: 'https://example.com/', resourceType: 'mainFrame', method: 'GET' }, answer)
+    await Promise.resolve()
+    expect(answer, 'the stale release opened the current gate').not.toHaveBeenCalled()
+
+    release?.()
+    release = null
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith({})
     })
   })
 })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  decideChromeNavigation,
   decideTabNavigation,
   pendingNavigationOf,
   type NavigationSource
@@ -124,6 +125,65 @@ describe('decideTabNavigation', () => {
     expect(decideTabNavigation(attempt(internalUrl('favicon'), 'redirect')).allowed).toBe(true)
     // But page content still may not navigate a document there.
     expect(decideTabNavigation(attempt(internalUrl('favicon'), 'frame')).allowed).toBe(false)
+  })
+})
+
+describe('decideChromeNavigation', () => {
+  /*
+    The chrome window and the overlay layer are moved only by the core, with `loadURL` and `loadFile`,
+    and neither fires `will-frame-navigate`. Anything that does arrive here is the page moving itself —
+    a dropped link, a stray `location` assignment, script that should not be running there — and the
+    surface that holds every IPC channel must not follow it anywhere.
+  */
+  const BUNDLE = 'file:///app/out/renderer/index.html'
+  const DEV = 'http://localhost:5173'
+
+  it('refuses every navigation in a packaged build, wherever it goes', () => {
+    for (const url of [
+      'https://example.com/',
+      'http://localhost:5173/',
+      'tessera://settings',
+      'file:///Users/me/Downloads/page.html',
+      'data:text/html,<p>x</p>',
+      'javascript:alert(1)'
+    ]) {
+      expect(decideChromeNavigation(attempt(url), null).allowed, url).toBe(false)
+    }
+  })
+
+  it('refuses even its own document, because the core never navigates there this way', () => {
+    // A reload the core wants is `webContents.reload`, which does not come through here either.
+    expect(decideChromeNavigation(attempt(BUNDLE), null).allowed).toBe(false)
+    expect(
+      decideChromeNavigation(attempt('file:///app/out/renderer/overlay.html'), null).allowed
+    ).toBe(false)
+  })
+
+  it('names the frame and the target in the refusal', () => {
+    expect(decideChromeNavigation(attempt('https://a.test/'), null).reason).toBe(
+      'the chrome UI may not navigate its main frame (https://a.test/)'
+    )
+    expect(decideChromeNavigation(attempt('https://a.test/', 'frame', false), null).reason).toBe(
+      'the chrome UI may not navigate a subframe (https://a.test/)'
+    )
+  })
+
+  it('lets the dev server reload its own page in development', () => {
+    /*
+      The one navigation of its own the chrome UI makes: Vite answers an edit it cannot hot-swap with
+      `location.reload()`, which is renderer-initiated and so arrives here. Refused, `pnpm dev` would
+      stop picking up changes. Only the main frame, only to the server the UI came from.
+    */
+    expect(decideChromeNavigation(attempt(`${DEV}/`), DEV)).toEqual({ allowed: true, reason: null })
+    expect(decideChromeNavigation(attempt(`${DEV}/overlay.html`), DEV).allowed).toBe(true)
+  })
+
+  it('refuses everything else in development', () => {
+    expect(decideChromeNavigation(attempt(`${DEV}/`, 'frame', false), DEV).allowed).toBe(false)
+    expect(decideChromeNavigation(attempt('http://localhost:5174/'), DEV).allowed).toBe(false)
+    expect(decideChromeNavigation(attempt('https://example.com/'), DEV).allowed).toBe(false)
+    expect(decideChromeNavigation(attempt(BUNDLE), DEV).allowed).toBe(false)
+    expect(decideChromeNavigation(attempt('not a url'), DEV).allowed).toBe(false)
   })
 })
 

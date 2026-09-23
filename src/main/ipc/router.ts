@@ -1,7 +1,10 @@
 import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { INVOKE_CHANNELS, type InvokeChannel } from '@shared/ipc/channels.js'
 import { invokeContract, type InvokeHandlerArg, type InvokeResponse } from '@shared/ipc/contract.js'
-import { decideAccess } from './sender-policy.js'
+import { devServerUrl } from '../startup-flags.js'
+import { decideAccess, type ChromeAddresses, type SenderDescription } from './sender-policy.js'
 
 /**
  * Typed, validated IPC registration.
@@ -35,6 +38,41 @@ export function configureSenderPolicy(check: (event: IpcMainInvokeEvent) => bool
   isChromeRenderer = check
 }
 
+/*
+  Where the chrome surfaces were loaded from, which is where a sender with their identity must be.
+
+  The same two answers `BrowserWindowController.#loadChrome` and `OverlayLayer.#load` act on: the dev
+  server when `devServerUrl` names one, otherwise `loadFile` of `index.html` and `overlay.html` in the
+  bundle. Resolved against this module's `__dirname`, which is theirs too — the main process is one
+  bundle, `out/main/index.js`. `pathToFileURL` does not spell every path exactly as `loadFile` and
+  Chromium's canonicaliser do, which is why `isChromeAddress` decodes both sides before comparing.
+  Computed once: neither the environment nor the bundle's location changes while the process runs.
+*/
+const chromeAddresses: ChromeAddresses = {
+  devServer: devServerUrl(process.env, { packaged: app.isPackaged }),
+  bundle: ['index.html', 'overlay.html'].map(
+    (document) => pathToFileURL(join(__dirname, '../renderer', document)).href
+  )
+}
+
+/**
+ * The facts about the sending frame the sender policy reads.
+ *
+ * `senderFrame` is null once the frame has navigated away or been destroyed, and a frame disposed
+ * between the two reads throws rather than answering. Both end as "no frame", which the policy
+ * refuses for the chrome identity — never as a crash that skips the check.
+ */
+function senderOf(event: IpcMainInvokeEvent): SenderDescription {
+  const isChrome = isChromeRenderer(event)
+  try {
+    const frame = event.senderFrame
+    if (frame === null) return { frameUrl: null, isChromeRenderer: isChrome, isMainFrame: false }
+    return { frameUrl: frame.url, isChromeRenderer: isChrome, isMainFrame: frame.parent === null }
+  } catch {
+    return { frameUrl: null, isChromeRenderer: isChrome, isMainFrame: false }
+  }
+}
+
 export type InvokeHandler<C extends InvokeChannel> = (
   payload: InvokeHandlerArg<C>,
   event: IpcMainInvokeEvent
@@ -52,10 +90,7 @@ export function handle<C extends InvokeChannel>(channel: C, handler: InvokeHandl
     // Who is calling, before what they are asking for. The preload keeps its own
     // allowlist, but a compromised renderer is exactly the case where the
     // preload's copy cannot be trusted — so the decision is made again here.
-    const access = decideAccess(channel, {
-      frameUrl: event.senderFrame?.url ?? null,
-      isChromeRenderer: isChromeRenderer(event)
-    })
+    const access = decideAccess(channel, senderOf(event), chromeAddresses)
     if (!access.allowed) {
       throw new Error(`Refused: ${access.reason}`)
     }

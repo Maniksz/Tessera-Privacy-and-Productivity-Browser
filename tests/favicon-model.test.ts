@@ -1,11 +1,14 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   FAVICON_MAX_AGE_MS,
   FAVICON_REJECTIONS,
+  FAVICON_TOKEN_PARAM,
   MAX_FAVICON_BYTES,
   MAX_FAVICON_SOURCE_URL_LENGTH,
+  MIN_FAVICON_TOKEN_LENGTH,
   advertisedIconSize,
   chooseFaviconCandidate,
+  configureFaviconToken,
   declaredLengthOf,
   discardingFaviconCache,
   emptyFaviconCounts,
@@ -14,6 +17,7 @@ import {
   faviconDomainOf,
   faviconIsStale,
   faviconSiteOf,
+  faviconTokenMatches,
   faviconUrl,
   findFaviconEntry,
   iconCandidateRank,
@@ -101,6 +105,85 @@ describe('the address a renderer draws from', () => {
   it('answers nothing for an address that names no site', () => {
     expect(faviconSiteOf('tessera://favicon')).toBeNull()
     expect(faviconSiteOf('nonsense')).toBeNull()
+  })
+})
+
+describe('the token that makes an address worth answering', () => {
+  /*
+    Any web page may point an `<img>` at `tessera://favicon?site=…`, so without a token whether it
+    loaded said whether the user had been to the site. The protocol handler asks `faviconTokenMatches`
+    before the store and answers a mismatch exactly like a miss; these are the rules it relies on.
+  */
+  const THIS_RUN = 'a'.repeat(22)
+  const NEXT_RUN = 'b'.repeat(22)
+
+  /** The same address with its token replaced, or removed for `null`. */
+  function withToken(url: string, token: string | null): string {
+    const parsed = new URL(url)
+    if (token === null) parsed.searchParams.delete(FAVICON_TOKEN_PARAM)
+    else parsed.searchParams.set(FAVICON_TOKEN_PARAM, token)
+    return parsed.toString()
+  }
+
+  it("accepts an address the core built with this run's token", () => {
+    configureFaviconToken(THIS_RUN)
+    const url = faviconUrl(entry())
+    expect(new URL(url).searchParams.get(FAVICON_TOKEN_PARAM)).toBe(THIS_RUN)
+    expect(faviconTokenMatches(url)).toBe(true)
+    // The token rides along; it does not change what the address asks for.
+    expect(faviconSiteOf(url)).toBe('example.com')
+  })
+
+  it('refuses an address without the token, with a wrong one, or with an empty one', () => {
+    configureFaviconToken(THIS_RUN)
+    const url = faviconUrl(entry())
+    expect(faviconTokenMatches(withToken(url, null))).toBe(false)
+    expect(faviconTokenMatches(withToken(url, NEXT_RUN))).toBe(false)
+    expect(faviconTokenMatches(withToken(url, ''))).toBe(false)
+    // A prefix is not the token: the comparison is whole, not "starts with".
+    expect(faviconTokenMatches(withToken(url, THIS_RUN.slice(1)))).toBe(false)
+    expect(faviconTokenMatches('nonsense')).toBe(false)
+  })
+
+  it("stops accepting the last run's addresses once a new token is drawn", () => {
+    // Also what keeps the handler's `immutable` caching correct: a new run builds new addresses.
+    configureFaviconToken(THIS_RUN)
+    const before = faviconUrl(entry())
+    configureFaviconToken(NEXT_RUN)
+    const after = faviconUrl(entry())
+
+    expect(faviconTokenMatches(before)).toBe(false)
+    expect(faviconTokenMatches(after)).toBe(true)
+    expect(after).not.toBe(before)
+  })
+
+  it('refuses a token short enough to guess, and keeps the one it had', () => {
+    configureFaviconToken(THIS_RUN)
+    expect(() => configureFaviconToken('')).toThrow(RangeError)
+    expect(() => configureFaviconToken('x'.repeat(MIN_FAVICON_TOKEN_LENGTH - 1))).toThrow(
+      RangeError
+    )
+    expect(faviconTokenMatches(faviconUrl(entry()))).toBe(true)
+
+    // The boundary itself is long enough.
+    const shortest = 'y'.repeat(MIN_FAVICON_TOKEN_LENGTH)
+    configureFaviconToken(shortest)
+    expect(faviconTokenMatches(withToken(faviconUrl(entry()), shortest))).toBe(true)
+  })
+
+  it('accepts nothing before the core has configured a token', async () => {
+    /*
+      A fresh copy of the module, because the token is module state and the tests above have set it.
+      An unconfigured core must serve no icons rather than serve them to anyone — including to an
+      address that simply leaves the token out, which is what a missing token would otherwise equal.
+    */
+    vi.resetModules()
+    const fresh = await import('@shared/favicons/model.js')
+    const url = fresh.faviconUrl(entry())
+
+    expect(new URL(url).searchParams.get(fresh.FAVICON_TOKEN_PARAM)).toBe('')
+    expect(fresh.faviconTokenMatches(url)).toBe(false)
+    expect(fresh.faviconTokenMatches(withToken(url, null))).toBe(false)
   })
 })
 

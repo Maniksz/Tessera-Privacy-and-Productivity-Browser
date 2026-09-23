@@ -1,3 +1,4 @@
+import { isPublicSuffix } from '../url/domain.js'
 import { hostChain } from './cosmetic.js'
 import { parseFilterList } from './parse.js'
 
@@ -226,12 +227,38 @@ export function repairUserRules(rules: readonly UserRule[]): UserRule[] {
 }
 
 /**
+ * Whether a picked rule now names a public suffix rather than a site.
+ *
+ * The picker keys a rule on `registrableDomain` of the page, and that is only as good as the suffix
+ * list in force when the rule was made. A profile that ran on the bootstrap stored `com.sg##.banner`
+ * for a page on `bank.com.sg`, because the bootstrap does not know `com.sg`; with the full list the
+ * same line hides that element on every site under `com.sg`. Nobody asked for that.
+ *
+ * Only the picker's own rules. A line the user typed with a suffix in it was typed on purpose, and a
+ * rule list that second-guessed its author would be the one thing here the user cannot audit.
+ */
+export function isTooBroadUserRule(rule: UserRule): boolean {
+  if (rule.origin !== 'picker') return false
+  const detail = describeUserRule(rule.text)
+  return detail?.hosts.some((host) => isPublicSuffix(host)) === true
+}
+
+/** The rules `isTooBroadUserRule` holds back, for reporting them. */
+export function tooBroadUserRules(rules: readonly UserRule[]): UserRule[] {
+  return rules.filter(isTooBroadUserRule)
+}
+
+/**
  * The enabled rules as one list body, ready for the same compiler the downloaded
  * lists go through.
+ *
+ * A too-broad rule is left out and left alone: `enabled` stays what the user set,
+ * the line stays in the list they can see, and it applies again the moment it
+ * names a site — which is what a user fixing it by hand would want kept.
  */
 export function enabledUserRuleText(rules: readonly UserRule[]): string {
   return rules
-    .filter((rule) => rule.enabled)
+    .filter((rule) => rule.enabled && !isTooBroadUserRule(rule))
     .map((rule) => rule.text)
     .join('\n')
 }

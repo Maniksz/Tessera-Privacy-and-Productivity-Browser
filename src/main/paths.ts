@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { app } from 'electron'
 import type { Platform } from '@shared/model.js'
 import { FILTER_LIST_CACHE_DIRNAME } from './privacy/FilterListStore.js'
+import { PUBLIC_SUFFIX_DIRNAME } from './privacy/PublicSuffixSubscription.js'
 
 /**
  * Filesystem locations (spec 10: use each platform's intended directories, no
@@ -202,6 +203,33 @@ export function thumbnailCacheDir(): string {
  */
 export function filterListCacheDir(): string {
   return join(cacheDir(), FILTER_LIST_CACHE_DIRNAME)
+}
+
+/**
+ * The downloaded Public Suffix List and the state that judges the next one.
+ *
+ * User data rather than cache, though the list itself can be downloaded again, because losing it is
+ * not free: it puts the profile back on the built-in suffixes until the next accepted download, and
+ * that silently changes which hosts count as one site — which is what a saved password is offered to.
+ * It also carries the baseline a candidate's removals are measured against, and a cache clear that
+ * reset the baseline would reset the check with it. Not beside the filter lists either: their store
+ * prunes every file its manifest does not name.
+ */
+/**
+ * The note a quit leaves when its clearing did not finish, read and removed at the next start.
+ *
+ * A file of its own rather than a key in one that exists. Not `settings.json`: that is encrypted and
+ * is itself one of the writes the same shutdown is racing. Not `startup-flags.json`: every settings
+ * change rewrites it from the settings alone and would drop the note. Unencrypted, like the flags,
+ * and for the same reason — it holds category names such as `cookies`, which say that the user
+ * clears on exit and nothing about what they browsed.
+ */
+export function pendingClearFile(): string {
+  return join(userDataDir(), 'clear-on-exit-pending.json')
+}
+
+export function publicSuffixDir(): string {
+  return join(userDataDir(), PUBLIC_SUFFIX_DIRNAME)
 }
 
 export function defaultDownloadsDir(): string {

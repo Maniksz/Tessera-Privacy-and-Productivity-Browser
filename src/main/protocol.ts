@@ -2,8 +2,9 @@ import { app, net, protocol } from 'electron'
 import { join, normalize, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { PRODUCT_NAME, PRODUCT_SCHEME } from '@shared/product.js'
-import { FAVICON_PAGE, faviconSiteOf } from '@shared/favicons/model.js'
-import { THUMBNAIL_PAGE, thumbnailPageOf } from '@shared/thumbnails/model.js'
+import { FAVICON_PAGE, faviconSiteOf, faviconTokenMatches } from '@shared/favicons/model.js'
+import { THUMBNAIL_PAGE, thumbnailPageOf, thumbnailTokenMatches } from '@shared/thumbnails/model.js'
+import { devServerUrl } from './startup-flags.js'
 
 /**
  * The `tessera://` scheme for internal pages (start page, settings, history,
@@ -53,11 +54,14 @@ export type ImageResolver = (key: string) => { filePath: string; contentType: st
 /**
  * The two routes that serve bytes from the profile directory rather than from the bundle.
  *
- * Kept as one table because they differ in exactly two ways — which query parameter names the
- * subject, and which store answers — and everything else about them must stay identical: the same
- * miss behaviour, the same `nosniff`, the same immutable caching. Two separate handlers would drift.
+ * Kept as one table because they differ in exactly three ways — which token they carry, which query
+ * parameter names the subject, and which store answers — and everything else about them must stay
+ * identical: the same miss behaviour, the same `nosniff`, the same immutable caching. Two separate
+ * handlers would drift.
  */
 interface ImageRoute {
+  /** Whether the address carries this run's token, which only the core's own addresses do. */
+  tokenMatches(url: string): boolean
   /** Reads the subject out of the address, already normalised to a store key. */
   keyOf(url: string): string | null
   resolve: ImageResolver
@@ -103,13 +107,19 @@ export function registerInternalProtocol(options: {
   const rootDir = normalize(join(__dirname, '../renderer'))
 
   const imageRoutes = new Map<string, ImageRoute>([
-    [FAVICON_PAGE, { keyOf: faviconSiteOf, resolve: options.favicons }],
-    [THUMBNAIL_PAGE, { keyOf: thumbnailPageOf, resolve: options.thumbnails }]
+    [
+      FAVICON_PAGE,
+      { tokenMatches: faviconTokenMatches, keyOf: faviconSiteOf, resolve: options.favicons }
+    ],
+    [
+      THUMBNAIL_PAGE,
+      { tokenMatches: thumbnailTokenMatches, keyOf: thumbnailPageOf, resolve: options.thumbnails }
+    ]
   ])
   // In development the renderer is served by Vite, so requests are proxied there
   // instead of read from disk — otherwise internal pages would be stale while the
-  // chrome UI hot-reloads.
-  const devServer = process.env.ELECTRON_RENDERER_URL
+  // chrome UI hot-reloads. Never in a packaged build; see `devServerUrl`.
+  const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
 
   protocol.handle(SCHEME, async (request) => {
     const url = new URL(request.url)
@@ -133,7 +143,7 @@ export function registerInternalProtocol(options: {
     const isAsset = url.pathname !== '' && url.pathname !== '/'
     const relativePath = isAsset ? url.pathname : `internal/${page}.html`
 
-    if (devServer !== undefined && devServer !== '') {
+    if (devServer !== null) {
       return net.fetch(new URL(relativePath, devServer).toString())
     }
 
@@ -166,8 +176,16 @@ export function registerInternalProtocol(options: {
  * The `Content-Type` is the one the store established from the bytes, never one a site declared, and
  * `nosniff` holds Chromium to it. Together they mean a site cannot get a document interpreted as
  * anything but the raster image it was accepted as.
+ *
+ * An address without this run's token is answered exactly like a miss, and before the store is
+ * asked. Any web page may point an `<img>` at this scheme, so a hit or a miss it could tell apart
+ * would say which sites and pages the user has seen. Checking the token first keeps the answer to a
+ * foreign address independent of the cache entirely — same status, same (absent) headers, and no
+ * lookup whose cost could differ between a cached and an uncached subject.
  */
 async function serveCachedImage(url: string, route: ImageRoute): Promise<Response> {
+  if (!route.tokenMatches(url)) return noImage()
+
   const key = route.keyOf(url)
   if (key === null) return noImage()
 
@@ -198,7 +216,12 @@ async function serveCachedImage(url: string, route: ImageRoute): Promise<Respons
   }
 }
 
-/** Nothing cached for this subject, which the caller draws its own fallback for. */
+/**
+ * Nothing cached for this subject, which the caller draws its own fallback for.
+ *
+ * Also the answer to an address with a wrong or missing token, and deliberately indistinguishable
+ * from a miss: no header, no body, nothing that would let a page tell "not yours" from "not cached".
+ */
 function noImage(): Response {
   return new Response(null, { status: 204 })
 }

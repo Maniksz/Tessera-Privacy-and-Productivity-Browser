@@ -1,6 +1,7 @@
 import { hostMatchesRule, registrableDomain } from '../url/domain.js'
 import {
   RESOURCE_TYPE_BITS,
+  canonicalHostname,
   hostnameOfUrl,
   type FilterRequest,
   type NetworkRule
@@ -53,6 +54,9 @@ const DOT = 0x2e
 const SLASH = 0x2f
 const QUESTION = 0x3f
 const HASH = 0x23
+const AT = 0x40
+
+const DOCUMENT_BIT = RESOURCE_TYPE_BITS.document
 
 export interface RuleBucket {
   /** `||domain^` rules keyed by their domain. */
@@ -63,11 +67,33 @@ export interface RuleBucket {
   readonly size: number
 }
 
+/**
+ * The rules, filed by rank.
+ *
+ * Six buckets rather than three because two exception shapes cannot be answered from
+ * the ordinary one. `@@…$important` overrules an important block, and important blocks
+ * are settled before `allow` is ever consulted, so filed there it could never win the
+ * one contest it exists for. `@@…$document` is a statement about the *page* rather
+ * than the request, so it has to be matched against a different URL altogether.
+ */
 export interface NetworkIndex {
   /** `$important` blocks, which outrank exceptions and so are settled first. */
   readonly important: RuleBucket
+  /** `@@…$important`: the only exceptions an important block yields to. */
+  readonly importantAllow: RuleBucket
+  /** `@@…$document,important`, matched against the page like `pageAllow`. */
+  readonly importantPageAllow: RuleBucket
   readonly block: RuleBucket
   readonly allow: RuleBucket
+  /**
+   * `@@…$document`, matched against the page a request belongs to, so an exception
+   * for `example.com` lets through what `example.com` loads.
+   *
+   * These rules are filed in `allow` (or `importantAllow`) as well. The page's own
+   * navigation is a request like any other, and there the ordinary lookup with its
+   * `document` type bit is the right question.
+   */
+  readonly pageAllow: RuleBucket
   readonly ruleCount: number
 }
 
@@ -161,7 +187,9 @@ function buildBucket(rules: readonly NetworkRule[]): RuleBucket {
   for (const rule of rules) {
     const host = plainHostOf(rule)
     if (host === null) patterned.push({ rule, tokens: safeTokensOf(rule) })
-    else fileUnder(byHost, host, rule)
+    // Filed under the same canonical form requests are looked up by: a list that
+    // spells `||example.com.^` names the host every dotless request reaches.
+    else fileUnder(byHost, canonicalHostname(host), rule)
   }
 
   const frequency = new Map<string, number>()
@@ -182,17 +210,33 @@ function buildBucket(rules: readonly NetworkRule[]): RuleBucket {
 
 export function buildNetworkIndex(rules: readonly NetworkRule[]): NetworkIndex {
   const important: NetworkRule[] = []
+  const importantAllow: NetworkRule[] = []
+  const importantPageAllow: NetworkRule[] = []
   const block: NetworkRule[] = []
   const allow: NetworkRule[] = []
+  const pageAllow: NetworkRule[] = []
   for (const rule of rules) {
-    if (rule.isException) allow.push(rule)
-    else if (rule.important) important.push(rule)
-    else block.push(rule)
+    if (!rule.isException) {
+      if (rule.important) important.push(rule)
+      else block.push(rule)
+      continue
+    }
+    if (rule.important) importantAllow.push(rule)
+    else allow.push(rule)
+    // Only an explicit `$document`. A type-less exception also carries no type bits,
+    // and reading "every type" as "the whole page" would turn each `@@||cdn.example^`
+    // into an allowlist for every page on that CDN.
+    if ((rule.types & DOCUMENT_BIT) === 0) continue
+    if (rule.important) importantPageAllow.push(rule)
+    else pageAllow.push(rule)
   }
   return {
     important: buildBucket(important),
+    importantAllow: buildBucket(importantAllow),
+    importantPageAllow: buildBucket(importantPageAllow),
     block: buildBucket(block),
     allow: buildBucket(allow),
+    pageAllow: buildBucket(pageAllow),
     ruleCount: rules.length
   }
 }
@@ -414,19 +458,31 @@ function findInBucket(bucket: RuleBucket, context: MatchContext): NetworkRule | 
 }
 
 interface HostBounds {
-  /** -1 when the URL has no host, e.g. `data:` — then no `||` rule can apply. */
+  /**
+   * First character of the host, past any credentials. -1 when the URL has no host,
+   * e.g. `data:` — then no `||` rule can apply.
+   */
   readonly start: number
+  /** End of the authority: the host and any port. */
   readonly end: number
 }
 
-/** Host bounds within a URL string, so `||` can be anchored without parsing it. */
+/**
+ * Host bounds within a URL string, so `||` can be anchored without parsing it.
+ *
+ * Credentials are skipped in the same scan: `https://u:p@ads.example/` goes to
+ * `ads.example`, and anchoring at `u` instead moved the host out from under every
+ * `||` rule. The *last* `@` ends them, as the URL standard reads it, and the scan
+ * never looks past the authority, so an `@` in the path is left alone.
+ */
 function hostBounds(url: string): HostBounds {
   const scheme = url.indexOf('://')
   if (scheme < 0) return { start: -1, end: -1 }
-  const start = scheme + 3
+  let start = scheme + 3
   for (let index = start; index < url.length; index++) {
     const code = url.charCodeAt(index)
     if (code === SLASH || code === QUESTION || code === HASH) return { start, end: index }
+    if (code === AT) start = index + 1
   }
   return { start, end: url.length }
 }
@@ -447,6 +503,11 @@ function hostAnchorStartsOf(url: string, bounds: HostBounds): readonly number[] 
  * `https://example.com:8443/` — `:` is a separator, so the `^` is satisfied — and
  * the suffix walk has to agree with the pattern matcher rather than quietly
  * disagree with it on non-default ports.
+ *
+ * Then the trailing dot of a fully-qualified host, which `canonicalHostname` drops
+ * everywhere else: `ads.example.com.` must probe `example.com`, not `com.`. No
+ * bounds check is needed before looking at `stop - 1` — the character in front of
+ * the host is the `/` of `://` or the `@` ending the credentials, never a dot.
  */
 function hostSuffixesOf(url: string, bounds: HostBounds): readonly string[] {
   if (bounds.start < 0) return []
@@ -455,6 +516,7 @@ function hostSuffixesOf(url: string, bounds: HostBounds): readonly string[] {
   const colon = url.lastIndexOf(':', bounds.end - 1)
   // `colon > bracket` keeps an IPv6 literal's own colons from being read as a port.
   if (colon >= bounds.start && colon > bracket) stop = colon
+  if (url.charCodeAt(stop - 1) === DOT) stop -= 1
 
   const host = url.slice(bounds.start, stop)
   const suffixes: string[] = [host]
@@ -483,10 +545,47 @@ function contextOf(request: FilterRequest): MatchContext {
 }
 
 /**
+ * The page a request belongs to, read as a request of its own so `$document`
+ * exceptions can be matched against it with the same machinery.
+ *
+ * None for a navigation. There the page *is* the request, which the ordinary lookup
+ * already answers, and `documentUrl` names the page being left — an exception for
+ * that one says nothing about where the user is going.
+ */
+function pageContextOf(context: MatchContext): MatchContext | null {
+  if (context.documentUrl === null || context.typeBit === DOCUMENT_BIT) return null
+  return contextOf({ url: context.documentUrl, documentUrl: context.documentUrl, type: 'document' })
+}
+
+/**
+ * The first `$document` exception in `buckets` that covers the request's page.
+ *
+ * Only reached once a block has been found, which most requests never get to, so
+ * reading the page URL here costs nothing on the path every request takes.
+ */
+function findOnPage(context: MatchContext, ...buckets: RuleBucket[]): NetworkRule | null {
+  const page = pageContextOf(context)
+  if (page === null) return null
+  for (const bucket of buckets) {
+    const rule = findInBucket(bucket, page)
+    if (rule !== null) return rule
+  }
+  return null
+}
+
+function allowed(rule: NetworkRule): NetworkMatch {
+  return { rule, blocked: false }
+}
+
+/**
  * The winning rule for a request, or null when nothing matched.
  *
  * The rule is returned rather than a bare boolean so a block can be explained —
  * "which line did this" is the first question about any false positive.
+ *
+ * An important block yields only to an important exception, for the request or for
+ * its page. An ordinary block yields to any exception: an important one is an
+ * exception first of all, and outranking more rules does not make it cover fewer.
  */
 export function matchNetworkRequest(
   index: NetworkIndex,
@@ -495,11 +594,18 @@ export function matchNetworkRequest(
   const context = contextOf(request)
 
   const important = findInBucket(index.important, context)
-  if (important !== null) return { rule: important, blocked: true }
+  if (important !== null) {
+    const exception =
+      findInBucket(index.importantAllow, context) ?? findOnPage(context, index.importantPageAllow)
+    return exception === null ? { rule: important, blocked: true } : allowed(exception)
+  }
 
   const block = findInBucket(index.block, context)
   if (block === null) return null
 
-  const allow = findInBucket(index.allow, context)
-  return allow === null ? { rule: block, blocked: true } : { rule: allow, blocked: false }
+  const exception =
+    findInBucket(index.allow, context) ??
+    findInBucket(index.importantAllow, context) ??
+    findOnPage(context, index.pageAllow, index.importantPageAllow)
+  return exception === null ? { rule: block, blocked: true } : allowed(exception)
 }

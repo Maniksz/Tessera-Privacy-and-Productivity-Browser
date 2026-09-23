@@ -1,4 +1,4 @@
-import { internalPageOf, isInternalPageUrl } from '../ipc/sender-policy.js'
+import { internalPageOf, isDevServerAddress, isInternalPageUrl } from '../ipc/sender-policy.js'
 
 /**
  * Whether a navigation this browser did not start may go where it is going.
@@ -183,4 +183,36 @@ export function decideTabNavigation(attempt: NavigationAttempt): NavigationDecis
     allowed: false,
     reason: `page content in ${frame} may not navigate to an internal address (${attempt.url})`
   }
+}
+
+/**
+ * Whether a chrome surface — the window's own UI or its overlay layer — may follow a navigation.
+ *
+ * ## Why the answer is no
+ *
+ * The core moves these two surfaces only with `loadURL` and `loadFile`, and the sentence this file
+ * rests on (`will-frame-navigate` does not fire for those) means none of that arrives here. What does
+ * arrive is the page moving itself: a link dropped onto the tab strip, an assignment to `location`,
+ * script that should not be running there. The surface holds every IPC channel there is, so it
+ * follows none of them — not even to its own `index.html`, which the core would reach with
+ * `webContents.reload` rather than through here. `navigateOnDragDrop` is already off by default in
+ * Electron 43 and the renderer refuses drops itself; this is the layer that holds if either changes.
+ *
+ * ## The one exception, and only in development
+ *
+ * Vite answers an edit it cannot hot-swap with `location.reload()`, which is renderer-initiated and so
+ * does arrive here. Refusing it would make `pnpm dev` stop picking up changes. So with a dev server —
+ * which `devServerUrl` never reports in a packaged build — a main-frame navigation to that server's
+ * own origin is let through, and nothing else is. The router still checks the address on every call
+ * (`classifySender`), so this widens nothing the IPC boundary trusts.
+ */
+export function decideChromeNavigation(
+  attempt: NavigationAttempt,
+  devServer: string | null
+): NavigationDecision {
+  if (devServer !== null && attempt.isMainFrame && isDevServerAddress(attempt.url, devServer)) {
+    return { allowed: true, reason: null }
+  }
+  const frame = attempt.isMainFrame ? 'its main frame' : 'a subframe'
+  return { allowed: false, reason: `the chrome UI may not navigate ${frame} (${attempt.url})` }
 }

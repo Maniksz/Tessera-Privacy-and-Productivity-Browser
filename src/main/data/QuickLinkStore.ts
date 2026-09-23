@@ -12,6 +12,7 @@ import {
 } from '@shared/quicklinks/model.js'
 import { quickLinkDocumentSchema } from '@shared/quicklinks/schema.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { StoreLoadReport } from './store-load.js'
 
 /**
  * Persistence for the start page's quick links (spec 1).
@@ -50,6 +51,9 @@ export class QuickLinkStore {
       filePath: options.filePath,
       schema: quickLinkDocumentSchema,
       fallback: emptyQuickLinkDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A hand-edited or partially written file must not leave items orphaned
       // and therefore invisible.
       repair: (document) => ({ ...document, links: repairTree(document.links) }),
@@ -115,6 +119,11 @@ export class QuickLinkStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 }
 

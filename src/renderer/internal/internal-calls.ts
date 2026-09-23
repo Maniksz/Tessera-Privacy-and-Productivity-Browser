@@ -102,6 +102,8 @@ export interface RemovedCount {
 
 export const bookmarksApi = {
   list: () => call<Bookmark[]>('bookmarks:list'),
+  /** How many nodes the core could not read. See `bookmarks:status`. */
+  status: () => call<{ unreadableEntries: number }>('bookmarks:status'),
   create: (request: CreateBookmarkRequest) => call<Bookmark>('bookmarks:create', request),
   update: (request: { id: string; title?: string }) => call<Bookmark>('bookmarks:update', request),
   /** The "this page has moved" operation; keeps the title, folder and position. */
