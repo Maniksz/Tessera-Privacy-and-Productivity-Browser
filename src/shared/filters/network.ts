@@ -250,8 +250,9 @@ export function buildNetworkIndex(rules: readonly NetworkRule[]): NetworkIndex {
  * character of every `^` in every candidate rule of every request, and a lookup has
  * no boundary conditions to get subtly wrong.
  */
-const SEPARATOR_BY_CODE: readonly boolean[] = Array.from({ length: 0x80 }, (_unused, code) =>
-  !/[0-9a-z_.%-]/i.test(String.fromCharCode(code))
+const SEPARATOR_BY_CODE: readonly boolean[] = Array.from(
+  { length: 0x80 },
+  (_unused, code) => !/[0-9a-z_.%-]/i.test(String.fromCharCode(code))
 )
 
 function isSeparatorCode(code: number): boolean {
@@ -427,11 +428,7 @@ function optionsApply(rule: NetworkRule, context: MatchContext): boolean {
 function ruleApplies(rule: NetworkRule, context: MatchContext): boolean {
   return (
     optionsApply(rule, context) &&
-    matchPattern(
-      rule,
-      rule.matchCase ? context.rawUrl : context.lowerUrl,
-      context.hostAnchorStarts
-    )
+    matchPattern(rule, rule.matchCase ? context.rawUrl : context.lowerUrl, context.hostAnchorStarts)
   )
 }
 

@@ -158,11 +158,7 @@ describe('side-by-side layouts', () => {
     // The order is what `clampFractions` relies on to tell which boundary has to
     // stay left of which; a shuffled list would order the wrong pair.
     expect(dividersFor('1x3', DEFAULT_FRACTIONS['1x3']).map((d) => d.id)).toEqual(['v', 'v2'])
-    expect(dividersFor('1x4', DEFAULT_FRACTIONS['1x4']).map((d) => d.id)).toEqual([
-      'v',
-      'v2',
-      'v3'
-    ])
+    expect(dividersFor('1x4', DEFAULT_FRACTIONS['1x4']).map((d) => d.id)).toEqual(['v', 'v2', 'v3'])
     for (const layout of ['1x3', '1x4'] as const) {
       const positions = dividersFor(layout, DEFAULT_FRACTIONS[layout]).map(
         (divider) => DEFAULT_FRACTIONS[layout][divider.id] ?? 0

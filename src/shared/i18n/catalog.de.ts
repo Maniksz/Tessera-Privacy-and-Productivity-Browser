@@ -314,8 +314,7 @@ export const de = {
     'Das sieht nicht wie ein exportiertes Passwort-Archiv aus: keine Adress-Spalte oder keine Passwort-Spalte.',
   'passwords.importRefusedEmpty': 'In dieser Datei war nichts.',
   'passwords.importRefusedTooLarge': 'Diese Datei ist zu groß für einen Passwort-Export.',
-  'passwords.importRefusedTooManyRows':
-    'Diese Datei hat mehr Zeilen, als ein Export haben sollte.',
+  'passwords.importRefusedTooManyRows': 'Diese Datei hat mehr Zeilen, als ein Export haben sollte.',
   'passwords.importSummary': '{imported} importiert, {skipped} übersprungen',
   'passwords.importDuplicates': '{count} waren schon gespeichert, unverändert',
   'passwords.importConflicts':
@@ -430,8 +429,10 @@ export const de = {
   'reader.imageOpen': 'Dieses Bild öffnen',
   'reader.refusedTitle': 'Diese Seite sieht nicht wie ein Artikel aus',
   'reader.refused.unreadable': 'Die Seite konnte nicht gelesen werden.',
-  'reader.refused.expired': 'Die Seite hat sich während der Vorbereitung geändert. Bitte erneut versuchen.',
-  'reader.refused.truncated': 'Es wurde nur ein Teil des Artikels gefunden, daher wird nichts davon gezeigt.',
+  'reader.refused.expired':
+    'Die Seite hat sich während der Vorbereitung geändert. Bitte erneut versuchen.',
+  'reader.refused.truncated':
+    'Es wurde nur ein Teil des Artikels gefunden, daher wird nichts davon gezeigt.',
   'reader.refused.noProse': 'Auf dieser Seite wurde kein Artikeltext gefunden.',
   'reader.refused.tooLittleProse': 'Hier ist zu wenig Text, um ihn als Artikel darzustellen.',
   'find.label': 'In Kachel {index} suchen',
@@ -466,7 +467,8 @@ export const de = {
   'start.dialog.address': 'Adresse',
   'start.dialog.addressHint': 'Zum Beispiel example.com',
   'start.dialog.addressResolved': 'Öffnet {title}',
-  'start.dialog.addressInvalid': 'Das ist keine Adresse. Gib eine Domain oder eine vollständige URL ein.',
+  'start.dialog.addressInvalid':
+    'Das ist keine Adresse. Gib eine Domain oder eine vollständige URL ein.',
   'start.dialog.name': 'Name',
   'start.dialog.nameHint': 'Leer lassen, um die Domain zu verwenden.',
   'start.dialog.cancel': 'Abbrechen',

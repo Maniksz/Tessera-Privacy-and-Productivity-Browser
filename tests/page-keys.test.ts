@@ -48,7 +48,10 @@ const press = (overrides: Partial<PageKeystroke> = {}): PageKeystroke => ({
   ...overrides
 })
 
-const state = (loading: boolean, escalation: EscalationLevel = 'none'): {
+const state = (
+  loading: boolean,
+  escalation: EscalationLevel = 'none'
+): {
   loading: boolean
   escalation: EscalationLevel
 } => ({ loading, escalation })
@@ -132,10 +135,9 @@ describe('the macOS stop key', () => {
 
   it('is macOS only, because that is where the table puts it', () => {
     for (const platform of ['win32', 'linux'] as const) {
-      expect(
-        pageKeyAction(press({ key: '.', meta: true }), platform, state(true)),
-        platform
-      ).toBe('nothing')
+      expect(pageKeyAction(press({ key: '.', meta: true }), platform, state(true)), platform).toBe(
+        'nothing'
+      )
     }
   })
 
@@ -209,7 +211,11 @@ describe('the close-tab chord, which is only a fallback', () => {
       'nothing'
     )
     expect(
-      pageKeyAction(press({ key: 'W', shift: true, control: true }), 'win32', state(false, 'window-fullscreen'))
+      pageKeyAction(
+        press({ key: 'W', shift: true, control: true }),
+        'win32',
+        state(false, 'window-fullscreen')
+      )
     ).toBe('nothing')
   })
 
@@ -367,7 +373,9 @@ describe('the three keys this matcher knows, against the table it comes from', (
         row would therefore be a key the menu answers and this does not — the dead-key failure again,
         in the one place a second route makes it invisible rather than merely silent.
       */
-      expect(DEFAULT_BINDINGS[platform].closeTab, `${platform} closeTab`).toEqual(expected?.closeTab)
+      expect(DEFAULT_BINDINGS[platform].closeTab, `${platform} closeTab`).toEqual(
+        expected?.closeTab
+      )
       expect(
         DEFAULT_BINDINGS[platform].closeTab.length,
         `${platform} closeTab has a sibling accelerator this matcher does not know`

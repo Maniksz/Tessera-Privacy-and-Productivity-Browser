@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react'
 import type { SecurityState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
-import {
-  SEARCH_ENGINES,
-  classifyOmniboxInput,
-  omniboxDisplayValue
-} from '@shared/url/omnibox.js'
+import { SEARCH_ENGINES, classifyOmniboxInput, omniboxDisplayValue } from '@shared/url/omnibox.js'
 import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
@@ -102,7 +98,7 @@ export function Omnibox({
   }
 
   const intent = classifyOmniboxInput(value)
-  const engine = (settings?.['search.defaultEngine'] ?? 'duckduckgo')
+  const engine = settings?.['search.defaultEngine'] ?? 'duckduckgo'
   const hint =
     !editing || intent.kind === 'empty'
       ? null
@@ -122,7 +118,10 @@ export function Omnibox({
     reason this is an import and not two lines of host comparison here.
   */
   const blockerEnabled = settings?.['privacy.blockerEnabled'] ?? true
-  const exemptHere = filteringExemptFor(tab?.url ?? null, settings?.['privacy.blockerOffForSites'] ?? [])
+  const exemptHere = filteringExemptFor(
+    tab?.url ?? null,
+    settings?.['privacy.blockerOffForSites'] ?? []
+  )
   const filtering = blockerEnabled && !exemptHere
   const blockerLabel = !blockerEnabled
     ? t('omnibox.blockerOff')

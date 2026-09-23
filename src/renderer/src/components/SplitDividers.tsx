@@ -57,7 +57,10 @@ export function SplitDividers({ split, contentTop }: SplitDividersProps): React.
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
-  const onPointerMove = (event: PointerEvent<HTMLDivElement>, orientation: 'vertical' | 'horizontal'): void => {
+  const onPointerMove = (
+    event: PointerEvent<HTMLDivElement>,
+    orientation: 'vertical' | 'horizontal'
+  ): void => {
     const id = dragging.current
     const container = containerRef.current
     if (id === null || container === null) return
@@ -96,7 +99,8 @@ export function SplitDividers({ split, contentTop }: SplitDividersProps): React.
       aria-hidden={false}
     >
       {dividers.map((divider) => {
-        const fraction = split.fractions[divider.id] ?? DEFAULT_FRACTIONS[split.layout][divider.id] ?? 0.5
+        const fraction =
+          split.fractions[divider.id] ?? DEFAULT_FRACTIONS[split.layout][divider.id] ?? 0.5
         const vertical = divider.orientation === 'vertical'
 
         const style = vertical

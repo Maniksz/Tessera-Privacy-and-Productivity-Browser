@@ -87,7 +87,9 @@ export function LayoutMenuSurface({
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
     event.preventDefault()
 
-    const items = [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])]
+    const items = [
+      ...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])
+    ]
     if (items.length === 0) return
     const index = items.findIndex((item) => item === document.activeElement)
     const delta = event.key === 'ArrowDown' ? 1 : -1

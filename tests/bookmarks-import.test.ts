@@ -44,7 +44,10 @@ const CHROME_EXPORT = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
     <DT><A HREF="https://elsewhere.example/">Elsewhere</A>
 </DL><p>`
 
-function graft(html: string, nodes: readonly Bookmark[] = []): ReturnType<typeof graftImportedBookmarks> {
+function graft(
+  html: string,
+  nodes: readonly Bookmark[] = []
+): ReturnType<typeof graftImportedBookmarks> {
   let counter = 0
   return graftImportedBookmarks([...nodes], parseNetscapeBookmarks(html), {
     nextId: () => {
@@ -85,7 +88,9 @@ describe('parsing an exported file', () => {
       '<DL><DT><A HREF="https://a.example/" ADD_DATE="soon">A</A></DL>'
     )
     expect(report.nodes[0]?.addedAt).toBeNull()
-    const zero = parseNetscapeBookmarks('<DL><DT><A HREF="https://a.example/" ADD_DATE="0">A</A></DL>')
+    const zero = parseNetscapeBookmarks(
+      '<DL><DT><A HREF="https://a.example/" ADD_DATE="0">A</A></DL>'
+    )
     expect(zero.nodes[0]?.addedAt).toBeNull()
   })
 
@@ -139,7 +144,9 @@ describe('parsing an exported file', () => {
   })
 
   it('strips the markup a title can be wrapped in', () => {
-    const report = parseNetscapeBookmarks('<DL><DT><A HREF="https://a.example/"><B>Bold</B></A></DL>')
+    const report = parseNetscapeBookmarks(
+      '<DL><DT><A HREF="https://a.example/"><B>Bold</B></A></DL>'
+    )
     expect(report.nodes[0]?.title).toBe('Bold')
   })
 

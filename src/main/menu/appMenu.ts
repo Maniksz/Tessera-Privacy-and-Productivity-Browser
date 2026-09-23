@@ -230,7 +230,11 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       {
         label: t('menu.view.focusTileBar'),
         accelerator: accel('focusTileBar'),
-        click: () => focused()?.requestTileBar({ invokedBy: 'keyboard', tileIndex: focused()?.split.activeTile ?? 0 })
+        click: () =>
+          focused()?.requestTileBar({
+            invokedBy: 'keyboard',
+            tileIndex: focused()?.split.activeTile ?? 0
+          })
       },
       {
         label: t('reader.title'),
@@ -385,7 +389,9 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
     label: t('menu.window'),
     submenu: [
       { label: t('menu.window.minimize'), role: 'minimize' },
-      ...(isMac ? ([{ label: t('menu.window.zoom'), role: 'zoom' }] satisfies MenuItemConstructorOptions[]) : []),
+      ...(isMac
+        ? ([{ label: t('menu.window.zoom'), role: 'zoom' }] satisfies MenuItemConstructorOptions[])
+        : []),
       { type: 'separator' },
       {
         label: t('menu.window.nextTab'),
@@ -452,7 +458,10 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
     template.push({
       label: app.name,
       submenu: [
-        { label: t('menu.help.about'), click: () => focused()?.createTab({ url: internalUrl('about') }) },
+        {
+          label: t('menu.help.about'),
+          click: () => focused()?.createTab({ url: internalUrl('about') })
+        },
         { type: 'separator' },
         {
           // The macOS home for this item, and the same target as its Windows and Linux twin above.

@@ -104,7 +104,9 @@ describe('a popup', () => {
   it('says why, for the log', () => {
     // Not shown to a page; a refusal nobody can tell from a bug is the thing `navigation-policy.ts`
     // already refuses to ship.
-    expect(decideAutomaticNavigation(request({ gate: 'block' })).reason).toContain('no user gesture')
+    expect(decideAutomaticNavigation(request({ gate: 'block' })).reason).toContain(
+      'no user gesture'
+    )
   })
 })
 

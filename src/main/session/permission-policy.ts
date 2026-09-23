@@ -1,8 +1,5 @@
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
-import type {
-  PermissionAnswer,
-  PermissionSubject
-} from '@shared/overlay/permission.js'
+import type { PermissionAnswer, PermissionSubject } from '@shared/overlay/permission.js'
 
 /**
  * Permission decisions, as pure functions.

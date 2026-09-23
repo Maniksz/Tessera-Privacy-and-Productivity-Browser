@@ -92,7 +92,8 @@ const bookmarksDe = {
   'bookmarks.dialogFolderTitle': 'Ordner umbenennen',
   'bookmarks.name': 'Name',
   'bookmarks.address': 'Adresse',
-  'bookmarks.addressInvalid': 'Das ist keine Adresse. Gib eine Domain oder eine vollständige URL ein.',
+  'bookmarks.addressInvalid':
+    'Das ist keine Adresse. Gib eine Domain oder eine vollständige URL ein.',
   'bookmarks.save': 'Speichern',
   'bookmarks.cancel': 'Abbrechen',
   'bookmarks.unreadableEntry':
@@ -123,7 +124,8 @@ const downloadsEn = {
   'downloads.clearedCount': '{count} entries removed',
   'downloads.fileMissing': 'The file was moved or deleted.',
   'downloads.openFailed': 'That file is no longer there.',
-  'downloads.cannotResume': 'This download cannot be resumed and would start again from the beginning.',
+  'downloads.cannotResume':
+    'This download cannot be resumed and would start again from the beginning.',
   'downloads.reason': 'Reason: {reason}',
   'downloads.byteSize': '{value} {unit}'
 } as const satisfies Record<string, string>
@@ -150,7 +152,8 @@ const downloadsDe = {
   'downloads.clearedCount': '{count} Einträge entfernt',
   'downloads.fileMissing': 'Die Datei wurde verschoben oder gelöscht.',
   'downloads.openFailed': 'Diese Datei ist nicht mehr vorhanden.',
-  'downloads.cannotResume': 'Dieser Download lässt sich nicht fortsetzen und würde von vorn beginnen.',
+  'downloads.cannotResume':
+    'Dieser Download lässt sich nicht fortsetzen und würde von vorn beginnen.',
   'downloads.reason': 'Grund: {reason}',
   'downloads.byteSize': '{value} {unit}'
 } as const satisfies Record<keyof typeof downloadsEn, string>

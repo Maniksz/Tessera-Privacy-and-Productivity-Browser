@@ -31,8 +31,6 @@ export function StartPage(): React.ReactNode {
   const [dragging, setDragging] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
 
-
-
   const refresh = useCallback(async (): Promise<void> => {
     const next = await invoke('quicklinks:list')
     setLinks(next)
@@ -97,10 +95,7 @@ export function StartPage(): React.ReactNode {
   const openFolder = openFolderId === null ? null : (findLink(links, openFolderId) ?? null)
   const effectiveFolderId = openFolder?.id ?? null
 
-  const visible = useMemo(
-    () => childrenOf(links, effectiveFolderId),
-    [links, effectiveFolderId]
-  )
+  const visible = useMemo(() => childrenOf(links, effectiveFolderId), [links, effectiveFolderId])
 
   const onDrop = (targetIndex: number): void => {
     if (dragging === null) return
@@ -194,7 +189,9 @@ export function StartPage(): React.ReactNode {
                 url: link.url
               })
             }
-            onRemove={() => void run(() => invoke('quicklinks:remove', { id: link.id }).then(refresh))}
+            onRemove={() =>
+              void run(() => invoke('quicklinks:remove', { id: link.id }).then(refresh))
+            }
             onDragStart={() => setDragging(link.id)}
             onDragEnd={() => setDragging(null)}
             onDropBefore={() => onDrop(index)}
@@ -245,9 +242,7 @@ export function StartPage(): React.ReactNode {
         </div>
       </div>
 
-      {loaded && visible.length === 0 && (
-        <p className="start__empty">{t('start.noTiles')}</p>
-      )}
+      {loaded && visible.length === 0 && <p className="start__empty">{t('start.noTiles')}</p>}
 
       {dialog !== null && (
         <QuickLinkDialog

@@ -130,7 +130,6 @@ function markerCodec(): DocumentCodec {
   }
 }
 
-
 describe('ExtensionStore before a session exists', () => {
   it('lists nothing rather than throwing', async () => {
     // The settings UI may ask for the list before the browsing session is up.
@@ -343,7 +342,10 @@ describe('ExtensionStore.open', () => {
     */
     const withDebounce = async (debounceMs: number): Promise<number> => {
       const dir = await mkdtemp(join(tmpdir(), 'tessera-ext-'))
-      const store = await ExtensionStore.open({ filePath: join(dir, 'extensions.json'), debounceMs })
+      const store = await ExtensionStore.open({
+        filePath: join(dir, 'extensions.json'),
+        debounceMs
+      })
       await store.attach(fakeSession().session)
 
       vi.useFakeTimers()

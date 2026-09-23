@@ -109,7 +109,10 @@ export type RevealAction =
  * Revealing a second credential replaces the first rather than adding to it; there is no action
  * that can produce two.
  */
-export function nextRevealState(current: RevealState | null, action: RevealAction): RevealState | null {
+export function nextRevealState(
+  current: RevealState | null,
+  action: RevealAction
+): RevealState | null {
   switch (action.kind) {
     case 'reveal':
       return revealState(action.id, action.at)

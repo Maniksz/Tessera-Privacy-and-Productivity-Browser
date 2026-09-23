@@ -64,7 +64,10 @@ function skipFurniture(node: ReaderElementNode): boolean {
 }
 
 /** The first non-null candidate that is neither empty nor implausibly long. */
-function firstUsable(candidates: readonly (string | null | undefined)[], limit: number): string | null {
+function firstUsable(
+  candidates: readonly (string | null | undefined)[],
+  limit: number
+): string | null {
   for (const candidate of candidates) {
     const value = (candidate ?? '').trim()
     if (value !== '' && value.length <= limit) return value

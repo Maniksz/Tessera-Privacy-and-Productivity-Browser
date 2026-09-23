@@ -427,7 +427,11 @@ describe('editing', () => {
 
   it('re-derives a blanked title from the new address', () => {
     const book = tree()
-    const leaf = book.add({ title: 'Name', url: 'https://example.com/a', parentId: BOOKMARK_BAR_ID })
+    const leaf = book.add({
+      title: 'Name',
+      url: 'https://example.com/a',
+      parentId: BOOKMARK_BAR_ID
+    })
     const updated = updateBookmark(book.nodes, leaf, { title: '', url: 'https://other.example/b' })
     expect(findBookmark(updated, leaf)?.title).toBe('other.example')
   })
@@ -525,10 +529,14 @@ describe('the limit', () => {
       createdAt: T0 + index
     }))
     expect(() =>
-      createBookmark(nodes, { kind: 'bookmark', title: 'one more', url: 'https://example.com/' }, {
-        id: 'extra',
-        now: T0
-      })
+      createBookmark(
+        nodes,
+        { kind: 'bookmark', title: 'one more', url: 'https://example.com/' },
+        {
+          id: 'extra',
+          now: T0
+        }
+      )
     ).toThrow(BookmarkLimitError)
   })
 

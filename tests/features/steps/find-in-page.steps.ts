@@ -308,5 +308,8 @@ Then('the find bar sits inside tile {int}', (state: unknown, tile: number) => {
 })
 
 Then('there is no bar over the page', (state: unknown) => {
-  expect(presentation(state), 'a bar over a page nobody can see counts invisible matches').toBeNull()
+  expect(
+    presentation(state),
+    'a bar over a page nobody can see counts invisible matches'
+  ).toBeNull()
 })

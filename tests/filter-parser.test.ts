@@ -228,10 +228,9 @@ describe('network options', () => {
     // A trailing separator is a typo, not a domain, and treating it as one would
     // put an entry in the list that matches nothing and reads like a bug.
     expect(onlyRule('&ad_box_$domain=example.com|').includeDomains).toEqual(['example.com'])
-    expect(parseFilterList('example.com,,other.example##.ad-slot').cosmetic[0]!.includeHosts).toEqual([
-      'example.com',
-      'other.example'
-    ])
+    expect(
+      parseFilterList('example.com,,other.example##.ad-slot').cosmetic[0]!.includeHosts
+    ).toEqual(['example.com', 'other.example'])
   })
 
   it('reads important', () => {
@@ -276,9 +275,9 @@ describe('counted rather than swallowed', () => {
     // Compiling one from a downloaded list would put an attacker-supplied pattern
     // in the hot path of every request.
     expect(reasonsFor('/(https?:\\/\\/)104\\.154\\..{100,}/')).toEqual({ 'regex-pattern': 1 })
-    expect(
-      reasonsFor('/^https?:\\/\\/146\\.59\\.211\\.(\\d){1,3}.*/$popup,third-party')
-    ).toEqual({ 'regex-pattern': 1 })
+    expect(reasonsFor('/^https?:\\/\\/146\\.59\\.211\\.(\\d){1,3}.*/$popup,third-party')).toEqual({
+      'regex-pattern': 1
+    })
   })
 
   it('counts an entity domain, which needs a public-suffix expansion', () => {
@@ -338,9 +337,8 @@ describe('cosmetic rules', () => {
   })
 
   it('parses an exception', () => {
-    const rule = parseFilterList(
-      'afterdawn.com,download.fi,edukas.fi#@##ad-top-banner-placeholder'
-    ).cosmetic[0]!
+    const rule = parseFilterList('afterdawn.com,download.fi,edukas.fi#@##ad-top-banner-placeholder')
+      .cosmetic[0]!
     expect(rule.isException).toBe(true)
     expect(rule.selector).toBe('#ad-top-banner-placeholder')
     expect(rule.includeHosts).toEqual(['afterdawn.com', 'download.fi', 'edukas.fi'])

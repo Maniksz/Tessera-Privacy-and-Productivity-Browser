@@ -114,7 +114,6 @@ export interface MaskingPlan {
   readonly devices: DevicePlan | null
 }
 
-
 /**
  * Canvas noise parameters.
  *

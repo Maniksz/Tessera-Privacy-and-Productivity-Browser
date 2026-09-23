@@ -119,11 +119,7 @@ export function applyChromeImport(
 
   for (const credential of parse.credentials) {
     const key = `${credential.url} ${usernameKey(credential.username)}`
-    const existing = target.compareStored(
-      credential.url,
-      credential.username,
-      credential.password
-    )
+    const existing = target.compareStored(credential.url, credential.username, credential.password)
 
     if (existing !== 'none') {
       if (existing === 'same-password') {

@@ -339,7 +339,7 @@ describe('closing the bar', () => {
     expect(result.session).toBeNull()
   })
 
-  it("clears the selection rather than keeping it or activating it", () => {
+  it('clears the selection rather than keeping it or activating it', () => {
     /*
       `keepSelection` translates the match into a normal selection, which means the highlight *stays*
       — the polite-sounding option, and the one that leaves a page permanently marked.

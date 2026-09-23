@@ -84,13 +84,7 @@ function Inlines({ inlines }: { inlines: readonly ReaderInline[] }): React.React
  */
 type Translate = (key: MessageKey, params?: Record<string, string | number>) => string
 
-function Blocks({
-  blocks,
-  t
-}: {
-  blocks: readonly ReaderBlock[]
-  t: Translate
-}): React.ReactNode {
+function Blocks({ blocks, t }: { blocks: readonly ReaderBlock[]; t: Translate }): React.ReactNode {
   return blocks.map((block, index) => <Block block={block} t={t} key={index} />)
 }
 
@@ -281,7 +275,10 @@ export function ReaderPage(): React.ReactNode {
 
   return (
     <main className="reader">
-      <article className="reader__article" {...(article.lang === null ? {} : { lang: article.lang })}>
+      <article
+        className="reader__article"
+        {...(article.lang === null ? {} : { lang: article.lang })}
+      >
         <h1 className="reader__title">{article.title ?? t('reader.untitled')}</h1>
         <p className="reader__meta">
           {article.byline !== null && (

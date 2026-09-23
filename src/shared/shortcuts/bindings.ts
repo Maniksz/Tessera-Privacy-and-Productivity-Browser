@@ -78,9 +78,36 @@ type Table = Readonly<Record<ShortcutAction, readonly string[]>>
 
 /** Ctrl+1 … Ctrl+8 select a tab by position; generated to avoid eight rows. */
 export const TAB_BY_INDEX_ACCELERATORS: Readonly<Record<Platform, readonly string[]>> = {
-  win32: ['Control+1', 'Control+2', 'Control+3', 'Control+4', 'Control+5', 'Control+6', 'Control+7', 'Control+8'],
-  linux: ['Control+1', 'Control+2', 'Control+3', 'Control+4', 'Control+5', 'Control+6', 'Control+7', 'Control+8'],
-  darwin: ['Command+1', 'Command+2', 'Command+3', 'Command+4', 'Command+5', 'Command+6', 'Command+7', 'Command+8']
+  win32: [
+    'Control+1',
+    'Control+2',
+    'Control+3',
+    'Control+4',
+    'Control+5',
+    'Control+6',
+    'Control+7',
+    'Control+8'
+  ],
+  linux: [
+    'Control+1',
+    'Control+2',
+    'Control+3',
+    'Control+4',
+    'Control+5',
+    'Control+6',
+    'Control+7',
+    'Control+8'
+  ],
+  darwin: [
+    'Command+1',
+    'Command+2',
+    'Command+3',
+    'Command+4',
+    'Command+5',
+    'Command+6',
+    'Command+7',
+    'Command+8'
+  ]
 }
 
 const windowsTable = {
@@ -245,16 +272,48 @@ export interface KnownConflict {
 export const KNOWN_CONFLICTS: Readonly<Record<Platform, readonly KnownConflict[]>> = {
   linux: [
     // GNOME, KDE and Xfce all bind these to workspace switching by default.
-    { accelerator: 'Control+Alt+Left', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+H' },
-    { accelerator: 'Control+Alt+Right', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+L' },
-    { accelerator: 'Control+Alt+Up', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+K' },
-    { accelerator: 'Control+Alt+Down', messageKey: 'shortcuts.conflict.linuxWorkspace', alternative: 'Control+Alt+J' }
+    {
+      accelerator: 'Control+Alt+Left',
+      messageKey: 'shortcuts.conflict.linuxWorkspace',
+      alternative: 'Control+Alt+H'
+    },
+    {
+      accelerator: 'Control+Alt+Right',
+      messageKey: 'shortcuts.conflict.linuxWorkspace',
+      alternative: 'Control+Alt+L'
+    },
+    {
+      accelerator: 'Control+Alt+Up',
+      messageKey: 'shortcuts.conflict.linuxWorkspace',
+      alternative: 'Control+Alt+K'
+    },
+    {
+      accelerator: 'Control+Alt+Down',
+      messageKey: 'shortcuts.conflict.linuxWorkspace',
+      alternative: 'Control+Alt+J'
+    }
   ],
   darwin: [
-    { accelerator: 'Control+Left', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Left' },
-    { accelerator: 'Control+Right', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Right' },
-    { accelerator: 'Control+Up', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Up' },
-    { accelerator: 'Control+Down', messageKey: 'shortcuts.conflict.macosMissionControl', alternative: 'Control+Alt+Down' }
+    {
+      accelerator: 'Control+Left',
+      messageKey: 'shortcuts.conflict.macosMissionControl',
+      alternative: 'Control+Alt+Left'
+    },
+    {
+      accelerator: 'Control+Right',
+      messageKey: 'shortcuts.conflict.macosMissionControl',
+      alternative: 'Control+Alt+Right'
+    },
+    {
+      accelerator: 'Control+Up',
+      messageKey: 'shortcuts.conflict.macosMissionControl',
+      alternative: 'Control+Alt+Up'
+    },
+    {
+      accelerator: 'Control+Down',
+      messageKey: 'shortcuts.conflict.macosMissionControl',
+      alternative: 'Control+Alt+Down'
+    }
   ],
   win32: [
     {

@@ -45,13 +45,12 @@ export function useBrowserState(): BrowserState {
 
     // Initial pull: events only carry changes, so the first picture has to be
     // requested.
-    void Promise.all([
-      invoke('window:getState'),
-      invoke('settings:getAll')
-    ]).then(([windowState, settings]) => {
-      if (cancelled) return
-      setState((previous) => ({ ...previous, window: windowState, settings }))
-    })
+    void Promise.all([invoke('window:getState'), invoke('settings:getAll')]).then(
+      ([windowState, settings]) => {
+        if (cancelled) return
+        setState((previous) => ({ ...previous, window: windowState, settings }))
+      }
+    )
 
     const unsubscribers = [
       subscribe('tabs:changed', ({ tabs, activeTabId }) => {

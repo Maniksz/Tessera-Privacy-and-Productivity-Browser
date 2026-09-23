@@ -49,7 +49,9 @@ describe('a reveal expires by itself', () => {
   })
 
   it('is dropped by a tick past the timeout', () => {
-    expect(nextRevealState(revealState('a', T0), { kind: 'tick', at: T0 + REVEAL_TIMEOUT_MS })).toBeNull()
+    expect(
+      nextRevealState(revealState('a', T0), { kind: 'tick', at: T0 + REVEAL_TIMEOUT_MS })
+    ).toBeNull()
   })
 
   it('is kept by a tick inside the timeout', () => {

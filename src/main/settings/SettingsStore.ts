@@ -125,7 +125,10 @@ export class SettingsStore {
     this.#snapshot = Object.freeze({ ...values }) as unknown as SettingsSnapshot
   }
 
-  static async open(filePath: string, codec: SettingsCodec = plainJsonCodec): Promise<SettingsStore> {
+  static async open(
+    filePath: string,
+    codec: SettingsCodec = plainJsonCodec
+  ): Promise<SettingsStore> {
     const values: Record<string, unknown> = { ...defaultSettings() }
     const unknown: string[] = []
     const unknownValues: Record<string, unknown> = {}
@@ -245,7 +248,8 @@ export class SettingsStore {
     const hasChanges = Object.keys(changed).length > 0
     // Rebuilt only when something actually changed, which is what keeps a `get`-only caller's
     // `snapshot()` a single reference read instead of a fresh 76-key copy.
-    if (hasChanges) this.#snapshot = Object.freeze({ ...this.#values }) as unknown as SettingsSnapshot
+    if (hasChanges)
+      this.#snapshot = Object.freeze({ ...this.#values }) as unknown as SettingsSnapshot
 
     const change: SettingsChange = { changed, snapshot: this.#snapshot }
     if (hasChanges) {

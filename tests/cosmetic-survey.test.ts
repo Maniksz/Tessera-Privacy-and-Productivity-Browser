@@ -203,9 +203,10 @@ describe('which document a request is about', () => {
 
   it('falls back to the view address when nothing was reported', () => {
     for (const reported of [undefined, null, '', 42, {}]) {
-      expect(injectableDocumentUrl(reported, 'https://fallback.example/'), JSON.stringify(reported)).toBe(
-        'https://fallback.example/'
-      )
+      expect(
+        injectableDocumentUrl(reported, 'https://fallback.example/'),
+        JSON.stringify(reported)
+      ).toBe('https://fallback.example/')
     }
   })
 

@@ -617,8 +617,7 @@ export const INTERNAL_PAGE_EVENT_CHANNELS = {
  * internal page reach this?", which is the right question for the operations that must stay
  * chrome-only: closing tabs, closing the window, presenting overlays.
  */
-export type InternalInvokeChannel =
-  (typeof INTERNAL_PAGE_INVOKE_CHANNELS)[InternalPage][number]
+export type InternalInvokeChannel = (typeof INTERNAL_PAGE_INVOKE_CHANNELS)[InternalPage][number]
 
 /**
  * The same, for subscriptions.
@@ -628,8 +627,7 @@ export type InternalInvokeChannel =
  * asymmetry nobody would have looked for: the settings *panel* updated live when a setting changed elsewhere,
  * and the settings *tab* did not, because its own bridge would not type the subscription it was allowed to make.
  */
-export type InternalEventChannel =
-  (typeof INTERNAL_PAGE_EVENT_CHANNELS)[InternalPage][number]
+export type InternalEventChannel = (typeof INTERNAL_PAGE_EVENT_CHANNELS)[InternalPage][number]
 
 const internalPageSet: ReadonlySet<string> = new Set(INTERNAL_PAGES)
 
@@ -715,4 +713,3 @@ export function isInvokeChannel(value: string): value is InvokeChannel {
 export function isEventChannel(value: string): value is EventChannel {
   return eventSet.has(value)
 }
-

@@ -172,7 +172,10 @@ export function TabBar({
     nothing about `TabState` — while the drag reports positions as indices into `tabs`, which is the
     order the core sent. Keeping the drag on that index means group chips cannot shift a drop target.
   */
-  const items = stripItems(tabs.map((tab) => tab.id), groups)
+  const items = stripItems(
+    tabs.map((tab) => tab.id),
+    groups
+  )
   const stateOf = new Map(tabs.map((tab) => [tab.id, tab]))
   const indexOf = new Map(tabs.map((tab, index) => [tab.id, index]))
 
@@ -213,7 +216,9 @@ export function TabBar({
 
           const isActive = tab.id === activeTabId
           const tileLabel =
-            tab.tileIndex === null ? t('tab.unassigned') : t('tab.inTile', { index: tab.tileIndex + 1 })
+            tab.tileIndex === null
+              ? t('tab.unassigned')
+              : t('tab.inTile', { index: tab.tileIndex + 1 })
 
           return (
             <div

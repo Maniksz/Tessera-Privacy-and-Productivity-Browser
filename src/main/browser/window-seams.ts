@@ -12,10 +12,7 @@ import { TabGroupController } from './TabGroupController.js'
 import { TileAudioController } from './TileAudioController.js'
 import { TileFullscreenController } from './TileFullscreenController.js'
 import { TileInputController } from './TileInputController.js'
-import {
-  TileOccupancyController,
-  type LayoutChangeOptions
-} from './TileOccupancyController.js'
+import { TileOccupancyController, type LayoutChangeOptions } from './TileOccupancyController.js'
 
 /**
  * Builds the six controllers a window delegates to, and — the actual point — writes down what each of them is

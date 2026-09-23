@@ -136,14 +136,16 @@ describe('isPrerelease', () => {
 
 describe('what a user is offered', () => {
   it('offers a newer alpha to somebody on the alpha channel', () => {
-    expect(isUpgrade({ current: '0.1.0-alpha.2', candidate: '0.1.0-alpha.3', channel: 'alpha' })).toBe(
-      true
-    )
+    expect(
+      isUpgrade({ current: '0.1.0-alpha.2', candidate: '0.1.0-alpha.3', channel: 'alpha' })
+    ).toBe(true)
   })
 
   it('never offers an alpha to somebody on the stable channel', () => {
     // They did not ask to test anything, and an alpha of a browser can lose their session.
-    expect(isUpgrade({ current: '0.1.0', candidate: '0.2.0-alpha.1', channel: 'stable' })).toBe(false)
+    expect(isUpgrade({ current: '0.1.0', candidate: '0.2.0-alpha.1', channel: 'stable' })).toBe(
+      false
+    )
   })
 
   it('offers a stable release to somebody on the alpha channel', () => {
@@ -152,9 +154,9 @@ describe('what a user is offered', () => {
   })
 
   it('never offers a step backwards, on either channel', () => {
-    expect(isUpgrade({ current: '0.1.0-alpha.10', candidate: '0.1.0-alpha.2', channel: 'alpha' })).toBe(
-      false
-    )
+    expect(
+      isUpgrade({ current: '0.1.0-alpha.10', candidate: '0.1.0-alpha.2', channel: 'alpha' })
+    ).toBe(false)
     expect(isUpgrade({ current: '1.0.0', candidate: '0.9.9', channel: 'stable' })).toBe(false)
   })
 

@@ -7,11 +7,7 @@ import {
 } from './model.js'
 import { selectorProblem } from './selector-safety.js'
 import { lookupScriptlet, type ScriptletRule } from './scriptlets.js'
-import {
-  isProceduralSelector,
-  parseProceduralSelector,
-  type ProceduralRule
-} from './procedural.js'
+import { isProceduralSelector, parseProceduralSelector, type ProceduralRule } from './procedural.js'
 
 /**
  * Adblock Plus filter syntax, parsed into the rule shapes the matcher works on.
@@ -575,9 +571,8 @@ export function parseFilterLists(texts: readonly string[]): ParsedFilterLists {
 
       // A regular-expression rule may contain `#`, so it is ruled out before the
       // cosmetic separator is looked for.
-      const separator = line.startsWith('/') || line.startsWith('@@/')
-        ? null
-        : COSMETIC_SEPARATOR.exec(line)
+      const separator =
+        line.startsWith('/') || line.startsWith('@@/') ? null : COSMETIC_SEPARATOR.exec(line)
       if (separator !== null) {
         /*
           A scriptlet before a selector, because both arrive behind `##` and only one of them is CSS.

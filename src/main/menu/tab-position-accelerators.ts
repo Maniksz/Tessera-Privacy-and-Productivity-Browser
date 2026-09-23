@@ -84,11 +84,7 @@ export function tabPositionAccelerators(
  * no user can see does not belong in the catalogue, where it would have to be maintained in both
  * languages forever.
  */
-function hidden(
-  label: string,
-  accelerator: string,
-  click: () => void
-): MenuItemConstructorOptions {
+function hidden(label: string, accelerator: string, click: () => void): MenuItemConstructorOptions {
   return {
     label,
     accelerator,

@@ -348,7 +348,10 @@ export function updateCredential(
 ): PasswordCredential[] {
   // A blank password is refused here for the same reason as in `saveCredential`: an entry
   // that fills nothing looks stored and is not.
-  if (patch.password !== undefined && (patch.password === '' || patch.password.length > MAX_PASSWORD_LENGTH)) {
+  if (
+    patch.password !== undefined &&
+    (patch.password === '' || patch.password.length > MAX_PASSWORD_LENGTH)
+  ) {
     return [...credentials]
   }
   /*
@@ -399,7 +402,9 @@ export function noteCredentialUsed(
 ): PasswordCredential[] {
   if (!credentials.some((candidate) => candidate.id === id)) return [...credentials]
   return credentials
-    .map((candidate) => (candidate.id === id ? { ...candidate, lastUsedAt: context.now } : candidate))
+    .map((candidate) =>
+      candidate.id === id ? { ...candidate, lastUsedAt: context.now } : candidate
+    )
     .sort(byUsefulness)
 }
 

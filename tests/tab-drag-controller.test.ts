@@ -83,7 +83,7 @@ describe('starting a drag', () => {
   it('sends zones in the overlay coordinate space, not window space', () => {
     // The surface renders inside the tile area, so its origin is that area's corner. Zones
     // still carrying the chrome inset would be drawn 88 pixels too low.
-    const ys = (h => {
+    const ys = ((h) => {
       h.controller.start('tab-1')
       return (h.presented[0]?.zones ?? []).map((zone) => zone.hit.y)
     })(harness('1x1'))

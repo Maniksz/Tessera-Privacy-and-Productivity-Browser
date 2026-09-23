@@ -91,12 +91,16 @@ class FakePage implements SearchablePage {
   }
 
   found(result: { requestId?: number; matches: number; activeMatch: number }): void {
-    this.emit('found-in-page', {}, {
-      requestId: result.requestId ?? this.#requests,
-      matches: result.matches,
-      activeMatchOrdinal: result.activeMatch,
-      finalUpdate: true
-    })
+    this.emit(
+      'found-in-page',
+      {},
+      {
+        requestId: result.requestId ?? this.#requests,
+        matches: result.matches,
+        activeMatchOrdinal: result.activeMatch,
+        finalUpdate: true
+      }
+    )
   }
 }
 
@@ -184,7 +188,9 @@ function bar(host: FakeWindow): FindBarPresentation {
 }
 
 function searches(page: FakePage): Array<Extract<PageCall, { call: 'find' }>> {
-  return page.calls.filter((call): call is Extract<PageCall, { call: 'find' }> => call.call === 'find')
+  return page.calls.filter(
+    (call): call is Extract<PageCall, { call: 'find' }> => call.call === 'find'
+  )
 }
 
 let find: FindController

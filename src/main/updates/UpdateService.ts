@@ -259,8 +259,7 @@ export type UpdateFeedResult =
   | { readonly kind: 'no-feed' }
 
 export type UpdateDownloadResult =
-  | { readonly kind: 'downloaded' }
-  | { readonly kind: 'failed'; readonly detail: string }
+  { readonly kind: 'downloaded' } | { readonly kind: 'failed'; readonly detail: string }
 
 /**
  * The updater, as this service needs it.
@@ -574,7 +573,9 @@ export class UpdateService {
         quiet.
       */
       console.warn('[updates] the download could not be completed:', downloaded.detail)
-      await showPrompt(noticePrompt({ locale: locale(), kind: 'download-failed', current: version }))
+      await showPrompt(
+        noticePrompt({ locale: locale(), kind: 'download-failed', current: version })
+      )
       return { kind: 'download-failed', version }
     }
 

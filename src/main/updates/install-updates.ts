@@ -109,14 +109,16 @@ function electronUpdaterPort(): UpdaterPort {
 
   let neutralised: Promise<void> | null = null
   const neutraliseStagingId = async (): Promise<void> => {
-    neutralised ??= writeFile(join(app.getPath('userData'), STAGING_ID_FILE), NIL_UUID, 'utf8').catch(
-      (error: unknown) => {
-        // Best effort. The header override is what keeps the id off the network; this only keeps a
-        // unique one from existing locally, so a profile that cannot be written to costs nothing
-        // more than that.
-        console.warn('[updates] could not neutralise the staging id file:', String(error))
-      }
-    )
+    neutralised ??= writeFile(
+      join(app.getPath('userData'), STAGING_ID_FILE),
+      NIL_UUID,
+      'utf8'
+    ).catch((error: unknown) => {
+      // Best effort. The header override is what keeps the id off the network; this only keeps a
+      // unique one from existing locally, so a profile that cannot be written to costs nothing
+      // more than that.
+      console.warn('[updates] could not neutralise the staging id file:', String(error))
+    })
     await neutralised
   }
 
@@ -171,13 +173,19 @@ function electronUpdaterPort(): UpdaterPort {
  */
 function classifyCheckFailure(error: unknown): UpdateFeedResult {
   const code = error instanceof Error ? (error as Error & { code?: unknown }).code : undefined
-  if (code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS' || code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND') {
+  if (
+    code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS' ||
+    code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND'
+  ) {
     return { kind: 'nothing-published' }
   }
   return { kind: 'unreachable', detail: String(error) }
 }
 
-async function showPrompt(prompt: UpdatePrompt, parent: BrowserWindow | null): Promise<UpdateAnswer> {
+async function showPrompt(
+  prompt: UpdatePrompt,
+  parent: BrowserWindow | null
+): Promise<UpdateAnswer> {
   const options: Electron.MessageBoxOptions = {
     type: prompt.severity,
     title: prompt.title,

@@ -55,7 +55,10 @@ async function harness(initialOrder: string[]): Promise<Harness> {
   // A real store rather than a fake book: the interesting behaviour is the *interaction* between the
   // store's rules and the window's state, and a fake would let the controller pass while disagreeing
   // with the thing it actually talks to.
-  const store = await TabGroupStore.open({ filePath: join(directory, 'groups.json'), debounceMs: 0 })
+  const store = await TabGroupStore.open({
+    filePath: join(directory, 'groups.json'),
+    debounceMs: 0
+  })
 
   let order = [...initialOrder]
   let liveTabs = [...initialOrder]

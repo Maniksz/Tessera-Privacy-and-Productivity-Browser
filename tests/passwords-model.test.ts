@@ -109,7 +109,11 @@ describe('how a username is compared and how it is kept', () => {
 
 describe('saving a credential', () => {
   it('creates a new entry', () => {
-    const result = saveCredential([], { url: 'https://example.com/login', username: 'alice', password: 'p1' }, context)
+    const result = saveCredential(
+      [],
+      { url: 'https://example.com/login', username: 'alice', password: 'p1' },
+      context
+    )
     expect(result.outcome).toBe('created')
     expect(result.credentials).toEqual([
       {
@@ -166,30 +170,46 @@ describe('saving a credential', () => {
   })
 
   it('keeps two different accounts on one site apart', () => {
-    const first = saveCredential([], { url: 'https://example.com/', username: 'alice', password: 'p' }, context)
-    const second = saveCredential(first.credentials, { url: 'https://example.com/', username: 'bob', password: 'q' }, {
-      ...context,
-      newId: () => 'second'
-    })
+    const first = saveCredential(
+      [],
+      { url: 'https://example.com/', username: 'alice', password: 'p' },
+      context
+    )
+    const second = saveCredential(
+      first.credentials,
+      { url: 'https://example.com/', username: 'bob', password: 'q' },
+      {
+        ...context,
+        newId: () => 'second'
+      }
+    )
     expect(second.outcome).toBe('created')
     expect(second.credentials).toHaveLength(2)
   })
 
   it('stores a credential with no username, because some sites authenticate on a password alone', () => {
-    const result = saveCredential([], { url: 'https://example.com/', username: '', password: 'p' }, context)
+    const result = saveCredential(
+      [],
+      { url: 'https://example.com/', username: '', password: 'p' },
+      context
+    )
     expect(result.outcome).toBe('created')
     expect(result.credentials[0]?.username).toBe('')
   })
 
   it('refuses an empty password, which would be a row that looks stored and fills nothing', () => {
-    const result = saveCredential([], { url: 'https://example.com/', username: 'a', password: '' }, context)
+    const result = saveCredential(
+      [],
+      { url: 'https://example.com/', username: 'a', password: '' },
+      context
+    )
     expect(result).toEqual({ credentials: [], outcome: 'rejected' })
   })
 
   it('refuses an unusable address', () => {
-    expect(saveCredential([], { url: 'file:///x', username: 'a', password: 'p' }, context).outcome).toBe(
-      'rejected'
-    )
+    expect(
+      saveCredential([], { url: 'file:///x', username: 'a', password: 'p' }, context).outcome
+    ).toBe('rejected')
   })
 
   it('refuses rather than truncating an over-long password', () => {
@@ -214,9 +234,17 @@ describe('saving a credential', () => {
 
   it('drops the least useful entry when the cap is reached', () => {
     const many = Array.from({ length: MAX_PASSWORD_CREDENTIALS }, (_value, index) =>
-      credential({ id: `c${String(index)}`, username: `user${String(index)}`, updatedAt: T0 + index })
+      credential({
+        id: `c${String(index)}`,
+        username: `user${String(index)}`,
+        updatedAt: T0 + index
+      })
     )
-    const result = saveCredential(many, { url: 'https://other.example/', username: 'z', password: 'p' }, context)
+    const result = saveCredential(
+      many,
+      { url: 'https://other.example/', username: 'z', password: 'p' },
+      context
+    )
     expect(result.credentials).toHaveLength(MAX_PASSWORD_CREDENTIALS)
     expect(ids(result.credentials)).toContain('new')
   })
@@ -244,26 +272,44 @@ describe('editing an entry', () => {
   })
 
   it('refuses to blank a password', () => {
-    const result = updateCredential([credential({ id: 'a' })], 'a', { password: '' }, { now: T0 + 5 })
+    const result = updateCredential(
+      [credential({ id: 'a' })],
+      'a',
+      { password: '' },
+      { now: T0 + 5 }
+    )
     expect(result[0]?.password).toBe('secret')
     expect(result[0]?.updatedAt, 'nothing was touched at all').toBe(T0)
   })
 
   it('refuses an over-long password or username', () => {
-    const long = updateCredential([credential({ id: 'a' })], 'a', { password: 'x'.repeat(MAX_PASSWORD_LENGTH + 1) }, { now: T0 + 5 })
+    const long = updateCredential(
+      [credential({ id: 'a' })],
+      'a',
+      { password: 'x'.repeat(MAX_PASSWORD_LENGTH + 1) },
+      { now: T0 + 5 }
+    )
     expect(long[0]?.password).toBe('secret')
-    const name = updateCredential([credential({ id: 'a' })], 'a', { username: 'x'.repeat(MAX_USERNAME_LENGTH + 1) }, { now: T0 + 5 })
+    const name = updateCredential(
+      [credential({ id: 'a' })],
+      'a',
+      { username: 'x'.repeat(MAX_USERNAME_LENGTH + 1) },
+      { now: T0 + 5 }
+    )
     expect(name[0]?.username).toBe('alice')
   })
 
   it('leaves an unknown id alone', () => {
-    expect(updateCredential([credential({ id: 'a' })], 'nope', { password: 'q' }, { now: T0 })[0]?.password).toBe(
-      'secret'
-    )
+    expect(
+      updateCredential([credential({ id: 'a' })], 'nope', { password: 'q' }, { now: T0 })[0]
+        ?.password
+    ).toBe('secret')
   })
 
   it('removes by id', () => {
-    expect(removeCredential([credential({ id: 'a' }), credential({ id: 'b', username: 'bob' })], 'a')).toHaveLength(1)
+    expect(
+      removeCredential([credential({ id: 'a' }), credential({ id: 'b', username: 'bob' })], 'a')
+    ).toHaveLength(1)
   })
 })
 
@@ -284,9 +330,9 @@ describe('a private window holds a writer that keeps nothing', () => {
   it('reports a refusal rather than pretending to have saved', () => {
     // It holds no store at all, which is the point: a forgotten `privateMode` check cannot leak a
     // credential because there is nothing here to leak it into.
-    expect(discardingPasswordWriter.save({ url: 'https://example.com/', username: 'a', password: 'p' })).toBe(
-      'rejected'
-    )
+    expect(
+      discardingPasswordWriter.save({ url: 'https://example.com/', username: 'a', password: 'p' })
+    ).toBe('rejected')
     expect(() => {
       discardingPasswordWriter.neverSaveFor('https://example.com/')
       discardingPasswordWriter.noteUsed('a')
@@ -307,11 +353,16 @@ describe('"never here"', () => {
 
   it('forgets an origin, so a change of mind is possible', () => {
     expect(forgetNeverSavedOrigin(['https://example.com'], 'https://example.com')).toEqual([])
-    expect(forgetNeverSavedOrigin(['https://example.com'], 'nonsense')).toEqual(['https://example.com'])
+    expect(forgetNeverSavedOrigin(['https://example.com'], 'nonsense')).toEqual([
+      'https://example.com'
+    ])
   })
 
   it('caps the list', () => {
-    const many = Array.from({ length: MAX_NEVER_SAVED_ORIGINS }, (_value, index) => `https://s${String(index)}.example`)
+    const many = Array.from(
+      { length: MAX_NEVER_SAVED_ORIGINS },
+      (_value, index) => `https://s${String(index)}.example`
+    )
     expect(neverSaveOrigin(many, 'https://new.example')).toHaveLength(MAX_NEVER_SAVED_ORIGINS)
   })
 })
@@ -425,8 +476,8 @@ describe('a damaged or hand-edited file', () => {
   })
 
   it('normalises and de-duplicates the "never here" list', () => {
-    expect(repairNeverSaved(['https://example.com:443', 'https://example.com', 'nonsense'])).toEqual([
-      'https://example.com'
-    ])
+    expect(
+      repairNeverSaved(['https://example.com:443', 'https://example.com', 'nonsense'])
+    ).toEqual(['https://example.com'])
   })
 })

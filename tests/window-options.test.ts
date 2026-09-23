@@ -77,7 +77,10 @@ describe('window controls per platform', () => {
       y: 15
     })
     for (const platform of ['linux', 'win32'] as const) {
-      expect(chromeWindowOptions({ ...base, platform }).trafficLightPosition, platform).toBeUndefined()
+      expect(
+        chromeWindowOptions({ ...base, platform }).trafficLightPosition,
+        platform
+      ).toBeUndefined()
     }
   })
 

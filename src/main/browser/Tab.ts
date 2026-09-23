@@ -443,7 +443,6 @@ export class Tab {
       else if (intent === 'forward') this.goForward()
     })
 
-
     /*
       Every mouse move in the page, filtered to the one number the tile bar needs.
 
@@ -621,7 +620,9 @@ export class Tab {
     })
     on('page-favicon-updated', (...args: unknown[]) => {
       const favicons = args[1]
-      this.#faviconUrls = Array.isArray(favicons) ? favicons.filter((url): url is string => typeof url === 'string') : []
+      this.#faviconUrls = Array.isArray(favicons)
+        ? favicons.filter((url): url is string => typeof url === 'string')
+        : []
       void this.#adoptFavicon(wc.getURL(), this.#faviconUrls)
       notify()
     })

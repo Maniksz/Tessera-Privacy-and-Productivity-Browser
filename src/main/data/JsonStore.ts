@@ -150,7 +150,9 @@ export class JsonStore<T> {
   readonly diagnostics: JsonStoreDiagnostics
 
   private constructor(
-    private readonly options: Required<Pick<JsonStoreOptions<T>, 'filePath' | 'schema' | 'fallback'>> &
+    private readonly options: Required<
+      Pick<JsonStoreOptions<T>, 'filePath' | 'schema' | 'fallback'>
+    > &
       JsonStoreOptions<T>,
     document: T,
     diagnostics: JsonStoreDiagnostics,

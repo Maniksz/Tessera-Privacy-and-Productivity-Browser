@@ -102,11 +102,13 @@ describe('summarizeWindowDownloads', () => {
   it('shows progress rather than an outcome while anything runs', () => {
     const running = entry({ state: 'progressing', receivedBytes: 50, totalBytes: 100 })
     const failed = entry({ state: 'interrupted', endedAt: 2_000 })
-    expect(summarizeWindowDownloads([running, failed], startedHere(running, failed), null)).toEqual({
-      visible: true,
-      activity: { kind: 'fraction', fraction: 0.5 },
-      marker: null
-    })
+    expect(summarizeWindowDownloads([running, failed], startedHere(running, failed), null)).toEqual(
+      {
+        visible: true,
+        activity: { kind: 'fraction', fraction: 0.5 },
+        marker: null
+      }
+    )
   })
 
   it('leaves a paused download out of the running total', () => {
@@ -130,9 +132,9 @@ describe('summarizeWindowDownloads', () => {
   it('marks a failure over a pause', () => {
     const failed = entry({ state: 'interrupted', endedAt: 2_000 })
     const paused = entry({ state: 'paused' })
-    expect(summarizeWindowDownloads([paused, failed], startedHere(paused, failed), null).marker).toBe(
-      'failed'
-    )
+    expect(
+      summarizeWindowDownloads([paused, failed], startedHere(paused, failed), null).marker
+    ).toBe('failed')
   })
 
   it('marks a pause over a completion when nothing failed', () => {

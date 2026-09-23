@@ -1,5 +1,10 @@
 import { ipcRenderer } from 'electron'
-import { chooseFillTargets, chooseSaveTargets, type FieldDescriptor, type FormDescriptor } from '@shared/passwords/fields.js'
+import {
+  chooseFillTargets,
+  chooseSaveTargets,
+  type FieldDescriptor,
+  type FormDescriptor
+} from '@shared/passwords/fields.js'
 import {
   AUTOFILL_FILLABLE_CHANNEL,
   AUTOFILL_FILL_CHANNEL,
@@ -218,7 +223,11 @@ function hideSuggestion(): void {
  * field: a list floating at the cursor would leave the user guessing which of two password boxes it
  * would fill.
  */
-function showSuggestion(anchor: HTMLInputElement, offer: FillOffer, fill: (id: string) => void): void {
+function showSuggestion(
+  anchor: HTMLInputElement,
+  offer: FillOffer,
+  fill: (id: string) => void
+): void {
   hideSuggestion()
   const surface = createSurface(SUGGESTION_HOST_ID, offer.chrome.styles)
   if (surface === null) return
@@ -235,7 +244,10 @@ function showSuggestion(anchor: HTMLInputElement, offer: FillOffer, fill: (id: s
   panel.appendChild(title)
 
   for (const entry of offer.entries) {
-    const item = button('entry', entry.username === '' ? offer.chrome.noUsernameLabel : entry.username)
+    const item = button(
+      'entry',
+      entry.username === '' ? offer.chrome.noUsernameLabel : entry.username
+    )
     item.addEventListener('click', () => {
       // Hidden before the fill, so a fill that throws cannot leave a list hanging over the page.
       hideSuggestion()
@@ -417,10 +429,7 @@ function performFill(anchor: HTMLInputElement, id: string): void {
   setFieldValue(password, credential.password)
 
   if (targets.username !== null && credential.username !== '') {
-    const [username] = described.elements.slice(
-      targets.username.index,
-      targets.username.index + 1
-    )
+    const [username] = described.elements.slice(targets.username.index, targets.username.index + 1)
     if (username !== undefined) setFieldValue(username, credential.username)
   }
 }
@@ -468,8 +477,10 @@ function fillableFocus(target: EventTarget | null): {
   if (targets === null) return null
   // The focused field has to be one of the two a fill would write to. Offering while the caret is
   // in an unrelated box would put a list of the user's accounts on screen for no reason.
-  if (target !== described.elements[targets.password.index] &&
-      (targets.username === null || target !== described.elements[targets.username.index])) {
+  if (
+    target !== described.elements[targets.password.index] &&
+    (targets.username === null || target !== described.elements[targets.username.index])
+  ) {
     return null
   }
   return { field: target, form: described }
@@ -547,10 +558,14 @@ export function installAutofill(): void {
       this and nothing else. Moving to another field fires this and then `focusin`, which reports the
       new field — so the listener goes and comes back between two events with no input in between.
     */
-    window.addEventListener('focusout', () => {
-      hideSuggestion()
-      reportFillable(false)
-    }, options)
+    window.addEventListener(
+      'focusout',
+      () => {
+        hideSuggestion()
+        reportFillable(false)
+      },
+      options
+    )
     // Both surfaces belong to the document that asked for them. A new document gets new ones.
     window.addEventListener('pagehide', () => {
       hideSuggestion()

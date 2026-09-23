@@ -171,7 +171,9 @@ function sealingCodec(): DocumentCodec {
     decode: (bytes) => {
       const text = new TextDecoder().decode(bytes)
       if (!text.startsWith(marker)) throw new Error('not written by this codec')
-      return JSON.parse(Buffer.from(text.slice(marker.length), 'base64').toString('utf8')) as unknown
+      return JSON.parse(
+        Buffer.from(text.slice(marker.length), 'base64').toString('utf8')
+      ) as unknown
     }
   }
 }
@@ -404,9 +406,7 @@ describe('scaling what came back', () => {
   it('refuses a picture that is too big even at the lower quality', async () => {
     const h = await harness()
     h.answer(() =>
-      Promise.resolve(
-        fakeImage(h.log, { jpeg: () => jpegBytes(0, MAX_THUMBNAIL_BYTES + 1) })
-      )
+      Promise.resolve(fakeImage(h.log, { jpeg: () => jpegBytes(0, MAX_THUMBNAIL_BYTES + 1) }))
     )
 
     expect(await h.store.capturerFor('normal').capture(request())).toEqual({
@@ -1020,8 +1020,22 @@ describe('on disk', () => {
       JSON.stringify({
         version: 1,
         shots: [
-          { url: PAGE_KEY, title: 'Older', width: 480, height: 300, byteLength: 10, capturedAt: T0 },
-          { url: PAGE_KEY, title: 'Newer', width: 480, height: 300, byteLength: 20, capturedAt: T0 + 5 }
+          {
+            url: PAGE_KEY,
+            title: 'Older',
+            width: 480,
+            height: 300,
+            byteLength: 10,
+            capturedAt: T0
+          },
+          {
+            url: PAGE_KEY,
+            title: 'Newer',
+            width: 480,
+            height: 300,
+            byteLength: 20,
+            capturedAt: T0 + 5
+          }
         ]
       }),
       'utf8'
@@ -1051,7 +1065,14 @@ describe('on disk', () => {
       JSON.stringify({
         version: 1,
         shots: [
-          { url: PAGE_KEY, title: 'Huge', width: 3840, height: 2160, byteLength: 20, capturedAt: T0 }
+          {
+            url: PAGE_KEY,
+            title: 'Huge',
+            width: 3840,
+            height: 2160,
+            byteLength: 20,
+            capturedAt: T0
+          }
         ]
       }),
       'utf8'

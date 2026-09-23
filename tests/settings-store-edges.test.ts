@@ -31,7 +31,7 @@ describe('debounced writes', () => {
     store.set('appearance.defaultZoom', 120)
 
     // The default debounce is 250ms; waiting proves the timer path runs rather
-        // than only the flush path.
+    // than only the flush path.
     await new Promise((resolve) => setTimeout(resolve, 400))
 
     const reopened = await SettingsStore.open(filePath)
@@ -111,7 +111,9 @@ describe('value comparison', () => {
   it('detects a shorter array as a change', async () => {
     const store = await SettingsStore.open(await tempFile())
     expect(
-      Object.keys(store.set('network.secureDnsServers', ['https://dns.quad9.net/dns-query']).changed)
+      Object.keys(
+        store.set('network.secureDnsServers', ['https://dns.quad9.net/dns-query']).changed
+      )
     ).toEqual(['network.secureDnsServers'])
   })
 

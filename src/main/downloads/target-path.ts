@@ -79,10 +79,7 @@ export function downloadDirectoryOf(request: SavePathRequest): string {
  * writes its own `.crdownload` intermediate and renames it, and inventing a second suffix
  * convention here would make the two collide.
  */
-export function resolveSavePath(
-  request: SavePathRequest,
-  probes: SavePathProbes
-): string | null {
+export function resolveSavePath(request: SavePathRequest, probes: SavePathProbes): string | null {
   const directory = downloadDirectoryOf(request)
   const fileName = safeDownloadFileName(request.fileName)
 

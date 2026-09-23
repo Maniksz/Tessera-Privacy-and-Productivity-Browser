@@ -211,7 +211,9 @@ export function PasswordsPage(): React.ReactNode {
     }, TICK_MS)
     const conceal = (): void => {
       if (document.visibilityState !== 'visible') {
-        setRevealed(nextRevealState(revealed.state, { kind: 'concealed' }) === null ? null : revealed)
+        setRevealed(
+          nextRevealState(revealed.state, { kind: 'concealed' }) === null ? null : revealed
+        )
       }
     }
     document.addEventListener('visibilitychange', conceal)
@@ -520,7 +522,9 @@ export function PasswordsPage(): React.ReactNode {
           !vault.unlocked && (
             <>
               <h3 className="passwords__lockTitle">{t('passwords.lockedTitle')}</h3>
-              <p className="passwords__lockBody">{t('passwords.idleNotice', { minutes: idleMinutes })}</p>
+              <p className="passwords__lockBody">
+                {t('passwords.idleNotice', { minutes: idleMinutes })}
+              </p>
               <button
                 type="button"
                 className="passwords__primary"
@@ -578,10 +582,18 @@ export function PasswordsPage(): React.ReactNode {
           )}
           {vault.unlocked && hasMaster && (
             <>
-              <button type="button" disabled={busy !== null} onClick={() => masterPassword('change')}>
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => masterPassword('change')}
+              >
                 {t('passwords.changeMasterPassword')}
               </button>
-              <button type="button" disabled={busy !== null} onClick={() => masterPassword('remove')}>
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => masterPassword('remove')}
+              >
                 {t('passwords.removeMasterPassword')}
               </button>
             </>
@@ -622,7 +634,9 @@ export function PasswordsPage(): React.ReactNode {
                   })}
                 </p>
                 {importReport.duplicatesIdentical > 0 && (
-                  <p>{t('passwords.importDuplicates', { count: importReport.duplicatesIdentical })}</p>
+                  <p>
+                    {t('passwords.importDuplicates', { count: importReport.duplicatesIdentical })}
+                  </p>
                 )}
                 {/*
                   The only line in the report worth acting on, so the colliding accounts are named — origins
@@ -746,7 +760,9 @@ export function PasswordsPage(): React.ReactNode {
               <button
                 type="button"
                 className="passwords__action"
-                aria-label={shown ? t('passwords.hide') : t('passwords.reveal', { site: entry.origin })}
+                aria-label={
+                  shown ? t('passwords.hide') : t('passwords.reveal', { site: entry.origin })
+                }
                 onClick={() => (shown ? setRevealed(null) : reveal(entry))}
               >
                 {shown ? t('passwords.hide') : t('passwords.reveal', { site: entry.origin })}

@@ -322,10 +322,7 @@ function applyPatch(record: DownloadRecord, patch: DownloadPatch): DownloadRecor
   }
 }
 
-export function removeDownload(
-  downloads: readonly DownloadRecord[],
-  id: string
-): DownloadRecord[] {
+export function removeDownload(downloads: readonly DownloadRecord[], id: string): DownloadRecord[] {
   return downloads.filter((record) => record.id !== id)
 }
 
@@ -335,9 +332,7 @@ export function removeDownload(
  * What "clear the list" has to mean: removing the record of a download in flight would leave
  * a file being written that nothing in the interface admits to, with no way to cancel it.
  */
-export function clearFinishedDownloads(
-  downloads: readonly DownloadRecord[]
-): DownloadRecord[] {
+export function clearFinishedDownloads(downloads: readonly DownloadRecord[]): DownloadRecord[] {
   return downloads.filter((record) => isActiveDownload(record))
 }
 

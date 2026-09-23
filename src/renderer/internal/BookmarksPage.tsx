@@ -13,7 +13,11 @@ import {
 } from '@shared/bookmarks/model.js'
 import { readableUrl } from '@shared/history/presentation.js'
 import { bookmarksApi, internalBridgeAvailable } from './internal-calls.js'
-import { BOOKMARK_MESSAGES, pendingTranslator, type BookmarkMessageKey } from './pending-messages.js'
+import {
+  BOOKMARK_MESSAGES,
+  pendingTranslator,
+  type BookmarkMessageKey
+} from './pending-messages.js'
 import { useInternalI18n } from './useInternalI18n.js'
 import { Icon } from '../shared/Icon.js'
 
@@ -114,19 +118,16 @@ export function BookmarksPage(): React.ReactNode {
     }
   }, [refresh])
 
-  const run = useCallback(
-    async (action: () => Promise<void>): Promise<void> => {
-      try {
-        setNotice(null)
-        await action()
-      } catch (cause) {
-        // A refused call must be visible. Silently leaving the list unchanged is how a user
-        // learns not to trust the delete button.
-        setNotice(cause instanceof Error ? cause.message : String(cause))
-      }
-    },
-    []
-  )
+  const run = useCallback(async (action: () => Promise<void>): Promise<void> => {
+    try {
+      setNotice(null)
+      await action()
+    } catch (cause) {
+      // A refused call must be visible. Silently leaving the list unchanged is how a user
+      // learns not to trust the delete button.
+      setNotice(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [])
 
   /*
     A folder that no longer exists sends the view back to its root.
@@ -143,7 +144,9 @@ export function BookmarksPage(): React.ReactNode {
     prevent. Computing the effective folder makes the wrong state unrepresentable instead of transient.
   */
   const openFolderId =
-    chosenFolderId === root || findBookmark(nodes, chosenFolderId) !== undefined ? chosenFolderId : root
+    chosenFolderId === root || findBookmark(nodes, chosenFolderId) !== undefined
+      ? chosenFolderId
+      : root
 
   const searching = query.trim() !== ''
 
@@ -380,7 +383,7 @@ export function BookmarksPage(): React.ReactNode {
                 {node.kind === 'folder' && (
                   <span className="bookmarks__entryMeta">
                     {/* The row says how many are *in* the folder; the delete confirmation counts every descendant. */}
-              {tp('bookmarks.itemCount', { count: countChildren(nodes, node.id) })}
+                    {tp('bookmarks.itemCount', { count: countChildren(nodes, node.id) })}
                   </span>
                 )}
               </button>

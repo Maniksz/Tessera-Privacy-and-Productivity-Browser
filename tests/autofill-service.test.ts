@@ -8,7 +8,11 @@ import {
 } from '@main/passwords/AutofillService.js'
 import { notifyOverlayKey, onOverlayKey } from '@main/passwords/overlay-keys.js'
 import type { Locale } from '@shared/i18n/catalog.js'
-import { wireAutofillView, type AutofillHost, type SyncReply } from '@main/passwords/autofill-wiring.js'
+import {
+  wireAutofillView,
+  type AutofillHost,
+  type SyncReply
+} from '@main/passwords/autofill-wiring.js'
 import type { MasterPasswordPresentation } from '@shared/overlay/surface.js'
 import { FILL_GESTURE_WINDOW_MS } from '@shared/passwords/consent.js'
 import type { BrowsingMode, PasswordSummary, SaveCredentialInput } from '@shared/passwords/model.js'
@@ -1218,9 +1222,9 @@ describe('every ending of a chrome request, one at a time', () => {
       about the page the user came *from* and has to survive the redirect a sign-in causes, while a
       consent is about the document in front of them. The form it was granted for is gone.
     */
-    expect(afterEnding((service) => service.noteNavigation(VIEW_ID, `${LOGIN_ORIGIN}/welcome`))).toEqual(
-      { open: false, filled: false }
-    )
+    expect(
+      afterEnding((service) => service.noteNavigation(VIEW_ID, `${LOGIN_ORIGIN}/welcome`))
+    ).toEqual({ open: false, filled: false })
   })
 
   it('drops it when the vault locks', () => {
@@ -1549,7 +1553,10 @@ describe('the chain from a focused form to an authorised fill', () => {
 
     expect(host.listening, 'the input subscription outlived the view').toBe(false)
     expect(service.hasPendingSave(VIEW_ID)).toBe(false)
-    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer, 'the gesture outlived the view').toBeNull()
+    expect(
+      host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer,
+      'the gesture outlived the view'
+    ).toBeNull()
   })
 })
 

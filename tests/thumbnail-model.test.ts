@@ -54,10 +54,10 @@ describe('what a page is identified by', () => {
   it('keeps the address, because the picture is of a page and not of a site', () => {
     // The opposite of the favicon cache, deliberately: an icon belongs to the site,
     // a screenshot belongs to the page.
-    expect(thumbnailKeyOf('https://example.com/docs/intro')).toBe(
-      'https://example.com/docs/intro'
+    expect(thumbnailKeyOf('https://example.com/docs/intro')).toBe('https://example.com/docs/intro')
+    expect(thumbnailKeyOf('https://example.com/a')).not.toBe(
+      thumbnailKeyOf('https://example.com/b')
     )
-    expect(thumbnailKeyOf('https://example.com/a')).not.toBe(thumbnailKeyOf('https://example.com/b'))
   })
 
   it('treats one document as one picture, however it was linked to', () => {
@@ -322,8 +322,9 @@ describe('what a screen reader is told', () => {
       reason: 'duplicate'
     })
     // Containment both ways: the same duplication with extra words is still duplication.
-    expect(thumbnailAlternative(entry({ title: 'GitHub · Where software is built' }), 'GitHub'))
-      .toEqual({ text: '', reason: 'duplicate' })
+    expect(
+      thumbnailAlternative(entry({ title: 'GitHub · Where software is built' }), 'GitHub')
+    ).toEqual({ text: '', reason: 'duplicate' })
     expect(thumbnailAlternative(entry({ title: 'GitHub' }), 'GitHub · my starred repos')).toEqual({
       text: '',
       reason: 'duplicate'
@@ -451,10 +452,12 @@ describe('a private window', () => {
     // Not a bound closure with a flag: an object holding no store, no directory and no
     // camera, so there is nothing for a forgotten check to leak into.
     expect(discardingThumbnailCapturer.shouldCapture('https://secret.example/')).toBe(false)
-    expect(await discardingThumbnailCapturer.capture({
-      url: 'https://secret.example/',
-      title: 'Secret',
-      viewId: 3
-    })).toEqual({ kind: 'rejected', reason: 'private-mode' })
+    expect(
+      await discardingThumbnailCapturer.capture({
+        url: 'https://secret.example/',
+        title: 'Secret',
+        viewId: 3
+      })
+    ).toEqual({ kind: 'rejected', reason: 'private-mode' })
   })
 })

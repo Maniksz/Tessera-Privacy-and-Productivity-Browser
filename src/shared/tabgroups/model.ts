@@ -440,10 +440,7 @@ export function groupToHoldArrangement(
  * `create` is never current, because there is no group to compare against, and `none` is not
  * asked — a caller told to keep nothing has nothing to compare.
  */
-export function arrangementIsCurrent(
-  groups: readonly TabGroup[],
-  layout: TabGroupLayout
-): boolean {
+export function arrangementIsCurrent(groups: readonly TabGroup[], layout: TabGroupLayout): boolean {
   const holder = groupToHoldArrangement(groups, layout)
   if (holder.kind !== 'reuse') return false
 

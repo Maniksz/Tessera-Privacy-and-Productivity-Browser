@@ -131,10 +131,7 @@ describe('the actions the items run', () => {
     const onRecolor = vi.fn()
     const items = tabContextMenuTemplate(
       deps({
-        groups: [
-          group({ id: 'g1', tabIds: ['t1'] }),
-          group({ id: 'g2', tabIds: ['t2'] })
-        ],
+        groups: [group({ id: 'g1', tabIds: ['t1'] }), group({ id: 'g2', tabIds: ['t2'] })],
         onRecolor
       })
     )

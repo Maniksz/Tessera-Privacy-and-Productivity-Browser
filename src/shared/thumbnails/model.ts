@@ -1,8 +1,4 @@
-import {
-  MAX_HISTORY_TITLE_LENGTH,
-  MAX_HISTORY_URL_LENGTH,
-  historyUrlOf
-} from '../history/model.js'
+import { MAX_HISTORY_TITLE_LENGTH, MAX_HISTORY_URL_LENGTH, historyUrlOf } from '../history/model.js'
 import { internalUrl, queryParamOf } from '../product.js'
 import { registrableDomainOfUrl } from '../url/domain.js'
 
@@ -518,10 +514,7 @@ export interface ThumbnailPlan {
 
 function isUsableSize(size: ThumbnailSize): boolean {
   return (
-    Number.isFinite(size.width) &&
-    Number.isFinite(size.height) &&
-    size.width > 0 &&
-    size.height > 0
+    Number.isFinite(size.width) && Number.isFinite(size.height) && size.width > 0 && size.height > 0
   )
 }
 
@@ -551,8 +544,7 @@ export function planThumbnail(
 
   const wanted = target.width / target.height
   const region = coverRegion(source, wanted)
-  const crop =
-    region.width === source.width && region.height === source.height ? null : region
+  const crop = region.width === source.width && region.height === source.height ? null : region
 
   // `min` is what makes this a downscale-only step.
   const scale = Math.min(1, target.width / region.width)

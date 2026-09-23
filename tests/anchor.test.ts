@@ -28,9 +28,14 @@ describe('anchorSurface', () => {
   })
 
   it('lines its left edge up when asked', () => {
-    const { rect } = anchorSurface({ x: 20, y: 60, width: 40, height: 32 }, { width: 220, height: 190 }, VIEWPORT, {
-      align: 'start'
-    })
+    const { rect } = anchorSurface(
+      { x: 20, y: 60, width: 40, height: 32 },
+      { width: 220, height: 190 },
+      VIEWPORT,
+      {
+        align: 'start'
+      }
+    )
     expect(rect.x).toBe(20)
   })
 

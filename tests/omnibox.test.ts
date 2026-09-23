@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  buildSearchUrl,
-  classifyOmniboxInput,
-  resolveOmniboxInput
-} from '@shared/url/omnibox.js'
+import { buildSearchUrl, classifyOmniboxInput, resolveOmniboxInput } from '@shared/url/omnibox.js'
 
 /**
  * Spec 7 names address-bar resolution as a unit-test target. The cases that

@@ -167,7 +167,12 @@ export function Toolbar({
         </button>
       </div>
 
-      <Omnibox tab={tab} settings={settings} privateMode={privateMode} focusRequest={focusRequest} />
+      <Omnibox
+        tab={tab}
+        settings={settings}
+        privateMode={privateMode}
+        focusRequest={focusRequest}
+      />
 
       <div className="toolbar__actions">
         {/*

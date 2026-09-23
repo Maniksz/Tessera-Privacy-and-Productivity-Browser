@@ -183,7 +183,7 @@ describe('internal page privileges', () => {
     expect(anyInternalInvokeChannels() as readonly string[]).not.toContain('passwords:answerPrompt')
   })
 
-  it("carries no channel whose payload could hold a master password", () => {
+  it('carries no channel whose payload could hold a master password', () => {
     /*
       The structural half of the decision `shared/passwords/api.ts` describes, read off the contract rather
       than promised in a comment. A request schema is where such a field would have to appear to be
@@ -287,7 +287,9 @@ describe('internal page messages', () => {
   /** Every `bookmarks.*` or `downloads.*` key the two pages render. */
   const used = [
     ...new Set(
-      [...pageSources.matchAll(/'((?:bookmarks|downloads)\.[a-zA-Z.]+)'/g)].map((match) => match[1]!)
+      [...pageSources.matchAll(/'((?:bookmarks|downloads)\.[a-zA-Z.]+)'/g)].map(
+        (match) => match[1]!
+      )
     )
   ].sort()
 

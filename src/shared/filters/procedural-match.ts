@@ -45,13 +45,18 @@ export interface MatchableElement {
   remove?: () => void
   /** Iterable for the `/regex/` form of `:remove-class()`; `remove` for the named form. */
   readonly classList?: { remove: (name: string) => void } & Iterable<string>
-  readonly style?: { cssText: string; setProperty: (name: string, value: string, priority?: string) => void }
+  readonly style?: {
+    cssText: string
+    setProperty: (name: string, value: string, priority?: string) => void
+  }
 }
 
 export interface MatchableDocument {
   querySelectorAll?: (selector: string) => Iterable<MatchableElement>
   defaultView?: {
-    getComputedStyle?: (element: MatchableElement) => { getPropertyValue: (name: string) => string } | null
+    getComputedStyle?: (
+      element: MatchableElement
+    ) => { getPropertyValue: (name: string) => string } | null
   } | null
 }
 
@@ -126,7 +131,10 @@ function applyStep(
   }
 }
 
-function upward(element: MatchableElement, step: { levels: number | null; selector: string | null }): MatchableElement | null {
+function upward(
+  element: MatchableElement,
+  step: { levels: number | null; selector: string | null }
+): MatchableElement | null {
   if (step.selector !== null) {
     /*
       `closest` on the *parent*, not on the element.

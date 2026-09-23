@@ -397,11 +397,7 @@ export class AutofillService {
     const origin = passwordOriginOf(frame.url)
     if (origin === null) return
 
-    const username = resolveSubmittedUsername(
-      this.#options.vault.list(),
-      origin,
-      report.username
-    )
+    const username = resolveSubmittedUsername(this.#options.vault.list(), origin, report.username)
     const offer = decideSaveOffer({
       mode,
       frameUrl: frame.url,
@@ -579,7 +575,10 @@ export class AutofillService {
       formAction: form.action,
       // Both sources, weighed by the one function that knows what either is worth. Neither is built
       // from the message: the timestamp was taken by the core, the request was opened by the core.
-      consent: consentFor({ lastGestureAt: this.#lastGestureAt.get(viewId) ?? null, openRequestId }, now),
+      consent: consentFor(
+        { lastGestureAt: this.#lastGestureAt.get(viewId) ?? null, openRequestId },
+        now
+      ),
       openRequestId,
       now,
       hasFillablePasswordField: chooseFillTargets(form) !== null

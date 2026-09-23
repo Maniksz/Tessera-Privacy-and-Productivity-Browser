@@ -45,9 +45,7 @@ export interface ChromeWindowOptions {
 const PRIVATE_BACKGROUND = '#2a1636'
 const NORMAL_BACKGROUND = '#17171a'
 
-export function chromeWindowOptions(
-  options: ChromeWindowOptions
-): BrowserWindowConstructorOptions {
+export function chromeWindowOptions(options: ChromeWindowOptions): BrowserWindowConstructorOptions {
   const isMac = options.platform === 'darwin'
   const background = options.privateMode ? PRIVATE_BACKGROUND : NORMAL_BACKGROUND
 

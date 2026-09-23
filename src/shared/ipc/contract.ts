@@ -134,8 +134,10 @@ const downloadEntrySchema = z.object({
   canPause: z.boolean()
 })
 
-const _downloadWireMatchesModel: SameShape<z.output<typeof downloadEntrySchema>, DownloadEntry> =
-  true
+const _downloadWireMatchesModel: SameShape<
+  z.output<typeof downloadEntrySchema>,
+  DownloadEntry
+> = true
 void _downloadWireMatchesModel
 
 /**
@@ -408,7 +410,6 @@ const extensionInfoSchema = z.object({
   version: z.string(),
   path: z.string()
 })
-
 
 /**
  * One bookmark or folder, on the wire.

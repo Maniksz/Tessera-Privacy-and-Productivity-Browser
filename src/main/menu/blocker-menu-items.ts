@@ -119,8 +119,10 @@ export interface BlockerMenuDeps {
 }
 
 export function blockerMenuTemplate(deps: BlockerMenuDeps): MenuItemConstructorOptions[] {
-  const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>): string =>
-    translate(deps.locale, key, params)
+  const t = (
+    key: Parameters<typeof translate>[1],
+    params?: Record<string, string | number>
+  ): string => translate(deps.locale, key, params)
 
   const items: MenuItemConstructorOptions[] = [
     /*
@@ -170,7 +172,10 @@ export function blockerMenuTemplate(deps: BlockerMenuDeps): MenuItemConstructorO
     submenu: myRulesSubmenu(deps, rules, t)
   })
 
-  items.push({ label: t('blocker.updateLists'), click: () => deps.onRefreshLists() }, { type: 'separator' })
+  items.push(
+    { label: t('blocker.updateLists'), click: () => deps.onRefreshLists() },
+    { type: 'separator' }
+  )
 
   /*
     Two switches, narrow before broad.

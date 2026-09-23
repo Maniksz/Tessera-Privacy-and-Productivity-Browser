@@ -167,15 +167,13 @@ describe('createLink', () => {
 
   it('refuses a folder inside a folder', () => {
     const links = [link({ id: 'f', kind: 'folder', url: '' })]
-    expect(() => createLink(links, { kind: 'folder', title: 'Inner', parentId: 'f' }, ctx())).toThrow(
-      QuickLinkNestingError
-    )
+    expect(() =>
+      createLink(links, { kind: 'folder', title: 'Inner', parentId: 'f' }, ctx())
+    ).toThrow(QuickLinkNestingError)
   })
 
   it('refuses to exceed the limit rather than growing without bound', () => {
-    const links = Array.from({ length: MAX_QUICK_LINKS }, (_, index) =>
-      link({ id: `l${index}` })
-    )
+    const links = Array.from({ length: MAX_QUICK_LINKS }, (_, index) => link({ id: `l${index}` }))
     expect(() => createLink(links, { kind: 'link', title: 'X', url: 'a.example' }, ctx())).toThrow(
       QuickLinkLimitError
     )
@@ -210,7 +208,6 @@ describe('updateLink', () => {
     const links = updateLink([link({ title: 'Something' })], 'l1', { title: '   ' })
     expect(links[0]?.title).toBe('example.com')
   })
-
 })
 
 describe('removeLink', () => {
@@ -234,7 +231,11 @@ describe('removeLink', () => {
 })
 
 describe('moveLink', () => {
-  const three = [link({ id: 'a', title: 'A' }), link({ id: 'b', title: 'B' }), link({ id: 'c', title: 'C' })]
+  const three = [
+    link({ id: 'a', title: 'A' }),
+    link({ id: 'b', title: 'B' }),
+    link({ id: 'c', title: 'C' })
+  ]
 
   it('moves to the front', () => {
     expect(moveLink(three, 'c', null, 0).map((l) => l.id)).toEqual(['c', 'a', 'b'])
@@ -349,10 +350,7 @@ describe('repairTree', () => {
   })
 
   it('leaves a healthy tree untouched', () => {
-    const links = [
-      link({ id: 'f', kind: 'folder', url: '' }),
-      link({ id: 'a', parentId: 'f' })
-    ]
+    const links = [link({ id: 'f', kind: 'folder', url: '' }), link({ id: 'a', parentId: 'f' })]
     expect(repairTree(links)).toEqual(links)
   })
 })
@@ -367,9 +365,9 @@ describe('schema and model agree', () => {
   })
 
   it('rejects an over-long title', () => {
-    expect(quickLinkSchema.safeParse(link({ title: 'x'.repeat(MAX_TITLE_LENGTH + 1) })).success).toBe(
-      false
-    )
+    expect(
+      quickLinkSchema.safeParse(link({ title: 'x'.repeat(MAX_TITLE_LENGTH + 1) })).success
+    ).toBe(false)
   })
 
   it('rejects an unknown kind', () => {

@@ -34,9 +34,7 @@ const NAVIGABLE_SCHEMES = new Set([
 const REJECTED_SCHEMES = new Set(['javascript:', 'data:', 'blob:', 'vbscript:'])
 
 export type OmniboxIntent =
-  | { kind: 'url'; url: string }
-  | { kind: 'search'; query: string }
-  | { kind: 'empty' }
+  { kind: 'url'; url: string } | { kind: 'search'; query: string } | { kind: 'empty' }
 
 const HOST_LIKE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/

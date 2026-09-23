@@ -224,7 +224,9 @@ export class DownloadStore {
       function has to be total on its own input.
     */
     const stamped: DownloadPatch =
-      patch.state !== undefined && isTerminalDownloadState(patch.state) && patch.endedAt === undefined
+      patch.state !== undefined &&
+      isTerminalDownloadState(patch.state) &&
+      patch.endedAt === undefined
         ? { ...patch, endedAt: this.#now() }
         : patch
     this.#store.update((document) => ({

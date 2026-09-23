@@ -34,7 +34,10 @@ function field(overrides: Partial<FieldDescriptor> = {}): FieldDescriptor {
 }
 
 /** Indices are assigned from position, exactly as `wire.ts` does when a report arrives. */
-function form(fields: Array<Partial<FieldDescriptor>>, action: string | null = null): FormDescriptor {
+function form(
+  fields: Array<Partial<FieldDescriptor>>,
+  action: string | null = null
+): FormDescriptor {
   return { action, fields: fields.map((overrides, index) => field({ ...overrides, index })) }
 }
 
@@ -62,14 +65,22 @@ describe('an ordinary sign-in form', () => {
     // The field after a password is a confirmation box or a search far more often than a login name,
     // and the field farthest before it is usually something else entirely.
     const targets = chooseFillTargets(
-      form([{ type: 'text', name: 'search' }, { type: 'email', name: 'login' }, { type: 'password' }])
+      form([
+        { type: 'text', name: 'search' },
+        { type: 'email', name: 'login' },
+        { type: 'password' }
+      ])
     )
     expect(targets?.username?.index).toBe(1)
   })
 
   it('accepts an email or a telephone field as the name', () => {
-    expect(chooseFillTargets(form([{ type: 'email' }, { type: 'password' }]))?.username?.index).toBe(0)
-    expect(chooseFillTargets(form([{ type: 'tel' }, { type: 'password' }]))?.username?.index).toBe(0)
+    expect(
+      chooseFillTargets(form([{ type: 'email' }, { type: 'password' }]))?.username?.index
+    ).toBe(0)
+    expect(chooseFillTargets(form([{ type: 'tel' }, { type: 'password' }]))?.username?.index).toBe(
+      0
+    )
   })
 
   it('does not take a search box as the name', () => {
@@ -128,7 +139,10 @@ describe('a form that must not be filled', () => {
   it('reads a multi-token autocomplete attribute', () => {
     // `autocomplete="section-login current-password"` is valid and common.
     const targets = chooseFillTargets(
-      form([{ type: 'password' }, { type: 'password', autocomplete: 'section-login current-password' }])
+      form([
+        { type: 'password' },
+        { type: 'password', autocomplete: 'section-login current-password' }
+      ])
     )
     expect(targets?.password.index).toBe(1)
   })
@@ -164,7 +178,10 @@ describe('what a save reads, which is not what a fill writes', () => {
 
   it('takes the only password on a sign-in form', () => {
     const targets = chooseSaveTargets(
-      form([{ type: 'text', hasValue: true }, { type: 'password', hasValue: true }])
+      form([
+        { type: 'text', hasValue: true },
+        { type: 'password', hasValue: true }
+      ])
     )
     expect(targets?.password.index).toBe(1)
     expect(targets?.username?.index).toBe(0)
@@ -181,7 +198,9 @@ describe('what a save reads, which is not what a fill writes', () => {
   })
 
   it('refuses a submission with no filled password at all', () => {
-    expect(chooseSaveTargets(form([{ type: 'text', hasValue: true }, { type: 'password' }]))).toBeNull()
+    expect(
+      chooseSaveTargets(form([{ type: 'text', hasValue: true }, { type: 'password' }]))
+    ).toBeNull()
   })
 
   it('prefers a declared username field over the nearest preceding one', () => {
@@ -202,6 +221,8 @@ describe('what a save reads, which is not what a fill writes', () => {
 
   it('does not read a field the user cannot see, even when it holds something', () => {
     // A hidden field pre-filled by the page is the page's value, not the user's.
-    expect(chooseSaveTargets(form([{ type: 'password', hasValue: true, visible: false }]))).toBeNull()
+    expect(
+      chooseSaveTargets(form([{ type: 'password', hasValue: true, visible: false }]))
+    ).toBeNull()
   })
 })

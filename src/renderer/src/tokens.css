@@ -70,8 +70,7 @@
   --tab-group-grey: #7c7c88;
   --tab-height: 36px;
   --toolbar-height: 44px;
-  --font-ui:
-    13px/1.4 system-ui, -apple-system, 'Segoe UI', Ubuntu, sans-serif;
+  --font-ui: 13px/1.4 system-ui, -apple-system, 'Segoe UI', Ubuntu, sans-serif;
   color-scheme: light dark;
 }
 

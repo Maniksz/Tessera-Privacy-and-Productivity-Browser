@@ -169,7 +169,9 @@ function blockerStage(engine: FilterListEngine | null): RequestStage {
       if (filteringExemptFor(context.documentUrl, context.settings['privacy.blockerOffForSites'])) {
         return { action: 'continue' }
       }
-      return engine?.matches(context) ? { action: 'block', reason: 'blocker' } : { action: 'continue' }
+      return engine?.matches(context)
+        ? { action: 'block', reason: 'blocker' }
+        : { action: 'continue' }
     }
   }
 }

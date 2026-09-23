@@ -36,7 +36,11 @@ function links(state: unknown): QuickLink[] {
 function byName(state: unknown, name: string): QuickLink {
   const found = links(state).find((link) => link.title === name)
   if (found === undefined) {
-    throw new Error(`no tile named "${name}"; have: ${links(state).map((l) => l.title).join(', ')}`)
+    throw new Error(
+      `no tile named "${name}"; have: ${links(state)
+        .map((l) => l.title)
+        .join(', ')}`
+    )
   }
   return found
 }
@@ -53,7 +57,7 @@ Given('the quick links file contains {string}', async (state: unknown, contents:
   const filePath = tempFile('ql', 'quicklinks.json')
   writeFileSync(filePath, contents)
   scope(state).scratch['filePath'] = filePath
-  })
+})
 
 Given('the quick links file references a folder that does not exist', async (state: unknown) => {
   const filePath = tempFile('ql', 'quicklinks.json')
@@ -76,7 +80,7 @@ Given('the quick links file references a folder that does not exist', async (sta
     })
   )
   scope(state).scratch['filePath'] = filePath
-  })
+})
 
 // --- given: existing tiles ---------------------------------------------------
 
@@ -100,11 +104,18 @@ Given(
   }
 )
 
-Given('the following tiles:', (state: unknown, table: { hashes(): Array<Record<string, string>> }) => {
-  for (const row of table.hashes()) {
-    quickLinkStore(state).create({ kind: 'link', title: row['name'] ?? '', url: row['url'] ?? '' })
+Given(
+  'the following tiles:',
+  (state: unknown, table: { hashes(): Array<Record<string, string>> }) => {
+    for (const row of table.hashes()) {
+      quickLinkStore(state).create({
+        kind: 'link',
+        title: row['name'] ?? '',
+        url: row['url'] ?? ''
+      })
+    }
   }
-})
+)
 
 // --- when --------------------------------------------------------------------
 
@@ -138,19 +149,28 @@ When('I rename the tile {string} to {string}', (state: unknown, from: string, to
   quickLinkStore(state).update(byName(state, from).id, { title: to })
 })
 
-When('I try to set the address of {string} to {string}', (state: unknown, name: string, url: string) => {
-  capture(state, () => {
-    quickLinkStore(state).update(byName(state, name).id, { url })
-  })
-})
+When(
+  'I try to set the address of {string} to {string}',
+  (state: unknown, name: string, url: string) => {
+    capture(state, () => {
+      quickLinkStore(state).update(byName(state, name).id, { url })
+    })
+  }
+)
 
-When('I move the tile {string} to position {int}', (state: unknown, name: string, index: number) => {
-  quickLinkStore(state).move(byName(state, name).id, null, index)
-})
+When(
+  'I move the tile {string} to position {int}',
+  (state: unknown, name: string, index: number) => {
+    quickLinkStore(state).move(byName(state, name).id, null, index)
+  }
+)
 
-When('I move the tile {string} into the folder {string}', (state: unknown, name: string, folder: string) => {
-  quickLinkStore(state).move(byName(state, name).id, byName(state, folder).id, 0)
-})
+When(
+  'I move the tile {string} into the folder {string}',
+  (state: unknown, name: string, folder: string) => {
+    quickLinkStore(state).move(byName(state, name).id, byName(state, folder).id, 0)
+  }
+)
 
 When(
   'I try to move the tile {string} into the folder {string}',

@@ -1,5 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { DEFAULT_LOCALE, catalogs, interpolate, type Locale, type MessageKey } from '@shared/i18n/catalog.js'
+import {
+  DEFAULT_LOCALE,
+  catalogs,
+  interpolate,
+  type Locale,
+  type MessageKey
+} from '@shared/i18n/catalog.js'
 import { invoke, subscribe } from './bridge.js'
 
 /**

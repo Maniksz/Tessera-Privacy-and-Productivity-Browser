@@ -99,7 +99,11 @@ export type ProceduralAction =
    * case these rules exist for — a class or attribute whose name a site randomises per session cannot be
    * named literally. Refusing it reported three real rules as malformed, which they are not.
    */
-  | { readonly kind: 'remove-attr'; readonly names: readonly string[]; readonly pattern: string | null }
+  | {
+      readonly kind: 'remove-attr'
+      readonly names: readonly string[]
+      readonly pattern: string | null
+    }
   | {
       readonly kind: 'remove-class'
       readonly names: readonly string[]
@@ -193,8 +197,7 @@ function operatorNamesIn(selector: string): string[] {
 }
 
 type TopLevelPart =
-  | { kind: 'css'; text: string }
-  | { kind: 'operator'; name: string; argument: string }
+  { kind: 'css'; text: string } | { kind: 'operator'; name: string; argument: string }
 
 /**
  * Splits a selector into plain-CSS runs and top-level `:name(argument)` groups.

@@ -66,7 +66,11 @@ export const settingDefinitions = {
 
   // --- Suche ---------------------------------------------------------------
   // Privacy-friendly default (spec 8). No engine that profiles the query.
-  'search.defaultEngine': def(z.enum(['duckduckgo', 'startpage', 'brave', 'mojeek', 'custom']), 'duckduckgo', 'search'),
+  'search.defaultEngine': def(
+    z.enum(['duckduckgo', 'startpage', 'brave', 'mojeek', 'custom']),
+    'duckduckgo',
+    'search'
+  ),
   'search.customEngineUrl': def(z.string(), '', 'search'),
   'search.suggestFromHistory': def(z.boolean(), true, 'search'),
   'search.suggestFromBookmarks': def(z.boolean(), true, 'search'),
@@ -213,7 +217,11 @@ export const settingDefinitions = {
   'privacy.blockTelemetryDomains': def(z.boolean(), true, 'privacy'),
   'privacy.httpsOnlyMode': def(z.boolean(), true, 'privacy'),
   'privacy.blockThirdPartyCookies': def(z.boolean(), true, 'privacy'),
-  'privacy.referrerPolicy': def(z.enum(['origin-only', 'strict', 'default']), 'origin-only', 'privacy'),
+  'privacy.referrerPolicy': def(
+    z.enum(['origin-only', 'strict', 'default']),
+    'origin-only',
+    'privacy'
+  ),
   'privacy.sendDoNotTrack': def(z.boolean(), true, 'privacy'),
   'privacy.sendGlobalPrivacyControl': def(z.boolean(), true, 'privacy'),
   'privacy.partitionStatePerSite': def(z.boolean(), true, 'privacy', 'restart'),
@@ -419,10 +427,9 @@ export function appliesOf(key: SettingsKey): SettingsApplies {
 
 /** Keys grouped by section, for rendering the settings pages. */
 export function keysBySection(): Readonly<Record<SettingsSection, readonly SettingsKey[]>> {
-  const grouped = Object.fromEntries(SETTINGS_SECTIONS.map((s) => [s, [] as SettingsKey[]])) as Record<
-    SettingsSection,
-    SettingsKey[]
-  >
+  const grouped = Object.fromEntries(
+    SETTINGS_SECTIONS.map((s) => [s, [] as SettingsKey[]])
+  ) as Record<SettingsSection, SettingsKey[]>
   for (const key of SETTINGS_KEYS) grouped[sectionOf(key)].push(key)
   return grouped
 }

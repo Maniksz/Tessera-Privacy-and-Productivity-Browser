@@ -28,10 +28,7 @@ import type { SplitController } from './SplitController.js'
  *
  * The whole of spec 2's central requirement, in one expression.
  */
-export function windowFullscreenPermitted(
-  layout: LayoutId,
-  scope: 'tile' | 'window'
-): boolean {
+export function windowFullscreenPermitted(layout: LayoutId, scope: 'tile' | 'window'): boolean {
   return layout === '1x1' || scope === 'window'
 }
 

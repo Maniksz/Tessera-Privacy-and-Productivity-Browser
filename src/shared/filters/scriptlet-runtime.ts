@@ -303,11 +303,15 @@ export function runScriptlets(calls: readonly ScriptletCall[]): void {
     })
   }
 
-  const defuseEventListener = (typePattern: string | undefined, handlerPattern: string | undefined): void => {
+  const defuseEventListener = (
+    typePattern: string | undefined,
+    handlerPattern: string | undefined
+  ): void => {
     const typeMatches = matcher(typePattern)
     const handlerMatches = matcher(handlerPattern)
-    const target = (globalThis as unknown as { EventTarget?: { prototype?: Record<string, unknown> } })
-      .EventTarget
+    const target = (
+      globalThis as unknown as { EventTarget?: { prototype?: Record<string, unknown> } }
+    ).EventTarget
     const prototype = target?.prototype
     if (prototype === undefined) return
 

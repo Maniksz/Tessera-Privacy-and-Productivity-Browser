@@ -48,9 +48,9 @@ import { asScriptletCalls } from '@shared/filters/injection.js'
 
 /** The runtime as the page gets it: source text, re-compiled with no scope to fall back on. */
 function compiled(context: object): (calls: readonly ScriptletCall[]) => void {
-  return new Script(`(${runScriptlets.toString()})`).runInContext(
-    createContext(context)
-  ) as (calls: readonly ScriptletCall[]) => void
+  return new Script(`(${runScriptlets.toString()})`).runInContext(createContext(context)) as (
+    calls: readonly ScriptletCall[]
+  ) => void
 }
 
 type Runner = (calls: readonly ScriptletCall[]) => void
@@ -140,7 +140,10 @@ function abortOf(read: () => unknown): { name: unknown; message: unknown } | und
     read()
     return undefined
   } catch (error) {
-    return { name: (error as { name?: unknown }).name, message: (error as { message?: unknown }).message }
+    return {
+      name: (error as { name?: unknown }).name,
+      message: (error as { message?: unknown }).message
+    }
   }
 }
 
@@ -216,7 +219,7 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
       // scriptlet. It must stop that one call and not the ones after it.
       const trap = Object.defineProperty({}, 'inner', {
         get: () => {
-          throw new Error('the page\'s own getter')
+          throw new Error("the page's own getter")
         }
       })
       const world = page({ trap })
@@ -297,7 +300,7 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
       expect((world.adBlockDetector as { enabled?: unknown }).enabled).toBe(false)
     })
 
-    it('leaves the page\'s own assignment of the intermediate object intact', () => {
+    it("leaves the page's own assignment of the intermediate object intact", () => {
       // The chain watcher must not swallow what the page put there: the object the page assigned has to be
       // the object the page then reads back, or every property on it disappears.
       const world = page()
@@ -469,7 +472,9 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
     it('drops a listener whose type and handler both match', () => {
       const { world, attached } = targetWorld()
       runnerFor(world)([{ name: 'addEventListener-defuser', args: ['click', 'openPopup'] }])
-      const target = new (world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void })()
+      const target = new (
+        world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void }
+      )()
       target.addEventListener('click', () => 'openPopup')
       expect(attached, 'the listener was attached anyway').toEqual([])
     })
@@ -477,7 +482,9 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
     it('attaches a listener whose handler does not match', () => {
       const { world, attached } = targetWorld()
       runnerFor(world)([{ name: 'addEventListener-defuser', args: ['click', 'openPopup'] }])
-      const target = new (world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void })()
+      const target = new (
+        world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void }
+      )()
       target.addEventListener('click', () => 'submitForm')
       expect(attached).toHaveLength(1)
     })
@@ -485,7 +492,9 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
     it('attaches a listener of another type', () => {
       const { world, attached } = targetWorld()
       runnerFor(world)([{ name: 'addEventListener-defuser', args: ['click', ''] }])
-      const target = new (world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void })()
+      const target = new (
+        world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void }
+      )()
       target.addEventListener('keydown', function () {
         return 1
       })
@@ -494,7 +503,9 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
 
     it('does nothing on a page with no EventTarget rather than throwing', () => {
       const world = page()
-      expect(() => runnerFor(world)([{ name: 'addEventListener-defuser', args: ['click'] }])).not.toThrow()
+      expect(() =>
+        runnerFor(world)([{ name: 'addEventListener-defuser', args: ['click'] }])
+      ).not.toThrow()
     })
 
     it('leaves a page alone whose EventTarget has no addEventListener', () => {
@@ -510,7 +521,9 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
       // No type is no match for a rule that names one. Dropping it would be defusing on a guess.
       const { world, attached } = targetWorld()
       runnerFor(world)([{ name: 'addEventListener-defuser', args: ['click', 'openPopup'] }])
-      const target = new (world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void })()
+      const target = new (
+        world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void }
+      )()
       target.addEventListener(undefined, () => 'openPopup')
       expect(attached).toHaveLength(1)
     })
@@ -520,7 +533,9 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
       // match — and defusing it for that would be defusing an arbitrary listener.
       const { world, attached } = targetWorld()
       runnerFor(world)([{ name: 'addEventListener-defuser', args: ['click', 'object'] }])
-      const target = new (world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void })()
+      const target = new (
+        world.EventTarget as new () => { addEventListener: (...args: unknown[]) => void }
+      )()
       target.addEventListener('click', { handleEvent: () => undefined })
       expect(attached).toHaveLength(1)
     })
@@ -541,7 +556,10 @@ describe.each([COMPILED, IN_PLACE])('the runtime, $name', ({ page, runnerFor }) 
         }
       })
       runnerFor(world)([{ name: 'prevent-setTimeout', args: ['showOverlay'] }])
-      const id = (world.setTimeout as (handler: unknown, delay?: unknown) => unknown)(() => 'showOverlay', 500)
+      const id = (world.setTimeout as (handler: unknown, delay?: unknown) => unknown)(
+        () => 'showOverlay',
+        500
+      )
       expect(calls).toEqual([])
       expect(typeof id).toBe('number')
     })
@@ -992,14 +1010,14 @@ describe('which scriptlets a host gets', () => {
   const index = (text: string): ReturnType<typeof buildScriptletIndex> =>
     buildScriptletIndex(parseFilterList(text).scriptlet)
 
-  it('gives a host its own rules and its parent domain\'s', () => {
+  it("gives a host its own rules and its parent domain's", () => {
     const built = index(
       ['shop.example.com##+js(set, a, true)', 'example.com##+js(set, b, true)'].join('\n')
     )
     expect(scriptletsFor(built, 'shop.example.com').map((call) => call.args[0])).toEqual(['a', 'b'])
   })
 
-  it('does not give a parent a subdomain\'s rules', () => {
+  it("does not give a parent a subdomain's rules", () => {
     const built = index('shop.example.com##+js(set, a, true)')
     expect(scriptletsFor(built, 'example.com')).toEqual([])
   })

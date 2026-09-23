@@ -61,7 +61,8 @@ export function createVaultDocumentCodec(options: VaultDocumentCodecOptions): Do
   }
 
   return {
-    encode: (data) => sealDocument(options.vaultKey, new TextEncoder().encode(JSON.stringify(data))),
+    encode: (data) =>
+      sealDocument(options.vaultKey, new TextEncoder().encode(JSON.stringify(data))),
 
     decode: (bytes) => {
       const plaintext = openWithVaultKey(bytes)

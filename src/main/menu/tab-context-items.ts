@@ -58,9 +58,7 @@ const COLOR_LABELS: Readonly<Record<TabGroupColor, MessageKey>> = {
   grey: 'tabgroup.color.grey'
 }
 
-export function tabContextMenuTemplate(
-  deps: TabContextMenuDeps
-): MenuItemConstructorOptions[] {
+export function tabContextMenuTemplate(deps: TabContextMenuDeps): MenuItemConstructorOptions[] {
   const t = (key: MessageKey, params?: Record<string, string | number>): string =>
     translate(deps.locale, key, params)
 

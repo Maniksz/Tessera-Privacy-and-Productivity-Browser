@@ -65,7 +65,9 @@ describe('a hostile Content-Disposition filename', () => {
       decoding repeats until the string stops changing, *before* anything is stripped.
     */
     expect(
-      downloadFileNameFor({ contentDisposition: "attachment; filename*=UTF-8''%2e%2e%2f%2e%2e%2fpasswd" })
+      downloadFileNameFor({
+        contentDisposition: "attachment; filename*=UTF-8''%2e%2e%2f%2e%2e%2fpasswd"
+      })
     ).toBe('passwd')
     expect(safeDownloadFileName('..%252f..%252fpasswd')).toBe('passwd')
   })
@@ -129,7 +131,18 @@ describe('a hostile Content-Disposition filename', () => {
       only of characters that had to be replaced sanitises to `_`, which is safe but carries no
       information — and it would then beat a perfectly good name taken from the address.
     */
-    for (const hostile of ['', '..', '.', '/', '\\', '...', '   ', '/////', '\u0000', '\u0000\u0000']) {
+    for (const hostile of [
+      '',
+      '..',
+      '.',
+      '/',
+      '\\',
+      '...',
+      '   ',
+      '/////',
+      '\u0000',
+      '\u0000\u0000'
+    ]) {
       expectSafe(safeDownloadFileName(hostile))
       expect(safeDownloadFileName(hostile), hostile).toBe(FALLBACK_DOWNLOAD_FILE_NAME)
     }
@@ -165,9 +178,7 @@ describe('length', () => {
   })
 
   it('does not produce an empty name from a name that was only an extension', () => {
-    expect(safeDownloadFileName(`.${'z'.repeat(400)}`)).toHaveLength(
-      MAX_DOWNLOAD_FILE_NAME_LENGTH
-    )
+    expect(safeDownloadFileName(`.${'z'.repeat(400)}`)).toHaveLength(MAX_DOWNLOAD_FILE_NAME_LENGTH)
   })
 
   it('leaves a name with no extension alone', () => {

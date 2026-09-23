@@ -90,7 +90,14 @@ describe('opening', () => {
     await writeDocument(filePath, {
       version: 1,
       nodes: [
-        { id: 'a', kind: 'bookmark', title: 'A', url: 'https://a.example/', parentId: 'ghost', createdAt: T0 }
+        {
+          id: 'a',
+          kind: 'bookmark',
+          title: 'A',
+          url: 'https://a.example/',
+          parentId: 'ghost',
+          createdAt: T0
+        }
       ]
     })
 
@@ -134,7 +141,12 @@ describe('writing', () => {
   it('renames and relocates without losing the folder or the position', async () => {
     const { store } = await openStore()
     const folder = store.create({ kind: 'folder', title: 'F', parentId: BOOKMARK_BAR_ID })
-    store.create({ kind: 'bookmark', title: 'First', url: 'https://a.example/', parentId: folder.id })
+    store.create({
+      kind: 'bookmark',
+      title: 'First',
+      url: 'https://a.example/',
+      parentId: folder.id
+    })
     const moved = store.create({
       kind: 'bookmark',
       title: 'Mine',
@@ -157,7 +169,12 @@ describe('writing', () => {
     const { store } = await openStore()
     const folder = store.create({ kind: 'folder', title: 'F', parentId: BOOKMARK_BAR_ID })
     const nested = store.create({ kind: 'folder', title: 'N', parentId: folder.id })
-    store.create({ kind: 'bookmark', title: 'Leaf', url: 'https://a.example/', parentId: nested.id })
+    store.create({
+      kind: 'bookmark',
+      title: 'Leaf',
+      url: 'https://a.example/',
+      parentId: nested.id
+    })
 
     expect(store.remove(folder.id)).toBe(3)
     expect(store.list()).toEqual([])
@@ -237,7 +254,12 @@ describe('importing a file', () => {
 
   it('adds to what is already there rather than replacing it', async () => {
     const { store } = await openStore()
-    store.create({ kind: 'bookmark', title: 'Mine', url: 'https://mine.example/', parentId: BOOKMARK_BAR_ID })
+    store.create({
+      kind: 'bookmark',
+      title: 'Mine',
+      url: 'https://mine.example/',
+      parentId: BOOKMARK_BAR_ID
+    })
     store.import(EXPORT, 'Imported bookmarks')
     expect(childrenOf(store.list(), BOOKMARK_BAR_ID).map((node) => node.title)).toEqual([
       'Mine',

@@ -121,14 +121,16 @@ describe('an exception', () => {
   })
 
   it('is named as the deciding rule when it wins', () => {
-    expect(
-      decidingRule(index, 'https://ad.linksynergy.com/pixel.gif', { type: 'image' })
-    ).toBe('@@||ad.linksynergy.com^$image')
+    expect(decidingRule(index, 'https://ad.linksynergy.com/pixel.gif', { type: 'image' })).toBe(
+      '@@||ad.linksynergy.com^$image'
+    )
   })
 
   it('does nothing on its own', () => {
     const allowOnly = indexFrom('@@||ad.linksynergy.com^$image')
-    expect(decidingRule(allowOnly, 'https://ad.linksynergy.com/pixel.gif', { type: 'image' })).toBeNull()
+    expect(
+      decidingRule(allowOnly, 'https://ad.linksynergy.com/pixel.gif', { type: 'image' })
+    ).toBeNull()
   })
 })
 
@@ -338,10 +340,12 @@ describe('$third-party', () => {
   it('compares registrable domains, not hostnames', () => {
     // `a.example.co.uk` and `b.example.co.uk` are one party; `evil.co.uk` is not.
     const uk = indexFrom('||example.co.uk^$third-party')
-    expect(blocks(uk, 'https://a.example.co.uk/x.js', { documentUrl: 'https://b.example.co.uk/' })).toBe(
-      false
+    expect(
+      blocks(uk, 'https://a.example.co.uk/x.js', { documentUrl: 'https://b.example.co.uk/' })
+    ).toBe(false)
+    expect(blocks(uk, 'https://a.example.co.uk/x.js', { documentUrl: 'https://evil.co.uk/' })).toBe(
+      true
     )
-    expect(blocks(uk, 'https://a.example.co.uk/x.js', { documentUrl: 'https://evil.co.uk/' })).toBe(true)
   })
 
   it('treats a request with no known document as first-party', () => {
@@ -433,9 +437,9 @@ describe('$domain=', () => {
   it('lets an exclusion override an inclusion on the same rule', () => {
     // Both lists are present, and the negated entry has to take precedence.
     const both = indexFrom('&ad_box_$domain=example.com|~shop.example.com')
-    expect(blocks(both, 'https://cdn.x/a?&ad_box_=1', { documentUrl: 'https://www.example.com/' })).toBe(
-      true
-    )
+    expect(
+      blocks(both, 'https://cdn.x/a?&ad_box_=1', { documentUrl: 'https://www.example.com/' })
+    ).toBe(true)
     expect(
       blocks(both, 'https://cdn.x/a?&ad_box_=1', { documentUrl: 'https://shop.example.com/' })
     ).toBe(false)
@@ -456,7 +460,9 @@ describe('resource types', () => {
   it('applies to any of several named types', () => {
     const several = indexFrom('&http_referer=$script,xmlhttprequest')
     expect(blocks(several, 'https://x.example/a?&http_referer=b', { type: 'script' })).toBe(true)
-    expect(blocks(several, 'https://x.example/a?&http_referer=b', { type: 'xmlhttprequest' })).toBe(true)
+    expect(blocks(several, 'https://x.example/a?&http_referer=b', { type: 'xmlhttprequest' })).toBe(
+      true
+    )
     expect(blocks(several, 'https://x.example/a?&http_referer=b', { type: 'image' })).toBe(false)
   })
 
@@ -486,7 +492,9 @@ describe('anchors and wildcards', () => {
     const index = indexFrom('/oo/cl.js|$~third-party')
     const document = 'https://www.example.com/page'
     expect(blocks(index, 'https://www.example.com/oo/cl.js', { documentUrl: document })).toBe(true)
-    expect(blocks(index, 'https://www.example.com/oo/cl.js?v=2', { documentUrl: document })).toBe(false)
+    expect(blocks(index, 'https://www.example.com/oo/cl.js?v=2', { documentUrl: document })).toBe(
+      false
+    )
   })
 
   it('finds a later occurrence when the end anchor needs one', () => {
@@ -503,7 +511,9 @@ describe('anchors and wildcards', () => {
     const index = indexFrom('://2ip.*/member_photo/$third-party')
     const document = 'https://forum.example.org/thread'
     expect(blocks(index, 'https://2ip.ru/member_photo/1.jpg', { documentUrl: document })).toBe(true)
-    expect(blocks(index, 'https://2ip.io/x/member_photo/1.jpg', { documentUrl: document })).toBe(true)
+    expect(blocks(index, 'https://2ip.io/x/member_photo/1.jpg', { documentUrl: document })).toBe(
+      true
+    )
     expect(blocks(index, 'https://2ip.ru/avatar/1.jpg', { documentUrl: document })).toBe(false)
   })
 
@@ -553,7 +563,9 @@ describe('anchors and wildcards', () => {
     const index = indexFrom('^endpoint=track^$image')
     expect(blocks(index, 'https://x.example/log?endpoint=track&id=1', { type: 'image' })).toBe(true)
     // `.` is not a separator, so the leading `^` has nothing to stand on here.
-    expect(blocks(index, 'https://x.example/log.endpoint=track&id=1', { type: 'image' })).toBe(false)
+    expect(blocks(index, 'https://x.example/log.endpoint=track&id=1', { type: 'image' })).toBe(
+      false
+    )
     expect(blocks(index, 'https://x.example/plain.gif', { type: 'image' })).toBe(false)
   })
 
@@ -573,7 +585,9 @@ describe('anchors and wildcards', () => {
       })
     ).toBe(true)
     expect(
-      blocks(index, 'https://anything.example/whatever.png', { documentUrl: 'https://other.example/' })
+      blocks(index, 'https://anything.example/whatever.png', {
+        documentUrl: 'https://other.example/'
+      })
     ).toBe(false)
   })
 })
@@ -762,10 +776,12 @@ describe('the index itself', () => {
   it('is empty for an empty list', () => {
     const empty = buildNetworkIndex([])
     expect(empty.ruleCount).toBe(0)
-    expect(matchNetworkRequest(empty, {
-      url: 'https://ad.doubleclick.net/x',
-      documentUrl: null,
-      type: 'script'
-    })).toBeNull()
+    expect(
+      matchNetworkRequest(empty, {
+        url: 'https://ad.doubleclick.net/x',
+        documentUrl: null,
+        type: 'script'
+      })
+    ).toBeNull()
   })
 })

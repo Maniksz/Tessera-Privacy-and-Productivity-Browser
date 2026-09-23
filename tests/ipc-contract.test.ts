@@ -121,7 +121,9 @@ describe('IPC contract', () => {
 
   it('rejects a malformed request', () => {
     // The main process must not trust the renderer, even our own.
-    expect(invokeContract['split:setLayout'].request.safeParse({ layout: '9x9' }).success).toBe(false)
+    expect(invokeContract['split:setLayout'].request.safeParse({ layout: '9x9' }).success).toBe(
+      false
+    )
     expect(invokeContract['tabs:close'].request.safeParse({}).success).toBe(false)
   })
 })

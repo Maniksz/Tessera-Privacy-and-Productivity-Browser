@@ -11,10 +11,7 @@ import {
   textMatcher,
   type MatchableDocument
 } from '@shared/filters/procedural-match.js'
-import {
-  buildProceduralIndex,
-  proceduralSelectorsFor
-} from '@shared/filters/procedural-index.js'
+import { buildProceduralIndex, proceduralSelectorsFor } from '@shared/filters/procedural-index.js'
 import { parseFilterList } from '@shared/filters/parse.js'
 import { asProceduralSelectors } from '@shared/filters/injection.js'
 
@@ -227,12 +224,10 @@ describe('parsing the chain', () => {
       here". The counters exist so the next thing worth building is legible, and a wrong name defeats that
       more thoroughly than a missing one.
     */
-    expect(problemOf(":xpath('//*[contains(text(),\"Adblock\")]')")).toBe(
+    expect(problemOf(':xpath(\'//*[contains(text(),"Adblock")]\')')).toBe(
       'procedural-unimplemented:xpath'
     )
-    expect(problemOf(':-abp-properties(data:)')).toBe(
-      'procedural-unimplemented:-abp-properties'
-    )
+    expect(problemOf(':-abp-properties(data:)')).toBe('procedural-unimplemented:-abp-properties')
   })
 
   it('refuses an action that is not last', () => {
@@ -315,7 +310,7 @@ describe('parsing the chain', () => {
       '.a:style()',
       '.a:remove(now)',
       '.a:remove-attr(1x)',
-      '.a:remove-class(\'\')'
+      ".a:remove-class('')"
     ]) {
       expect(problemOf(selector), selector).toBe('procedural-bad-argument')
     }
@@ -442,7 +437,9 @@ describe('a document that is not all there', () => {
 
   it('matches nothing by computed style when the window cannot compute one', () => {
     const element = { textContent: 'x' }
-    const withView = (defaultView: NonNullable<MatchableDocument['defaultView']>): MatchableDocument => ({
+    const withView = (
+      defaultView: NonNullable<MatchableDocument['defaultView']>
+    ): MatchableDocument => ({
       querySelectorAll: () => [element],
       defaultView
     })
@@ -483,7 +480,11 @@ describe('a document that is not all there', () => {
     // No parser produces one, but the preload receives steps over IPC unchecked. Climbing zero levels is
     // the reading that neither hides an ancestor nobody named nor throws.
     const [selector] = asProceduralSelectors([
-      { css: '.a', steps: [{ op: 'upward', levels: null, selector: null }], action: { kind: 'hide' } }
+      {
+        css: '.a',
+        steps: [{ op: 'upward', levels: null, selector: null }],
+        action: { kind: 'hide' }
+      }
     ])
     const element = { textContent: 'x' }
     expect(matchProcedural(selector!, { querySelectorAll: () => [element] })).toEqual([element])
@@ -513,7 +514,7 @@ describe('a document that is not all there', () => {
 })
 
 describe('doing what the rule asks', () => {
-  it('hides without discarding the page\'s own inline style', () => {
+  it("hides without discarding the page's own inline style", () => {
     /*
       `setProperty` rather than assigning `cssText`, and this is what says so: assigning would throw away a
       layout the page set up for itself in order to hide a box inside it.
@@ -571,7 +572,9 @@ describe('doing what the rule asks', () => {
     // The number a screen could use to say "this rule is doing something". A rule that matches nothing for
     // the life of a page is a rule the user wrote wrongly, and that is worth being able to tell them.
     documentOf('<div class="ad"></div><div class="ad"></div>')
-    expect(applyProceduralRules([hideOnly('.ad')], document as unknown as MatchableDocument)).toBe(2)
+    expect(applyProceduralRules([hideOnly('.ad')], document as unknown as MatchableDocument)).toBe(
+      2
+    )
   })
 
   it('lets one broken rule cost only itself', () => {
@@ -603,7 +606,7 @@ describe('which rules a host gets', () => {
   const index = (text: string): ReturnType<typeof buildProceduralIndex> =>
     buildProceduralIndex(parseFilterList(text).procedural)
 
-  it('gives a host its own rules and its parent domain\'s', () => {
+  it("gives a host its own rules and its parent domain's", () => {
     const built = index(
       ['shop.example.com##.a:has-text(x)', 'example.com##.b:has-text(y)'].join('\n')
     )
@@ -613,10 +616,10 @@ describe('which rules a host gets', () => {
     ])
   })
 
-  it('does not give a parent a subdomain\'s rules', () => {
-    expect(proceduralSelectorsFor(index('shop.example.com##.a:has-text(x)'), 'example.com')).toEqual(
-      []
-    )
+  it("does not give a parent a subdomain's rules", () => {
+    expect(
+      proceduralSelectorsFor(index('shop.example.com##.a:has-text(x)'), 'example.com')
+    ).toEqual([])
   })
 
   it('honours a ~host exclusion', () => {

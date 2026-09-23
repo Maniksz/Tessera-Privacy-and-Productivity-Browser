@@ -45,7 +45,9 @@ function filePath(): string {
   return join(directory, 'permissions.json')
 }
 
-async function open(options: { now?: () => number; maxEntries?: number } = {}): Promise<PermissionStore> {
+async function open(
+  options: { now?: () => number; maxEntries?: number } = {}
+): Promise<PermissionStore> {
   return PermissionStore.open({
     filePath: filePath(),
     debounceMs: 0,
@@ -136,7 +138,11 @@ describe('putSitePermission', () => {
 
 describe('forgetOrigin', () => {
   it('removes every answer for one site and leaves the others', () => {
-    const sites = [entry(), entry({ topic: 'microphone' }), entry({ origin: 'https://other.example' })]
+    const sites = [
+      entry(),
+      entry({ topic: 'microphone' }),
+      entry({ origin: 'https://other.example' })
+    ]
     expect(forgetOrigin(sites, 'https://example.com')).toEqual([
       entry({ origin: 'https://other.example' })
     ])
@@ -201,7 +207,12 @@ describe('PermissionStore', () => {
     const rules = store.rulesFor('normal')
     rules.remember('https://example.com', 'camera-and-microphone', 'allow')
 
-    expect(store.list().map((site) => site.topic).sort()).toEqual(['camera', 'microphone'])
+    expect(
+      store
+        .list()
+        .map((site) => site.topic)
+        .sort()
+    ).toEqual(['camera', 'microphone'])
     expect(rules.recall('https://example.com', 'camera')).toBe('allow')
     expect(rules.recall('https://example.com', 'microphone')).toBe('allow')
   })
@@ -228,7 +239,10 @@ describe('PermissionStore', () => {
     await settleWrites()
 
     expect(store.list(), 'a private window reached the store').toEqual([])
-    await expect(readFile(filePath(), 'utf8'), 'a private window created the file').rejects.toThrow()
+    await expect(
+      readFile(filePath(), 'utf8'),
+      'a private window created the file'
+    ).rejects.toThrow()
   })
 
   it('does not honour a stored grant in a private window', async () => {
@@ -317,7 +331,9 @@ describe('PermissionStore', () => {
       filePath(),
       JSON.stringify({
         version: 1,
-        sites: [{ origin: 'https://example.com', topic: 'telepathy', decision: 'allow', decidedAt: 1 }]
+        sites: [
+          { origin: 'https://example.com', topic: 'telepathy', decision: 'allow', decidedAt: 1 }
+        ]
       })
     )
     const store = await open()

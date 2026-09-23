@@ -40,7 +40,10 @@ async function tempFile(): Promise<string> {
 describe('reading the flags', () => {
   it('reads both values back', async () => {
     const filePath = await tempFile()
-    await writeStartupFlags(filePath, { hardwareAcceleration: false, throttleBackgroundContent: true })
+    await writeStartupFlags(filePath, {
+      hardwareAcceleration: false,
+      throttleBackgroundContent: true
+    })
     expect(readStartupFlags(filePath, DEFAULTS)).toEqual({
       hardwareAcceleration: false,
       throttleBackgroundContent: true
@@ -75,7 +78,10 @@ describe('reading the flags', () => {
     // Each value is checked on its own, so one bad field does not cost the other. The alternative
     // — reject the file wholesale — would turn a typo into two reverted settings.
     const filePath = await tempFile()
-    await writeFile(filePath, JSON.stringify({ hardwareAcceleration: false, throttleBackgroundContent: 'yes' }))
+    await writeFile(
+      filePath,
+      JSON.stringify({ hardwareAcceleration: false, throttleBackgroundContent: 'yes' })
+    )
     expect(readStartupFlags(filePath, DEFAULTS)).toEqual({
       hardwareAcceleration: false,
       throttleBackgroundContent: DEFAULTS.throttleBackgroundContent
@@ -143,8 +149,14 @@ describe('writing the flags', () => {
 
   it('overwrites a previous file rather than appending to it', async () => {
     const filePath = await tempFile()
-    await writeStartupFlags(filePath, { hardwareAcceleration: false, throttleBackgroundContent: false })
-    await writeStartupFlags(filePath, { hardwareAcceleration: true, throttleBackgroundContent: true })
+    await writeStartupFlags(filePath, {
+      hardwareAcceleration: false,
+      throttleBackgroundContent: false
+    })
+    await writeStartupFlags(filePath, {
+      hardwareAcceleration: true,
+      throttleBackgroundContent: true
+    })
     expect(readStartupFlags(filePath, DEFAULTS)).toEqual({
       hardwareAcceleration: true,
       throttleBackgroundContent: true
@@ -158,15 +170,20 @@ describe('the check-run switch', () => {
   it('reads the module path off the command line', () => {
     // Without this the application has no way to be driven from inside its own process, and the
     // only remaining way to drive a real window is a debugging port — the thing this replaced.
-    expect(readCheckModule(['electron', 'out/main/index.js', '--run-checks=/tmp/checks.mjs'], DEVELOPMENT)).toBe(
-      '/tmp/checks.mjs'
-    )
+    expect(
+      readCheckModule(
+        ['electron', 'out/main/index.js', '--run-checks=/tmp/checks.mjs'],
+        DEVELOPMENT
+      )
+    ).toBe('/tmp/checks.mjs')
   })
 
   it('is absent on an ordinary command line', () => {
     // Every normal launch goes through here. A false positive would make the browser load a module
     // and exit instead of opening a window.
-    expect(readCheckModule(['electron', 'out/main/index.js', '--user-data-dir=/tmp/p'], DEVELOPMENT)).toBeNull()
+    expect(
+      readCheckModule(['electron', 'out/main/index.js', '--user-data-dir=/tmp/p'], DEVELOPMENT)
+    ).toBeNull()
   })
 
   it('refuses the switch in a packaged build', () => {
@@ -176,7 +193,9 @@ describe('the check-run switch', () => {
       anything that can start the browser with arguments. In a packaged build the switch must not
       exist at all, however well-formed it looks.
     */
-    expect(readCheckModule(['Tessera', '--run-checks=/tmp/evil.mjs'], { packaged: true })).toBeNull()
+    expect(
+      readCheckModule(['Tessera', '--run-checks=/tmp/evil.mjs'], { packaged: true })
+    ).toBeNull()
   })
 
   it('treats a switch with no path as absent', () => {
@@ -189,7 +208,10 @@ describe('the check-run switch', () => {
     // The run script appends the switch to whatever is already on the command line. If an earlier
     // one won, a stale path in someone's launch configuration would silently decide what runs.
     expect(
-      readCheckModule(['electron', '--run-checks=/tmp/stale.mjs', '--run-checks=/tmp/wanted.mjs'], DEVELOPMENT)
+      readCheckModule(
+        ['electron', '--run-checks=/tmp/stale.mjs', '--run-checks=/tmp/wanted.mjs'],
+        DEVELOPMENT
+      )
     ).toBe('/tmp/wanted.mjs')
   })
 

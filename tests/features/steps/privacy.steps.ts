@@ -1,7 +1,11 @@
 import { expect } from 'vitest'
 import { Given, Then, When } from 'quickpickle'
 import { STAGE_ORDER, evaluateStages } from '@main/privacy/RequestPipeline.js'
-import { filterResponseHeaders, findHeader, normalizeRequestHeaders } from '@main/session/headers.js'
+import {
+  filterResponseHeaders,
+  findHeader,
+  normalizeRequestHeaders
+} from '@main/session/headers.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
 import { scope } from './world.js'
 
@@ -30,16 +34,19 @@ Given('the request carries the referrer {string}', (state: unknown, referrer: st
 
 // --- when --------------------------------------------------------------------
 
-When('a {string} request is made to {string}', (state: unknown, resourceType: string, url: string) => {
-  const target = scope(state)
-  target.requestOutcome = evaluateStages({
-    url,
-    resourceType,
-    documentUrl: target.documentUrl,
-    method: 'GET',
-    settings: target.settings
-  })
-})
+When(
+  'a {string} request is made to {string}',
+  (state: unknown, resourceType: string, url: string) => {
+    const target = scope(state)
+    target.requestOutcome = evaluateStages({
+      url,
+      resourceType,
+      documentUrl: target.documentUrl,
+      method: 'GET',
+      settings: target.settings
+    })
+  }
+)
 
 When('headers are prepared for {string}', (state: unknown, url: string) => {
   const target = scope(state)

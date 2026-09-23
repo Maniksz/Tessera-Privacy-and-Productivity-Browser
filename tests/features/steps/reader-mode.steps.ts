@@ -66,7 +66,11 @@ function text(value: string): ReaderNode {
 
 function el(
   tag: string,
-  options: { id?: string; classes?: readonly string[]; attributes?: Readonly<Record<string, string>> } = {},
+  options: {
+    id?: string
+    classes?: readonly string[]
+    attributes?: Readonly<Record<string, string>>
+  } = {},
   children: readonly ReaderNode[] = []
 ): ReaderElementNode {
   return {
@@ -250,7 +254,9 @@ Then('the article keeps all {int} paragraphs', (state: unknown, count: number) =
 
 Then('the article holds nothing from the comment thread', (state: unknown) => {
   const spoken = paragraphsOf(state).join(' ')
-  expect(spoken, 'a comment thread is prose, and is not the article').not.toContain('A comment from a reader')
+  expect(spoken, 'a comment thread is prose, and is not the article').not.toContain(
+    'A comment from a reader'
+  )
 })
 
 Then('the text it judged on is all the article text on the page', (state: unknown) => {
@@ -281,6 +287,9 @@ Then('it refuses: the answer from the page could not be read', (state: unknown) 
 Then('it says how much article text it found, and how much it wanted', (state: unknown) => {
   const { measurement } = readerOutcome(state)
   expect(measurement.required, 'the threshold travels with the figure').toBe(MIN_PROSE_MASS)
-  expect(measurement.mass, 'a refusal with no figure is an opinion nobody can check').toBeGreaterThan(0)
+  expect(
+    measurement.mass,
+    'a refusal with no figure is an opinion nobody can check'
+  ).toBeGreaterThan(0)
   expect(measurement.mass).toBeLessThan(measurement.required)
 })

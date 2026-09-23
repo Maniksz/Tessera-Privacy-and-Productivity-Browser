@@ -1,4 +1,8 @@
-import { classifyClassName, classifyElementId, type IdentifierVerdict } from '../filters/identifiers.js'
+import {
+  classifyClassName,
+  classifyElementId,
+  type IdentifierVerdict
+} from '../filters/identifiers.js'
 import type { ReaderElementNode } from './wire.js'
 
 /**

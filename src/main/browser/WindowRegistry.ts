@@ -314,7 +314,9 @@ export class WindowRegistry {
     /** Set only by session restore; see `WindowControllerOptions.initialSplit`. */
     initialSplit?: Partial<SplitSnapshotForPersistence>
   }): BrowserWindowController {
-    const session = options.privateMode ? this.#createPrivateSession() : electronSession.defaultSession
+    const session = options.privateMode
+      ? this.#createPrivateSession()
+      : electronSession.defaultSession
     // Named once, so the bindings below cannot disagree about which kind of window this is — and
     // named *before* the session is prepared, because the download subscription is bound there.
     const mode: BrowsingMode = options.privateMode ? 'private' : 'normal'
@@ -635,7 +637,9 @@ export class WindowRegistry {
   }
 
   focused(): BrowserWindowController | undefined {
-    return [...this.#controllers].find((controller) => !controller.window.isDestroyed() && controller.window.isFocused())
+    return [...this.#controllers].find(
+      (controller) => !controller.window.isDestroyed() && controller.window.isFocused()
+    )
   }
 
   /**

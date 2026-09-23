@@ -4,17 +4,9 @@ import { linkTargetOf } from '@shared/reader/links.js'
 import { MIN_PROSE_MASS, refusedOutcome } from '@shared/reader/outcome.js'
 import { extractArticle } from '@shared/reader/extract.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '@shared/reader/schema.js'
-import {
-  HARVEST_NODE_BUDGET,
-  MAX_HARVEST_DEPTH,
-  NEVER_CONTENT_TAGS
-} from '@shared/reader/wire.js'
+import { HARVEST_NODE_BUDGET, MAX_HARVEST_DEPTH, NEVER_CONTENT_TAGS } from '@shared/reader/wire.js'
 import { harvestDocument, harvestSource, type ReaderPageScriptHost } from '@main/reader/harvest.js'
-import {
-  READER_HISTORY_LIMIT,
-  ReaderService,
-  type ReaderHost
-} from '@main/reader/ReaderService.js'
+import { READER_HISTORY_LIMIT, ReaderService, type ReaderHost } from '@main/reader/ReaderService.js'
 import { openReaderMode, readerOutcomeFor } from '@main/reader/reader-mode.js'
 import { documentationPage, newsArticleWithSidebar } from './reader-fixtures.js'
 

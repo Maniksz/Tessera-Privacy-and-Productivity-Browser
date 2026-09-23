@@ -316,9 +316,7 @@ describe("the user's own rules", () => {
     element picker write request-blocking rules would put "hide this box" and "cut this site off" behind
     the same button. So a hand-made rule hides something; it never blocks a request.
   */
-  const withOwnRules = (
-    supplier: () => string
-  ): FilterSubscription => {
+  const withOwnRules = (supplier: () => string): FilterSubscription => {
     const { fetchList } = fetcherFor({ [AD_URL]: AD_LIST })
     return new FilterSubscription({
       directory,

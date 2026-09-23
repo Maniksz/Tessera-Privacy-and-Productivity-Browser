@@ -476,9 +476,7 @@ export function tileInDirection(
   if (!origin) return null
 
   const horizontal = direction === 'left' || direction === 'right'
-  const originCenter = horizontal
-    ? origin.y + origin.height / 2
-    : origin.x + origin.width / 2
+  const originCenter = horizontal ? origin.y + origin.height / 2 : origin.x + origin.width / 2
 
   let best: { index: number; primary: number; secondary: number } | null = null
 
@@ -513,7 +511,11 @@ export function tileInDirection(
       : candidate.x + candidate.width / 2
     const secondary = Math.abs(candidateCenter - originCenter)
 
-    if (!best || advance < best.primary || (advance === best.primary && secondary < best.secondary)) {
+    if (
+      !best ||
+      advance < best.primary ||
+      (advance === best.primary && secondary < best.secondary)
+    ) {
       best = { index, primary: advance, secondary }
     }
   }

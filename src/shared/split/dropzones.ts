@@ -156,7 +156,11 @@ function tileRects(layout: LayoutId, contentRect: Rect, fractions: Fractions): R
   return computeTileRects(layout, fractions, contentRect, { gutter: TILE_GUTTER })
 }
 
-function splitTarget(layout: LayoutId, tileIndex: number, edge: SplitEdge): SplitTarget | undefined {
+function splitTarget(
+  layout: LayoutId,
+  tileIndex: number,
+  edge: SplitEdge
+): SplitTarget | undefined {
   return SPLIT_TARGETS[`${layout}:${tileIndex}:${edge}`]
 }
 

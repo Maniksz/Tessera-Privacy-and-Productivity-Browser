@@ -441,9 +441,10 @@ describe('escape', () => {
     h.controller.escape()
 
     expect(h.exitedWindowFullscreen).toBe(1)
-    expect(h.fullScreenable, 'the confinement came back while the window was still fullscreen').toEqual(
-      []
-    )
+    expect(
+      h.fullScreenable,
+      'the confinement came back while the window was still fullscreen'
+    ).toEqual([])
   })
 
   it('gives up a fullscreen page before it un-maximises the tile it is in', () => {

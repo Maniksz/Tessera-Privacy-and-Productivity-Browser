@@ -69,7 +69,10 @@ function parentIdOf(state: unknown, where: string): string {
   return byTitle(state, name).id
 }
 
-function add(state: unknown, input: { kind: 'bookmark' | 'folder'; title: string; url?: string; parentId: string }): void {
+function add(
+  state: unknown,
+  input: { kind: 'bookmark' | 'folder'; title: string; url?: string; parentId: string }
+): void {
   const current = scope(state)
   current.bookmarks = createBookmark(
     current.bookmarks,
@@ -115,18 +118,21 @@ Given(
   }
 )
 
-Given('a bookmark file with a bookmark filed inside a folder that is not in it', (state: unknown) => {
-  scope(state).bookmarks = [
-    {
-      id: 'orphan-1',
-      kind: 'bookmark',
-      title: 'Orphan',
-      url: 'https://orphan.example/',
-      parentId: 'a-folder-that-is-not-here',
-      createdAt: NOW
-    }
-  ]
-})
+Given(
+  'a bookmark file with a bookmark filed inside a folder that is not in it',
+  (state: unknown) => {
+    scope(state).bookmarks = [
+      {
+        id: 'orphan-1',
+        kind: 'bookmark',
+        title: 'Orphan',
+        url: 'https://orphan.example/',
+        parentId: 'a-folder-that-is-not-here',
+        createdAt: NOW
+      }
+    ]
+  }
+)
 
 Given('a bookmark file with a folder that also carries an address', (state: unknown) => {
   scope(state).bookmarks = [

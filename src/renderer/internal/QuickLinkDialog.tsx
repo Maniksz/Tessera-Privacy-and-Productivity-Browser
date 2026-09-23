@@ -97,7 +97,10 @@ export function QuickLinkDialog({
   )
 
   return (
-    <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onCancel()}>
+    <div
+      className="overlay"
+      onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
+    >
       <div
         className="dialog"
         role="dialog"
@@ -146,9 +149,7 @@ export function QuickLinkDialog({
               placeholder={isFolder ? '' : previewTitle(state.url)}
               onChange={(event) => onChange({ ...state, title: event.target.value })}
             />
-            {!isFolder && (
-              <span className="dialog__hint">{t('start.dialog.nameHint')}</span>
-            )}
+            {!isFolder && <span className="dialog__hint">{t('start.dialog.nameHint')}</span>}
           </label>
 
           <div className="dialog__buttons">

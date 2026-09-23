@@ -61,10 +61,7 @@ function pageMenu(overrides: Partial<PageContextMenuDeps> = {}): PageContextMenu
  * any handler body with `() => undefined` survived. A menu whose items are all present and all inert is exactly
  * the failure a label assertion cannot see.
  */
-function click(
-  items: ReturnType<typeof pageContextMenuTemplate>,
-  label: string
-): void {
+function click(items: ReturnType<typeof pageContextMenuTemplate>, label: string): void {
   const item = items.find((candidate) => candidate.label === label)
   if (item?.click === undefined) throw new Error(`no clickable item labelled ${label}`)
   // The template's handlers take no arguments; Electron's signature is wider.
@@ -99,7 +96,12 @@ describe('offering to block an element', () => {
   })
 
   it('does not offer it on a page with no host at all', () => {
-    for (const pageUrl of ['about:blank', 'data:text/html,<p>x', 'file:///tmp/page.html', 'nonsense']) {
+    for (const pageUrl of [
+      'about:blank',
+      'data:text/html,<p>x',
+      'file:///tmp/page.html',
+      'nonsense'
+    ]) {
       const items = pageContextMenuTemplate(pageMenu({ target: target({ pageUrl }) }))
       expect(labels(items), pageUrl).not.toContain('Block element…')
     }
@@ -125,7 +127,9 @@ describe('what each item actually does', () => {
     const onBack = vi.fn()
     const onForward = vi.fn()
     const onReload = vi.fn()
-    const items = pageContextMenuTemplate(pageMenu({ onBack, onForward, onReload, canGoForward: true }))
+    const items = pageContextMenuTemplate(
+      pageMenu({ onBack, onForward, onReload, canGoForward: true })
+    )
 
     click(items, 'Back')
     click(items, 'Forward')
@@ -238,7 +242,9 @@ describe('what a right-click was probably for', () => {
 
   it('shortens a long selection instead of putting a paragraph in a menu', () => {
     const long = 'the quick brown fox jumps over the lazy dog and keeps going for quite a while'
-    const items = labels(pageContextMenuTemplate(pageMenu({ target: target({ selectionText: long }) })))
+    const items = labels(
+      pageContextMenuTemplate(pageMenu({ target: target({ selectionText: long }) }))
+    )
     const search = items.find((label) => label.startsWith('Search for'))
     expect(search).toBeDefined()
     expect(search?.length, search).toBeLessThan(50)
@@ -246,7 +252,9 @@ describe('what a right-click was probably for', () => {
   })
 
   it('leaves a short selection intact', () => {
-    const items = labels(pageContextMenuTemplate(pageMenu({ target: target({ selectionText: 'fox' }) })))
+    const items = labels(
+      pageContextMenuTemplate(pageMenu({ target: target({ selectionText: 'fox' }) }))
+    )
     expect(items).toContain('Search for “fox”')
   })
 
@@ -288,7 +296,9 @@ describe('what a right-click was probably for', () => {
 
   it('always offers inspect', () => {
     // The one item that works everywhere, including on a page where nothing else applies.
-    const items = labels(pageContextMenuTemplate(pageMenu({ target: target({ pageUrl: 'about:blank' }) })))
+    const items = labels(
+      pageContextMenuTemplate(pageMenu({ target: target({ pageUrl: 'about:blank' }) }))
+    )
     expect(items).toContain('Inspect')
   })
 })
@@ -303,7 +313,13 @@ describe('what a right-click was probably for', () => {
 function userRules(): UserRule[] {
   return [
     { id: 'r1', text: 'shop.example##.banner-ad', enabled: true, createdAt: 300, origin: 'picker' },
-    { id: 'r2', text: 'shop.example##.sponsored', enabled: false, createdAt: 200, origin: 'picker' },
+    {
+      id: 'r2',
+      text: 'shop.example##.sponsored',
+      enabled: false,
+      createdAt: 200,
+      origin: 'picker'
+    },
     { id: 'r3', text: 'example.com##.newsletter', enabled: true, createdAt: 100, origin: 'manual' }
   ]
 }
@@ -392,7 +408,9 @@ describe('the blocker badge menu', () => {
     const onBlockElement = vi.fn()
     const onRefreshLists = vi.fn()
     const onSetBlockerEnabled = vi.fn()
-    const items = blockerMenuTemplate(blocker({ onBlockElement, onRefreshLists, onSetBlockerEnabled }))
+    const items = blockerMenuTemplate(
+      blocker({ onBlockElement, onRefreshLists, onSetBlockerEnabled })
+    )
 
     click(items, 'Block element…')
     click(items, 'Update filter lists now')
@@ -421,7 +439,7 @@ describe('the per-site off switch, which is what makes the global one safe', () 
    * blocker people uninstall — and the menu had only the *global* switch. So fixing one broken page meant
    * switching filtering off everywhere and remembering to put it back, which nobody does.
    */
-  it('states the site\'s state as a checkbox', () => {
+  it("states the site's state as a checkbox", () => {
     const on = blockerMenuTemplate(blocker()).find((item) => item.label === 'Blocking on this site')
     expect(on?.type).toBe('checkbox')
     expect(on?.checked).toBe(true)
@@ -450,7 +468,9 @@ describe('the per-site off switch, which is what makes the global one safe', () 
   it('is absent rather than disabled where there is no host to key it on', () => {
     // An internal page, a `file:` document. A checkbox that cannot be clicked invites the reading that
     // blocking is off here, which would be a false statement about the one thing this menu is for.
-    expect(labels(blockerMenuTemplate(blocker({ host: null })))).not.toContain('Blocking on this site')
+    expect(labels(blockerMenuTemplate(blocker({ host: null })))).not.toContain(
+      'Blocking on this site'
+    )
   })
 
   it('never claims a site is filtered while the blocker is off entirely', () => {
@@ -467,7 +487,7 @@ describe('the per-site off switch, which is what makes the global one safe', () 
   })
 })
 
-describe('the user\'s own rules, which nothing could show before', () => {
+describe("the user's own rules, which nothing could show before", () => {
   /**
    * `user-rules.ts` states the requirement: *"The three operations that matter are not 'add': they are
    * see, disable, delete."* All three had core handlers — `userrules:list`, `userrules:setEnabled`,
@@ -475,7 +495,7 @@ describe('the user\'s own rules, which nothing could show before', () => {
    * rules and no surface could show one, switch one off, or remove it: a rule that hid the wrong thing
    * was permanent and unfindable.
    */
-  it('lists this site\'s rules, newest first', () => {
+  it("lists this site's rules, newest first", () => {
     const items = labels(rulesSubmenu())
     expect(items.slice(0, 2)).toEqual(['shop.example##.banner-ad', 'shop.example##.sponsored'])
   })
@@ -518,7 +538,7 @@ describe('the user\'s own rules, which nothing could show before', () => {
     expect(again, 'a disabled rule cannot be switched back on').toHaveBeenCalledWith('r2', true)
   })
 
-  it('deletes this site\'s rules and no others', () => {
+  it("deletes this site's rules and no others", () => {
     const onRemoveRules = vi.fn()
     click(rulesSubmenu(blocker({ onRemoveRules })), 'Delete my rules for this site (2)')
     expect(onRemoveRules).toHaveBeenCalledWith(['r1', 'r2'])

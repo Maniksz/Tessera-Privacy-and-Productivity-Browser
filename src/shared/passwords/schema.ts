@@ -115,7 +115,10 @@ export const vaultStatusSchema = z.object({
   unreadableEntries: z.number().int().positive().exactOptional()
 })
 
-const _vaultStatusWireMatchesModel: SameShape<z.output<typeof vaultStatusSchema>, VaultStatus> = true
+const _vaultStatusWireMatchesModel: SameShape<
+  z.output<typeof vaultStatusSchema>,
+  VaultStatus
+> = true
 void _vaultStatusWireMatchesModel
 
 export const passwordListResponseSchema = z.object({

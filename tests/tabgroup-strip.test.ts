@@ -62,10 +62,7 @@ describe('a group in the strip', () => {
   })
 
   it('marks the middle of a longer group', () => {
-    const items = stripItems(
-      ['t1', 't2', 't3'],
-      [group({ id: 'g1', tabIds: ['t1', 't2', 't3'] })]
-    )
+    const items = stripItems(['t1', 't2', 't3'], [group({ id: 'g1', tabIds: ['t1', 't2', 't3'] })])
     expect(shape(items)).toEqual(['[g1]', 't1(first)', 't2(middle)', 't3(last)'])
   })
 
@@ -92,7 +89,10 @@ describe('a folded group', () => {
   it('says how many are folded away', () => {
     // The only thing that tells the user the tabs still exist. A chip with no count reads as an empty
     // group.
-    const items = stripItems(['t1', 't2'], [group({ id: 'g1', tabIds: ['t1', 't2'], collapsed: true })])
+    const items = stripItems(
+      ['t1', 't2'],
+      [group({ id: 'g1', tabIds: ['t1', 't2'], collapsed: true })]
+    )
     const chip = items.find((item) => item.kind === 'group')
     expect(chip).toMatchObject({ hiddenCount: 2 })
   })
@@ -118,10 +118,7 @@ describe('an order that is not contiguous', () => {
       is worth pinning. A strip that dropped a tab because an invariant was briefly untrue would leave
       an open page unreachable, and that is a far worse failure than a second chip.
     */
-    const items = stripItems(
-      ['t1', 't2', 't3'],
-      [group({ id: 'g1', tabIds: ['t1', 't3'] })]
-    )
+    const items = stripItems(['t1', 't2', 't3'], [group({ id: 'g1', tabIds: ['t1', 't3'] })])
     const drawn = items.filter((item) => item.kind === 'tab').map((item) => item.tabId)
     expect(drawn).toEqual(['t1', 't2', 't3'])
   })
@@ -129,10 +126,7 @@ describe('an order that is not contiguous', () => {
   it('never drops a tab, whatever the groups claim', () => {
     // A stale member id — a group naming a tab this window does not have — must not remove a tab that
     // it does.
-    const items = stripItems(
-      ['t1', 't2'],
-      [group({ id: 'g1', tabIds: ['gone', 't2'] })]
-    )
+    const items = stripItems(['t1', 't2'], [group({ id: 'g1', tabIds: ['gone', 't2'] })])
     expect(items.filter((item) => item.kind === 'tab').map((item) => item.tabId)).toEqual([
       't1',
       't2'

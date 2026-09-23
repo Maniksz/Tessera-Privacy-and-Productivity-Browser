@@ -75,7 +75,10 @@ export class ExtensionStore {
         await session.extensions.loadExtension(path, { allowFileAccess: false })
       } catch (error) {
         failures.push(`${path}: ${error instanceof Error ? error.message : String(error)}`)
-        this.#store.update((document) => ({ ...document, paths: withoutPath(document.paths, path) }))
+        this.#store.update((document) => ({
+          ...document,
+          paths: withoutPath(document.paths, path)
+        }))
       }
     }
 

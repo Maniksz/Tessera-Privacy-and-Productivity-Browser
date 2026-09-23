@@ -1,5 +1,9 @@
 import { z } from 'zod'
-import { PERMISSION_TOPICS, subjectTopics, type PermissionSubject } from '@shared/overlay/permission.js'
+import {
+  PERMISSION_TOPICS,
+  subjectTopics,
+  type PermissionSubject
+} from '@shared/overlay/permission.js'
 import {
   MAX_SITE_PERMISSIONS,
   emptyPermissionDocument,
@@ -95,11 +99,7 @@ export class PermissionStore {
   readonly #now: () => number
   readonly #maxEntries: number
 
-  private constructor(
-    store: JsonStore<PermissionDocument>,
-    now: () => number,
-    maxEntries: number
-  ) {
+  private constructor(store: JsonStore<PermissionDocument>, now: () => number, maxEntries: number) {
     this.#store = store
     this.#now = now
     this.#maxEntries = maxEntries

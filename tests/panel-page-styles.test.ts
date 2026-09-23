@@ -76,7 +76,9 @@ describe('the panel, hosted as a page', () => {
     const asPanel = new Set(declaredProperties(chrome, '.panel'))
 
     for (const name of Object.keys(NOT_UNDONE)) {
-      expect(asPanel.has(name), `\`${name}\` is exempted but \`.panel\` no longer sets it`).toBe(true)
+      expect(asPanel.has(name), `\`${name}\` is exempted but \`.panel\` no longer sets it`).toBe(
+        true
+      )
     }
   })
 })

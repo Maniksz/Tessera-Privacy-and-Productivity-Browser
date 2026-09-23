@@ -59,7 +59,10 @@ const MasterPasswordSurface = lazy(() =>
  * Both channels are already open to this view: the overlay's own `webContents` runs with the `chrome`
  * preload role (see `OverlayLayer`), so no privilege changes for this.
  */
-function useShortcutContext(): { platform: Platform | null; overrides: Readonly<Record<string, string>> } {
+function useShortcutContext(): {
+  platform: Platform | null
+  overrides: Readonly<Record<string, string>>
+} {
   const [platform, setPlatform] = useState<Platform | null>(null)
   const [overrides, setOverrides] = useState<Readonly<Record<string, string>>>({})
 

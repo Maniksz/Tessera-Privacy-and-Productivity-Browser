@@ -134,7 +134,8 @@ function chooseUsernameField(
   password: FieldDescriptor
 ): FieldDescriptor | null {
   const [declared] = usable.filter(
-    (field) => !isPassword(field) && tokens(field.autocomplete).some((token) => USERNAME_TOKENS.has(token))
+    (field) =>
+      !isPassword(field) && tokens(field.autocomplete).some((token) => USERNAME_TOKENS.has(token))
   )
   if (declared !== undefined) return declared
 
@@ -175,7 +176,8 @@ export function chooseSaveTargets(form: FormDescriptor): SaveTargets | null {
   if (password === undefined) return null
 
   const [declared] = filled.filter(
-    (field) => !isPassword(field) && tokens(field.autocomplete).some((token) => USERNAME_TOKENS.has(token))
+    (field) =>
+      !isPassword(field) && tokens(field.autocomplete).some((token) => USERNAME_TOKENS.has(token))
   )
   if (declared !== undefined) return { password, username: declared }
 

@@ -16,7 +16,10 @@ import {
 import { resolveLocale, translate, type Locale } from '@shared/i18n/catalog.js'
 import { configureFaviconToken } from '@shared/favicons/model.js'
 import { configureThumbnailToken } from '@shared/thumbnails/model.js'
-import { PublicSuffixSubscription, readPublicSuffixBody } from './privacy/PublicSuffixSubscription.js'
+import {
+  PublicSuffixSubscription,
+  readPublicSuffixBody
+} from './privacy/PublicSuffixSubscription.js'
 import { SettingsStore } from './settings/SettingsStore.js'
 import { WindowRegistry } from './browser/WindowRegistry.js'
 import { registerIpcHandlers } from './ipc/handlers.js'
@@ -36,7 +39,11 @@ import {
 import { openLocalDataProtection } from './data/local-data-protection.js'
 import { describeStoreLoad, type StoreLoadReport } from './data/store-load.js'
 import { applySecureDns } from './session/hardening.js'
-import { registerAsDefaultBrowser, registerInternalProtocol, registerInternalSchemePrivileges } from './protocol.js'
+import {
+  registerAsDefaultBrowser,
+  registerInternalProtocol,
+  registerInternalSchemePrivileges
+} from './protocol.js'
 import {
   currentPlatform,
   extensionsFile,
@@ -307,7 +314,10 @@ async function main(): Promise<void> {
     console.warn('[settings] file could not be read; kept at', settings.quarantinedFileOnLoad)
   }
   if (settings.unknownKeysOnLoad.length > 0) {
-    console.warn('[settings] file contains keys this build does not know:', settings.unknownKeysOnLoad)
+    console.warn(
+      '[settings] file contains keys this build does not know:',
+      settings.unknownKeysOnLoad
+    )
   }
 
   applySecureDns(settings.snapshot())
@@ -441,11 +451,13 @@ async function main(): Promise<void> {
     defaults in the meantime.
   */
   const persistStartupFlags = (snapshot: SettingsSnapshot): void => {
-    void writeStartupFlags(startupFlagsFile(), startupFlagsFrom(snapshot)).catch((error: unknown) => {
-      // A failure here costs the *next* launch its switches, not this one. Worth saying, not worth
-      // refusing to start over.
-      console.warn('[startup-flags] could not be written:', String(error))
-    })
+    void writeStartupFlags(startupFlagsFile(), startupFlagsFrom(snapshot)).catch(
+      (error: unknown) => {
+        // A failure here costs the *next* launch its switches, not this one. Worth saying, not worth
+        // refusing to start over.
+        console.warn('[startup-flags] could not be written:', String(error))
+      }
+    )
   }
   /*
     Leftovers a crash left beside the flags file, removed once before the first write. Not inside
@@ -1253,7 +1265,9 @@ async function runOwnChecks(modulePath: string): Promise<void> {
   try {
     const [first] = BrowserWindow.getAllWindows()
     if (first?.webContents.isLoading() === true) {
-      await new Promise<void>((resolve) => first.webContents.once('did-finish-load', () => resolve()))
+      await new Promise<void>((resolve) =>
+        first.webContents.once('did-finish-load', () => resolve())
+      )
     }
     const loaded = (await import(pathToFileURL(modulePath).href)) as Partial<CheckModule>
     const run = loaded.run
@@ -1402,7 +1416,6 @@ function warnAboutStoreLoad(label: string, report: StoreLoadReport): void {
   if (message !== null) console.warn(`[${label}] ${message}`)
 }
 
-
 /**
  * What a note is read as when it cannot be read: everything `clearDataOnExit` knows how to clear.
  * The note exists because the user asked for their data to go.
@@ -1419,7 +1432,14 @@ async function clearDataOnExit(categories: readonly string[]): Promise<void> {
 
   if (categories.includes('cookies')) storageTypes.push('cookies')
   if (categories.includes('storage')) {
-    storageTypes.push('localstorage', 'indexdb', 'serviceworkers', 'cachestorage', 'filesystem', 'shadercache')
+    storageTypes.push(
+      'localstorage',
+      'indexdb',
+      'serviceworkers',
+      'cachestorage',
+      'filesystem',
+      'shadercache'
+    )
   }
 
   const work: Array<Promise<unknown>> = []

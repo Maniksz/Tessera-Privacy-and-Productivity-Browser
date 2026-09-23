@@ -83,7 +83,9 @@ describe('a form description from a renderer', () => {
 
   it('refuses an over-long action or attribute rather than trimming it', () => {
     expect(asFormDescriptor({ action: 'x'.repeat(2049), fields: [] })).toBeNull()
-    expect(asFormDescriptor({ action: null, fields: [fieldPayload({ name: 'x'.repeat(257) })] })).toBeNull()
+    expect(
+      asFormDescriptor({ action: null, fields: [fieldPayload({ name: 'x'.repeat(257) })] })
+    ).toBeNull()
   })
 
   it('refuses the whole report when one control is malformed', () => {
@@ -95,7 +97,9 @@ describe('a form description from a renderer', () => {
     expect(
       asFormDescriptor({ action: null, fields: [fieldPayload(), { type: 'password' }] })
     ).toBeNull()
-    expect(asFormDescriptor({ action: null, fields: [fieldPayload({ visible: 'yes' })] })).toBeNull()
+    expect(
+      asFormDescriptor({ action: null, fields: [fieldPayload({ visible: 'yes' })] })
+    ).toBeNull()
   })
 })
 
@@ -143,7 +147,9 @@ describe('a submission report', () => {
 
   it('refuses a report with no form or wrong types', () => {
     expect(asSubmissionReport({ username: 'a', password: 'p' })).toBeNull()
-    expect(asSubmissionReport({ form: { action: null, fields: [] }, username: 1, password: 'p' })).toBeNull()
+    expect(
+      asSubmissionReport({ form: { action: null, fields: [] }, username: 1, password: 'p' })
+    ).toBeNull()
     expect(asSubmissionReport(null)).toBeNull()
   })
 })

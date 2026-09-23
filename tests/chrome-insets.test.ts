@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  NO_CHROME_INSETS,
-  chromeHiddenAt,
-  chromeInsetsFor
-} from '@shared/split/chrome-insets.js'
+import { NO_CHROME_INSETS, chromeHiddenAt, chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { escalationLevelSchema } from '@shared/model.js'
 import { computeTileRects, dividersFor, TILE_GUTTER } from '@shared/split/layout.js'
 
@@ -80,7 +76,7 @@ describe('the insets that actually apply', () => {
     expect(chromeInsetsFor(null, measured)).toEqual(measured)
   })
 
-  it('does not hand back the caller\'s own object', () => {
+  it("does not hand back the caller's own object", () => {
     // The core keeps its insets in a field and passes it straight in. Returning it would let a caller
     // that mutated the result quietly change what the chrome reported.
     const insets = { ...measured }
@@ -166,7 +162,9 @@ describe('the divider layer and the tiles are the same box', () => {
     */
     for (const escalation of ['none', 'window-fullscreen'] as const) {
       const insets = chromeInsetsFor(escalation, measured)
-      const [left, right] = computeTileRects('1x2', {}, contentRect(insets), { gutter: TILE_GUTTER })
+      const [left, right] = computeTileRects('1x2', {}, contentRect(insets), {
+        gutter: TILE_GUTTER
+      })
       expect(left, escalation).toBeDefined()
       expect(right, escalation).toBeDefined()
       expect(right!.x - (left!.x + left!.width), escalation).toBe(TILE_GUTTER)

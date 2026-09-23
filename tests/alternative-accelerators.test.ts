@@ -131,7 +131,10 @@ describe('withAlternativeAccelerators', () => {
       {
         label: 'View',
         submenu: [
-          { label: 'Zoom', submenu: [{ label: 'In', accelerator: 'Control+Plus', click: () => {} }] }
+          {
+            label: 'Zoom',
+            submenu: [{ label: 'In', accelerator: 'Control+Plus', click: () => {} }]
+          }
         ]
       }
     ]

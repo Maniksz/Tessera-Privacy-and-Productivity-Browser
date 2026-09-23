@@ -155,7 +155,9 @@ function restoredTabFor(state: unknown, url: string): PlannedTab {
   const tabs = restoredTabs(state)
   const found = tabs.find((tab) => tab.url === url)
   if (found === undefined) {
-    throw new Error(`no restored tab points at ${url}; have: ${tabs.map((tab) => tab.url).join(', ')}`)
+    throw new Error(
+      `no restored tab points at ${url}; have: ${tabs.map((tab) => tab.url).join(', ')}`
+    )
   }
   return found
 }
@@ -324,9 +326,12 @@ Then('the restored window is focused on tile {int}', (state: unknown, tile: numb
   expect(restoredWindow(state).activeTile).toBe(tile)
 })
 
-Then('the restored divider {string} sits at {float}', (state: unknown, id: string, value: number) => {
-  expect(restoredWindow(state).fractions[id]).toBeCloseTo(value, 6)
-})
+Then(
+  'the restored divider {string} sits at {float}',
+  (state: unknown, id: string, value: number) => {
+    expect(restoredWindow(state).fractions[id]).toBeCloseTo(value, 6)
+  }
+)
 
 Then('the restored window has no divider {string}', (state: unknown, id: string) => {
   expect(Object.keys(restoredWindow(state).fractions)).not.toContain(id)
@@ -345,7 +350,9 @@ Then('no tab created this launch can be given a restored id', (state: unknown) =
   // fresh id cannot be one of them. Without it two pages answer to one id and every id-keyed
   // thing in the browser disagrees quietly.
   const highest = ids.reduce((high, id) => Math.max(high, sequenceOfTabId(id)), 0)
-  expect(ids, 'a restored id would be handed out again').not.toContain(tabIdForSequence(highest + 1))
+  expect(ids, 'a restored id would be handed out again').not.toContain(
+    tabIdForSequence(highest + 1)
+  )
   expect(highest, 'no restored id was recognised as coming from the counter').toBeGreaterThan(0)
 })
 

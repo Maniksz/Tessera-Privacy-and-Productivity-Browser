@@ -55,11 +55,7 @@ When(
   (state: unknown, width: number, height: number) => {
     const current = scope(state)
     current.scratch['requestedHeight'] = height
-    current.anchoredSurface = anchorSurface(
-      anchorOf(state),
-      { width, height },
-      viewportOf(state)
-    )
+    current.anchoredSurface = anchorSurface(anchorOf(state), { width, height }, viewportOf(state))
   }
 )
 
@@ -182,8 +178,12 @@ Then('every drop target previews a rectangle inside the tile area', (state: unkn
   for (const zone of zonesOf(state)) {
     expect(zone.preview.x, zone.id).toBeGreaterThanOrEqual(content.x)
     expect(zone.preview.y, zone.id).toBeGreaterThanOrEqual(content.y)
-    expect(zone.preview.x + zone.preview.width, zone.id).toBeLessThanOrEqual(content.x + content.width)
-    expect(zone.preview.y + zone.preview.height, zone.id).toBeLessThanOrEqual(content.y + content.height)
+    expect(zone.preview.x + zone.preview.width, zone.id).toBeLessThanOrEqual(
+      content.x + content.width
+    )
+    expect(zone.preview.y + zone.preview.height, zone.id).toBeLessThanOrEqual(
+      content.y + content.height
+    )
   }
 })
 

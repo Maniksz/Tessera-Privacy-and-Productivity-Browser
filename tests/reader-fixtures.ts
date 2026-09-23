@@ -132,9 +132,13 @@ export function newsArticleWithSidebar(): ReaderDocument {
         ]),
         el('div', { id: 'sidebar-1', classes: ['widget-area'] }, [
           el('h2', {}, [text('Most read')]),
-          p('A teaser paragraph about something else entirely, long enough to count as prose here.'),
+          p(
+            'A teaser paragraph about something else entirely, long enough to count as prose here.'
+          ),
           el('ul', {}, [
-            el('li', {}, [link('https://example.test/a', 'A second story about the harbour works')]),
+            el('li', {}, [
+              link('https://example.test/a', 'A second story about the harbour works')
+            ]),
             el('li', {}, [link('https://example.test/b', 'A third story about the school budget')])
           ])
         ])
@@ -166,8 +170,12 @@ export function documentationPage(): ReaderDocument {
         ]),
         el('main', { classes: ['content'] }, [
           el('h1', {}, [text('Configuration')]),
-          p('Every option below can be set in the configuration file or on the command line, and the command line always wins — which matters when a deployment script overrides one value and nobody remembers that it does.'),
-          p('The file is read once at start-up. Changing it while the process is running has no effect at all, and there is deliberately no watcher: a configuration that changes underneath a running request is harder to reason about than a restart.'),
+          p(
+            'Every option below can be set in the configuration file or on the command line, and the command line always wins — which matters when a deployment script overrides one value and nobody remembers that it does.'
+          ),
+          p(
+            'The file is read once at start-up. Changing it while the process is running has no effect at all, and there is deliberately no watcher: a configuration that changes underneath a running request is harder to reason about than a restart.'
+          ),
           el('h2', {}, [text('Options')]),
           el('ul', {}, [
             el('li', {}, [
@@ -184,7 +192,9 @@ export function documentationPage(): ReaderDocument {
           el('pre', {}, [
             el('code', {}, [text('  timeout: 3000\n  retries: 2\n  verbose: false\n')])
           ]),
-          p('A table of the defaults follows. Every one of them can be overridden per host, and a per-host value replaces the global one rather than merging with it, which is the opposite of what the older releases did.'),
+          p(
+            'A table of the defaults follows. Every one of them can be overridden per host, and a per-host value replaces the global one rather than merging with it, which is the opposite of what the older releases did.'
+          ),
           el('table', {}, [
             el('thead', {}, [
               el('tr', {}, [el('th', {}, [text('Option')]), el('th', {}, [text('Default')])])
@@ -194,8 +204,12 @@ export function documentationPage(): ReaderDocument {
               el('tr', {}, [el('td', {}, [text('retries')]), el('td', {}, [text('2')])])
             ])
           ]),
-          p('The remaining options are experimental and may be removed in any minor release, so a deployment that depends on one of them should pin the version it was tested against.'),
-          p('Read the migration notes before changing any of them in a production deployment, particularly the section about the retry counter, whose meaning changed in the last release.')
+          p(
+            'The remaining options are experimental and may be removed in any minor release, so a deployment that depends on one of them should pin the version it was tested against.'
+          ),
+          p(
+            'Read the migration notes before changing any of them in a production deployment, particularly the section about the retry counter, whose meaning changed in the last release.'
+          )
         ])
       ])
     ]),
@@ -234,7 +248,11 @@ export function notAnArticlePage(): ReaderDocument {
   return doc(
     el('body', {}, [
       el('nav', {}, [
-        el('ul', {}, products.map((name) => el('li', {}, [link(`https://shop.test/${name}`, name)])))
+        el(
+          'ul',
+          {},
+          products.map((name) => el('li', {}, [link(`https://shop.test/${name}`, name)]))
+        )
       ]),
       el('main', {}, [
         el('h1', {}, [text('Kitchen')]),
@@ -268,7 +286,9 @@ export function nestedWrappersArticle(): ReaderDocument {
               ...ARTICLE_PARAGRAPHS.map((value) => p(value))
             ]),
             el('div', { classes: ['comments'] }, [
-              p('A comment long enough to be prose, which is why the vocabulary has to exclude it.'),
+              p(
+                'A comment long enough to be prose, which is why the vocabulary has to exclude it.'
+              ),
               p('A second comment, also long enough, so the section is not dismissed by its size.')
             ])
           ])

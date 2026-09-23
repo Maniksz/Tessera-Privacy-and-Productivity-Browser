@@ -413,7 +413,10 @@ describe('what a view’s addition is not allowed to be', () => {
       viewStylesheet({ documentUrl, hostStyles: null, preview }).css
 
     expect(on('https://example.com/', '~example.com##.promo')).toBeNull()
-    expect(on('https://www.example.com/', '~example.com##.promo'), 'a subdomain is excluded too').toBeNull()
+    expect(
+      on('https://www.example.com/', '~example.com##.promo'),
+      'a subdomain is excluded too'
+    ).toBeNull()
     expect(on('https://other.test/', '~example.com##.promo')).toContain('.promo')
 
     const scoped = 'example.com,~shop.example.com##.x'

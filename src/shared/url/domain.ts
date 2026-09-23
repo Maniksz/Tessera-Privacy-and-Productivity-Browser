@@ -202,7 +202,10 @@ export function resetPublicSuffixes(): void {
 }
 
 export function normalizeHost(host: string): string {
-  return host.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '')
+  return host
+    .toLowerCase()
+    .replace(/\.$/, '')
+    .replace(/^\[|\]$/g, '')
 }
 
 const IPV4 = /^\d{1,3}(?:\.\d{1,3}){3}$/

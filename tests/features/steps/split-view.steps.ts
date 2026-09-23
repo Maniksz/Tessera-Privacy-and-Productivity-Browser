@@ -2,7 +2,13 @@ import { expect } from 'vitest'
 import { Given, Then, When } from 'quickpickle'
 import { SplitController, type TileDirection } from '@main/browser/SplitController.js'
 import { windowFullscreenPermitted } from '@main/browser/TileFullscreenController.js'
-import { TILE_GUTTER, dividersFor, isLayoutId, type LayoutId, type Rect } from '@shared/split/layout.js'
+import {
+  TILE_GUTTER,
+  dividersFor,
+  isLayoutId,
+  type LayoutId,
+  type Rect
+} from '@shared/split/layout.js'
 import { scope, splitController } from './world.js'
 
 /**
@@ -166,14 +172,17 @@ Then('the {string} divider sits at {float}', (state: unknown, divider: string, v
   expect(splitController(state).toState().fractions[divider]).toBeCloseTo(value, 6)
 })
 
-Then('tile {int} is at least {int} pixels wide', (state: unknown, tile: number, minWidth: number) => {
-  const rect = splitController(state).tileRects(CONTENT)[tile]
-  expect(rect, `tile ${tile} has no rectangle`).not.toBeNull()
-  // The gutter is taken off the interior edge after clamping, so the visible tile
-  // is up to half a gutter narrower than the minimum the divider enforces. The
-  // requirement is that the tile stays usable, not that it matches to the pixel.
-  expect((rect as Rect).width).toBeGreaterThanOrEqual(minWidth - TILE_GUTTER)
-})
+Then(
+  'tile {int} is at least {int} pixels wide',
+  (state: unknown, tile: number, minWidth: number) => {
+    const rect = splitController(state).tileRects(CONTENT)[tile]
+    expect(rect, `tile ${tile} has no rectangle`).not.toBeNull()
+    // The gutter is taken off the interior edge after clamping, so the visible tile
+    // is up to half a gutter narrower than the minimum the divider enforces. The
+    // requirement is that the tile stays usable, not that it matches to the pixel.
+    expect((rect as Rect).width).toBeGreaterThanOrEqual(minWidth - TILE_GUTTER)
+  }
+)
 
 Then('the column boundaries are in left-to-right order', (state: unknown) => {
   /*
@@ -270,12 +279,16 @@ Then('tile {int} is muted', (state: unknown, tile: number) => {
 
 Then('tile {int} is audible', (state: unknown, tile: number) => {
   const target = scope(state)
-  expect(splitController(state).shouldTileBeMuted(tile, target.onlyActiveTileAudible, false)).toBe(false)
+  expect(splitController(state).shouldTileBeMuted(tile, target.onlyActiveTileAudible, false)).toBe(
+    false
+  )
 })
 
 Then('tile {int} is not audible', (state: unknown, tile: number) => {
   const target = scope(state)
-  expect(splitController(state).shouldTileBeMuted(tile, target.onlyActiveTileAudible, false)).toBe(true)
+  expect(splitController(state).shouldTileBeMuted(tile, target.onlyActiveTileAudible, false)).toBe(
+    true
+  )
 })
 
 export { windowFullscreenPermitted }

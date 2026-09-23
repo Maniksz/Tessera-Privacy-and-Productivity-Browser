@@ -227,9 +227,9 @@ describe('choosing which candidate to follow', () => {
   })
 
   it('keeps the page order when two candidates rank the same', () => {
-    expect(
-      chooseFaviconCandidate(['https://e.example/a.ico', 'https://e.example/b.ico'])
-    ).toBe('https://e.example/a.ico')
+    expect(chooseFaviconCandidate(['https://e.example/a.ico', 'https://e.example/b.ico'])).toBe(
+      'https://e.example/a.ico'
+    )
   })
 
   it('follows nothing but http and https', () => {

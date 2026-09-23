@@ -89,9 +89,9 @@ describe('decidePermission', () => {
   })
 
   it('honours an ask', () => {
-    expect(decidePermission('notifications', withSettings({ 'permissions.notifications': 'ask' }))).toBe(
-      'ask'
-    )
+    expect(
+      decidePermission('notifications', withSettings({ 'permissions.notifications': 'ask' }))
+    ).toBe('ask')
   })
 
   it('maps both clipboard permissions to one setting', () => {
@@ -305,7 +305,11 @@ describe('applyReferrerPolicy', () => {
   const referrer = 'https://source.example/secret/page?q=1'
 
   it('trims a cross-site referrer to its origin', () => {
-    const headers = applyReferrerPolicy({ Referer: referrer }, 'https://other.example/x', 'origin-only')
+    const headers = applyReferrerPolicy(
+      { Referer: referrer },
+      'https://other.example/x',
+      'origin-only'
+    )
     expect(findHeader(headers, 'Referer')).toBe('https://source.example/')
   })
 
@@ -329,7 +333,11 @@ describe('applyReferrerPolicy', () => {
 
   it('drops the referrer on a downgrade to plain HTTP', () => {
     // Sending it over an unencrypted hop discloses the source page to the path.
-    const headers = applyReferrerPolicy({ Referer: referrer }, 'http://other.example/x', 'origin-only')
+    const headers = applyReferrerPolicy(
+      { Referer: referrer },
+      'http://other.example/x',
+      'origin-only'
+    )
     expect(findHeader(headers, 'Referer')).toBeUndefined()
   })
 
@@ -350,7 +358,11 @@ describe('applyReferrerPolicy', () => {
   })
 
   it('drops an unparseable referrer rather than forwarding it', () => {
-    const headers = applyReferrerPolicy({ Referer: 'nonsense' }, 'https://a.example/', 'origin-only')
+    const headers = applyReferrerPolicy(
+      { Referer: 'nonsense' },
+      'https://a.example/',
+      'origin-only'
+    )
     expect(findHeader(headers, 'Referer')).toBeUndefined()
   })
 

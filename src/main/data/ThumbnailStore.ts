@@ -214,8 +214,7 @@ export interface ThumbnailLookup {
 }
 
 type Rendered =
-  | { ok: true; bytes: Uint8Array; size: ThumbnailSize }
-  | { ok: false; reason: ThumbnailRejection }
+  { ok: true; bytes: Uint8Array; size: ThumbnailSize } | { ok: false; reason: ThumbnailRejection }
 
 export class ThumbnailStore {
   readonly #store: JsonStore<ThumbnailIndex>
@@ -451,11 +450,7 @@ export class ThumbnailStore {
       byteLength: rendered.bytes.byteLength,
       capturedAt: this.#now()
     }
-    const { shots, evicted } = putThumbnailEntry(
-      this.#store.get().shots,
-      entry,
-      this.#maxEntries
-    )
+    const { shots, evicted } = putThumbnailEntry(this.#store.get().shots, entry, this.#maxEntries)
     this.#store.update((document) => ({ ...document, shots }))
     for (const gone of evicted) await this.#removeFile(gone.url)
 

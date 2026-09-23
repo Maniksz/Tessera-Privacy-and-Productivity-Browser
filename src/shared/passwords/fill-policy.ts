@@ -104,7 +104,8 @@ export type FillRefusal =
   | 'cross-origin-form-action'
   | 'no-password-field'
 
-export type FillDecision = { readonly allowed: true } | { readonly allowed: false; readonly reason: FillRefusal }
+export type FillDecision =
+  { readonly allowed: true } | { readonly allowed: false; readonly reason: FillRefusal }
 
 const ALLOWED: FillDecision = { allowed: true }
 

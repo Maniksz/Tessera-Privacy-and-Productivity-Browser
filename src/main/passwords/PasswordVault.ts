@@ -1,9 +1,6 @@
 import { copyFile, rm } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import {
-  parseChromePasswordCsv,
-  type ChromeImportResult
-} from '@shared/passwords/chrome-import.js'
+import { parseChromePasswordCsv, type ChromeImportResult } from '@shared/passwords/chrome-import.js'
 import {
   discardingPasswordWriter,
   type BrowsingMode,
@@ -198,7 +195,10 @@ export class PasswordVault implements AutofillVault, ImportTarget {
       // A key file that is not this format. Not repaired and not replaced: generating a new key would
       // make every stored credential permanently unreadable while looking like a successful launch.
       // A newer version's file is locked for the same reason, and told apart so the page offers no reset.
-      console.warn('[passwords] the vault key file could not be read; the vault stays locked:', error.message)
+      console.warn(
+        '[passwords] the vault key file could not be read; the vault stays locked:',
+        error.message
+      )
       this.#unreadable = true
       this.#keyNewer = error instanceof VaultKeyNewerError
       return
@@ -216,10 +216,17 @@ export class PasswordVault implements AutofillVault, ImportTarget {
 
     let key: Uint8Array
     try {
-      key = await openVaultKey({ file, safeStorage: this.#options.safeStorage, masterPassword: null })
+      key = await openVaultKey({
+        file,
+        safeStorage: this.#options.safeStorage,
+        masterPassword: null
+      })
     } catch (error) {
       if (!(error instanceof VaultKeyUnreadableError)) throw error
-      console.warn('[passwords] the vault key could not be unwrapped; the vault stays locked:', error.message)
+      console.warn(
+        '[passwords] the vault key could not be unwrapped; the vault stays locked:',
+        error.message
+      )
       this.#unreadable = true
       return
     }

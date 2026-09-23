@@ -57,7 +57,9 @@ describe('the ordinary cases', () => {
 
   it('offers to update when the stored password differs', () => {
     // A different question with a different consequence, so the bar has to be able to say which.
-    expect(decideSaveOffer(context({ existing: 'different-password' }))).toEqual({ offer: 'update' })
+    expect(decideSaveOffer(context({ existing: 'different-password' }))).toEqual({
+      offer: 'update'
+    })
   })
 
   it('asks nothing at all when the same password is already stored', () => {
@@ -86,14 +88,19 @@ describe('nothing is collected that could never be filled back', () => {
   it('offers on http loopback, where a fill would also be allowed', () => {
     expect(
       decideSaveOffer(
-        context({ frameUrl: 'http://localhost:3000/login', topLevelUrl: 'http://localhost:3000/login' })
+        context({
+          frameUrl: 'http://localhost:3000/login',
+          topLevelUrl: 'http://localhost:3000/login'
+        })
       )
     ).toEqual({ offer: 'create' })
   })
 
   it('refuses a document with no origin to file a credential under', () => {
     expect(
-      decideSaveOffer(context({ frameUrl: 'file:///tmp/x.html', topLevelUrl: 'file:///tmp/x.html' }))
+      decideSaveOffer(
+        context({ frameUrl: 'file:///tmp/x.html', topLevelUrl: 'file:///tmp/x.html' })
+      )
     ).toEqual({ offer: 'none', reason: 'unsupported-scheme' })
   })
 })
@@ -177,6 +184,8 @@ describe('an implausible password', () => {
   })
 
   it('accepts one exactly at the limit', () => {
-    expect(decideSaveOffer(context({ passwordLength: MAX_PASSWORD_LENGTH }))).toEqual({ offer: 'create' })
+    expect(decideSaveOffer(context({ passwordLength: MAX_PASSWORD_LENGTH }))).toEqual({
+      offer: 'create'
+    })
   })
 })

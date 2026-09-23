@@ -24,7 +24,13 @@ import {
   allAcceleratorsFor,
   findBindingConflicts
 } from '@shared/shortcuts/bindings.js'
-import { DEFAULT_LOCALE, catalogs, isLocale, resolveLocale, translate } from '@shared/i18n/catalog.js'
+import {
+  DEFAULT_LOCALE,
+  catalogs,
+  isLocale,
+  resolveLocale,
+  translate
+} from '@shared/i18n/catalog.js'
 import { installRequestPipeline, type StageId } from '@main/privacy/RequestPipeline.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
 import { PRODUCT_NAME } from '@shared/product.js'
@@ -316,7 +322,9 @@ describe('shortcuts: overrides and conflicts', () => {
   it('covers every action on every platform', () => {
     for (const platform of ['win32', 'linux', 'darwin'] as const) {
       for (const action of SHORTCUT_ACTIONS) {
-        expect(DEFAULT_BINDINGS[platform][action].length, `${platform}/${action}`).toBeGreaterThan(0)
+        expect(DEFAULT_BINDINGS[platform][action].length, `${platform}/${action}`).toBeGreaterThan(
+          0
+        )
       }
     }
   })
@@ -383,7 +391,9 @@ describe('request pipeline installation', () => {
    * the hook, and that disposal clears the listener — is observable through this.
    */
   function fakeSession() {
-    const registrations: Array<((details: unknown, callback: (r: unknown) => void) => void) | null> = []
+    const registrations: Array<
+      ((details: unknown, callback: (r: unknown) => void) => void) | null
+    > = []
     return {
       registrations,
       session: {
@@ -420,7 +430,10 @@ describe('request pipeline installation', () => {
   it('cancels a blocked request', () => {
     const { listener } = install()
     const result = vi.fn()
-    listener({ url: 'https://safebrowsing.googleapis.com/x', resourceType: 'xhr', method: 'GET' }, result)
+    listener(
+      { url: 'https://safebrowsing.googleapis.com/x', resourceType: 'xhr', method: 'GET' },
+      result
+    )
     expect(result).toHaveBeenCalledWith({ cancel: true })
   })
 
@@ -481,7 +494,10 @@ describe('request pipeline installation', () => {
     const listener = fake.registrations[0]
     expect(listener).toBeTypeOf('function')
     expect(() =>
-      listener?.({ url: 'https://safebrowsing.googleapis.com/x', resourceType: 'xhr', method: 'GET' }, () => {})
+      listener?.(
+        { url: 'https://safebrowsing.googleapis.com/x', resourceType: 'xhr', method: 'GET' },
+        () => {}
+      )
     ).not.toThrow()
     dispose()
   })

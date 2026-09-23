@@ -243,14 +243,22 @@ describe('what the measurement counts', () => {
   })
 
   it('counts a div of inline children as a paragraph, because many sites write body copy that way', () => {
-    const page = el('body', {}, ARTICLE_PARAGRAPHS.map((value) => el('div', {}, [text(value)])))
+    const page = el(
+      'body',
+      {},
+      ARTICLE_PARAGRAPHS.map((value) => el('div', {}, [text(value)]))
+    )
     const measure = chooseContainer(page).measure
     expect(measure.blocks).toBe(ARTICLE_PARAGRAPHS.length)
     expect(measure.mass).toBeGreaterThanOrEqual(MIN_PROSE_MASS)
   })
 
   it('ignores headings, so a table of contents is not an article', () => {
-    const page = el('body', {}, ARTICLE_PARAGRAPHS.map((value) => el('h2', {}, [text(value)])))
+    const page = el(
+      'body',
+      {},
+      ARTICLE_PARAGRAPHS.map((value) => el('h2', {}, [text(value)]))
+    )
     expect(chooseContainer(page).measure.mass).toBe(0)
   })
 
@@ -264,7 +272,10 @@ describe('what the measurement counts', () => {
 
   it('subtracts only the link text from a paragraph that contains links', () => {
     const page = el('body', {}, [
-      el('p', {}, [text('A paragraph long enough to count, with '), link('https://x.test', 'a link in it, which is discounted.')])
+      el('p', {}, [
+        text('A paragraph long enough to count, with '),
+        link('https://x.test', 'a link in it, which is discounted.')
+      ])
     ])
     const measure = chooseContainer(page).measure
     expect(measure.linkText).toBe('a link in it, which is discounted.'.length)
@@ -299,7 +310,9 @@ describe('the furniture vocabulary', () => {
     // the class survives onto the article page.
     expect(isFurniture(el('article', { classes: ['post', 'promo'] }))).toBe(false)
     expect(isFurniture(el('div', { classes: ['promo'] }))).toBe(true)
-    expect(isFurniture(el('div', { attributes: { role: 'main' }, classes: ['sidebar'] }))).toBe(false)
+    expect(isFurniture(el('div', { attributes: { role: 'main' }, classes: ['sidebar'] }))).toBe(
+      false
+    )
   })
 
   it('excludes a landmark that cannot be the article', () => {
@@ -345,7 +358,11 @@ describe('what is kept inside the container', () => {
 
   it("keeps a link's text and refuses its address when the scheme is not one a page may use", () => {
     const container = el('div', {}, [
-      el('p', {}, [link('javascript:alert(1)', 'Click me'), text(' and '), link('mailto:a@b.test', 'write')])
+      el('p', {}, [
+        link('javascript:alert(1)', 'Click me'),
+        text(' and '),
+        link('mailto:a@b.test', 'write')
+      ])
     ])
     const [block] = blocksOf(container)
     const inlines = block?.kind === 'paragraph' ? block.inlines : []
@@ -381,10 +398,7 @@ describe('what is kept inside the container', () => {
   it('keeps a nested list and the text beside it in the same item', () => {
     const container = el('div', {}, [
       el('ul', {}, [
-        el('li', {}, [
-          text('Outer item'),
-          el('ul', {}, [el('li', {}, [text('Inner item')])])
-        ])
+        el('li', {}, [text('Outer item'), el('ul', {}, [el('li', {}, [text('Inner item')])])])
       ])
     ])
     const [list] = blocksOf(container)
@@ -402,7 +416,10 @@ describe('what is kept inside the container', () => {
       ])
     ])
     const [table] = blocksOf(container)
-    expect(table?.kind === 'table' ? table.rows.map((row) => row.header) : []).toEqual([true, false])
+    expect(table?.kind === 'table' ? table.rows.map((row) => row.header) : []).toEqual([
+      true,
+      false
+    ])
   })
 
   it('produces nothing for wrappers that hold nothing', () => {
@@ -430,10 +447,17 @@ describe('what is kept inside the container', () => {
 
 describe('the title', () => {
   it('falls back to og:title when there is no heading', () => {
-    const source = doc(el('body', {}, ARTICLE_PARAGRAPHS.map((value) => p(value))), {
-      meta: { 'og:title': 'What the page says it is called' },
-      documentTitle: 'Something else entirely'
-    })
+    const source = doc(
+      el(
+        'body',
+        {},
+        ARTICLE_PARAGRAPHS.map((value) => p(value))
+      ),
+      {
+        meta: { 'og:title': 'What the page says it is called' },
+        documentTitle: 'Something else entirely'
+      }
+    )
     expect(article(extractArticle(source)).article.title).toBe('What the page says it is called')
   })
 
@@ -441,9 +465,9 @@ describe('the title', () => {
     expect(withoutSiteName('Headline - Example Herald', { 'og:site_name': 'Example Herald' })).toBe(
       'Headline'
     )
-    expect(withoutSiteName('Example Herald | Headline', { 'application-name': 'Example Herald' })).toBe(
-      'Headline'
-    )
+    expect(
+      withoutSiteName('Example Herald | Headline', { 'application-name': 'Example Herald' })
+    ).toBe('Headline')
     // Nothing said what the site is called, so nothing is guessed: a mangled headline is worse than
     // a long one because the reader cannot tell it was mangled.
     expect(withoutSiteName('Headline - Example Herald', {})).toBe('Headline - Example Herald')
@@ -454,7 +478,11 @@ describe('the title', () => {
     const source = doc(
       el('body', {}, [
         el('header', { classes: ['masthead'] }, [el('h1', {}, [text('Example Herald')])]),
-        el('main', {}, ARTICLE_PARAGRAPHS.map((value) => p(value)))
+        el(
+          'main',
+          {},
+          ARTICLE_PARAGRAPHS.map((value) => p(value))
+        )
       ]),
       { documentTitle: 'The real headline' }
     )
@@ -465,7 +493,11 @@ describe('the title', () => {
     const source = doc(
       el('body', {}, [
         el('div', { attributes: { itemprop: 'headline' } }, [text('The schema headline')]),
-        el('main', {}, ARTICLE_PARAGRAPHS.map((value) => p(value)))
+        el(
+          'main',
+          {},
+          ARTICLE_PARAGRAPHS.map((value) => p(value))
+        )
       ]),
       { documentTitle: 'The template title' }
     )
@@ -476,7 +508,16 @@ describe('the title', () => {
 describe('the byline and the date', () => {
   const body = (extra: readonly ReaderElementNode[]): ReaderOutcome =>
     extractArticle(
-      doc(el('body', {}, [...extra, el('main', {}, ARTICLE_PARAGRAPHS.map((value) => p(value)))]))
+      doc(
+        el('body', {}, [
+          ...extra,
+          el(
+            'main',
+            {},
+            ARTICLE_PARAGRAPHS.map((value) => p(value))
+          )
+        ])
+      )
     )
 
   it('reads a nested schema.org author name rather than the whole author block', () => {
@@ -506,9 +547,16 @@ describe('the byline and the date', () => {
   })
 
   it('reads a date from meta when the article has no time element', () => {
-    const source = doc(el('body', {}, ARTICLE_PARAGRAPHS.map((value) => p(value))), {
-      meta: { 'article:published_time': '2026-01-02T03:04:05Z' }
-    })
+    const source = doc(
+      el(
+        'body',
+        {},
+        ARTICLE_PARAGRAPHS.map((value) => p(value))
+      ),
+      {
+        meta: { 'article:published_time': '2026-01-02T03:04:05Z' }
+      }
+    )
     expect(article(extractArticle(source)).article.publishedAt).toBe('2026-01-02T03:04:05Z')
   })
 
@@ -521,7 +569,13 @@ describe('the byline and the date', () => {
 
   it('leaves the byline and the date null rather than inferring them from prose', () => {
     const outcome = extractArticle(
-      doc(el('body', {}, ARTICLE_PARAGRAPHS.map((value) => p(value))))
+      doc(
+        el(
+          'body',
+          {},
+          ARTICLE_PARAGRAPHS.map((value) => p(value))
+        )
+      )
     )
     expect(article(outcome).article.byline).toBeNull()
     expect(article(outcome).article.publishedAt).toBeNull()
@@ -530,7 +584,11 @@ describe('the byline and the date', () => {
   it('takes the nearest declared language, so a translated piece is read as itself', () => {
     const source = doc(
       el('body', {}, [
-        el('main', { attributes: { lang: 'de' } }, ARTICLE_PARAGRAPHS.map((value) => p(value)))
+        el(
+          'main',
+          { attributes: { lang: 'de' } },
+          ARTICLE_PARAGRAPHS.map((value) => p(value))
+        )
       ]),
       { lang: 'en' }
     )
@@ -538,12 +596,25 @@ describe('the byline and the date', () => {
   })
 
   it('falls back to the document language', () => {
-    const source = doc(el('body', {}, ARTICLE_PARAGRAPHS.map((value) => p(value))), { lang: 'en' })
+    const source = doc(
+      el(
+        'body',
+        {},
+        ARTICLE_PARAGRAPHS.map((value) => p(value))
+      ),
+      { lang: 'en' }
+    )
     expect(article(extractArticle(source)).article.lang).toBe('en')
   })
 
   it('reports no language rather than a guess', () => {
-    const source = doc(el('body', {}, ARTICLE_PARAGRAPHS.map((value) => p(value))))
+    const source = doc(
+      el(
+        'body',
+        {},
+        ARTICLE_PARAGRAPHS.map((value) => p(value))
+      )
+    )
     expect(article(extractArticle(source)).article.lang).toBeNull()
   })
 })
@@ -568,14 +639,24 @@ describe('the guarantee the descent gives', () => {
     // Descending into the paragraph would make it the article and drop its siblings — the classic
     // three-of-nine failure in miniature.
     const long = ARTICLE_PARAGRAPHS.join(' ')
-    const page = el('body', {}, [el('div', { classes: ['content'] }, [p(long), p('A short tail.')])])
+    const page = el('body', {}, [
+      el('div', { classes: ['content'] }, [p(long), p('A short tail.')])
+    ])
     expect(chooseContainer(page).container.classes).toEqual(['content'])
   })
 
   it('stays at the root when the prose forks immediately', () => {
     const page = el('body', {}, [
-      el('div', {}, ARTICLE_PARAGRAPHS.slice(0, 5).map((value) => p(value))),
-      el('div', {}, ARTICLE_PARAGRAPHS.slice(5).map((value) => p(value)))
+      el(
+        'div',
+        {},
+        ARTICLE_PARAGRAPHS.slice(0, 5).map((value) => p(value))
+      ),
+      el(
+        'div',
+        {},
+        ARTICLE_PARAGRAPHS.slice(5).map((value) => p(value))
+      )
     ])
     expect(chooseContainer(page).path).toHaveLength(1)
   })

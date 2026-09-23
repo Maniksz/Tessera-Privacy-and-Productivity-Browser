@@ -621,7 +621,10 @@ export function registerIpcHandlers(deps: {
   })
 
   handle('nav:reload', ({ tabId, ignoreCache }, event) => {
-    windows.resolve(event)?.resolveTab(tabId)?.reload(ignoreCache ?? false)
+    windows
+      .resolve(event)
+      ?.resolveTab(tabId)
+      ?.reload(ignoreCache ?? false)
     return OK
   })
 

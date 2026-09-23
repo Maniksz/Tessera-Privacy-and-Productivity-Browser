@@ -138,7 +138,9 @@ function codePointOrSelf(code: number, fallback: string): string {
 
 /** Strips the tags a title may contain — real exports carry `<B>` and `<I>` inside `<A>`. */
 function plainText(html: string): string {
-  return decodeHtmlEntities(html.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim()
+  return decodeHtmlEntities(html.replace(/<[^>]*>/g, ''))
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 /**

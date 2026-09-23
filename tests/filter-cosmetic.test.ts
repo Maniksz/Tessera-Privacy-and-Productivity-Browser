@@ -172,7 +172,11 @@ describe('host exclusions', () => {
 
 describe('hostChain', () => {
   it('walks up to the registrable domain', () => {
-    expect(hostChain('a.b.example.com')).toEqual(['a.b.example.com', 'b.example.com', 'example.com'])
+    expect(hostChain('a.b.example.com')).toEqual([
+      'a.b.example.com',
+      'b.example.com',
+      'example.com'
+    ])
   })
 
   it('stops short of the bare public suffix', () => {

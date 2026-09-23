@@ -13,7 +13,11 @@ import {
   downloadProgressText
 } from '@shared/downloads/presentation.js'
 import { downloadsApi, internalBridgeAvailable, type DownloadListing } from './internal-calls.js'
-import { DOWNLOAD_MESSAGES, pendingTranslator, type DownloadMessageKey } from './pending-messages.js'
+import {
+  DOWNLOAD_MESSAGES,
+  pendingTranslator,
+  type DownloadMessageKey
+} from './pending-messages.js'
 import { useInternalI18n } from './useInternalI18n.js'
 import { Icon } from '../shared/Icon.js'
 import { DOWNLOAD_ACTION_ICONS } from '../shared/download-icons.js'
@@ -104,17 +108,14 @@ export function DownloadsPage(): React.ReactNode {
     [apply]
   )
 
-  const run = useCallback(
-    async (action: () => Promise<void>): Promise<void> => {
-      try {
-        setNotice(null)
-        await action()
-      } catch (cause) {
-        setNotice(cause instanceof Error ? cause.message : String(cause))
-      }
-    },
-    []
-  )
+  const run = useCallback(async (action: () => Promise<void>): Promise<void> => {
+    try {
+      setNotice(null)
+      await action()
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [])
 
   const openEntry = (entry: DownloadEntry): void => {
     void run(async () => {
@@ -160,9 +161,7 @@ export function DownloadsPage(): React.ReactNode {
         </button>
       </header>
 
-      {privateWindow && (
-        <p className="downloads__notice">{tp('downloads.privateNotice')}</p>
-      )}
+      {privateWindow && <p className="downloads__notice">{tp('downloads.privateNotice')}</p>}
 
       {notice !== null && (
         <p className="downloads__notice" role="status">
@@ -170,7 +169,9 @@ export function DownloadsPage(): React.ReactNode {
         </p>
       )}
 
-      {loaded && entries.length === 0 && <p className="downloads__empty">{tp('downloads.empty')}</p>}
+      {loaded && entries.length === 0 && (
+        <p className="downloads__empty">{tp('downloads.empty')}</p>
+      )}
 
       <ul className="downloads__list">
         {entries.map((entry) => {

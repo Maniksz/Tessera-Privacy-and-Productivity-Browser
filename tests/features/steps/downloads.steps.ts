@@ -3,10 +3,7 @@ import { Given, Then, When } from 'quickpickle'
 import { DownloadStore } from '@main/data/DownloadStore.js'
 import { DownloadManager, type DownloadViewer } from '@main/downloads/DownloadManager.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
-import {
-  MAX_DOWNLOAD_FILE_NAME_LENGTH,
-  downloadFileNameFor
-} from '@shared/downloads/filename.js'
+import { MAX_DOWNLOAD_FILE_NAME_LENGTH, downloadFileNameFor } from '@shared/downloads/filename.js'
 import {
   canOpenDownload,
   downloadFraction,
@@ -64,7 +61,9 @@ const NOW = 1_700_000_000_000
 
 async function openList(state: unknown): Promise<void> {
   const current = scope(state)
-  const filePath = (current.scratch['downloadFile'] as string | undefined) ?? tempFile('downloads', 'downloads.json')
+  const filePath =
+    (current.scratch['downloadFile'] as string | undefined) ??
+    tempFile('downloads', 'downloads.json')
   current.scratch['downloadFile'] = filePath
   const store = await DownloadStore.open({
     filePath,
@@ -157,7 +156,9 @@ function openWindow(state: unknown, name: string): DownloadViewer & { session: F
 }
 
 function listedIn(state: unknown, viewer: DownloadViewer): string[] {
-  return windowWorld(state).manager.snapshot(viewer).map((entry) => entry.fileName)
+  return windowWorld(state)
+    .manager.snapshot(viewer)
+    .map((entry) => entry.fileName)
 }
 
 /**
@@ -558,11 +559,17 @@ Then(
   }
 )
 
-Then('the progress for {string} is unknown rather than nought', (state: unknown, fileName: string) => {
-  // Nought would draw a bar that never moves for the whole download.
-  expect(downloadFraction(rowFor(state, fileName))).toBeNull()
-})
+Then(
+  'the progress for {string} is unknown rather than nought',
+  (state: unknown, fileName: string) => {
+    // Nought would draw a bar that never moves for the whole download.
+    expect(downloadFraction(rowFor(state, fileName))).toBeNull()
+  }
+)
 
-Then('the progress for {string} is full rather than past full', (state: unknown, fileName: string) => {
-  expect(downloadFraction(rowFor(state, fileName))).toBe(1)
-})
+Then(
+  'the progress for {string} is full rather than past full',
+  (state: unknown, fileName: string) => {
+    expect(downloadFraction(rowFor(state, fileName))).toBe(1)
+  }
+)

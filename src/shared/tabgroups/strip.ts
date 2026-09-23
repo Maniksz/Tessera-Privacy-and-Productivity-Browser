@@ -49,10 +49,7 @@ function positionOf(index: number, total: number): GroupPosition {
  * follows from where its tabs are. Nothing stores a rank, which is what keeps drag-to-reorder and
  * grouping from needing to agree about anything.
  */
-export function stripItems(
-  order: readonly string[],
-  groups: readonly TabGroup[]
-): StripItem[] {
+export function stripItems(order: readonly string[], groups: readonly TabGroup[]): StripItem[] {
   const items: StripItem[] = []
   let openGroupId: string | null = null
 

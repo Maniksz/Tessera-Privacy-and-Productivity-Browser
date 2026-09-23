@@ -83,9 +83,12 @@ describe('the baseline', () => {
   it('fills a subdomain from a credential saved on the registrable domain', () => {
     // What users mean by "the same site", and what makes the manager usable: a login that lives on
     // `accounts.` must get the credential saved for `example.com`.
-    expect(refusalFor({ frameUrl: 'https://login.example.com/x', topLevelUrl: 'https://login.example.com/x' })).toBe(
-      'allowed'
-    )
+    expect(
+      refusalFor({
+        frameUrl: 'https://login.example.com/x',
+        topLevelUrl: 'https://login.example.com/x'
+      })
+    ).toBe('allowed')
   })
 })
 
@@ -189,7 +192,7 @@ describe('a fill the user asked for from browser chrome', () => {
   })
 })
 
-describe("a form that is not a sign-in form gets nothing", () => {
+describe('a form that is not a sign-in form gets nothing', () => {
   it('refuses a form with no fillable password field', () => {
     // Without this, any page with a text input is a page the manager offers credentials on — and a
     // username silently dropped into a search box is submitted to the site with the query.
@@ -201,15 +204,15 @@ describe('a document with no site cannot be handed a site credential', () => {
   it('refuses a file: document', () => {
     // A local file has no origin that means "example.com", so a credential put there is a credential
     // handed to whoever wrote the file.
-    expect(refusalFor({ frameUrl: 'file:///tmp/login.html', topLevelUrl: 'file:///tmp/login.html' })).toBe(
-      'unsupported-scheme'
-    )
+    expect(
+      refusalFor({ frameUrl: 'file:///tmp/login.html', topLevelUrl: 'file:///tmp/login.html' })
+    ).toBe('unsupported-scheme')
   })
 
   it('refuses a data: document', () => {
-    expect(refusalFor({ frameUrl: 'data:text/html,<form>', topLevelUrl: 'data:text/html,<form>' })).toBe(
-      'unsupported-scheme'
-    )
+    expect(
+      refusalFor({ frameUrl: 'data:text/html,<form>', topLevelUrl: 'data:text/html,<form>' })
+    ).toBe('unsupported-scheme')
   })
 
   it("refuses the browser's own internal pages", () => {
@@ -219,7 +222,9 @@ describe('a document with no site cannot be handed a site credential', () => {
   })
 
   it('refuses an address it cannot parse', () => {
-    expect(refusalFor({ frameUrl: 'not a url', topLevelUrl: 'not a url' })).toBe('unsupported-scheme')
+    expect(refusalFor({ frameUrl: 'not a url', topLevelUrl: 'not a url' })).toBe(
+      'unsupported-scheme'
+    )
   })
 
   it('refuses a credential whose stored origin is not usable', () => {
@@ -237,14 +242,17 @@ describe('a network attacker on an unencrypted connection gets nothing', () => {
       attacker chose it — so a rule that only compared hosts would fill, and the password would leave
       in clear text.
     */
-    expect(refusalFor({ frameUrl: 'http://example.com/login', topLevelUrl: 'http://example.com/login' })).toBe(
-      'insecure-page'
-    )
+    expect(
+      refusalFor({ frameUrl: 'http://example.com/login', topLevelUrl: 'http://example.com/login' })
+    ).toBe('insecure-page')
   })
 
   it('allows http on loopback, where there is no wire to listen on', () => {
     const decision = decideFill(
-      goodContext({ frameUrl: 'http://localhost:3000/login', topLevelUrl: 'http://localhost:3000/login' }),
+      goodContext({
+        frameUrl: 'http://localhost:3000/login',
+        topLevelUrl: 'http://localhost:3000/login'
+      }),
       { origin: 'http://localhost:3000' }
     )
     expect(decision).toEqual({ allowed: true })
@@ -252,7 +260,10 @@ describe('a network attacker on an unencrypted connection gets nothing', () => {
 
   it('allows http on the whole 127.0.0.0/8 range, not only 127.0.0.1', () => {
     const decision = decideFill(
-      goodContext({ frameUrl: 'http://127.0.0.2:8080/login', topLevelUrl: 'http://127.0.0.2:8080/login' }),
+      goodContext({
+        frameUrl: 'http://127.0.0.2:8080/login',
+        topLevelUrl: 'http://127.0.0.2:8080/login'
+      }),
       { origin: 'http://127.0.0.2:8080' }
     )
     expect(decision).toEqual({ allowed: true })
@@ -260,7 +271,10 @@ describe('a network attacker on an unencrypted connection gets nothing', () => {
 
   it('allows http on a *.localhost name, which cannot be registered by anybody', () => {
     const decision = decideFill(
-      goodContext({ frameUrl: 'http://api.localhost/login', topLevelUrl: 'http://api.localhost/login' }),
+      goodContext({
+        frameUrl: 'http://api.localhost/login',
+        topLevelUrl: 'http://api.localhost/login'
+      }),
       { origin: 'http://api.localhost' }
     )
     expect(decision).toEqual({ allowed: true })
@@ -268,7 +282,10 @@ describe('a network attacker on an unencrypted connection gets nothing', () => {
 
   it('does not mistake a registrable host ending in localhost-like text for loopback', () => {
     expect(
-      refusalFor({ frameUrl: 'http://notlocalhost.example/login', topLevelUrl: 'http://notlocalhost.example/login' })
+      refusalFor({
+        frameUrl: 'http://notlocalhost.example/login',
+        topLevelUrl: 'http://notlocalhost.example/login'
+      })
     ).toBe('insecure-page')
   })
 })
@@ -282,7 +299,10 @@ describe('a credential saved over https is never downgraded to http', () => {
       to the second.
     */
     const decision = decideFill(
-      goodContext({ frameUrl: 'http://localhost:8080/login', topLevelUrl: 'http://localhost:8080/login' }),
+      goodContext({
+        frameUrl: 'http://localhost:8080/login',
+        topLevelUrl: 'http://localhost:8080/login'
+      }),
       { origin: 'https://localhost:8443' }
     )
     expect(decision).toEqual({ allowed: false, reason: 'scheme-downgrade' })
@@ -300,7 +320,10 @@ describe('a look-alike domain gets nothing', () => {
     // The oldest trick in the list. `registrableDomain` matches on whole labels, so the site here is
     // `evil.com` and not `example.com`.
     expect(
-      refusalFor({ frameUrl: 'https://example.com.evil.com/login', topLevelUrl: 'https://example.com.evil.com/login' })
+      refusalFor({
+        frameUrl: 'https://example.com.evil.com/login',
+        topLevelUrl: 'https://example.com.evil.com/login'
+      })
     ).toBe('different-site')
   })
 
@@ -308,7 +331,10 @@ describe('a look-alike domain gets nothing', () => {
     // Naive "last two labels" logic makes both of these `co.uk` and therefore the same party. This
     // is the case the public-suffix table exists for.
     const decision = decideFill(
-      goodContext({ frameUrl: 'https://evil.co.uk/login', topLevelUrl: 'https://evil.co.uk/login' }),
+      goodContext({
+        frameUrl: 'https://evil.co.uk/login',
+        topLevelUrl: 'https://evil.co.uk/login'
+      }),
       { origin: 'https://bbc.co.uk' }
     )
     expect(decision).toEqual({ allowed: false, reason: 'different-site' })
@@ -318,16 +344,22 @@ describe('a look-alike domain gets nothing', () => {
     // Hosting suffixes where each subdomain is a separate party. A rule that stopped at "two labels"
     // would treat every project page on the service as one site.
     const decision = decideFill(
-      goodContext({ frameUrl: 'https://attacker.github.io/login', topLevelUrl: 'https://attacker.github.io/login' }),
+      goodContext({
+        frameUrl: 'https://attacker.github.io/login',
+        topLevelUrl: 'https://attacker.github.io/login'
+      }),
       { origin: 'https://victim.github.io' }
     )
     expect(decision).toEqual({ allowed: false, reason: 'different-site' })
   })
 
   it('refuses an unrelated site outright', () => {
-    expect(refusalFor({ frameUrl: 'https://evil.example/login', topLevelUrl: 'https://evil.example/login' })).toBe(
-      'different-site'
-    )
+    expect(
+      refusalFor({
+        frameUrl: 'https://evil.example/login',
+        topLevelUrl: 'https://evil.example/login'
+      })
+    ).toBe('different-site')
   })
 })
 
@@ -464,8 +496,12 @@ describe('the offer list and the fill decision cannot disagree', () => {
 
     expect(offerableSubjects(unconsented, subjects)).toEqual([{ origin: 'https://example.com' }])
     expect(fillableSubjects(unconsented, subjects)).toEqual([])
-    expect(offerableSubjects(goodContext({ consent: null, isTopLevelFrame: false }), subjects)).toEqual([])
-    expect(decideOffer(goodContext({ consent: null, formAction: 'https://evil.example/x' }), SUBJECT)).toEqual({
+    expect(
+      offerableSubjects(goodContext({ consent: null, isTopLevelFrame: false }), subjects)
+    ).toEqual([])
+    expect(
+      decideOffer(goodContext({ consent: null, formAction: 'https://evil.example/x' }), SUBJECT)
+    ).toEqual({
       allowed: false,
       reason: 'cross-origin-form-action'
     })

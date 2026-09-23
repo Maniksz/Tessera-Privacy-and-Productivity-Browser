@@ -415,10 +415,13 @@ describe('FilterListStore', () => {
     const { store, directory } = await harness({ [LIST_URL]: EASYLIST_SLICE })
     await store.refresh([LIST_URL])
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
-    await writeFile(join(directory, 'manifest.json'), JSON.stringify({
-      ...manifest,
-      [PRIVACY_URL]: { file: 'gone.txt', fetchedAt: 1 }
-    }))
+    await writeFile(
+      join(directory, 'manifest.json'),
+      JSON.stringify({
+        ...manifest,
+        [PRIVACY_URL]: { file: 'gone.txt', fetchedAt: 1 }
+      })
+    )
     expect((await store.load([PRIVACY_URL, LIST_URL])).map((list) => list.url)).toEqual([LIST_URL])
   })
 

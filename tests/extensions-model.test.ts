@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  emptyExtensionDocument,
-  withPath,
-  withoutPath
-} from '@shared/extensions/model.js'
+import { emptyExtensionDocument, withPath, withoutPath } from '@shared/extensions/model.js'
 
 /**
  * The remembered list of extension folders.

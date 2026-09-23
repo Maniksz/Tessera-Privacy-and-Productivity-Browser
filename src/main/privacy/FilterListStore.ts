@@ -32,10 +32,7 @@ export const DEFAULT_LIST_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000
 
 const MANIFEST_FILE = 'manifest.json'
 
-const manifestSchema = z.record(
-  z.string(),
-  z.object({ file: z.string(), fetchedAt: z.number() })
-)
+const manifestSchema = z.record(z.string(), z.object({ file: z.string(), fetchedAt: z.number() }))
 
 type Manifest = z.output<typeof manifestSchema>
 
@@ -134,7 +131,9 @@ export class FilterListStore {
 
   async #readManifest(): Promise<Manifest> {
     try {
-      const parsed = manifestSchema.safeParse(JSON.parse(await readFile(this.#manifestPath(), 'utf8')))
+      const parsed = manifestSchema.safeParse(
+        JSON.parse(await readFile(this.#manifestPath(), 'utf8'))
+      )
       // An unusable manifest is the same situation as no manifest: nothing is
       // cached, so the next refresh downloads. Never a throw — a corrupt cache
       // file must not stop the browser from starting.

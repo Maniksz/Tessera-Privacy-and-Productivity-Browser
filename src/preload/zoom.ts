@@ -1,9 +1,5 @@
 import { ipcRenderer } from 'electron'
-import {
-  ZOOM_GESTURE_CHANNEL,
-  stepWheelZoom,
-  wheelZoomDelta
-} from '@shared/gestures/wheel-zoom.js'
+import { ZOOM_GESTURE_CHANNEL, stepWheelZoom, wheelZoomDelta } from '@shared/gestures/wheel-zoom.js'
 
 /**
  * The trackpad pinch, and `Ctrl`-wheel with it, read where a page can still refuse them.

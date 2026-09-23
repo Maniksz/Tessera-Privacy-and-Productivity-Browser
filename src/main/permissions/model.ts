@@ -91,10 +91,7 @@ export function putSitePermission(
 }
 
 /** Everything this site was ever told, gone. What a "forget this site" control runs. */
-export function forgetOrigin(
-  sites: readonly SitePermission[],
-  origin: string
-): SitePermission[] {
+export function forgetOrigin(sites: readonly SitePermission[], origin: string): SitePermission[] {
   return sites.filter((site) => site.origin !== origin)
 }
 

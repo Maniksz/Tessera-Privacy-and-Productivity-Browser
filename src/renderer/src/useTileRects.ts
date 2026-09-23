@@ -60,6 +60,11 @@ export function useTileRects(split: SplitState | null): {
   if (split === null || size === null || element === null) return { ref: setElement, rects: [] }
   return {
     ref: setElement,
-    rects: computeTileRects(split.layout, split.fractions, { x: 0, y: 0, ...size }, { gutter: TILE_GUTTER })
+    rects: computeTileRects(
+      split.layout,
+      split.fractions,
+      { x: 0, y: 0, ...size },
+      { gutter: TILE_GUTTER }
+    )
   }
 }

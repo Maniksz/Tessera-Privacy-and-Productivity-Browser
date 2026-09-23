@@ -1,10 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { expect } from 'vitest'
 import { Given, Then, When } from 'quickpickle'
-import {
-  decideMediaPermission,
-  decidePermission
-} from '@main/session/permission-policy.js'
+import { decideMediaPermission, decidePermission } from '@main/session/permission-policy.js'
 import { decideAccess } from '@main/ipc/sender-policy.js'
 import { SettingsStore } from '@main/settings/SettingsStore.js'
 import { defaultSettings, isSettingsKey, type SettingsKey } from '@shared/settings/definitions.js'

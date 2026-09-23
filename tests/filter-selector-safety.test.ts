@@ -85,7 +85,9 @@ describe('a scriptlet line is not a selector', () => {
     const parsed = parseFilterList('##+js(nowebrtc)')
     expect(parsed.cosmetic).toEqual([])
     expect(parsed.scriptlet).toEqual([])
-    expect(parsed.diagnostics.unsupportedByReason).toHaveProperty('scriptlet-unimplemented:nowebrtc')
+    expect(parsed.diagnostics.unsupportedByReason).toHaveProperty(
+      'scriptlet-unimplemented:nowebrtc'
+    )
   })
 
   it('keeps the line accounting exact, which is how the counters stay trustworthy', () => {
@@ -219,7 +221,9 @@ describe('a rule that restyles instead of hiding', () => {
       This is the 537-use operator in the three default lists, so getting it onto the working path rather
       than into a counter is most of what the procedural engine buys.
     */
-    const parsed = parseFilterList('lyrics.example##.lyricBody:style(user-select: text !important;)')
+    const parsed = parseFilterList(
+      'lyrics.example##.lyricBody:style(user-select: text !important;)'
+    )
     expect(parsed.cosmetic).toEqual([])
     expect(parsed.procedural).toHaveLength(1)
     expect(parsed.procedural[0]?.selector.action).toEqual({
@@ -356,7 +360,7 @@ describe('what the check refuses, and under which name', () => {
 })
 
 describe('end to end, from list text to page stylesheet', () => {
-  it('keeps a site\'s hiding rules working next to a scriptlet line for the same site', () => {
+  it("keeps a site's hiding rules working next to a scriptlet line for the same site", () => {
     /*
       The reported shape of the bug, as a list a real site would be filtered by: two hiding rules and
       one scriptlet, all scoped to the same host. Before the fix the scriptlet was stored as a selector,

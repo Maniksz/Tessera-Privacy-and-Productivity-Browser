@@ -75,7 +75,11 @@ export interface PasswordApiVault {
   list(): PasswordSummary[]
   neverSavedOrigins(): string[]
   secretOf(id: string): string | null
-  create(input: { url: string; username: string; password: string }): PasswordCreateResponse['outcome']
+  create(input: {
+    url: string
+    username: string
+    password: string
+  }): PasswordCreateResponse['outcome']
   update(id: string, patch: { username?: string; password?: string }): void
   remove(id: string): boolean
   forgetNeverSaved(url: string): void

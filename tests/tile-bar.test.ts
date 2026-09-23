@@ -242,7 +242,12 @@ describe('the bar for a tile', () => {
     const bar = tileBarPresentation({
       tileIndex: 0,
       rects,
-      tab: tab('t1', { canGoBack: true, canGoForward: true, loading: true, url: 'https://a.test/' }),
+      tab: tab('t1', {
+        canGoBack: true,
+        canGoForward: true,
+        loading: true,
+        url: 'https://a.test/'
+      }),
       invokedBy: 'keyboard'
     })
     expect(bar).toMatchObject({
@@ -262,20 +267,29 @@ describe('the bar for a tile', () => {
   it('gives a collapsed tile no bar', () => {
     // What `tileRects` reports for the tiles a maximised neighbour has taken over.
     expect(
-      tileBarPresentation({ tileIndex: 1, rects: [rects[0]!, null], tab: tab('t2'), invokedBy: 'pointer' })
+      tileBarPresentation({
+        tileIndex: 1,
+        rects: [rects[0]!, null],
+        tab: tab('t2'),
+        invokedBy: 'pointer'
+      })
     ).toBeNull()
   })
 
   it('gives an index that names no tile no bar', () => {
     // A pointer report from a view whose layout has since shrunk looks exactly like this.
-    expect(tileBarPresentation({ tileIndex: 7, rects, tab: tab('t1'), invokedBy: 'pointer' })).toBeNull()
+    expect(
+      tileBarPresentation({ tileIndex: 7, rects, tab: tab('t1'), invokedBy: 'pointer' })
+    ).toBeNull()
   })
 
   it('gives a tile with no area no bar', () => {
     // A layout computed before the first paint. A zero-width surface would hold the layer against
     // everything else while being invisible.
     const empty: Array<Rect | null> = [{ x: 0, y: 0, width: 0, height: 0 }]
-    expect(tileBarPresentation({ tileIndex: 0, rects: empty, tab: tab('t1'), invokedBy: 'pointer' })).toBeNull()
+    expect(
+      tileBarPresentation({ tileIndex: 0, rects: empty, tab: tab('t1'), invokedBy: 'pointer' })
+    ).toBeNull()
   })
 })
 
@@ -330,11 +344,14 @@ describe('the step the core takes', () => {
 
   it('hides when the pointer leaves the tile that has the bar', () => {
     expect(
-      step({ tileIndex: 1, invokedBy: 'pointer' }, {
-        invokedBy: 'pointer',
-        tileIndex: 1,
-        y: TILE_BAR_POINTER_AWAY
-      }).do
+      step(
+        { tileIndex: 1, invokedBy: 'pointer' },
+        {
+          invokedBy: 'pointer',
+          tileIndex: 1,
+          y: TILE_BAR_POINTER_AWAY
+        }
+      ).do
     ).toBe('hide')
   })
 
@@ -374,11 +391,15 @@ describe('the step the core takes', () => {
         not be taken away by a hand brushing the trackpad.
       */
       expect(
-        step({ tileIndex: 0, invokedBy: 'keyboard' }, {
-          invokedBy: 'pointer',
-          tileIndex: 0,
-          y: TILE_BAR_POINTER_AWAY
-        }, 'keyboard').do
+        step(
+          { tileIndex: 0, invokedBy: 'keyboard' },
+          {
+            invokedBy: 'pointer',
+            tileIndex: 0,
+            y: TILE_BAR_POINTER_AWAY
+          },
+          'keyboard'
+        ).do
       ).toBe('nothing')
     })
   })
@@ -493,9 +514,9 @@ describe('refreshing a bar that is already up', () => {
 
   it('does nothing when the bar would look exactly the same', () => {
     const state = tab('a', { canGoBack: true })
-    expect(tileBarRefresh({ current: barFor(state), mode: 'hover', rects, tabOf: tabOf(state) }).do).toBe(
-      'nothing'
-    )
+    expect(
+      tileBarRefresh({ current: barFor(state), mode: 'hover', rects, tabOf: tabOf(state) }).do
+    ).toBe('nothing')
   })
 
   it('keeps the invocation that opened the bar, so a keyboard bar keeps its focus', () => {

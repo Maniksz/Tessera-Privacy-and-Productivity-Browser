@@ -122,9 +122,7 @@ export function isBodyBlock(node: ReaderElementNode): boolean {
 
 /** The element children of a node, skipping text. */
 export function elementsOf(node: ReaderElementNode): readonly ReaderElementNode[] {
-  return node.children.filter(
-    (child): child is ReaderElementNode => child.kind === 'element'
-  )
+  return node.children.filter((child): child is ReaderElementNode => child.kind === 'element')
 }
 
 /**

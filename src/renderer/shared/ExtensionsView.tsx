@@ -150,7 +150,11 @@ export function ExtensionsView({ host, onClose }: ExtensionsViewProps): React.Re
         )}
 
         <div className="panel__actions">
-          <button type="button" className="dialog__button dialog__button--primary" onClick={() => void load()}>
+          <button
+            type="button"
+            className="dialog__button dialog__button--primary"
+            onClick={() => void load()}
+          >
             {t('extensions.load')}
           </button>
         </div>
@@ -160,7 +164,10 @@ export function ExtensionsView({ host, onClose }: ExtensionsViewProps): React.Re
 
   if (onClose === undefined) return body
   return (
-    <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div
+      className="overlay"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
       {body}
     </div>
   )

@@ -295,7 +295,8 @@ export class BrowserWindowController implements PermissionHost {
       presentOverlay: (presentation) => this.presentOverlay(presentation),
       relayout: () => this.relayout(),
       broadcast: () => this.#scheduleBroadcast(),
-      onOverlayPresentationChanged: (presentation) => this.emit('overlay:presented', { presentation }),
+      onOverlayPresentationChanged: (presentation) =>
+        this.emit('overlay:presented', { presentation }),
       tabGroups: this.options.tabGroups
     })
 
@@ -1364,10 +1365,7 @@ export class BrowserWindowController implements PermissionHost {
   /** Re-applies settings that take effect live (spec 5). */
   onSettingsChanged(changed: Readonly<Record<string, unknown>>): void {
     if ('splitView.fullscreenScope' in changed) this.#seams.fullscreen.applyPolicy()
-    if (
-      'splitView.onlyActiveTileAudible' in changed ||
-      'splitView.muteAllButActive' in changed
-    ) {
+    if ('splitView.onlyActiveTileAudible' in changed || 'splitView.muteAllButActive' in changed) {
       this.#seams.audio.apply()
     }
     if ('appearance.defaultZoom' in changed) {
@@ -1489,7 +1487,11 @@ export class BrowserWindowController implements PermissionHost {
         are folded away. Which ones to hide is decided on the other side with the same shared
         function, so the two cannot disagree.
       */
-      const tabs = this.#seams.groups.displayOrder().map((id) => this.#tabs.get(id)).filter((tab): tab is Tab => tab !== undefined).map((tab) => tab.toState())
+      const tabs = this.#seams.groups
+        .displayOrder()
+        .map((id) => this.#tabs.get(id))
+        .filter((tab): tab is Tab => tab !== undefined)
+        .map((tab) => tab.toState())
       this.emit('tabs:changed', { tabs, activeTabId: this.split.activeTabId() })
       // The same tick the strip learns which tab is active, a waiting permission question does too.
       this.#reportActiveTab()

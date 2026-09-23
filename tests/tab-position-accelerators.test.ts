@@ -95,7 +95,9 @@ describe('tabPositionAccelerators', () => {
       for (const item of build(platform, () => {})) {
         expect(item.visible, `${platform} ${String(item.accelerator)}`).toBe(false)
         // Without this macOS registers nothing for a hidden item.
-        expect(item.acceleratorWorksWhenHidden, `${platform} ${String(item.accelerator)}`).toBe(true)
+        expect(item.acceleratorWorksWhenHidden, `${platform} ${String(item.accelerator)}`).toBe(
+          true
+        )
       }
     }
   })

@@ -51,7 +51,9 @@ export interface AutofillHost {
   /** The view itself, in the shape `AutofillService` takes one. */
   readonly view: AutofillView
   /** Synchronous messages from the page's preload, with the frame as the core read it. */
-  onSyncMessage(listener: (channel: string, frame: AutofillFrame, payload: unknown) => SyncReply): void
+  onSyncMessage(
+    listener: (channel: string, frame: AutofillFrame, payload: unknown) => SyncReply
+  ): void
   /** Messages that expect no answer. */
   onMessage(listener: (channel: string, frame: AutofillFrame, payload: unknown) => void): void
   /**
@@ -105,7 +107,8 @@ export function wireAutofillView(service: AutofillService, host: AutofillHost): 
   }
 
   host.onSyncMessage((channel, frame, payload) => {
-    if (channel === AUTOFILL_OFFER_CHANNEL) return { answer: service.offerFor(view, frame, payload) }
+    if (channel === AUTOFILL_OFFER_CHANNEL)
+      return { answer: service.offerFor(view, frame, payload) }
     if (channel === AUTOFILL_FILL_CHANNEL) return { answer: service.fillFor(view, frame, payload) }
     return null
   })

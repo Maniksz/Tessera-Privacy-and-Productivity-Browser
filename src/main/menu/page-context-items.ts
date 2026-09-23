@@ -81,12 +81,12 @@ function truncate(text: string): string {
   return `${collapsed.slice(0, MAX_SELECTION_LABEL - 1)}…`
 }
 
-export function pageContextMenuTemplate(
-  deps: PageContextMenuDeps
-): MenuItemConstructorOptions[] {
+export function pageContextMenuTemplate(deps: PageContextMenuDeps): MenuItemConstructorOptions[] {
   const { target, locale } = deps
-  const t = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>): string =>
-    translate(locale, key, params)
+  const t = (
+    key: Parameters<typeof translate>[1],
+    params?: Record<string, string | number>
+  ): string => translate(locale, key, params)
 
   const items: MenuItemConstructorOptions[] = []
 
@@ -115,7 +115,10 @@ export function pageContextMenuTemplate(
   if (target.srcUrl !== '' && target.linkUrl === '') {
     // Only when it is not also a link: two "copy address" items one above the other, for two different
     // addresses, is a choice nobody can make correctly at a glance.
-    items.push({ label: t('page.copyImageAddress'), click: () => deps.onCopy(target.srcUrl) }, { type: 'separator' })
+    items.push(
+      { label: t('page.copyImageAddress'), click: () => deps.onCopy(target.srcUrl) },
+      { type: 'separator' }
+    )
   }
 
   if (target.selectionText !== '') {
@@ -147,7 +150,10 @@ export function pageContextMenuTemplate(
     that arms a click-to-hide mode above the field they are typing in is a trap.
   */
   if (deps.blockerEnabled && !target.isEditable && isFilterable(target.pageUrl)) {
-    items.push({ type: 'separator' }, { label: t('page.blockElement'), click: () => deps.onBlockElement() })
+    items.push(
+      { type: 'separator' },
+      { label: t('page.blockElement'), click: () => deps.onBlockElement() }
+    )
   }
 
   items.push({ type: 'separator' }, { label: t('page.inspect'), click: () => deps.onInspect() })

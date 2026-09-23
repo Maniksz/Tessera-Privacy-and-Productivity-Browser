@@ -250,9 +250,10 @@ describe('previews', () => {
     for (const layout of LAYOUT_IDS) {
       const plain = dropZonesFor(layout, CONTENT).filter((zone) => zone.kind === 'tile')
       expect(plain.length, layout).toBe(TILE_COUNT[layout])
-      expect(plain.map((zone) => zone.tileIndex), layout).toEqual(
-        Array.from({ length: TILE_COUNT[layout] }, (_, index) => index)
-      )
+      expect(
+        plain.map((zone) => zone.tileIndex),
+        layout
+      ).toEqual(Array.from({ length: TILE_COUNT[layout] }, (_, index) => index))
     }
   })
 })

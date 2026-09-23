@@ -68,7 +68,9 @@ function sealingCodec(): DocumentCodec {
     decode: (bytes) => {
       const text = new TextDecoder().decode(bytes)
       if (!text.startsWith(marker)) throw new Error('not written by this codec')
-      return JSON.parse(Buffer.from(text.slice(marker.length), 'base64').toString('utf8')) as unknown
+      return JSON.parse(
+        Buffer.from(text.slice(marker.length), 'base64').toString('utf8')
+      ) as unknown
     }
   }
 }

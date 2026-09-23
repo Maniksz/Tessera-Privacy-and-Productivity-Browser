@@ -93,7 +93,9 @@ function macSigningArguments() {
     (process.env.CSC_NAME ?? '') !== '' ||
     (process.env.APPLE_TEAM_ID ?? '') !== ''
   if (signable) return []
-  console.log('No Apple signing credentials, so this mac build is unsigned: it installs by hand and')
+  console.log(
+    'No Apple signing credentials, so this mac build is unsigned: it installs by hand and'
+  )
   console.log('cannot update itself. Windows and Linux from the workflow are unaffected.\n')
   return ['--config.mac.notarize=false', '--config.mac.identity=null']
 }

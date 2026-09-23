@@ -108,7 +108,9 @@ function sealingCodec(): DocumentCodec {
     decode: (bytes) => {
       const text = new TextDecoder().decode(bytes)
       if (!text.startsWith(marker)) throw new Error('not written by this codec')
-      return JSON.parse(Buffer.from(text.slice(marker.length), 'base64').toString('utf8')) as unknown
+      return JSON.parse(
+        Buffer.from(text.slice(marker.length), 'base64').toString('utf8')
+      ) as unknown
     }
   }
 }
@@ -222,10 +224,11 @@ describe('retrieving an icon', () => {
 describe('refusing what came back', () => {
   it('refuses a page pretending to be an icon', async () => {
     const h = await harness()
-    h.answer(() =>
-      new Response('<!doctype html><title>Not found</title>', {
-        headers: { 'content-type': 'text/html; charset=utf-8' }
-      })
+    h.answer(
+      () =>
+        new Response('<!doctype html><title>Not found</title>', {
+          headers: { 'content-type': 'text/html; charset=utf-8' }
+        })
     )
 
     const outcome = await h.store.cacheFor('normal').ensure(PAGE, [ICON])
@@ -247,8 +250,8 @@ describe('refusing what came back', () => {
       per site in the tab strip.
     */
     const h = await harness()
-    h.answer(() =>
-      new Response(pngBytes(), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+    h.answer(
+      () => new Response(pngBytes(), { headers: { 'content-type': 'text/html; charset=utf-8' } })
     )
 
     expect(await h.store.cacheFor('normal').ensure(PAGE, [ICON])).toEqual({
@@ -262,10 +265,11 @@ describe('refusing what came back', () => {
     const h = await harness()
     // The header says PNG; the body is an error page. This is the case a header check
     // alone would store and then serve inside the browser's own interface.
-    h.answer(() =>
-      new Response(new TextEncoder().encode('<html>error</html>'), {
-        headers: { 'content-type': 'image/png' }
-      })
+    h.answer(
+      () =>
+        new Response(new TextEncoder().encode('<html>error</html>'), {
+          headers: { 'content-type': 'image/png' }
+        })
     )
 
     expect(await h.store.cacheFor('normal').ensure(PAGE, [ICON])).toEqual({
@@ -276,10 +280,11 @@ describe('refusing what came back', () => {
 
   it('refuses an SVG, which no signature can match', async () => {
     const h = await harness()
-    h.answer(() =>
-      new Response(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'), {
-        headers: { 'content-type': 'image/svg+xml' }
-      })
+    h.answer(
+      () =>
+        new Response(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"/>'), {
+          headers: { 'content-type': 'image/svg+xml' }
+        })
     )
 
     expect(await h.store.cacheFor('normal').ensure(PAGE, [ICON])).toEqual({
@@ -304,7 +309,9 @@ describe('refusing what came back', () => {
     // The body would pass on its own, so a `too-large` answer proves the claimed length
     // was checked first — which is the point of checking it at all.
     h.answer(() =>
-      imageResponse(pngBytes(), { headers: { 'content-type': 'image/png', 'content-length': '9999999' } })
+      imageResponse(pngBytes(), {
+        headers: { 'content-type': 'image/png', 'content-length': '9999999' }
+      })
     )
 
     expect(await h.store.cacheFor('normal').ensure(PAGE, [ICON])).toEqual({
@@ -435,9 +442,14 @@ describe('aging', () => {
     h.answer(() => imageResponse(pngBytes(80)))
     const outcome = await cache.ensure(PAGE, [ICON])
 
-    expect(outcome).toMatchObject({ kind: 'stored', entry: { byteLength: 80, fetchedAt: T0 + 1_000 } })
+    expect(outcome).toMatchObject({
+      kind: 'stored',
+      entry: { byteLength: 80, fetchedAt: T0 + 1_000 }
+    })
     expect(h.requests).toHaveLength(2)
-    expect(new Uint8Array(await readFile(iconPath(h.directory, 'example.com')))).toEqual(pngBytes(80))
+    expect(new Uint8Array(await readFile(iconPath(h.directory, 'example.com')))).toEqual(
+      pngBytes(80)
+    )
     // Still one entry: a refresh replaces, it does not accumulate.
     expect(h.store.list()).toHaveLength(1)
   })
@@ -508,9 +520,9 @@ describe('a private window', () => {
     const h = await harness()
     const cache = h.store.cacheFor('private')
 
-    expect(await cache.ensure('https://secret.example/', ['https://secret.example/favicon.ico'])).toEqual(
-      { kind: 'rejected', reason: 'private-mode' }
-    )
+    expect(
+      await cache.ensure('https://secret.example/', ['https://secret.example/favicon.ico'])
+    ).toEqual({ kind: 'rejected', reason: 'private-mode' })
     await cache.ensure('https://secret.example/page', ['https://secret.example/icon.png'])
 
     expect(h.requests).toEqual([])
@@ -870,8 +882,20 @@ describe('on disk', () => {
       JSON.stringify({
         version: 1,
         icons: [
-          { domain: 'example.com', contentType: 'image/png', byteLength: 10, fetchedAt: T0, sourceUrl: ICON },
-          { domain: 'example.com', contentType: 'image/gif', byteLength: 20, fetchedAt: T0 + 5, sourceUrl: ICON }
+          {
+            domain: 'example.com',
+            contentType: 'image/png',
+            byteLength: 10,
+            fetchedAt: T0,
+            sourceUrl: ICON
+          },
+          {
+            domain: 'example.com',
+            contentType: 'image/gif',
+            byteLength: 20,
+            fetchedAt: T0 + 5,
+            sourceUrl: ICON
+          }
         ]
       }),
       'utf8'
@@ -885,7 +909,13 @@ describe('on disk', () => {
     // The newer entry wins: it describes the bytes actually in the file, since both
     // entries name the same one.
     expect(store.list()).toEqual([
-      { domain: 'example.com', contentType: 'image/gif', byteLength: 20, fetchedAt: T0 + 5, sourceUrl: ICON }
+      {
+        domain: 'example.com',
+        contentType: 'image/gif',
+        byteLength: 20,
+        fetchedAt: T0 + 5,
+        sourceUrl: ICON
+      }
     ])
     expect(store.recoveredFromInvalidFile).toBe(false)
   })
@@ -900,7 +930,15 @@ describe('on disk', () => {
       join(directory, 'index.json'),
       JSON.stringify({
         version: 1,
-        icons: [{ domain: 'example.com', contentType: 'image/svg+xml', byteLength: 10, fetchedAt: T0, sourceUrl: ICON }]
+        icons: [
+          {
+            domain: 'example.com',
+            contentType: 'image/svg+xml',
+            byteLength: 10,
+            fetchedAt: T0,
+            sourceUrl: ICON
+          }
+        ]
       }),
       'utf8'
     )
@@ -929,10 +967,7 @@ describe('the retrieval seam', () => {
       The type system already refuses a missing fetcher; this refuses a default being
       added later.
     */
-    const source = await readFile(
-      join(process.cwd(), 'src/main/data/FaviconStore.ts'),
-      'utf8'
-    )
+    const source = await readFile(join(process.cwd(), 'src/main/data/FaviconStore.ts'), 'utf8')
     const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1')
 
     expect(code, 'the fetcher is optional').not.toMatch(/fetch\?\s*:/)

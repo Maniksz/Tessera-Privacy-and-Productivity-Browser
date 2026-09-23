@@ -86,7 +86,8 @@ export const DOWNLOAD_STATE_LABELS = {
 export type DownloadAction = 'open' | 'reveal' | 'pause' | 'resume' | 'cancel' | 'remove'
 
 /** Every key the text functions below ask a translator for. */
-export type DownloadTextKey = 'downloads.byteSize' | 'downloads.progress' | 'downloads.progressUnknown'
+export type DownloadTextKey =
+  'downloads.byteSize' | 'downloads.progress' | 'downloads.progressUnknown'
 
 /**
  * Whatever translator the calling surface holds, narrowed to the keys used here.

@@ -156,7 +156,7 @@ describe('blocker stage', () => {
      */
     const exempt = withSettings({ 'privacy.blockerOffForSites': ['example.com'] })
 
-    it('lets the page\'s own requests through', () => {
+    it("lets the page's own requests through", () => {
       const outcome = evaluateStages(
         context({
           url: 'https://example.com/ads/banner.js',

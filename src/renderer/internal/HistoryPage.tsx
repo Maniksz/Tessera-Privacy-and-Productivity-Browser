@@ -39,15 +39,12 @@ export function HistoryPage(): React.ReactNode {
     [locale]
   )
 
-  const refresh = useCallback(
-    async (text: string): Promise<void> => {
-      // Searching happens in the core, against every stored entry — filtering a page-sized slice
-      // here would silently search only what had already been fetched.
-      const found = await invoke('history:query', text === '' ? {} : { text })
-      setEntries(found)
-    },
-    []
-  )
+  const refresh = useCallback(async (text: string): Promise<void> => {
+    // Searching happens in the core, against every stored entry — filtering a page-sized slice
+    // here would silently search only what had already been fetched.
+    const found = await invoke('history:query', text === '' ? {} : { text })
+    setEntries(found)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -82,19 +79,16 @@ export function HistoryPage(): React.ReactNode {
     return () => clearTimeout(handle)
   }, [query, loaded, refresh])
 
-  const run = useCallback(
-    async (action: () => Promise<void>): Promise<void> => {
-      try {
-        setNotice(null)
-        await action()
-      } catch (cause) {
-        // A refused call must be visible. Silently leaving the list unchanged is how a user learns
-        // not to trust the delete button.
-        setNotice(cause instanceof Error ? cause.message : String(cause))
-      }
-    },
-    []
-  )
+  const run = useCallback(async (action: () => Promise<void>): Promise<void> => {
+    try {
+      setNotice(null)
+      await action()
+    } catch (cause) {
+      // A refused call must be visible. Silently leaving the list unchanged is how a user learns
+      // not to trust the delete button.
+      setNotice(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [])
 
   const grouped = useMemo(() => {
     const now = new Date()
@@ -178,7 +172,10 @@ export function HistoryPage(): React.ReactNode {
           <section className="history__group" key={group}>
             <h2
               className="history__groupTitle"
-              aria-label={t('history.groupLabel', { group: t(GROUP_LABELS[group]), count: list.length })}
+              aria-label={t('history.groupLabel', {
+                group: t(GROUP_LABELS[group]),
+                count: list.length
+              })}
             >
               {t(GROUP_LABELS[group])}
             </h2>
@@ -197,7 +194,11 @@ export function HistoryPage(): React.ReactNode {
                       type="button"
                       className="history__open"
                       aria-label={t('history.open', { title })}
-                      onClick={() => void run(async () => void (await invoke('history:open', { url: entry.url })))}
+                      onClick={() =>
+                        void run(
+                          async () => void (await invoke('history:open', { url: entry.url }))
+                        )
+                      }
                     >
                       <span className="history__entryTitle">{title}</span>
                       {showAddress && <span className="history__entryUrl">{readable}</span>}
