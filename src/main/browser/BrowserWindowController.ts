@@ -23,6 +23,8 @@ import { nextZoomPercent } from '@shared/gestures/zoom.js'
 import { decideZoomTarget } from '@shared/gestures/wheel-zoom.js'
 import type { PaneZoom } from '@shared/zoom/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
+import type { PermissionHost } from '../permissions/PermissionArbiter.js'
+import type { PermissionTabChange } from '../permissions/model.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SessionRecorder } from '@shared/session/model.js'
 import type { SplitSnapshotForPersistence } from './SplitController.js'
@@ -103,7 +105,7 @@ function preventDefaultOf(event: unknown): void {
   cancellable.preventDefault?.()
 }
 
-export class BrowserWindowController {
+export class BrowserWindowController implements PermissionHost {
   readonly window: BrowserWindow
   readonly split: SplitController
   readonly privateMode: boolean
@@ -169,6 +171,21 @@ export class BrowserWindowController {
   })
   #broadcastScheduled = false
   #disposers: Array<() => void> = []
+  /**
+   * Whoever waits on this window's tabs to answer a permission question: the arbiter, while it has
+   * something queued here. See `onPermissionTabChange`.
+   */
+  readonly #permissionListeners = new Set<(change: PermissionTabChange) => void>()
+  /**
+   * What the permission listeners were last told about each tab.
+   *
+   * The `webContents` id is read once, when the tab is made, because it is needed again when the tab
+   * closes — and a view that is being torn down is the one thing whose id may no longer be readable.
+   * A `WeakMap`, so a closed tab takes its entry with it.
+   */
+  readonly #permissionTabs = new WeakMap<Tab, { readonly webContentsId: number; url: string }>()
+  /** The tab in front as the permission listeners last heard it; see `#reportActiveTab`. */
+  #reportedActiveWebContentsId: number | null = null
 
   private readonly getSettings: () => SettingsSnapshot
   private readonly options: WindowControllerOptions
@@ -412,6 +429,13 @@ export class BrowserWindowController {
     })
 
     this.window.on('closed', () => {
+      /*
+        Anything still waiting on a tab here is refused before the listeners go. The overlay reports
+        only the prompt it shows, so without this a question waiting in a background tab would be left
+        pending on a window that no longer exists.
+      */
+      this.#tellPermissionListeners({ kind: 'gone' })
+      this.#permissionListeners.clear()
       for (const dispose of this.#disposers) dispose()
       this.#disposers = []
       // A timer outliving the window it would act on is the same class of leak the disposers above
@@ -465,7 +489,10 @@ export class BrowserWindowController {
       ...(options.ephemeral === undefined ? {} : { ephemeral: options.ephemeral }),
       ...(options.zoomPercent === undefined ? {} : { zoomPercent: options.zoomPercent }),
       callbacks: {
-        onStateChanged: () => this.#scheduleBroadcast(),
+        onStateChanged: (source) => {
+          this.#reportNavigation(source)
+          this.#scheduleBroadcast()
+        },
         /*
           A tab a page asked for, which is not the same as a tab the user asked for.
 
@@ -554,6 +581,7 @@ export class BrowserWindowController {
     })
 
     this.#tabs.set(tab.id, tab)
+    this.#permissionTabs.set(tab, { webContentsId: tab.view.webContents.id, url: tab.currentUrl })
     this.#tabOrder.push(tab.id)
     // Index 0 puts the tab view at the bottom of the child stack, which keeps the overlay
     // layer above every tab no matter when each was added. Appending instead would put the
@@ -613,6 +641,11 @@ export class BrowserWindowController {
     this.#tabs.delete(tabId)
     this.window.contentView.removeChildView(tab.view)
     tab.destroy()
+    // After the tab has left `#tabs` and the split, so the arbiter, reacting, cannot find it in front.
+    const permissionTab = this.#permissionTabs.get(tab)
+    if (permissionTab !== undefined) {
+      this.#tellPermissionListeners({ kind: 'closed', webContentsId: permissionTab.webContentsId })
+    }
 
     this.#seams.occupancy.afterTabClosed(vacatedTile)
 
@@ -743,6 +776,83 @@ export class BrowserWindowController {
 
   resolveTab(tabId?: string): Tab | undefined {
     return tabId === undefined ? this.activeTab() : this.#tabs.get(tabId)
+  }
+
+  // --- permission questions --------------------------------------------------
+
+  /**
+   * `PermissionHost`: the tab a permission dialogue may appear over, as its `webContents` id.
+   *
+   * The active tile's tab and no other. In a split layout the other tiles are visible too, but the
+   * active one is where the user's attention and keyboard are, and clicking into another tile makes
+   * that one active — so a question from a visible tile comes up the moment the user turns to it.
+   */
+  activeTabWebContentsId(): number | null {
+    const tab = this.activeTab()
+    if (tab === undefined) return null
+    return this.#permissionTabs.get(tab)?.webContentsId ?? null
+  }
+
+  /**
+   * `PermissionHost`: tells a listener when the tab in front may have changed, when a tab commits a
+   * new address or closes, and when the window goes. Returns the way off.
+   *
+   * A set with its own unsubscribe rather than `#on`: the arbiter subscribes whenever a queue opens
+   * here and unsubscribes whenever it empties, many times over a window's life, and `#disposers` only
+   * ever grows. The window's own teardown clears the set as well, in `#wireLifecycle`.
+   */
+  onPermissionTabChange(listener: (change: PermissionTabChange) => void): () => void {
+    this.#permissionListeners.add(listener)
+    return () => {
+      this.#permissionListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Guarded per listener, as `notifyOverlayVacancy` is: this runs inside `closeTab` and the window's
+   * teardown, and a listener that threw must not leave a tab half closed.
+   */
+  #tellPermissionListeners(change: PermissionTabChange): void {
+    for (const listener of [...this.#permissionListeners]) {
+      try {
+        listener(change)
+      } catch (error) {
+        console.error('[permissions] a tab listener threw:', error)
+      }
+    }
+  }
+
+  /**
+   * A tab's committed address, reported when it changes and not otherwise.
+   *
+   * `onStateChanged` fires for a title, a favicon or a load starting as well, and `currentUrl` moves
+   * only on a commit — so comparing with what was last reported turns the one callback into a
+   * navigation event without reaching into `Tab`'s own subscriptions.
+   */
+  #reportNavigation(tab: Tab): void {
+    const reported = this.#permissionTabs.get(tab)
+    if (reported === undefined || reported.url === tab.currentUrl) return
+    reported.url = tab.currentUrl
+    this.#tellPermissionListeners({
+      kind: 'navigated',
+      webContentsId: reported.webContentsId,
+      url: tab.currentUrl
+    })
+  }
+
+  /**
+   * Tells the listeners the tab in front changed, once per change.
+   *
+   * From the broadcast round rather than from every place that moves the active tile — tab
+   * activation, tile focus, layouts, closing, groups folding — because that round is where every one
+   * of them already arrives, for the same reason the tab strip is told there: the list of causes has
+   * grown before and hooking each is how one gets missed.
+   */
+  #reportActiveTab(): void {
+    const active = this.activeTabWebContentsId()
+    if (active === this.#reportedActiveWebContentsId) return
+    this.#reportedActiveWebContentsId = active
+    this.#tellPermissionListeners({ kind: 'activated' })
   }
 
   // --- navigation ----------------------------------------------------------
@@ -1246,6 +1356,8 @@ export class BrowserWindowController {
       */
       const tabs = this.#seams.groups.displayOrder().map((id) => this.#tabs.get(id)).filter((tab): tab is Tab => tab !== undefined).map((tab) => tab.toState())
       this.emit('tabs:changed', { tabs, activeTabId: this.split.activeTabId() })
+      // The same tick the strip learns which tab is active, a waiting permission question does too.
+      this.#reportActiveTab()
       /*
         An open tile bar reads the tab again, from the same tick the strip does.
 

@@ -60,7 +60,11 @@ export interface DownloadSubscriber {
  * which kind of window a session serves, for the memory a check reads.
  */
 export interface PermissionDecider {
-  ask(request: PermissionRequestDetails, host: PermissionHost | null): Promise<boolean>
+  ask(
+    request: PermissionRequestDetails,
+    host: PermissionHost | null,
+    webContentsId: number
+  ): Promise<boolean>
   check(check: PermissionCheck, mode: BrowsingMode): boolean
 }
 
@@ -318,9 +322,15 @@ export class WindowRegistry {
       /*
         The window a request is shown in is the one owning the tab that asked. `null` when none does —
         a view already detached — and the arbiter then lets the settings answer and asks nobody.
+
+        The tab's id travels with it, because the dialogue appears only while that tab is in front.
       */
       requestFromUser: (request, webContents) =>
-        this.#deps.permissions.ask(request, this.controllerForWebContents(webContents.id) ?? null),
+        this.#deps.permissions.ask(
+          request,
+          this.controllerForWebContents(webContents.id) ?? null,
+          webContents.id
+        ),
       /*
         Bound to the mode here, once, like the download subscription below: a check can arrive with no
         `webContents` at all, and this is the only place that knows which kind of window the session
