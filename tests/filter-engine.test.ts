@@ -165,6 +165,60 @@ describe('FilterEngine cosmetic queries', () => {
   })
 })
 
+describe('FilterEngine procedural queries', () => {
+  const LIST = 'shop.example##.teaser:has-text(Anzeige)'
+  const USER = 'shop.example##.promo:has-text(Sponsored)'
+
+  function engineWithUserRules(settings: SettingsSnapshot = defaultSettings()): FilterEngine {
+    return new FilterEngine({ lists: [LIST], userRules: USER, getSettings: () => settings })
+  }
+
+  it('counts the rules from the lists and the user’s own together', () => {
+    expect(engineWithUserRules().proceduralRuleCount).toBe(2)
+  })
+
+  it('answers with the lists’ selectors first and the user’s last', () => {
+    // Last, so the rule the user wrote is the one they find when they ask why a page still shows something.
+    const selectors = engineWithUserRules().proceduralSelectorsFor('https://www.shop.example/')
+    expect(selectors.map((selector) => selector.css)).toEqual(['.teaser', '.promo'])
+  })
+
+  it('honours privacy.cosmeticFiltering, because a procedural rule hides like any cosmetic one', () => {
+    // No switch of its own: someone who turned cosmetic filtering off must not still have script
+    // rearranging their pages.
+    const off = engineWithUserRules(withSettings({ 'privacy.cosmeticFiltering': false }))
+    expect(off.proceduralSelectorsFor('https://www.shop.example/')).toEqual([])
+  })
+
+  it('answers with nothing for a document that has no host', () => {
+    expect(engineWithUserRules().proceduralSelectorsFor('about:blank')).toEqual([])
+  })
+})
+
+describe('FilterEngine scriptlet queries', () => {
+  const LIST = 'shop.example##+js(set, canRunAds, true)'
+
+  it('answers with the scriptlets the lists give the document’s host', () => {
+    const engine = engineFor([LIST])
+    expect(engine.scriptletsFor('https://www.shop.example/')).toEqual([
+      { name: 'set-constant', args: ['canRunAds', 'true'] }
+    ])
+  })
+
+  it('honours privacy.scriptletInjection, and not privacy.cosmeticFiltering', () => {
+    // Different powers: agreeing to have a layout altered is not agreeing to have code run in the page.
+    const off = engineFor([LIST], withSettings({ 'privacy.scriptletInjection': false }))
+    expect(off.scriptletsFor('https://www.shop.example/')).toEqual([])
+
+    const cosmeticOff = engineFor([LIST], withSettings({ 'privacy.cosmeticFiltering': false }))
+    expect(cosmeticOff.scriptletsFor('https://www.shop.example/')).toHaveLength(1)
+  })
+
+  it('answers with nothing for a document that has no host', () => {
+    expect(engineFor([LIST]).scriptletsFor('about:blank')).toEqual([])
+  })
+})
+
 describe('FilterEngine.replaceLists', () => {
   it('recompiles in place, so the pipeline’s single listener stays installed', () => {
     // `privacy.blockerLists` applies live. Reinstalling the pipeline to pick up a

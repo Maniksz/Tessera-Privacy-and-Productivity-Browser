@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseFilterList } from '@shared/filters/parse.js'
 import { buildCosmeticIndex, cosmeticCss, cosmeticSelectorsFor } from '@shared/filters/cosmetic.js'
 import { accountedLines } from '@shared/filters/model.js'
+import { selectorProblem } from '@shared/filters/selector-safety.js'
 
 /**
  * What happens to a cosmetic line this engine cannot honour, and what it must not cost.
@@ -311,6 +312,46 @@ describe('one unreadable selector costs itself and not the batch', () => {
         selector
       )
     }
+  })
+})
+
+describe('what the check refuses, and under which name', () => {
+  /**
+   * Asked of `selectorProblem` directly rather than through the parser, because the parser is only one of
+   * its callers. User rules and picked elements reach `cosmeticCss` without passing through `parse.ts`, so
+   * the refusals below have to hold for text no list ever contained.
+   */
+  it('refuses nothing at all', () => {
+    // An empty selector in a stylesheet is `{ display: none !important; }` with nothing in front of it,
+    // which is invalid CSS and would take the batch down with it.
+    expect(selectorProblem('')).toBe('unsupported-selector')
+    expect(selectorProblem('   ')).toBe('unsupported-selector')
+  })
+
+  it('refuses a selector whose brackets do not pair up', () => {
+    // Unclosed, and closed by the wrong partner. Both are text no CSS parser can read, and the scrubbing
+    // that follows relies on this having been established first.
+    expect(selectorProblem('.a[data-x')).toBe('unsupported-selector')
+    expect(selectorProblem('.a:not(.b]')).toBe('unsupported-selector')
+  })
+
+  it('refuses a pseudo-class it does not know, with or without an argument', () => {
+    // An allowlist, so an unknown name is refused rather than trusted. A typo in a list is the likely
+    // cause, and one unreadable member invalidates every selector it is joined with.
+    expect(selectorProblem('.a:shiny(1)')).toBe('unsupported-selector')
+    expect(selectorProblem('.a:shiny')).toBe('unsupported-selector')
+  })
+
+  it('names a procedural operator written without its parentheses as one', () => {
+    expect(selectorProblem('.a:remove')).toBe('procedural-cosmetic')
+  })
+
+  it('refuses the characters that could end the selector or start something else', () => {
+    // `;` and `@` belong to declarations and at-rules, and a comment marker could swallow the rule the
+    // selector is written into. None of them has a place in a selector list.
+    expect(selectorProblem('.a;.b')).toBe('unsupported-selector')
+    expect(selectorProblem('.a @media')).toBe('unsupported-selector')
+    expect(selectorProblem('.a /* x */')).toBe('unsupported-selector')
   })
 })
 

@@ -284,6 +284,10 @@ describe('counted rather than swallowed', () => {
   it('counts an entity domain, which needs a public-suffix expansion', () => {
     expect(reasonsFor('||cacheserve.com^$domain=example.*')).toEqual({ 'domain-entity': 1 })
     expect(reasonsFor('crazygames.*##[class*="MpuContainer_"]')).toEqual({ 'domain-entity': 1 })
+    // The scriptlet and procedural parsers read their host lists on their own, so each has to refuse
+    // an entity as well — or the one syntax that runs code would be the one that accepted `example.*`.
+    expect(reasonsFor('crazygames.*##+js(set, canRunAds, true)')).toEqual({ 'domain-entity': 1 })
+    expect(reasonsFor('crazygames.*##.box:has-text(Anzeige)')).toEqual({ 'domain-entity': 1 })
   })
 
   it('counts a rule with no pattern left to match on', () => {
