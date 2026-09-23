@@ -104,22 +104,49 @@ export function DownloadsPanelSurface({
   const focusedOnce = useRef(false)
   const [rect, setRect] = useState<Rect | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  /**
+   * Whether the layer still shows this panel, for an answer that arrives after it was taken down.
+   *
+   * The panel is dismissed without being asked — Escape, a click outside, the window losing focus — so an
+   * action can still be waiting on the core when it goes. What that answer would do next must then not
+   * happen: asking for fresh rows is presenting the panel, and would put back, and give the keyboard to,
+   * the panel the user has just closed. `useDownloadSummary`'s `cancelled` and `useShortcutContext`'s
+   * `live` guard the same way; this one is a ref because the answers land in handlers, not an effect.
+   */
+  const live = useRef(true)
   const numberFormat = useMemo(() => downloadNumberFormat(locale), [locale])
 
   // The core sends at most this many; a longer list is not this surface's to lay out.
   const rows = presentation.downloads.slice(0, DOWNLOADS_PANEL_ROWS)
 
+  useEffect(() => {
+    // Set here as well as initially, so a remount under Strict Mode's double effect is live again.
+    live.current = true
+    return () => {
+      live.current = false
+    }
+  }, [])
+
   /**
-   * Measure, then place — on every presentation, because the height follows the rows.
+   * Measure, then place — on every presentation and every notice, because the height follows the rows.
    *
    * `LayoutMenuSurface`'s approach: natural size first, then `anchorSurface` against the button's rect.
    * Only the very first pass is hidden; a later one keeps the panel where it was until the new place is
    * known, so a progress tick never blinks it.
+   *
+   * Natural means without the cap the last placement left on the element. Measured with it, the box can
+   * be no taller than it was, `anchorSurface` keeps the smaller of that and the room there is, and a row
+   * or a notice added while the panel is open would go into a scroll inside it rather than make it grow.
+   * The cap is lifted only for the reading and put straight back — React will not restore it itself when
+   * the place comes out the same — and all of it happens before paint, so nothing is drawn uncapped.
    */
   useLayoutEffect(() => {
     const element = panelRef.current
     if (element === null) return
+    const cap = element.style.maxHeight
+    element.style.maxHeight = ''
     const natural = element.getBoundingClientRect()
+    element.style.maxHeight = cap
     const placed = anchorSurface(
       presentation.anchor,
       { width: natural.width, height: natural.height },
@@ -133,7 +160,7 @@ export function DownloadsPanelSurface({
         ? previous
         : placed.rect
     )
-  }, [presentation])
+  }, [presentation, notice])
 
   // The first placement, and only that one, puts the keyboard on the newest row.
   useEffect(() => {
@@ -217,12 +244,13 @@ export function DownloadsPanelSurface({
 
   /*
     One place for what every action shares with the page: the notice is cleared as the next action starts,
-    and an error becomes the notice rather than a promise nobody handles.
+    and an error becomes the notice rather than a promise nobody handles — while there is still a panel
+    to show it in (`live`).
   */
   const run = (action: () => Promise<void>): void => {
     setNotice(null)
     action().catch((cause: unknown) => {
-      setNotice(cause instanceof Error ? cause.message : String(cause))
+      if (live.current) setNotice(cause instanceof Error ? cause.message : String(cause))
     })
   }
 
@@ -241,7 +269,8 @@ export function DownloadsPanelSurface({
             action === 'open'
               ? (await invoke('downloads:open', { id })).opened
               : (await invoke('downloads:reveal', { id })).revealed
-          if (found) return
+          // Closed meanwhile, the panel stays closed: fresh rows would present it again (`live`).
+          if (found || !live.current) return
           setNotice(t('downloads.openFailed'))
           await askForFreshRows()
           return
@@ -252,7 +281,7 @@ export function DownloadsPanelSurface({
         case 'resume': {
           const { changed } = await invoke('downloads:resume', { id })
           // A resume the server cannot serve would restart the file; the core refuses, and the panel says so.
-          if (!changed) setNotice(t('downloads.cannotResume'))
+          if (!changed && live.current) setNotice(t('downloads.cannotResume'))
           return
         }
         case 'cancel':

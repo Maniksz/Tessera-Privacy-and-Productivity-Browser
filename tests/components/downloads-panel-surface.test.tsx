@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DownloadsPanelSurface } from '@renderer/surfaces/DownloadsPanelSurface.js'
 import { OverlaySurface } from '@renderer/surfaces/OverlaySurface.js'
 import type { DownloadEntry } from '@shared/downloads/model.js'
@@ -33,19 +33,28 @@ interface Answers {
   opened?: boolean
   revealed?: boolean
   resumed?: boolean
+  /** Holds `downloads:open` unanswered until the test calls `answerOpen`, for what happens meanwhile. */
+  holdOpen?: boolean
 }
 
 function installBridge(answers: Answers = {}): {
   calls: Call[]
   present: (next: OverlayPresentation | null) => void
+  answerOpen: (opened: boolean) => void
 } {
   const calls: Call[] = []
+  let answerOpen: ((opened: boolean) => void) | null = null
   let deliver: ((payload: { presentation: OverlayPresentation | null }) => void) | null = null
   const bridge = {
     invoke: (channel: string, payload?: unknown): Promise<unknown> => {
       calls.push({ channel, payload })
       if (channel === 'window:getState') return Promise.resolve({ platform: 'linux' })
       if (channel === 'settings:getAll') return Promise.resolve({ 'advanced.customShortcuts': {} })
+      if (channel === 'downloads:open' && answers.holdOpen === true) {
+        return new Promise((resolve) => {
+          answerOpen = (opened) => resolve({ opened })
+        })
+      }
       if (channel === 'downloads:open') return Promise.resolve({ opened: answers.opened ?? true })
       if (channel === 'downloads:reveal')
         return Promise.resolve({ revealed: answers.revealed ?? true })
@@ -70,6 +79,10 @@ function installBridge(answers: Answers = {}): {
     present: (next) => {
       if (deliver === null) throw new Error('the layer never subscribed')
       deliver({ presentation: next })
+    },
+    answerOpen: (opened) => {
+      if (answerOpen === null) throw new Error('nothing asked to open a file')
+      answerOpen(opened)
     }
   }
 }
@@ -116,7 +129,9 @@ function renderPanel(downloads: DownloadEntry[], answers: Answers = {}) {
     /** The core re-presenting the panel with fresh rows: same surface, new props. */
     update: (next: DownloadEntry[]): void => {
       view.rerender(<DownloadsPanelSurface presentation={panel(next)} />)
-    }
+    },
+    /** The layer taking the panel down: Escape, a click outside, the window losing focus. */
+    unmount: view.unmount
   }
 }
 
@@ -297,6 +312,24 @@ describe('what each row offers (R6)', () => {
     })
   })
 
+  it('does not ask for itself again when it was closed while an open was still being answered', async () => {
+    const { calls, answerOpen, unmount } = renderPanel(
+      [download('done', { state: 'completed', onDisk: true })],
+      { holdOpen: true }
+    )
+    fireEvent.click(screen.getByRole('button', { name: name('downloads.open', 'done.zip') }))
+    unmount()
+
+    answerOpen(false)
+    await act(async () => {})
+
+    /*
+      Asking for fresh rows is presenting the panel: after a dismissal that would put back, and give the
+      keyboard to, the panel the user has just closed.
+    */
+    expect(calls.filter(({ channel }) => channel === 'overlay:present')).toEqual([])
+  })
+
   it('says when a paused download cannot be resumed, as the page does', async () => {
     renderPanel([download('held', { state: 'paused' })], { resumed: false })
     fireEvent.click(screen.getByRole('button', { name: name('downloads.resume', 'held.zip') }))
@@ -372,6 +405,18 @@ describe('where the keyboard is (R8, KTD8)', () => {
     expect(document.activeElement).toBe(theRow('a.zip'))
   })
 
+  it('moves to the row now in the last place when the focused last row is pushed off the end', () => {
+    const six = ['f', 'e', 'd', 'c', 'b', 'a'].map((id) => download(id))
+    const { update } = renderPanel(six)
+    theRow('a.zip').focus()
+
+    // A seventh arrives on top; the panel draws six, so the oldest — the focused one — is no longer drawn.
+    update([download('g'), ...six])
+
+    expect(screen.queryByText('a.zip')).toBeNull()
+    expect(document.activeElement).toBe(theRow('b.zip'))
+  })
+
   it('wraps from the last element to the first on Tab, and back on Shift+Tab', () => {
     renderPanel([download('b'), download('a')])
     const all = screen.getByRole('button', { name: t('menu.tools.downloads') })
@@ -388,6 +433,64 @@ describe('where the keyboard is (R8, KTD8)', () => {
     expect(document.activeElement).toBe(theRow('a.zip'))
     fireEvent.keyDown(theRow('a.zip'), { key: 'ArrowUp' })
     expect(document.activeElement).toBe(theRow('b.zip'))
+  })
+})
+
+describe('how tall it is', () => {
+  /*
+    jsdom lays nothing out, so the panel's box is modelled here: as tall as its rows and its notice need,
+    unless an inline max-height holds it shorter — as a browser would draw it, with the rest scrolled.
+  */
+  const ROW_HEIGHT = 50
+  const NOTICE_HEIGHT = 30
+  const CHROME_HEIGHT = 40
+
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      if (!this.classList.contains('downloads-panel')) return new DOMRect()
+      const natural =
+        CHROME_HEIGHT +
+        this.querySelectorAll('[data-download-id]').length * ROW_HEIGHT +
+        (this.querySelector('.downloads-panel__notice') === null ? 0 : NOTICE_HEIGHT)
+      const cap = Number.parseFloat(this.style.maxHeight)
+      return new DOMRect(0, 0, 340, Number.isNaN(cap) ? natural : Math.min(natural, cap))
+    })
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const heightOf = (): number => {
+    const dialog = screen.getByRole('dialog', { name: t('downloads.title') })
+    return Number.parseFloat(dialog.style.maxHeight)
+  }
+
+  it('grows when a download arrives while it is open', () => {
+    const { update } = renderPanel([download('a')])
+    expect(heightOf()).toBe(CHROME_HEIGHT + ROW_HEIGHT)
+
+    update([download('c'), download('b'), download('a')])
+
+    expect(heightOf()).toBe(CHROME_HEIGHT + 3 * ROW_HEIGHT)
+  })
+
+  it('grows when a notice appears', async () => {
+    renderPanel([download('done', { state: 'completed', onDisk: true })], { opened: false })
+    expect(heightOf()).toBe(CHROME_HEIGHT + ROW_HEIGHT)
+
+    fireEvent.click(screen.getByRole('button', { name: t('downloads.open', { name: 'done.zip' }) }))
+    await screen.findByText(t('downloads.openFailed'))
+
+    expect(heightOf()).toBe(CHROME_HEIGHT + ROW_HEIGHT + NOTICE_HEIGHT)
+  })
+
+  it('still shrinks when rows go', () => {
+    const { update } = renderPanel([download('c'), download('b'), download('a')])
+    update([download('a')])
+    expect(heightOf()).toBe(CHROME_HEIGHT + ROW_HEIGHT)
   })
 })
 
