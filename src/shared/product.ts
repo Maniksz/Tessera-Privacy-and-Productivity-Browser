@@ -62,6 +62,20 @@ export function internalUrl(page: string, query?: Readonly<Record<string, string
 }
 
 /**
+ * One query parameter of an address, or `null` when the address does not parse or lacks it.
+ *
+ * The reading counterpart of `internalUrl`, for the internal image routes that take their key and
+ * their token from the query.
+ */
+export function queryParamOf(url: string, name: string): string | null {
+  try {
+    return new URL(url).searchParams.get(name)
+  } catch {
+    return null
+  }
+}
+
+/**
  * ## What is deliberately not here
  *
  * The name of the bridge object on `window` — `window.tessera` and `window.tesseraInternal`.

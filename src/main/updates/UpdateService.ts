@@ -1,6 +1,7 @@
-import { translate, type Locale, type MessageKey } from '@shared/i18n/catalog.js'
+import type { Locale } from '@shared/i18n/catalog.js'
 import type { Platform } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
+import { updateText, type UpdateTextKey } from './update-text.js'
 import { isUpgrade, type UpdateChannel } from './version.js'
 
 /**
@@ -105,21 +106,53 @@ export const UPDATE_REPOSITORY = {
   repo: 'Tessera-Privacy-and-Productivity-Browser'
 } as const
 
+/** Per platform, whether an update may replace this program in place. */
+export type InPlaceUpdates = Readonly<Record<Platform, boolean>>
+
 /**
- * Whether a macOS build of this application carries an Apple Developer ID signature.
+ * Which platforms may download and install an update themselves. **None, today.**
  *
- * **`false`, and this one line is the whole difference between a mac user being offered a download
- * and being sent to a web page.** Squirrel.Mac — which is what an in-place update on macOS goes
- * through, underneath `electron-updater` — refuses to replace an application whose code signature it
- * cannot verify. Offering the download anyway would produce a progress bar, a restart, and the same
- * old version afterwards, with the failure reported by a framework rather than by us.
+ * The rule is that an update nobody can verify does not install itself: the person is sent to the
+ * release page and installs it by hand, with their operating system's own warning in front of them.
+ * No build of this browser is signed yet, and each platform turns that into a different failure,
+ * which is why this is a table rather than one switch — each row is flipped by its own change, and
+ * nothing else moves when it is, because `updateDelivery` already routes on it.
  *
- * What flips it, exactly: `.github/workflows/release.yml` builds macOS with
- * `--config.mac.identity=null --config.mac.notarize=false` because there is no Developer ID yet.
- * When a certificate exists those two overrides come out of the workflow, and this constant becomes
- * `true` in the same change. Nothing else moves — `updateDelivery` already routes on it.
+ * `architecture.test.ts` ties the macOS and Windows rows to the release pipeline, so neither can be
+ * set to `true` while the build it describes is still unsigned.
  */
-export const MAC_BUILD_IS_SIGNED = false
+export const IN_PLACE_UPDATES: InPlaceUpdates = {
+  /**
+   * Squirrel.Mac — what an in-place update on macOS goes through, underneath `electron-updater` —
+   * refuses to replace an application whose code signature it cannot verify. A download offered here
+   * would produce a progress bar, a restart, and the same old version.
+   *
+   * Flipped by an Apple Developer ID: `.github/workflows/release.yml` (and `scripts/release.mjs`)
+   * build with `--config.mac.identity=null --config.mac.notarize=false` until one exists. When those
+   * overrides come out, this becomes `true` in the same change.
+   */
+  darwin: false,
+  /**
+   * `NsisUpdater` would not refuse, which is worse: it checks the installer's Authenticode signature
+   * against `publisherName` from `app-update.yml`, and without one it skips the check and installs
+   * whatever the release holds.
+   *
+   * Flipped by two things together: a code-signing certificate in the environment of the publish job
+   * (`WIN_CSC_LINK` or `CSC_LINK`), and `win.publisherName` in `electron-builder.yml` naming the
+   * subject of that certificate. The first alone signs the installer; only the second makes the
+   * updater look.
+   */
+  win32: false,
+  /**
+   * The AppImage updater checks no signature at all — only the checksum in `latest-linux.yml`, which
+   * comes from the same release as the file it describes, so it proves the download is intact and
+   * not who made it.
+   *
+   * No configuration flips this. It takes a signature check of our own, over something signed with a
+   * key the release pipeline does not hold, and until that exists the row stays `false`.
+   */
+  linux: false
+}
 
 /**
  * How long after launch the first automatic check happens.
@@ -168,14 +201,14 @@ export type UpdateDelivery = 'in-place' | 'release-page'
 /**
  * Which of the two routes this build can offer.
  *
- * The only reason it is not simply "in-place" is the macOS signature; see `MAC_BUILD_IS_SIGNED`.
+ * The release page unless the platform's row says otherwise; see `IN_PLACE_UPDATES` for what each
+ * row waits for.
  */
 export function updateDelivery(input: {
   readonly platform: Platform
-  readonly macBuildIsSigned: boolean
+  readonly inPlaceUpdates: InPlaceUpdates
 }): UpdateDelivery {
-  if (input.platform === 'darwin' && !input.macBuildIsSigned) return 'release-page'
-  return 'in-place'
+  return input.inPlaceUpdates[input.platform] ? 'in-place' : 'release-page'
 }
 
 /**
@@ -309,8 +342,11 @@ export interface UpdateServiceOptions {
   readonly platform: Platform
   readonly showPrompt: ShowUpdatePrompt
   readonly openReleasePage: (url: string) => void
-  /** Overridden in tests; defaults to `MAC_BUILD_IS_SIGNED`. */
-  readonly macBuildIsSigned?: boolean
+  /**
+   * Overridden in tests; defaults to `IN_PLACE_UPDATES`. The adapter must not pass it — the fitness
+   * functions check that table, and a second one here would be invisible to them.
+   */
+  readonly inPlaceUpdates?: InPlaceUpdates
   /** `0` installs no timer, and a test then calls `checkAutomatically()` itself. */
   readonly firstCheckDelayMs?: number
   readonly checkIntervalMs?: number
@@ -496,7 +532,7 @@ export class UpdateService {
     const { showPrompt, openReleasePage, platform } = this.#options
     const delivery = updateDelivery({
       platform,
-      macBuildIsSigned: this.#options.macBuildIsSigned ?? MAC_BUILD_IS_SIGNED
+      inPlaceUpdates: this.#options.inPlaceUpdates ?? IN_PLACE_UPDATES
     })
 
     const answer = await showPrompt(
@@ -504,7 +540,8 @@ export class UpdateService {
         locale: this.#options.locale(),
         current: input.current,
         version: input.version,
-        delivery
+        delivery,
+        platform
       })
     )
 
@@ -512,7 +549,10 @@ export class UpdateService {
       openReleasePage(releasePageUrl(input.version))
       return { kind: 'sent-to-release-page', version: input.version }
     }
-    if (answer !== 'download') {
+    // The route is checked again rather than trusted to the buttons that were drawn: which buttons a
+    // prompt shows is presentation, and "nothing unverified installs itself" is not a rule to leave
+    // to presentation. An answer the offer did not carry changes nothing.
+    if (answer !== 'download' || delivery !== 'in-place') {
       this.#alreadyOffered.add(input.version)
       return { kind: 'declined', version: input.version }
     }
@@ -588,31 +628,44 @@ export type NoticeKind = Extract<
  * request to trust the dialog. The accepting button is first — the platform draws it as the default
  * — and `cancelIndex` points at the one that changes nothing, so Escape and a stray Return both
  * decline.
+ *
+ * On the release-page route the detail says why, in the terms of the person's own platform — and
+ * on Windows it also says what they will meet when they install by hand, because an unsigned
+ * installer is what SmartScreen stops, and a warning nobody mentioned reads as the download being
+ * malicious.
  */
 export function offerPrompt(input: {
   readonly locale: Locale
   readonly current: string
   readonly version: string
   readonly delivery: UpdateDelivery
+  readonly platform: Platform
 }): UpdatePrompt {
-  const t = (key: MessageKey, params?: Readonly<Record<string, string>>): string =>
-    translate(input.locale, key, params)
+  const t = (key: UpdateTextKey, params?: Readonly<Record<string, string>>): string =>
+    updateText(input.locale, key, params)
 
   const accept: UpdatePromptButton =
     input.delivery === 'in-place'
-      ? { label: t('updates.download'), answer: 'download' }
-      : { label: t('updates.openReleasePage'), answer: 'release-page' }
+      ? { label: t('download'), answer: 'download' }
+      : { label: t('openReleasePage'), answer: 'release-page' }
 
   return {
     kind: 'offer',
     severity: 'info',
-    title: t('updates.offerTitle'),
-    message: t('updates.offerMessage', { version: input.version, current: input.current }),
+    title: t('offerTitle'),
+    message: t('offerMessage', { version: input.version, current: input.current }),
     detail:
-      input.delivery === 'in-place' ? t('updates.offerDetail') : t('updates.macNotSignedDetail'),
-    buttons: [accept, { label: t('updates.notNow'), answer: 'dismiss' }],
+      input.delivery === 'in-place' ? t('offerDetail') : t(RELEASE_PAGE_DETAIL[input.platform]),
+    buttons: [accept, { label: t('notNow'), answer: 'dismiss' }],
     cancelIndex: 1
   }
+}
+
+/** Why a platform is sent to the release page. A table, so a platform without a reason does not compile. */
+const RELEASE_PAGE_DETAIL: Readonly<Record<Platform, UpdateTextKey>> = {
+  darwin: 'macNotSignedDetail',
+  win32: 'windowsNotSignedDetail',
+  linux: 'linuxNotSignedDetail'
 }
 
 /** Consent three. "Later" is a real answer: nothing installs until this box is answered again. */
@@ -620,25 +673,25 @@ export function restartPrompt(input: {
   readonly locale: Locale
   readonly version: string
 }): UpdatePrompt {
-  const t = (key: MessageKey, params?: Readonly<Record<string, string>>): string =>
-    translate(input.locale, key, params)
+  const t = (key: UpdateTextKey, params?: Readonly<Record<string, string>>): string =>
+    updateText(input.locale, key, params)
 
   /*
     One sentence and no `detail`, unlike the offer.
 
-    Not a stylistic choice: the renderer's catalogue chunk is one asset holding both locales and it
-    sits 200 bytes under a budget a fitness test enforces, so a second paragraph here costs a failing
-    test somewhere else. What had to survive the cut is the part a person acts on — that the restart
-    is when it installs, and that until then nothing changes — and that is in the message.
+    It was cut for the renderer's catalogue budget, back when these sentences lived in that chunk; they
+    are in `update-text.*` now and that constraint is gone. The one sentence stays because it already
+    carries the part a person acts on — that the restart is when it installs, and that until then
+    nothing changes. A `detail` added now would have to say something the message does not.
   */
   return {
     kind: 'ready',
     severity: 'info',
-    title: t('updates.readyTitle'),
-    message: t('updates.readyMessage', { version: input.version }),
+    title: t('readyTitle'),
+    message: t('readyMessage', { version: input.version }),
     buttons: [
-      { label: t('updates.restartNow'), answer: 'restart' },
-      { label: t('updates.later'), answer: 'dismiss' }
+      { label: t('restartNow'), answer: 'restart' },
+      { label: t('later'), answer: 'dismiss' }
     ],
     cancelIndex: 1
   }
@@ -656,8 +709,8 @@ export function noticePrompt(input: {
   readonly kind: NoticeKind
   readonly current: string
 }): UpdatePrompt {
-  const t = (key: MessageKey, params?: Readonly<Record<string, string>>): string =>
-    translate(input.locale, key, params)
+  const t = (key: UpdateTextKey, params?: Readonly<Record<string, string>>): string =>
+    updateText(input.locale, key, params)
 
   const wording = NOTICE_WORDING[input.kind]
   return {
@@ -665,7 +718,7 @@ export function noticePrompt(input: {
     severity: wording.severity,
     title: t(wording.title),
     message: t(wording.message, { current: input.current }),
-    buttons: [{ label: t('updates.ok'), answer: 'dismiss' }],
+    buttons: [{ label: t('ok'), answer: 'dismiss' }],
     cancelIndex: 0
   }
 }
@@ -681,35 +734,35 @@ const NOTICE_WORDING: Readonly<
   Record<
     NoticeKind,
     {
-      readonly title: MessageKey
-      readonly message: MessageKey
+      readonly title: UpdateTextKey
+      readonly message: UpdateTextKey
       readonly severity: 'info' | 'warning'
     }
   >
 > = {
   'up-to-date': {
-    title: 'updates.upToDateTitle',
-    message: 'updates.upToDateMessage',
+    title: 'upToDateTitle',
+    message: 'upToDateMessage',
     severity: 'info'
   },
   'nothing-published': {
-    title: 'updates.upToDateTitle',
-    message: 'updates.nothingPublishedMessage',
+    title: 'upToDateTitle',
+    message: 'nothingPublishedMessage',
     severity: 'info'
   },
   'check-failed': {
-    title: 'updates.checkFailedTitle',
-    message: 'updates.checkFailedMessage',
+    title: 'checkFailedTitle',
+    message: 'checkFailedMessage',
     severity: 'warning'
   },
   'download-failed': {
-    title: 'updates.downloadFailedTitle',
-    message: 'updates.downloadFailedMessage',
+    title: 'downloadFailedTitle',
+    message: 'downloadFailedMessage',
     severity: 'warning'
   },
   'no-feed': {
-    title: 'updates.noFeedTitle',
-    message: 'updates.noFeedMessage',
+    title: 'noFeedTitle',
+    message: 'noFeedMessage',
     severity: 'info'
   }
 }

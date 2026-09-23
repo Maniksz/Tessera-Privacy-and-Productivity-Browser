@@ -166,6 +166,8 @@ function harness(options: {
   manager: FakeManager
   windows: FakeWindow[]
   clock?: { now: number }
+  /** Stands in for `DownloadStore.discardCopies`. Resolves by default. */
+  discardCopies?: () => Promise<void>
 }) {
   const handlers = new Map<string, AnyHandler>()
   const handle: DownloadHandle = (channel, handler) => {
@@ -185,7 +187,8 @@ function harness(options: {
         presented.add(listener)
       }
     },
-    now: () => clock.now
+    now: () => clock.now,
+    discardCopies: options.discardCopies ?? (() => Promise.resolve())
   })
 
   return {
@@ -332,6 +335,35 @@ describe('downloads IPC', () => {
     expect(await invoke('downloads:clear', undefined, 21)).toEqual({ removed: 3 })
     // Cleared as window 2, which is what keeps one private window's clear out of another's list.
     expect(manager.calls).toEqual(['remove:gone', 'remove:a', 'clear:2'])
+  })
+
+  it('removes the copies of the list before it answers that the list was cleared', async () => {
+    // A `.v1.bak` or an `.unreadable` beside the file is an older state of the very list the user just
+    // cleared. Waited for, so the answer cannot arrive while the copies are still on disk.
+    const events: string[] = []
+    const manager = fakeManager({ byWindow: { 1: [entry('a')] } })
+    const { invoke } = harness({
+      manager,
+      windows: [fakeWindow(1, false)],
+      discardCopies: async () => {
+        await Promise.resolve()
+        events.push('copies removed')
+      }
+    })
+
+    const answer = await invoke('downloads:clear')
+    events.push('answered')
+    expect(answer).toEqual({ removed: 3 })
+    expect(events).toEqual(['copies removed', 'answered'])
+  })
+
+  it('fails the clear when a copy could not be removed', async () => {
+    const { invoke } = harness({
+      manager: fakeManager(),
+      windows: [fakeWindow(1, false)],
+      discardCopies: () => Promise.reject(new Error('EACCES'))
+    })
+    await expect(invoke('downloads:clear')).rejects.toThrow('EACCES')
   })
 
   it('pushes each window its own list, with its own privacy flag', () => {

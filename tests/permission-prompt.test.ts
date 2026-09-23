@@ -1,18 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  UNANSWERED,
+  answerPermissionCheck,
+  grantsPermission,
+  isAskableSubject,
   permissionSubject,
   rememberedDecision,
   resolvePermissionRequest,
+  topLevelOrigin,
+  unaskedPrompting,
+  type PermissionCheck,
+  type PermissionOutcome,
   type PermissionPrompting,
   type PermissionRequestDetails
 } from '@main/session/permission-policy.js'
+import { invokeContract } from '@shared/ipc/contract.js'
 import {
   PERMISSION_ANSWERS,
   PERMISSION_SUBJECTS,
   PERMISSION_TOPICS,
   subjectDevices,
   subjectTopics,
-  type PermissionAnswer,
   type PermissionSubject
 } from '@shared/overlay/permission.js'
 import {
@@ -44,7 +52,7 @@ interface Harness {
 
 function harness(options: {
   settings?: SettingsSnapshot
-  answer?: PermissionAnswer
+  answer?: PermissionOutcome
   recall?: (origin: string, subject: PermissionSubject) => 'allow' | 'deny' | 'ask'
 }): Harness {
   const prompts: Harness['prompts'] = []
@@ -152,6 +160,40 @@ describe('rememberedDecision', () => {
 
   it('remembers nothing about a one-off grant', () => {
     expect(rememberedDecision('allow-once')).toBeNull()
+  })
+
+  it('remembers nothing about a prompt nobody answered', () => {
+    // A closed window is not a person refusing a site.
+    expect(rememberedDecision(UNANSWERED)).toBeNull()
+  })
+})
+
+describe('grantsPermission', () => {
+  it('grants on the two ways a person says yes and on nothing else', () => {
+    expect(grantsPermission('allow-once')).toBe(true)
+    expect(grantsPermission('allow-always')).toBe(true)
+    expect(grantsPermission('block')).toBe(false)
+    expect(grantsPermission(UNANSWERED)).toBe(false)
+  })
+})
+
+describe('the unanswered outcome', () => {
+  it('is not an answer a surface can send', () => {
+    // Only the core can conclude that nobody answered; over IPC it would be a way to refuse a site
+    // without the memory noticing — or, worse, a value the arbiter had never planned for.
+    expect(PERMISSION_ANSWERS as readonly string[]).not.toContain(UNANSWERED)
+    const schema = invokeContract['permissions:answer'].request
+    expect(schema.safeParse({ requestId: 'r1', answer: UNANSWERED }).success).toBe(false)
+    expect(schema.safeParse({ requestId: 'r1', answer: 'block' }).success).toBe(true)
+  })
+})
+
+describe('isAskableSubject', () => {
+  it('asks about everything except camera, microphone and screen sharing', () => {
+    const silent = ['camera', 'microphone', 'camera-and-microphone', 'display-capture']
+    for (const subject of PERMISSION_SUBJECTS) {
+      expect(isAskableSubject(subject), subject).toBe(!silent.includes(subject))
+    }
   })
 })
 
@@ -274,22 +316,6 @@ describe('resolvePermissionRequest', () => {
     expect(prompts).toEqual([{ origin: 'https://example.com', subject: 'geolocation' }])
   })
 
-  it('asks about a camera and microphone pair once, as one subject', async () => {
-    const { deps, prompts } = harness({
-      settings: settingsWith({ 'permissions.camera': 'ask', 'permissions.microphone': 'ask' }),
-      answer: 'allow-once'
-    })
-    await expect(
-      resolvePermissionRequest(
-        request({ permission: 'media', mediaTypes: ['video', 'audio'] }),
-        deps
-      )
-    ).resolves.toBe(true)
-    expect(prompts).toEqual([
-      { origin: 'https://example.com', subject: 'camera-and-microphone' }
-    ])
-  })
-
   it('refuses the pair when one half is denied, without asking about the other', async () => {
     // The strictest decision wins: granting the pair because the camera was allowed would hand
     // over a microphone the user never agreed to.
@@ -305,17 +331,56 @@ describe('resolvePermissionRequest', () => {
     expect(prompts).toEqual([])
   })
 
-  it('refuses a dismissed dialogue and remembers the refusal', async () => {
-    // Escape, an outside click, a resized window: all arrive here as `block`.
+  it('remembers a refusal the user gave', async () => {
+    // The block button and Escape: the surface sends both as `block` over `permissions:answer`.
     const { deps, written } = harness({
-      settings: settingsWith({ 'permissions.camera': 'ask' }),
+      settings: settingsWith({ 'permissions.geolocation': 'ask' }),
       answer: 'block'
     })
-    await expect(
-      resolvePermissionRequest(request({ permission: 'media', mediaTypes: ['video'] }), deps)
-    ).resolves.toBe(false)
+    await expect(resolvePermissionRequest(request({}), deps)).resolves.toBe(false)
     expect(written).toEqual([
-      { origin: 'https://example.com', subject: 'camera', decision: 'deny' }
+      { origin: 'https://example.com', subject: 'geolocation', decision: 'deny' }
+    ])
+  })
+
+  it('refuses a prompt nobody answered and remembers nothing', async () => {
+    // A closed window, a full queue, a displaced dialogue. Refused this once; asked again next time.
+    const { deps, prompts, written } = harness({
+      settings: settingsWith({ 'permissions.geolocation': 'ask' }),
+      answer: UNANSWERED
+    })
+    await expect(resolvePermissionRequest(request({}), deps)).resolves.toBe(false)
+    expect(prompts).toHaveLength(1)
+    expect(written, 'an unanswered prompt blocked the site').toEqual([])
+  })
+
+  it('refuses a frame embedded from another site without asking or remembering', async () => {
+    const { deps, prompts, written } = harness({
+      settings: settingsWith({ 'permissions.geolocation': 'ask' }),
+      answer: 'allow-always'
+    })
+    const origin = topLevelOrigin({
+      frame: 'https://maps.example.net/',
+      topLevel: 'https://a.example/'
+    })
+    await expect(resolvePermissionRequest(request({ origin }), deps)).resolves.toBe(false)
+    expect(prompts).toEqual([])
+    expect(written).toEqual([])
+  })
+
+  it('asks and remembers a same-origin frame under the page', async () => {
+    const { deps, prompts, written } = harness({
+      settings: settingsWith({ 'permissions.geolocation': 'ask' }),
+      answer: 'allow-always'
+    })
+    const origin = topLevelOrigin({
+      frame: 'https://a.example/frame',
+      topLevel: 'https://a.example/'
+    })
+    await expect(resolvePermissionRequest(request({ origin }), deps)).resolves.toBe(true)
+    expect(prompts).toEqual([{ origin: 'https://a.example', subject: 'geolocation' }])
+    expect(written).toEqual([
+      { origin: 'https://a.example', subject: 'geolocation', decision: 'allow' }
     ])
   })
 
@@ -371,5 +436,217 @@ describe('resolvePermissionRequest', () => {
     })
     await expect(resolvePermissionRequest(request({}), deps)).resolves.toBe(false)
     expect(recall, 'the store was consulted despite a deny setting').not.toHaveBeenCalled()
+  })
+})
+
+describe('camera, microphone and screen sharing behave exactly as before "ask" was wired', () => {
+  /*
+    A deliberate stance, not a gap (R13). "Ask" is a silent refusal for these three: no dialogue
+    appears, nothing is remembered, and `allow` and `deny` keep answering alone. Pinned before the
+    prompt was connected to anything, so wiring it could not quietly start asking for a camera.
+  */
+  const media = (mediaTypes: readonly string[]): PermissionRequestDetails =>
+    request({ permission: 'media', mediaTypes })
+
+  it('refuses a camera set to ask without a dialogue', async () => {
+    const { deps, prompts, written } = harness({
+      settings: settingsWith({ 'permissions.camera': 'ask' }),
+      answer: 'allow-always'
+    })
+    await expect(resolvePermissionRequest(media(['video']), deps)).resolves.toBe(false)
+    expect(prompts, 'a camera request reached a dialogue').toEqual([])
+    expect(written).toEqual([])
+  })
+
+  it('refuses a microphone set to ask without a dialogue', async () => {
+    const { deps, prompts } = harness({
+      settings: settingsWith({ 'permissions.microphone': 'ask' }),
+      answer: 'allow-once'
+    })
+    await expect(resolvePermissionRequest(media(['audio']), deps)).resolves.toBe(false)
+    expect(prompts).toEqual([])
+  })
+
+  it('refuses the camera and microphone pair set to ask without a dialogue', async () => {
+    const { deps, prompts } = harness({
+      settings: settingsWith({ 'permissions.camera': 'ask', 'permissions.microphone': 'ask' }),
+      answer: 'allow-once'
+    })
+    await expect(resolvePermissionRequest(media(['video', 'audio']), deps)).resolves.toBe(false)
+    expect(prompts).toEqual([])
+  })
+
+  it('does not consult a remembered answer for the camera', async () => {
+    // Nothing can have been stored for it, and a stored allow must not become a way round the stance.
+    const recall = vi.fn(() => 'allow' as const)
+    const { deps } = harness({ settings: settingsWith({ 'permissions.camera': 'ask' }), recall })
+    await expect(resolvePermissionRequest(media(['video']), deps)).resolves.toBe(false)
+    expect(recall).not.toHaveBeenCalled()
+  })
+
+  it('grants and refuses the microphone on allow and deny, as before', async () => {
+    const allowed = harness({ settings: settingsWith({ 'permissions.microphone': 'allow' }) })
+    await expect(resolvePermissionRequest(media(['audio']), allowed.deps)).resolves.toBe(true)
+    const denied = harness({ settings: settingsWith({ 'permissions.microphone': 'deny' }) })
+    await expect(resolvePermissionRequest(media(['audio']), denied.deps)).resolves.toBe(false)
+    expect([...allowed.prompts, ...denied.prompts]).toEqual([])
+  })
+
+  it('grants an allowed camera whatever frame or origin asked, as before', async () => {
+    // The origin rules below are for the dialogue and its memory; an allow setting never needed a site.
+    const { deps } = harness({ settings: settingsWith({ 'permissions.camera': 'allow' }) })
+    await expect(
+      resolvePermissionRequest({ ...media(['video']), origin: null }, deps)
+    ).resolves.toBe(true)
+  })
+
+  it('refuses screen sharing set to ask without a dialogue', async () => {
+    const { deps, prompts } = harness({
+      settings: settingsWith({ 'permissions.displayCapture': 'ask' }),
+      answer: 'allow-once'
+    })
+    await expect(
+      resolvePermissionRequest(request({ permission: 'display-capture' }), deps)
+    ).resolves.toBe(false)
+    expect(prompts).toEqual([])
+  })
+})
+
+describe('unaskedPrompting', () => {
+  it('lets the settings answer and refuses an ask without leaving a trace', async () => {
+    const allow = unaskedPrompting(settingsWith({ 'permissions.geolocation': 'allow' }))
+    await expect(resolvePermissionRequest(request({}), allow)).resolves.toBe(true)
+
+    const ask = unaskedPrompting(settingsWith({ 'permissions.geolocation': 'ask' }))
+    expect(ask.recall('https://example.com', 'geolocation')).toBe('ask')
+    await expect(
+      ask.prompt({ origin: 'https://example.com', subject: 'geolocation' })
+    ).resolves.toBe(UNANSWERED)
+    await expect(resolvePermissionRequest(request({}), ask)).resolves.toBe(false)
+    expect(() => {
+      ask.remember('https://example.com', 'geolocation', 'deny')
+    }).not.toThrow()
+  })
+
+  it('still grants an allowed camera, as before any prompt existed', async () => {
+    const deps = unaskedPrompting(settingsWith({ 'permissions.camera': 'allow' }))
+    await expect(
+      resolvePermissionRequest(request({ permission: 'media', mediaTypes: ['video'] }), deps)
+    ).resolves.toBe(true)
+  })
+})
+
+describe('answerPermissionCheck', () => {
+  function check(overrides: Partial<PermissionCheck>): PermissionCheck {
+    return {
+      permission: 'geolocation',
+      requestingOrigin: 'https://example.com',
+      embeddingOrigin: null,
+      topLevelUrl: 'https://example.com/page',
+      ...overrides
+    }
+  }
+
+  function answering(
+    settings: Partial<SettingsSnapshot>,
+    recall: (origin: string, subject: PermissionSubject) => 'allow' | 'deny' | 'ask' = () => 'ask'
+  ): Pick<PermissionPrompting, 'settings' | 'recall'> {
+    return { settings: settingsWith(settings), recall }
+  }
+
+  it('answers from the settings when they allow or deny', () => {
+    expect(
+      answerPermissionCheck(check({}), answering({ 'permissions.geolocation': 'allow' }))
+    ).toBe(true)
+    expect(answerPermissionCheck(check({}), answering({ 'permissions.geolocation': 'deny' }))).toBe(
+      false
+    )
+  })
+
+  it("reports a site's remembered allow as granted", () => {
+    const recall = vi.fn(() => 'allow' as const)
+    expect(
+      answerPermissionCheck(check({}), answering({ 'permissions.geolocation': 'ask' }, recall))
+    ).toBe(true)
+    expect(recall).toHaveBeenCalledWith('https://example.com', 'geolocation')
+  })
+
+  it('reports a question still to be asked, and a remembered block, as not granted', () => {
+    expect(answerPermissionCheck(check({}), answering({ 'permissions.geolocation': 'ask' }))).toBe(
+      false
+    )
+    expect(
+      answerPermissionCheck(
+        check({}),
+        answering({ 'permissions.geolocation': 'ask' }, () => 'deny')
+      )
+    ).toBe(false)
+  })
+
+  it('uses the checking origin when there is no webContents', () => {
+    // A service worker's check. The memory it reads was bound to the session's mode beforehand.
+    const remembered = answering({ 'permissions.notifications': 'ask' }, (origin) =>
+      origin === 'https://example.com' ? 'allow' : 'ask'
+    )
+    expect(
+      answerPermissionCheck(check({ permission: 'notifications', topLevelUrl: null }), remembered)
+    ).toBe(true)
+    expect(
+      answerPermissionCheck(
+        check({
+          permission: 'notifications',
+          requestingOrigin: 'https://other.example',
+          topLevelUrl: null
+        }),
+        remembered
+      )
+    ).toBe(false)
+  })
+
+  it('refuses a cross-origin subframe even where the page was allowed', () => {
+    const recall = vi.fn(() => 'allow' as const)
+    const settings = { 'permissions.geolocation': 'ask' } as const
+    // With a webContents: the frame's origin is not the page's.
+    expect(
+      answerPermissionCheck(
+        check({
+          requestingOrigin: 'https://ads.example.net',
+          embeddingOrigin: 'https://example.com'
+        }),
+        answering(settings, recall)
+      )
+    ).toBe(false)
+    // Without one: the embedding origin still names the page.
+    expect(
+      answerPermissionCheck(
+        check({
+          requestingOrigin: 'https://ads.example.net',
+          embeddingOrigin: 'https://example.com',
+          topLevelUrl: null
+        }),
+        answering(settings, recall)
+      )
+    ).toBe(false)
+    expect(recall).not.toHaveBeenCalled()
+  })
+
+  it('never reports the camera or microphone as granted, as before', () => {
+    // Media is checked with no device named, and `media` has no setting of its own.
+    for (const value of ['allow', 'ask', 'deny'] as const) {
+      expect(
+        answerPermissionCheck(
+          check({ permission: 'media' }),
+          answering({ 'permissions.camera': value, 'permissions.microphone': value }, () => 'allow')
+        ),
+        value
+      ).toBe(false)
+    }
+  })
+
+  it('grants fullscreen and refuses what it has never heard of, as before', () => {
+    expect(answerPermissionCheck(check({ permission: 'fullscreen' }), answering({}))).toBe(true)
+    expect(
+      answerPermissionCheck(check({ permission: 'some-future-capability' }), answering({}))
+    ).toBe(false)
   })
 })

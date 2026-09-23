@@ -26,8 +26,10 @@ import {
   type UnlockOutcome,
   type VaultStatus
 } from '@shared/passwords/vault.js'
+import type { KeystoreStrength } from '../crypto/keystore-strength.js'
 import type { SafeStorageLike } from '../crypto/local-data-key.js'
 import {
+  VaultKeyNewerError,
   VaultKeyUnreadableError,
   WrongMasterPasswordError,
   deleteVaultKeyFile,
@@ -39,7 +41,9 @@ import {
   writeVaultKeyFile,
   type VaultKeyFile
 } from '../crypto/vault-key.js'
+import { removeTempFilesOf } from '../data/atomic-write.js'
 import { UnreadableDocumentError, type DocumentCodec } from '../data/JsonStore.js'
+import { removeCopiesOf } from '../data/quarantine.js'
 import { PasswordStore } from '../data/PasswordStore.js'
 import type { AutofillVault } from './AutofillService.js'
 import { applyChromeImport, type ImportTarget } from './import.js'
@@ -88,6 +92,14 @@ export interface PasswordVaultOptions {
   /** Electron's `safeStorage` satisfies this; a test supplies a key store that misbehaves. */
   readonly safeStorage: SafeStorageLike
   /**
+   * What this run's key store is worth, from `classifyKeystore` after `ready`.
+   *
+   * Only ever changes what the page is *told*: `weak` turns `keystore` into `weak-keystore`, and nothing
+   * about how the key is wrapped or opened. Absent means the key store is taken at its word, which is
+   * right on macOS and Windows and in every test that is not about Linux's basic text.
+   */
+  readonly keystoreStrength?: KeystoreStrength
+  /**
    * The codec the document was sealed with before the vault had a key of its own.
    *
    * `LocalDataProtection.codec` in the application. Used for reading only, once, and then never
@@ -124,6 +136,7 @@ export class PasswordVault implements AutofillVault, ImportTarget {
   readonly #options: PasswordVaultOptions
   readonly #now: () => number
   readonly #idleTimeoutMs: () => number
+  readonly #keystore: KeystoreStrength
   readonly #lockListeners = new Set<() => void>()
 
   #file: VaultKeyFile | null = null
@@ -131,12 +144,17 @@ export class PasswordVault implements AutofillVault, ImportTarget {
   #store: PasswordStore | null = null
   #lastActivityAt: number | null = null
   #unreadable = false
+  /** The unreadable key file is from a newer version. See `VaultKeyNewerError`. */
+  #keyNewer = false
   #sweep: ReturnType<typeof setInterval> | null = null
+  /** The lock still writing, if any. See `lock` and `flush`. */
+  #locking: Promise<void> | null = null
 
   private constructor(options: PasswordVaultOptions) {
     this.#options = options
     this.#now = options.now ?? ((): number => Date.now())
     this.#idleTimeoutMs = options.idleTimeoutMs ?? ((): number => VAULT_IDLE_TIMEOUT_MS)
+    this.#keystore = options.keystoreStrength ?? 'os'
   }
 
   /**
@@ -167,6 +185,11 @@ export class PasswordVault implements AutofillVault, ImportTarget {
   }
 
   async #load(): Promise<void> {
+    // What a crash during a key rewrap left behind: a copy of the key under a name nothing reads or
+    // would ever remove. Only the key's own: the document's go when its store opens, and a locked
+    // vault's document is never written, so nothing of it can be mid-rename. A failure is let out,
+    // like every error here that is not about the vault.
+    await removeTempFilesOf(this.#options.keyFilePath)
     let file: VaultKeyFile | null
     try {
       file = await readVaultKeyFile(this.#options.keyFilePath)
@@ -174,8 +197,10 @@ export class PasswordVault implements AutofillVault, ImportTarget {
       if (!(error instanceof VaultKeyUnreadableError)) throw error
       // A key file that is not this format. Not repaired and not replaced: generating a new key would
       // make every stored credential permanently unreadable while looking like a successful launch.
+      // A newer version's file is locked for the same reason, and told apart so the page offers no reset.
       console.warn('[passwords] the vault key file could not be read; the vault stays locked:', error.message)
       this.#unreadable = true
+      this.#keyNewer = error instanceof VaultKeyNewerError
       return
     }
 
@@ -278,12 +303,16 @@ export class PasswordVault implements AutofillVault, ImportTarget {
         file === null
           ? vaultKeyProtection({
               keystore: this.#options.safeStorage.isEncryptionAvailable(),
+              weakKeystore: this.#keystore === 'weak',
               masterPassword: false
             })
-          : vaultKeyProtectionOf(file),
+          : vaultKeyProtectionOf(file, this.#keystore),
       unlocked: this.#store !== null,
       unreadable: this.#unreadable,
-      idleTimeoutMs: this.#idleTimeoutMs()
+      idleTimeoutMs: this.#idleTimeoutMs(),
+      // Never together with the document's: a vault whose key file is newer has no store to report on.
+      ...(this.#keyNewer ? { newer: true } : {}),
+      ...documentStatusOf(this.#store)
     }
   }
 
@@ -328,16 +357,46 @@ export class PasswordVault implements AutofillVault, ImportTarget {
    * Closes the vault: the document is written, the store is released, the key is overwritten.
    *
    * The order matters and is easy to get wrong. The store reference is dropped *first*, so no write
-   * can be scheduled while the flush is in flight, and the key is zeroed *last*, because the codec
+   * can be scheduled while the flush is in flight, and the key buffer is zeroed *last*, because the codec
    * holding it is the thing that seals the pending document — zeroing before the flush would encrypt
    * the vault under thirty-two zero bytes and lose it.
+   *
+   * ## Why the running lock is remembered
+   *
+   * The store is gone the moment this is called, but its write is not finished, and two callers need
+   * to know that. `flush` does: the last window closing locks the vault and asks to quit in the same
+   * breath, and a flush that saw no store answered at once and let the process end mid-write — the
+   * password changed a minute earlier was missing at the next start. And a second `lock` does: it
+   * found no store either and zeroed the key straight away, which is the buffer the first lock's
+   * write was about to seal with. So each lock takes the key it will zero at the moment it is called,
+   * and waits for any lock before it, and the latest is kept for `flush` to wait on.
    */
-  async lock(): Promise<void> {
+  lock(): Promise<void> {
     const store = this.#store
+    const key = this.#key
     this.#store = null
+    this.#key = null
     this.#lastActivityAt = null
+    const locking = this.#finishLock(this.#locking, store, key)
+    this.#locking = locking
+    void locking.then(() => {
+      if (this.#locking === locking) this.#locking = null
+    })
+    return locking
+  }
+
+  async #finishLock(
+    previous: Promise<void> | null,
+    store: PasswordStore | null,
+    key: Uint8Array | null
+  ): Promise<void> {
+    // Cannot reject: the store reports a failed write rather than throwing it, and every listener
+    // below is caught. So waiting on it never stops this lock from dropping its own key.
+    if (previous !== null) await previous
     if (store !== null) await store.flush()
-    this.#dropKey()
+    // Zeroed here rather than through `#dropKey`, which would reach whatever key an unlock since has
+    // put in its place. Same reasoning as there about what zeroing is worth.
+    if (key !== null) key.fill(0)
     for (const listener of this.#lockListeners) {
       try {
         listener()
@@ -551,17 +610,24 @@ export class PasswordVault implements AutofillVault, ImportTarget {
    */
   async resetVault(confirmation: string): Promise<boolean> {
     if (confirmation !== RESET_VAULT_CONFIRMATION) return false
+    // A lock still writing would rename the old document back in after the deletions below, sealed
+    // under a key the new vault does not have. See `lock`.
+    const locking = this.#locking
+    if (locking !== null) await locking
 
     this.#store = null
     this.#lastActivityAt = null
     this.#dropKey()
     this.#file = null
     this.#unreadable = false
+    this.#keyNewer = false
 
     await rm(this.#options.documentPath, { force: true })
-    // The store writes through a temporary beside the document; a leftover one would be picked up by
-    // nothing, but leaving a file full of credentials behind a "delete everything" is not on.
-    await rm(`${this.#options.documentPath}.tmp`, { force: true })
+    // Everything else that holds credentials beside the document: the temporaries its writes go
+    // through, the `.v<N>.bak` a migration kept, the `.unreadable` copy of a document that could not
+    // be used. A leftover one would be picked up by nothing, but leaving a file full of credentials
+    // behind a "delete everything" is not on. See `quarantine.ts`.
+    await removeCopiesOf(this.#options.documentPath)
     await deleteVaultKeyFile(this.#options.keyFilePath)
 
     await this.#createFreshVault()
@@ -672,8 +738,16 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     return this.#store?.onChange(listener) ?? ((): void => {})
   }
 
-  flush(): Promise<void> {
-    return this.#store?.flush() ?? Promise.resolve()
+  /**
+   * Writes what is pending, including what a lock still in flight is writing.
+   *
+   * The shutdown's flush of the vault is usually the second half of a lock: see `lock` for why
+   * answering "no store, nothing to do" there lost the last change.
+   */
+  async flush(): Promise<void> {
+    const locking = this.#locking
+    if (locking !== null) await locking
+    await this.#store?.flush()
   }
 
   /** Stops the idle timer. For shutdown, and for a test that must not leave a handle behind. */
@@ -684,7 +758,7 @@ export class PasswordVault implements AutofillVault, ImportTarget {
 
   #hasMasterPassword(): boolean {
     const file = this.#file
-    return file !== null && vaultHasMasterPassword(vaultKeyProtectionOf(file))
+    return file !== null && vaultHasMasterPassword(vaultKeyProtectionOf(file, this.#keystore))
   }
 
   #noteActivity(): void {
@@ -704,5 +778,24 @@ export class PasswordVault implements AutofillVault, ImportTarget {
     const key = this.#key
     this.#key = null
     if (key !== null) key.fill(0)
+  }
+}
+
+/**
+ * The part of `VaultStatus` about the document, from an open store; nothing from a locked vault.
+ *
+ * Only the fields that are set, so a vault whose document loaded cleanly answers exactly what it
+ * answered before these existed. The count in particular is only ever read off an open store: a locked
+ * vault has not read its document, and a status reply is answered while it may be closed.
+ */
+function documentStatusOf(store: PasswordStore | null): Partial<VaultStatus> {
+  if (store === null) return {}
+  const outcome = store.loadReport.outcome.kind
+  const unreadable = store.unreadableEntryCount
+  return {
+    ...(outcome === 'newer' ? { newer: true } : {}),
+    ...(outcome === 'invalid' ? { invalid: true } : {}),
+    ...(store.readOnly ? { readOnly: true } : {}),
+    ...(unreadable > 0 ? { unreadableEntries: unreadable } : {})
   }
 }

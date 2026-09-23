@@ -14,6 +14,8 @@ import {
 } from '../permissions/model.js'
 import type { PermissionDecision } from '../session/permission-policy.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 import type { BrowsingMode } from './HistoryStore.js'
 
 /**
@@ -48,14 +50,14 @@ import type { BrowsingMode } from './HistoryStore.js'
  * should be able to leave an entry in the list that nothing will ever match and nothing will ever
  * remove.
  */
-const sitePermissionSchema = z.object({
+const sitePermissionSchema = z.looseObject({
   origin: z.string().min(1),
   topic: z.enum(PERMISSION_TOPICS),
   decision: z.enum(['allow', 'deny']),
   decidedAt: z.number().int().nonnegative()
 })
 
-const permissionDocumentSchema = z.object({
+const permissionDocumentSchema = z.looseObject({
   version: z.literal(1),
   sites: z.array(sitePermissionSchema)
 })
@@ -66,8 +68,8 @@ const permissionDocumentSchema = z.object({
  * the schema itself: `model.ts` is imported by the arbiter, which is unit-tested, and pulling zod
  * into that path buys nothing the store does not already do.
  */
-type SchemaSite = z.output<typeof sitePermissionSchema>
-type SchemaDocument = z.output<typeof permissionDocumentSchema>
+type SchemaSite = KnownFields<z.output<typeof sitePermissionSchema>>
+type SchemaDocument = KnownFields<z.output<typeof permissionDocumentSchema>>
 
 const _siteMatchesModel: SchemaSite = null as unknown as SitePermission
 const _modelMatchesSite: SitePermission = null as unknown as SchemaSite
@@ -108,6 +110,9 @@ export class PermissionStore {
       filePath: options.filePath,
       schema: permissionDocumentSchema,
       fallback: emptyPermissionDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A file written by an older build, edited by hand or cut short by a crash must not leave
       // two answers for one question: the read path takes the first match, so the duplicate would
       // decide silently — and it is the *stale* one that tends to come first.
@@ -176,6 +181,11 @@ export class PermissionStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   #recall(origin: string, subject: PermissionSubject): PermissionDecision {

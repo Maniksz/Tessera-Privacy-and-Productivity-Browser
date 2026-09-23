@@ -3,7 +3,7 @@ import {
   MAX_HISTORY_URL_LENGTH,
   historyUrlOf
 } from '../history/model.js'
-import { internalUrl } from '../product.js'
+import { internalUrl, queryParamOf } from '../product.js'
 import { registrableDomainOfUrl } from '../url/domain.js'
 
 /**
@@ -414,6 +414,41 @@ export const THUMBNAIL_PAGE = 'thumbnail'
 export const THUMBNAIL_URL_PARAM = 'url'
 /** Query parameter carrying the capture time, so a new picture is a new address. */
 export const THUMBNAIL_VERSION_PARAM = 'v'
+/** Query parameter carrying this run's token; see `configureThumbnailToken`. */
+export const THUMBNAIL_TOKEN_PARAM = 't'
+/** The shortest token `configureThumbnailToken` takes: anything shorter is guessable. */
+export const MIN_THUMBNAIL_TOKEN_LENGTH = 16
+
+/** `null` until the core configures one, and then no address is accepted at all. */
+let thumbnailToken: string | null = null
+
+/**
+ * Sets the token every thumbnail address of this run carries, and the only one the handler
+ * accepts.
+ *
+ * Without it the cache answered any web page that asked. An `<img>` pointing at
+ * `tessera://thumbnail?url=https://bank.example/` loaded or failed depending on whether the user
+ * had seen that page, so the start page's pictures doubled as a readable history. With it, only an
+ * address the core built itself finds anything, and every address a page makes up answers like a
+ * miss.
+ *
+ * Its own token rather than the favicon one, so the two caches share no secret, and drawn fresh per
+ * start for the same reason as that one: an address from an earlier run stops working with the
+ * restart, which keeps the handler's `immutable` caching honest. A seam rather than a value drawn
+ * here, like `configurePublicSuffixes`: `shared` must stay free of Node built-ins, and the
+ * renderers only ever receive finished addresses.
+ *
+ * Refuses a short token rather than storing it, because an empty one would match an address that
+ * says `t=` — the exact guess a page would try first.
+ */
+export function configureThumbnailToken(token: string): void {
+  if (token.length < MIN_THUMBNAIL_TOKEN_LENGTH) {
+    throw new RangeError(
+      `a thumbnail token needs at least ${MIN_THUMBNAIL_TOKEN_LENGTH} characters`
+    )
+  }
+  thumbnailToken = token
+}
 
 /**
  * The address a renderer puts in an `<img>`.
@@ -422,14 +457,30 @@ export const THUMBNAIL_VERSION_PARAM = 'v'
  * parameter is the load-bearing part: the file name is stable per page, so without it
  * a freshly captured picture would keep the address it already had and Chromium would
  * go on drawing the copy in its memory cache — the card would keep last week's
- * picture until the browser restarted. The handler ignores the parameter; its only
+ * picture until the browser restarted. The handler ignores the version; its only
  * job is to change.
+ *
+ * Before `configureThumbnailToken` the token is empty, which `thumbnailTokenMatches`
+ * never accepts: an unconfigured core serves no pictures rather than serving them to
+ * anyone.
  */
 export function thumbnailUrl(entry: Pick<ThumbnailEntry, 'url' | 'capturedAt'>): string {
   return internalUrl(THUMBNAIL_PAGE, {
     [THUMBNAIL_URL_PARAM]: entry.url,
-    [THUMBNAIL_VERSION_PARAM]: entry.capturedAt.toString(36)
+    [THUMBNAIL_VERSION_PARAM]: entry.capturedAt.toString(36),
+    [THUMBNAIL_TOKEN_PARAM]: thumbnailToken ?? ''
   })
+}
+
+/**
+ * Whether a thumbnail address carries this run's token.
+ *
+ * Separate from `thumbnailPageOf` so the handler can ask it first, before anything about the
+ * address reaches the store: a wrong token must cost exactly what a miss costs, with no lookup in
+ * between whose timing could tell the two apart.
+ */
+export function thumbnailTokenMatches(url: string): boolean {
+  return thumbnailToken !== null && queryParamOf(url, THUMBNAIL_TOKEN_PARAM) === thumbnailToken
 }
 
 /**
@@ -441,13 +492,7 @@ export function thumbnailUrl(entry: Pick<ThumbnailEntry, 'url' | 'capturedAt'>):
  * untrusted input.
  */
 export function thumbnailPageOf(url: string): string | null {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return null
-  }
-  const page = parsed.searchParams.get(THUMBNAIL_URL_PARAM)
+  const page = queryParamOf(url, THUMBNAIL_URL_PARAM)
   if (page === null) return null
   return thumbnailKeyOf(page)
 }

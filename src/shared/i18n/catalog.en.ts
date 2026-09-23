@@ -261,6 +261,8 @@ export const en = {
   'bookmarks.addressInvalid': 'That is not an address. Enter a domain or a full URL.',
   'bookmarks.save': 'Save',
   'bookmarks.cancel': 'Cancel',
+  'bookmarks.unreadableEntry': 'One bookmark could not be read and is kept unchanged.',
+  'bookmarks.unreadableEntries': '{count} bookmarks could not be read and are kept unchanged.',
 
   // downloads
   'downloads.title': 'Downloads',
@@ -317,16 +319,20 @@ export const en = {
   /*
     One sentence per protection level rather than one sentence with a noun interpolated.
 
-    The four are not variations on a theme, so a template would have forced them into one grammar — and
+    The six are not variations on a theme, so a template would have forced them into one grammar — and
     interpolating a noun into a shared clause is how a translation ends up saying the opposite in German,
     where the surrounding words change with the noun.
   */
   'passwords.protection.keystoreMaster':
     'Protected twice: by a key your operating system keeps, and by your master password. Opening this vault needs both.',
+  'passwords.protection.weakKeystoreMaster':
+    'The key store on this system is weak (Linux without a keyring). Only your master password protects your credentials.',
   'passwords.protection.master':
     'Protected by your master password alone — this machine offered no key store. That password is the only thing between this folder and your credentials.',
   'passwords.protection.keystore':
     'Encrypted with a key your operating system keeps. Anyone already signed in as you can read these. Set a master password to change that.',
+  'passwords.protection.weakKeystore':
+    'No real protection. The key store on this system is weak (Linux without a keyring), and no master password is set, so anyone who can read this folder can read your passwords.',
   'passwords.protection.plain':
     'Not protected. There was no system key store, and no master password is set, so the key sits beside the file it protects.',
 
@@ -348,9 +354,22 @@ export const en = {
   /** No master password helps here, so the sentence must not suggest trying one. */
   'passwords.unreadableBody':
     'The key file is damaged, or the system key store that wrapped it is gone. No master password can open it. You can save a copy and start a new vault.',
+  /** Not damage, so the sentence must not suggest starting again: the newer version still opens it. */
+  'passwords.keyNewer':
+    'A newer version saved the key of this vault. This version cannot open it and leaves it unchanged.',
   'passwords.lockNow': 'Lock now',
   'passwords.idleNotice':
     'The vault locks itself after {minutes} minutes without use, when you lock it, and when the last window closes.',
+  'passwords.unreadableEntry':
+    '1 entry could not be read. It is kept unchanged and never filled in.',
+  'passwords.unreadableEntries':
+    '{count} entries could not be read. They are kept unchanged and never filled in.',
+  'passwords.documentNewer':
+    'A newer version saved this vault. It is shown here but cannot be changed.',
+  'passwords.documentInvalid':
+    'The vault file could not be read and is kept as passwords.json.unreadable. The vault started empty.',
+  'passwords.documentReadOnly':
+    'The vault file could not be backed up, so nothing can be changed until the next start.',
 
   /*
     The master password.
@@ -730,39 +749,11 @@ export const en = {
   /*
     Updates.
 
-    Every sentence here names what state the user's own copy is in, because that is the fact they are
-    actually asking about — and the failures say it explicitly ("unchanged"), since a person who has
-    just been told something went wrong will otherwise wonder whether it went wrong halfway.
+    Only the command is here, because the settings screen renders it as well as the Help menu. What
+    the check then says — offers, notices, failures — is drawn in native message boxes by the core
+    alone, so it lives in `main/updates/update-text.*` and costs the renderers nothing.
   */
   'updates.checkNow': 'Check for Updates…',
-  'updates.offerTitle': 'A new version is available',
-  'updates.offerMessage': 'Version {version} has been published. This copy is {current}.',
-  'updates.offerDetail':
-    'Nothing is downloaded until you agree, and nothing is installed until you restart. The file comes from GitHub.',
-  'updates.download': 'Download',
-  'updates.notNow': 'Not now',
-  'updates.openReleasePage': 'Open the release page',
-  'updates.macNotSignedDetail':
-    'macOS refuses to replace an application Apple has not signed, and this build is not signed. The release page has the file to install by hand.',
-  'updates.readyTitle': 'The update is ready',
-  'updates.readyMessage':
-    'Version {version} has been downloaded. It is installed while {app} restarts; nothing changes until you choose to.',
-  'updates.restartNow': 'Restart now',
-  'updates.later': 'Later',
-  'updates.upToDateTitle': 'No new version',
-  'updates.upToDateMessage': 'This copy is {current}, and nothing newer has been published.',
-  'updates.nothingPublishedMessage':
-    'No version has been published yet, so there is nothing newer than this copy.',
-  'updates.checkFailedTitle': 'The check could not be completed',
-  'updates.checkFailedMessage':
-    'GitHub could not be reached, so there is nothing to report. This copy is unchanged; you can try again later.',
-  'updates.downloadFailedTitle': 'The download could not be completed',
-  'updates.downloadFailedMessage':
-    'Nothing was installed and this copy is unchanged. You can try again, or fetch the file from the release page.',
-  'updates.noFeedTitle': 'This copy cannot update itself',
-  'updates.noFeedMessage':
-    'It was not installed from a release, so there is nothing to replace. Build it again to update it.',
-  'updates.ok': 'OK',
 
   // errors
   'error.dnsFailed': 'Could not find the server for {host}.',

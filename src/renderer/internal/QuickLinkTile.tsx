@@ -206,6 +206,11 @@ function TilePicture({ card }: { card: QuickLinkCard }): React.ReactNode {
       className={`tile__picture tile__picture--${candidate.kind}`}
       src={candidate.url}
       alt=""
+      /*
+        Not draggable, because the address carries the token that makes the picture caches answer at
+        all. Dropped into a web page it would hand that page the key, and with it the user's history.
+      */
+      draggable={false}
       onError={() => setAttempt(attempt + 1)}
     />
   )

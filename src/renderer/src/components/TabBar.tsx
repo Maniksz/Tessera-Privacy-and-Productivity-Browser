@@ -271,6 +271,11 @@ export function TabBar({
                       src={tab.faviconUrl}
                       alt=""
                       /*
+                        Not draggable, because the address carries the token that makes the icon
+                        cache answer at all. Dropped into a web page it would hand that page the key.
+                      */
+                      draggable={false}
+                      /*
                         A cache miss answers 204, which fails to decode — by design, and the common
                         case rather than an error, since most sites are seen before their icon has
                         been fetched. Hiding the image lets the placeholder square underneath show

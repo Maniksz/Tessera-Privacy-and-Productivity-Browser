@@ -83,6 +83,10 @@ export class WindowPlacementStore {
       filePath: options.filePath,
       schema: documentSchema,
       fallback: emptyWindowPlacementDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      // Where a window last stood is a convenience: losing it opens the next window at the default.
+      criticality: 'degradable',
       ...(options.codec === undefined ? {} : { codec: options.codec }),
       // Longer than the default: a window being dragged reports a new position many times a second, and
       // only where it came to rest matters. `flush` on exit catches the last one.

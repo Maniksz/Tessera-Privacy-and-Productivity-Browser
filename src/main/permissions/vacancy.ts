@@ -12,7 +12,8 @@ import type { OverlayPresentation } from '@shared/overlay/surface.js'
  * rejects — and the site simply hangs, with no error anywhere and nothing on screen to explain it.
  *
  * So the layer reports every departure, and whoever was waiting settles it the safe way: refused
- * (spec 4 — an unanswered prompt is a denied one).
+ * (spec 4 — an unanswered prompt is a denied one). Refused *once*: a departure is not a person's
+ * answer, so the permission arbiter settles it as `UNANSWERED` and remembers nothing about the site.
  *
  * ## Why a module-level registry rather than a constructor option
  *

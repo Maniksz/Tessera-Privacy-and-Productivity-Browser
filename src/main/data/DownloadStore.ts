@@ -17,6 +17,8 @@ import {
   type StartedDownload
 } from '@shared/downloads/model.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 import type { BrowsingMode } from './HistoryStore.js'
 
 /**
@@ -49,7 +51,7 @@ import type { BrowsingMode } from './HistoryStore.js'
  * Chromium and the set grows between versions. Validating against a list this build knows
  * would discard the entire document the first time a newer Chromium invented a reason.
  */
-const downloadRecordSchema = z.object({
+const downloadRecordSchema = z.looseObject({
   id: z.string().min(1),
   url: z.string(),
   fileName: z.string().min(1),
@@ -63,7 +65,7 @@ const downloadRecordSchema = z.object({
   interruptReason: z.string()
 })
 
-const downloadDocumentSchema = z.object({
+const downloadDocumentSchema = z.looseObject({
   version: z.literal(1),
   downloads: z.array(downloadRecordSchema)
 })
@@ -74,8 +76,8 @@ const downloadDocumentSchema = z.object({
  * schema cannot live beside the interface because the downloads page is a renderer and zod
  * must not reach its bundle.
  */
-type SchemaRecord = z.output<typeof downloadRecordSchema>
-type SchemaDocument = z.output<typeof downloadDocumentSchema>
+type SchemaRecord = KnownFields<z.output<typeof downloadRecordSchema>>
+type SchemaDocument = KnownFields<z.output<typeof downloadDocumentSchema>>
 
 const _recordMatchesModel: SchemaRecord = null as unknown as DownloadRecord
 const _modelMatchesRecord: DownloadRecord = null as unknown as SchemaRecord
@@ -108,6 +110,9 @@ export class DownloadStore {
       filePath: options.filePath,
       schema: downloadDocumentSchema,
       fallback: emptyDownloadDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A record left mid-flight by a crash or a quit has to be resolved on load: nothing is
       // writing that file any more, and a row that claims otherwise has a cancel button
       // wired to nothing.
@@ -168,6 +173,17 @@ export class DownloadStore {
     return this.#replace((downloads) => clearFinishedDownloads(downloads))
   }
 
+  /**
+   * Removes the list's backup and quarantine copies and its temporaries, after writing what is
+   * pending. The second half of clearing it; see `JsonStore.discardCopies`.
+   *
+   * All of them, even though `clear` keeps the running downloads: a copy is an older state of the
+   * whole list, and the running ones are in the file this writes first.
+   */
+  discardCopies(): Promise<void> {
+    return this.#store.discardCopies()
+  }
+
   onChange(listener: (downloads: DownloadRecord[]) => void): () => void {
     return this.#store.onChange((document) => listener([...document.downloads]))
   }
@@ -178,6 +194,11 @@ export class DownloadStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   #start(started: StartedDownload): void {

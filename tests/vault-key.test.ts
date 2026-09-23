@@ -1,7 +1,7 @@
 import type * as NodeCrypto from 'node:crypto'
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOCUMENT_KEY_BYTES, isSealedDocument } from '@main/crypto/envelope.js'
 import type { SafeStorageLike } from '@main/crypto/local-data-key.js'
@@ -9,6 +9,7 @@ import {
   MasterPasswordRequiredError,
   VAULT_SALT_BYTES,
   VAULT_SCRYPT_COST,
+  VaultKeyNewerError,
   VaultKeyUnreadableError,
   WrongMasterPasswordError,
   deleteVaultKeyFile,
@@ -142,10 +143,21 @@ describe('the protection a key file describes', () => {
       masterPassword: null
     })
 
-    expect(vaultKeyProtectionOf(both)).toBe('keystore+master')
-    expect(vaultKeyProtectionOf(masterOnly)).toBe('master')
-    expect(vaultKeyProtectionOf(keystoreOnly)).toBe('keystore')
-    expect(vaultKeyProtectionOf(plain)).toBe('plain')
+    expect(vaultKeyProtectionOf(both, 'os')).toBe('keystore+master')
+    expect(vaultKeyProtectionOf(masterOnly, 'os')).toBe('master')
+    expect(vaultKeyProtectionOf(keystoreOnly, 'os')).toBe('keystore')
+    expect(vaultKeyProtectionOf(plain, 'os')).toBe('plain')
+
+    /*
+      The same bytes under a weak key store (Linux's basic text): the file's `keystore` flag still says
+      what wrapped the key and is not reinterpreted, but what that wrapping is worth is this run's fact.
+      Only the files the key store took part in change their sentence.
+    */
+    expect(vaultKeyProtectionOf(both, 'weak')).toBe('weak-keystore+master')
+    expect(vaultKeyProtectionOf(masterOnly, 'weak')).toBe('master')
+    expect(vaultKeyProtectionOf(keystoreOnly, 'weak')).toBe('weak-keystore')
+    expect(vaultKeyProtectionOf(plain, 'weak')).toBe('plain')
+    expect(keystoreOnly.keystore).toBe(true)
   })
 
   it('records the key store that was there at the wrap, not the one that was asked for', async () => {
@@ -465,7 +477,11 @@ describe('reading the key file', () => {
     for (const [label, value] of [
       ['a number where the file should be', 42],
       ['the JSON null', null],
-      ['a version this build does not know', { ...VALID_FILE, version: 2 }],
+      // Not newer: no build writes these, so they are damage rather than a later format.
+      ['a version of zero', { ...VALID_FILE, version: 0 }],
+      ['a fractional version', { ...VALID_FILE, version: 1.5 }],
+      ['a version written as text', { ...VALID_FILE, version: '2' }],
+      ['no version at all', { keystore: false, kdf: null, payload: 'AAAA' }],
       ['a keystore flag that is not a boolean', { ...VALID_FILE, keystore: 'yes' }],
       ['a payload that is not text', { ...VALID_FILE, payload: 42 }],
       ['an empty payload', { ...VALID_FILE, payload: '' }],
@@ -487,7 +503,30 @@ describe('reading the key file', () => {
       ['a salt that is not text', { ...VALID_FILE, kdf: { ...VALID_KDF, salt: 42 } }]
     ] as const) {
       await writeFile(path, JSON.stringify(value), 'utf8')
-      await expect(readVaultKeyFile(path), label).rejects.toThrow(VaultKeyUnreadableError)
+      const read = readVaultKeyFile(path)
+      await expect(read, label).rejects.toThrow(VaultKeyUnreadableError)
+      await expect(read, label).rejects.not.toThrow(VaultKeyNewerError)
+    }
+  })
+
+  it('calls a file from a later format newer, not damaged', async () => {
+    /*
+      A newer Tessera may change every other field, so nothing but the version is looked at. What the
+      distinction buys is the recovery: "damaged" leads the page to offer a reset, and resetting here
+      would delete a vault the newer version can still open.
+    */
+    const path = join(await tempDir(), 'passwords.key')
+    for (const value of [
+      { ...VALID_FILE, version: 2 },
+      { version: 7, wrapping: 'something this build has never seen' }
+    ]) {
+      await writeFile(path, JSON.stringify(value), 'utf8')
+      const read = readVaultKeyFile(path)
+      await expect(read).rejects.toThrow(VaultKeyNewerError)
+      // Still an unreadable key to every caller that only knows that much, so none of them opens it.
+      await expect(read).rejects.toThrow(VaultKeyUnreadableError)
+      await expect(read).rejects.toThrow(`format ${String(value.version)}`)
+      await expect(read).rejects.toMatchObject({ name: 'VaultKeyNewerError' })
     }
   })
 
@@ -568,12 +607,14 @@ describe('writing and deleting the key file', () => {
         masterPassword: null
       })
     )
-    await expect(stat(`${path}.tmp`)).rejects.toThrow(/ENOENT/)
+    // The listing, not one guessed name: temporaries are uniquely named (`atomic-write.ts`).
+    expect(await readdir(dirname(path))).toEqual([basename(path)])
   })
 
-  it('removes the key and the half-written temporary beside it', async () => {
-    // Only ever called together with the document it protects. A temporary surviving the reset
-    // would be read as a key file on the next start, over a document that is already gone.
+  it('removes the key and every half-written temporary beside it', async () => {
+    // Only ever called together with the document it protects. Every temporary is a working copy of
+    // the key, and with unique names a crash during each of several rewraps leaves one each. The
+    // fixed `.tmp` is what a build from before the names became unique left.
     const path = await keyPath()
     await writeVaultKeyFile(
       path,
@@ -584,10 +625,11 @@ describe('writing and deleting the key file', () => {
       })
     )
     await writeFile(`${path}.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${path}.4242-0a1b2c3d4e5f.tmp`, 'interrupted', 'utf8')
+    await writeFile(`${path}.7-ff.tmp`, 'interrupted', 'utf8')
 
     await deleteVaultKeyFile(path)
-    await expect(stat(path)).rejects.toThrow(/ENOENT/)
-    await expect(stat(`${path}.tmp`)).rejects.toThrow(/ENOENT/)
+    expect(await readdir(dirname(path))).toEqual([])
     expect(await readVaultKeyFile(path)).toBeNull()
   })
 

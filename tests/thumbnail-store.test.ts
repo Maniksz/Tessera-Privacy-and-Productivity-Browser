@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -802,6 +802,54 @@ describe('what the renderer and the handler ask for', () => {
 })
 
 describe('on disk', () => {
+  it('removes the temporaries a crash left behind when it opens, and keeps the pictures', async () => {
+    // A picture half-written when the browser went down is a copy of the user's screen under a name
+    // nothing refers to. Unique names (`atomic-write.ts`) mean one per interrupted write, plus the
+    // fixed `.tmp` of an older build.
+    const h = await harness()
+    await h.store.capturerFor('normal').capture(request())
+    await h.store.flush()
+    const shot = shotPath(h.directory, PAGE_KEY)
+    await writeFile(`${shot}.4242-0a1b2c3d4e5f.tmp`, 'interrupted')
+    await writeFile(`${shot}.tmp`, 'interrupted')
+    await writeFile(join(h.directory, 'index.json.7-ff.tmp'), 'interrupted')
+    const before = (await readdir(h.directory)).filter((name) => !name.endsWith('.tmp')).sort()
+
+    const log: CameraLog = { crops: [], resizes: [], qualities: [] }
+    const restarted = await ThumbnailStore.open({
+      directory: h.directory,
+      capture: () => Promise.resolve(fakeImage(log)),
+      debounceMs: 0
+    })
+
+    expect((await readdir(h.directory)).sort()).toEqual(before)
+    expect(restarted.find(PAGE)).not.toBeNull()
+  })
+
+  it('still opens when the cache directory cannot be looked through', async () => {
+    // A file where the directory belongs. The cache is discardable, and a sweep of it must not be the
+    // reason the browser does not start.
+    const root = await mkdtemp(join(tmpdir(), 'tessera-thumbnails-'))
+    const directory = join(root, 'thumbnails')
+    await writeFile(directory, 'not a directory')
+    const log: CameraLog = { crops: [], resizes: [], qualities: [] }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const store = await ThumbnailStore.open({
+        directory,
+        capture: () => Promise.resolve(fakeImage(log)),
+        debounceMs: 0
+      })
+      expect(store.list()).toEqual([])
+      expect(warn).toHaveBeenCalledWith(
+        '[thumbnails] could not remove temporary files from the cache:',
+        expect.anything()
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('reads back what a previous run wrote, and photographs nothing', async () => {
     const h = await harness()
     await h.store.capturerFor('normal').capture(request())

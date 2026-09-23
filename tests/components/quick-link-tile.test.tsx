@@ -97,6 +97,27 @@ describe('which picture a card draws', () => {
     expect(picture()?.getAttribute('src')).toContain('favicon')
   })
 
+  it('cannot be dragged out, because the address carries the cache token', () => {
+    /*
+      A cached picture answers only an address that carries this run's token, which is what keeps a
+      web page from asking the cache about the user's history. Dropped into a page, the image would
+      hand over that address — so neither step of the cascade may be draggable. The card itself still
+      is; only the picture inside it is not.
+    */
+    renderTile(
+      card({
+        thumbnailUrl: 'tessera://thumbnail?url=x&v=1&t=token',
+        faviconUrl: 'tessera://favicon?site=example.com&v=1&t=token'
+      })
+    )
+    expect(picture()?.getAttribute('draggable')).toBe('false')
+
+    fireEvent.error(picture()!)
+    expect(picture()?.getAttribute('src')).toContain('favicon')
+    expect(picture()?.getAttribute('draggable')).toBe('false')
+    expect(screen.getByRole('listitem').getAttribute('draggable')).toBe('true')
+  })
+
   it('falls back to the initial when both fail', () => {
     renderTile(
       card({

@@ -20,7 +20,7 @@ import { useInternalI18n } from './useInternalI18n.js'
  * `tessera://bookmarks`.
  *
  * An internal page rather than chrome UI, which is a *narrower* privilege rather than a wider
- * one: the per-page allowlist grants this document its eight bookmark channels and nothing
+ * one: the per-page allowlist grants this document its nine bookmark channels and nothing
  * else. It cannot read a setting, touch a tab, or reach the window.
  *
  * Following a bookmark goes through `bookmarks:open`, which the core resolves to *this* tab.
@@ -78,9 +78,15 @@ export function BookmarksPage(): React.ReactNode {
   const [notice, setNotice] = useState<string | null>(null)
   const [editing, setEditing] = useState<EditingState | null>(null)
   const [loaded, setLoaded] = useState(false)
+  /** Nodes the core kept raw because it could not read them. Only the count ever reaches this page. */
+  const [unreadable, setUnreadable] = useState(0)
 
   const refresh = useCallback(async (): Promise<void> => {
-    setNodes(await bookmarksApi.list())
+    // Both on every refresh: deleting a folder can take raw nodes along, and the line below must not
+    // go on counting what is gone.
+    const [listed, status] = await Promise.all([bookmarksApi.list(), bookmarksApi.status()])
+    setNodes(listed)
+    setUnreadable(status.unreadableEntries)
   }, [])
 
   useEffect(() => {
@@ -301,6 +307,14 @@ export function BookmarksPage(): React.ReactNode {
       {notice !== null && (
         <p className="bookmarks__notice" role="status">
           {notice}
+        </p>
+      )}
+
+      {unreadable > 0 && (
+        <p className="bookmarks__notice">
+          {unreadable === 1
+            ? tp('bookmarks.unreadableEntry')
+            : tp('bookmarks.unreadableEntries', { count: unreadable })}
         </p>
       )}
 

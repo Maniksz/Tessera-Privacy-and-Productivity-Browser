@@ -1,4 +1,5 @@
 import { matchHostRule } from '../url/domain.js'
+import { canonicalHostname } from './model.js'
 
 /**
  * Sites the user has switched the blocker off for, and what "off" covers.
@@ -61,7 +62,9 @@ export function exemptionHostOf(documentUrl: string | null): ExemptionSubject {
     return null
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
-  return parsed.hostname === '' ? null : parsed.hostname.toLowerCase()
+  // Canonical, so `example.com.` is stored and shown as the one site it is.
+  const host = canonicalHostname(parsed.hostname)
+  return host === '' ? null : host
 }
 
 /**
@@ -100,7 +103,7 @@ export function withSiteExemption(
   host: string,
   exempt: boolean
 ): readonly string[] {
-  const normalized = host.trim().toLowerCase()
+  const normalized = canonicalHostname(host.trim())
   if (normalized === '') return exemptSites
 
   if (exempt) {

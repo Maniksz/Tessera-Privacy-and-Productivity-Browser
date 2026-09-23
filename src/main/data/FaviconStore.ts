@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
@@ -26,7 +26,10 @@ import {
   type FaviconOutcome,
   type FaviconRejection
 } from '@shared/favicons/model.js'
+import { removeTempFilesIn, writeFileAtomically } from './atomic-write.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { KnownFields } from '@shared/known-fields.js'
+import type { StoreLoadReport } from './store-load.js'
 import type { BrowsingMode } from './HistoryStore.js'
 import { createHash } from 'node:crypto'
 
@@ -74,7 +77,7 @@ export type FaviconFetcher = (url: string) => Promise<Response>
  * and the write path is what keeps them (`faviconDomainOf` caps the key,
  * `chooseFaviconCandidate` caps the source address, the size check caps the length).
  */
-const faviconEntrySchema = z.object({
+const faviconEntrySchema = z.looseObject({
   domain: z.string().min(1).max(MAX_FAVICON_DOMAIN_LENGTH),
   contentType: z.enum(FAVICON_CONTENT_TYPES),
   byteLength: z.number().int().positive().max(MAX_FAVICON_BYTES),
@@ -82,7 +85,7 @@ const faviconEntrySchema = z.object({
   sourceUrl: z.string().min(1).max(MAX_FAVICON_SOURCE_URL_LENGTH)
 })
 
-const faviconIndexSchema = z.object({
+const faviconIndexSchema = z.looseObject({
   version: z.literal(1),
   icons: z.array(faviconEntrySchema)
 })
@@ -92,8 +95,8 @@ const faviconIndexSchema = z.object({
  * assignment each way per shape. The schema cannot live next to the interface, because
  * the start page imports the interface and zod must not reach a renderer bundle.
  */
-type SchemaEntry = z.output<typeof faviconEntrySchema>
-type SchemaIndex = z.output<typeof faviconIndexSchema>
+type SchemaEntry = KnownFields<z.output<typeof faviconEntrySchema>>
+type SchemaIndex = KnownFields<z.output<typeof faviconIndexSchema>>
 
 const _entryMatchesModel: SchemaEntry = null as unknown as FaviconEntry
 const _modelMatchesEntry: FaviconEntry = null as unknown as SchemaEntry
@@ -171,10 +174,19 @@ export class FaviconStore {
   }
 
   static async open(options: FaviconStoreOptions): Promise<FaviconStore> {
+    // Before anything is written: an icon half-written when the browser went down is a file under a
+    // name nothing refers to, and so a file nothing would ever remove. The index's own temporaries go
+    // with it; every file in this directory is the store's.
+    await removeTempFilesIn(options.directory).catch((error: unknown) => {
+      console.warn('[favicons] could not remove temporary files from the cache:', error)
+    })
     const store = await JsonStore.open<FaviconIndex>({
       filePath: join(options.directory, INDEX_FILE_NAME),
       schema: faviconIndexSchema,
       fallback: emptyFaviconIndex,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       // A file cut short by a crash, or written by an older build, must not leave two
       // entries for one site: the write path assumes one, and the extra would decide
       // arbitrarily which content type gets served for a file only one of them wrote.
@@ -233,6 +245,11 @@ export class FaviconStore {
 
   get recoveredFromInvalidFile(): boolean {
     return this.#store.diagnostics.recoveredFromInvalidFile
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   onChange(listener: (icons: FaviconEntry[]) => void): () => void {
@@ -369,9 +386,7 @@ export class FaviconStore {
     const target = this.#pathFor(domain)
     try {
       await mkdir(this.#directory, { recursive: true })
-      const temp = `${target}.tmp`
-      await writeFile(temp, bytes, { mode: 0o600 })
-      await rename(temp, target)
+      await writeFileAtomically(target, bytes, { mode: 0o600 })
       return true
     } catch (error) {
       console.warn(`[favicons] could not store the icon for ${domain}:`, error)

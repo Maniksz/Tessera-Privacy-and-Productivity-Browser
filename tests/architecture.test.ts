@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   INTERNAL_PAGES,
@@ -151,7 +151,7 @@ function valueImportsOf(text: string): string[] {
   while ((match = pattern.exec(text)) !== null) {
     const clause = match[1] ?? ''
     // `import { type A, type B } from` is also fully erased.
-    const named = (/\{([^}]*)\}/.exec(clause))?.[1]
+    const named = /\{([^}]*)\}/.exec(clause)?.[1]
     if (named !== undefined && named.trim() !== '') {
       const allTypes = named
         .split(',')
@@ -163,6 +163,121 @@ function valueImportsOf(text: string): string[] {
     specifiers.push(match[2]!)
   }
   return specifiers
+}
+
+/**
+ * What a test that reads `out/` may do with the build it finds.
+ *
+ * These tests used to pass whenever `out/` was absent, which made them decorative in exactly the place
+ * they matter: a CI job that forgot to build, or built after testing, went green on budgets nobody had
+ * measured. And locally they measured whatever `out/` happened to hold, so a bundle from last week
+ * could pass or fail a budget for code that no longer exists.
+ *
+ * So the rule differs by where it runs. In CI a missing or stale build is a broken pipeline and fails.
+ * On a developer's machine a unit-test run should not require a build, so it skips — loudly, because a
+ * silent skip is the same false comfort as a silent pass.
+ *
+ * Pure, so the table can be asserted without a build, a clock or an environment variable.
+ */
+type BuildVerdict = { kind: 'check' } | { kind: 'fail' | 'skip'; reason: string }
+
+function judgeBuild(input: {
+  ci: boolean
+  artifact: string
+  /** Modification time of the built artifact, or `null` when it does not exist. */
+  builtAt: number | null
+  newestSourceAt: number
+}): BuildVerdict {
+  const { ci, artifact, builtAt, newestSourceAt } = input
+  const problem =
+    builtAt === null ? 'is missing' : builtAt < newestSourceAt ? 'is older than src/' : null
+  if (problem === null) return { kind: 'check' }
+  const advice = ci ? 'CI must run `pnpm build` before the tests' : 'run `pnpm build` to check it'
+  return { kind: ci ? 'fail' : 'skip', reason: `${artifact} ${problem}; ${advice}` }
+}
+
+/** GitHub Actions and most other runners set `CI`; `false` and `0` are how people switch it off. */
+function runningInCi(): boolean {
+  const value = process.env['CI']
+  return value !== undefined && value !== '' && value !== 'false' && value !== '0'
+}
+
+let newestSourceAtCache: number | undefined
+
+/** The most recent modification anywhere under `src/`, computed once per run. */
+function newestSourceAt(): number {
+  newestSourceAtCache ??= Math.max(
+    ...filesUnder(join(ROOT, 'src')).map((file) => statSync(file).mtimeMs)
+  )
+  return newestSourceAtCache
+}
+
+/**
+ * When the build under `out/` was written: the file's own time, or for a directory the *oldest* file in
+ * it, since one chunk left over from an earlier build is enough to make a budget check meaningless.
+ */
+function builtAt(path: string): number | null {
+  if (!existsSync(path)) return null
+  if (!statSync(path).isDirectory()) return statSync(path).mtimeMs
+  const files = filesUnder(path)
+  return files.length === 0 ? null : Math.min(...files.map((file) => statSync(file).mtimeMs))
+}
+
+/**
+ * Fails, skips or returns, per `judgeBuild`. `skip` is the test context's, so the skip is reported
+ * against the test it belongs to rather than counted as a pass.
+ */
+function requireFreshBuild(relativePath: string, skip: (note: string) => never): void {
+  const verdict = judgeBuild({
+    ci: runningInCi(),
+    artifact: relativePath,
+    builtAt: builtAt(join(ROOT, relativePath)),
+    newestSourceAt: newestSourceAt()
+  })
+  if (verdict.kind === 'check') return
+  if (verdict.kind === 'fail') expect.fail(verdict.reason)
+  // `process.stderr` rather than `console.warn`: Vitest's default reporter does not print console output
+  // from a test that ends skipped, which would leave this skip as quiet as the pass it replaces. The
+  // note passed to `skip` is shown too, but only by the verbose reporter.
+  process.stderr.write(`skipped: ${verdict.reason}\n`)
+  skip(verdict.reason)
+}
+
+/** A workflow file with its comment lines removed, so prose about a step is not read as the step. */
+function workflowCode(name: string): string {
+  const text = readFileSync(join(ROOT, '.github/workflows', name), 'utf8')
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n')
+}
+
+/**
+ * `IN_PLACE_UPDATES` as `UpdateService.ts` declares it, one boolean per platform.
+ *
+ * Read from the source like everything else here. A missing row fails rather than reading as
+ * `false`: a reshaped table would otherwise make the couplings below pass by finding nothing.
+ */
+function inPlaceUpdatesInSource(): Record<'darwin' | 'win32' | 'linux', boolean> {
+  const source = withoutComments(
+    readFileSync(join(ROOT, 'src/main/updates/UpdateService.ts'), 'utf8')
+  )
+  const table = /\bIN_PLACE_UPDATES\b[^=]*=\s*\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  const row = (platform: string): boolean => {
+    const value = new RegExp(`(?:^|[\\s,])${platform}:\\s*(true|false)\\b`).exec(table)?.[1]
+    expect(value, `IN_PLACE_UPDATES has no literal row for ${platform}`).toBeDefined()
+    return value === 'true'
+  }
+  return { darwin: row('darwin'), win32: row('win32'), linux: row('linux') }
+}
+
+/** The jobs of a workflow by name, each as the text of its block. Two-space indentation, as written. */
+function workflowJobs(code: string): Map<string, string> {
+  const jobs = new Map<string, string>()
+  const body = code.split(/^jobs:\s*$/m)[1] ?? ''
+  const parts = body.split(/^ {2}([\w-]+):\s*$/m)
+  for (let index = 1; index < parts.length; index += 2) jobs.set(parts[index]!, parts[index + 1]!)
+  return jobs
 }
 
 describe('layer boundaries', () => {
@@ -233,7 +348,10 @@ describe('layer boundaries', () => {
       this refuses.
     */
     const path = join(ROOT, 'src/main/browser/window-events.ts')
-    expect(existsSync(path), 'window-events.ts moved; this rule moved with it or died with it').toBe(true)
+    expect(
+      existsSync(path),
+      'window-events.ts moved; this rule moved with it or died with it'
+    ).toBe(true)
     const text = readFileSync(path, 'utf8')
 
     expect(valueImportsOf(text), 'window-events.ts imports Electron').not.toContain('electron')
@@ -277,7 +395,9 @@ describe('bundle weight', () => {
     }
 
     for (const file of rendererFiles) visit(file)
-    expect(reachable.size, 'expected the renderer to import something from shared').toBeGreaterThan(0)
+    expect(reachable.size, 'expected the renderer to import something from shared').toBeGreaterThan(
+      0
+    )
 
     for (const module of reachable) {
       const text = readFileSync(join(ROOT, module), 'utf8')
@@ -285,14 +405,10 @@ describe('bundle weight', () => {
     }
   })
 
-  it('holds the built renderer bundles to a size budget', () => {
-    // Skipped rather than failed when there is no build: a unit-test run should not
-    // require one, but a run after a build must hold the line.
+  it('holds the built renderer bundles to a size budget', (context) => {
+    // Fails in CI and skips locally when the build is missing or stale; see `judgeBuild`.
+    requireFreshBuild('out/renderer/assets', context.skip)
     const assets = join(ROOT, 'out/renderer/assets')
-    if (!existsSync(assets)) {
-      expect(true, 'no build present; run pnpm build to check the budget').toBe(true)
-      return
-    }
 
     /**
      * First match wins, and the last entry is a catch-all.
@@ -344,6 +460,13 @@ describe('bundle weight', () => {
         and both of which are their own pass: the per-locale split named above, and a core-side catalogue
         for strings only the core renders, on the precedent `settings-text.ts` set. Whoever hits this budget
         next should do one of them rather than raise the number a third time.
+
+        ## Hit again, and answered with the core-side catalogue
+
+        The update check's release-page sentences for Windows and Linux took the chunk to 48.18 kB. Instead
+        of a third raise, every `updates.*` sentence that only its native message boxes show moved to
+        `main/updates/update-text.*`, which brought it to 44.20 kB; `updates.checkNow` stayed, because the
+        settings screen renders it. The `menu.*` keys are the obvious next candidates for the same move.
       */
       { match: /^catalog-.*\.js$/, maxKb: 48, note: 'message catalogue, both locales' },
       { match: /\.js$/, maxKb: 40, note: 'shared chunk' }
@@ -374,12 +497,9 @@ describe('bundle weight', () => {
     }
   })
 
-  it('keeps the preload bundle self-contained', () => {
+  it('keeps the preload bundle self-contained', (context) => {
+    requireFreshBuild('out/preload/index.cjs', context.skip)
     const preload = join(ROOT, 'out/preload/index.cjs')
-    if (!existsSync(preload)) {
-      expect(true, 'no build present').toBe(true)
-      return
-    }
     const text = readFileSync(preload, 'utf8')
     const requires = [...text.matchAll(/require\("([^"]+)"\)/g)].map((m) => m[1])
     // A sandboxed preload cannot require a relative chunk; a shared chunk here
@@ -453,7 +573,7 @@ describe('sandbox rules', () => {
     }
   })
 
-  it('keeps the public-suffix table out of the preload', () => {
+  it('keeps the public-suffix table out of the preload', (context) => {
     /*
       The preload runs in every renderer, so every byte of it is parse work on every page load.
 
@@ -466,8 +586,8 @@ describe('sandbox rules', () => {
       Checked against the built bundle rather than against imports, because the failure is about what
       ends up in the file: a future import three modules deep would reintroduce it just as invisibly.
     */
+    requireFreshBuild('out/preload/index.cjs', context.skip)
     const bundle = join(ROOT, 'out/preload/index.cjs')
-    if (!existsSync(bundle)) return // Nothing built; `pnpm build` covers this in CI.
     const text = readFileSync(bundle, 'utf8')
     expect(text, 'the preload must not carry the eTLD list').not.toContain('co.uk')
     // And the thing it *does* need is still there, so this cannot pass by the preload shrinking to
@@ -514,6 +634,79 @@ describe('sandbox rules', () => {
 })
 
 describe('IPC discipline', () => {
+  it('lets only the atomic write helper rename a temporary file into place', async () => {
+    /*
+      Eight stores each spelled out write-then-rename for themselves, none with an fsync and all with a
+      fixed `.tmp` name two processes could share. `atomic-write.ts` is now the one place; a ninth
+      copy would bring back exactly what it removed. `MediaDownloader.ts` renames a finished `.part`
+      download, which is a transfer, not a store.
+    */
+    const allowed = new Set(['src/main/data/atomic-write.ts', 'src/main/media/MediaDownloader.ts'])
+    const renameImport =
+      /import\s*\{[^}]*\brename(?:Sync)?\b[^}]*\}\s*from\s*'(?:node:)?fs(?:\/promises)?'/
+    const renameMember = /\b(?:fs|fsp|promises)\.rename(?:Sync)?\s*\(/
+    const fixedTemp = /\$\{[^}]*\}\.tmp\b/
+    const offenders = (await collect('src/main'))
+      .filter((file) => !allowed.has(file.relative.split(sep).join('/')))
+      .filter(
+        (file) =>
+          renameImport.test(file.text) || renameMember.test(file.text) || fixedTemp.test(file.text)
+      )
+      .map((file) => file.relative)
+    expect(offenders).toEqual([])
+  })
+
+  it('hands every session to the permission arbiter, for requests and checks alike', () => {
+    /*
+      The arbiter was built, tested and never called: `applySessionHardening` got no
+      `requestFromUser`, so every "ask" setting answered with a silent refusal and no dialog ever
+      appeared. These pin the wiring at both ends, and pin that the hardening decides only through
+      the policy, so the settings and the dialog cannot drift apart again.
+    */
+    const registry = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    )
+    const index = codeOnly(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const hardening = codeOnly(readFileSync(join(ROOT, 'src/main/session/hardening.ts'), 'utf8'))
+    expect(registry).toMatch(
+      /applySessionHardening\(\{[\s\S]*?requestFromUser:[\s\S]*?this\.#deps\.permissions\.ask\(/
+    )
+    expect(registry).toMatch(
+      /checkPermission:\s*\(check\)\s*=>\s*this\.#deps\.permissions\.check\(check,\s*mode\)/
+    )
+    expect(index).toMatch(/new WindowRegistry\(\{[\s\S]*?permissions:\s*permissionArbiter/)
+    expect(hardening).toMatch(/setPermissionRequestHandler[\s\S]*?ask\(request, webContents\)/)
+    expect(hardening).toMatch(/setPermissionCheckHandler[\s\S]*?check\(\{/)
+    expect(hardening).not.toMatch(/decidePermission\(|decideMediaPermission\(/)
+  })
+
+  it('keeps the refusal nobody answered off the wire', () => {
+    // A window closed, a queue full, a dialog displaced: refused once and never remembered. If that
+    // value could be sent as an answer, a page-reachable surface could clear a site's decision.
+    const answers = readFileSync(join(ROOT, 'src/shared/overlay/permission.ts'), 'utf8')
+    const policy = readFileSync(join(ROOT, 'src/main/session/permission-policy.ts'), 'utf8')
+    expect(answers).not.toMatch(/unanswered/)
+    expect(policy).toMatch(/export const UNANSWERED = 'unanswered'/)
+  })
+
+  it('resolves the window of a request from its sender, never from focus', () => {
+    /*
+      A settings page in a private window once wrote its user rules into the normal profile whenever
+      another window had focus. `fromEvent` matched a tab's sender on `hostWebContents`, which only a
+      `<webview>` sets and a `WebContentsView` never does, so every internal page fell through to the
+      focused window. The decision now lives in `sender-window.ts`; this keeps the registry on it and
+      keeps the dead branch and the focus fallback from coming back.
+    */
+    const registry = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    )
+    const raw = readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    expect(raw).toMatch(/from '\.\/sender-window\.js'/)
+    expect(registry).toMatch(/resolve\([^)]*\)[^{]*\{[^}]*windowOfSender\(/)
+    expect(registry).not.toMatch(/hostWebContents/)
+    expect(registry).not.toMatch(/resolve\([^)]*\)[^{]*\{[^}]*focused\(\)/)
+  })
+
   it('gives every shortcut action a menu item that carries its accelerator', () => {
     /*
       An accelerator only fires if a menu item declares it.
@@ -630,7 +823,9 @@ describe('IPC discipline', () => {
     // 1. A literal `accel('…')` anywhere in the menus. The directory rather than `appMenu.ts`, because the
     //    item templates already live in their own modules and a menu built in one of them registers just
     //    as well.
-    const menus = (await collect('src/main/menu')).map((file) => withoutComments(file.text)).join('\n')
+    const menus = (await collect('src/main/menu'))
+      .map((file) => withoutComments(file.text))
+      .join('\n')
     const registered = new Set<string>(
       [...menus.matchAll(/accel\('([A-Za-z0-9]+)'\)/g)].map((match) => match[1] ?? '')
     )
@@ -639,9 +834,10 @@ describe('IPC discipline', () => {
     //    table is read rather than its four current values written down — and only while the loop is still
     //    there to turn it into accelerators, so deleting the loop takes the four out of the set.
     const layoutActions = tableActions('LAYOUT_SHORTCUTS')
-    expect(layoutActions.length, 'LAYOUT_SHORTCUTS no longer reads as a table of actions').toBeGreaterThan(
-      0
-    )
+    expect(
+      layoutActions.length,
+      'LAYOUT_SHORTCUTS no longer reads as a table of actions'
+    ).toBeGreaterThan(0)
     const appMenu = withoutComments(readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8'))
     if (/LAYOUT_SHORTCUTS\[[\s\S]{0,400}?accel\(shortcut\)/.test(appMenu)) {
       for (const action of layoutActions) registered.add(action)
@@ -651,13 +847,18 @@ describe('IPC discipline', () => {
     //    globally are reached. Their names come out of `PageKeyAction` — the union of everything that path
     //    can do — rather than from a pair of literals here, and they count only while the subscription and
     //    the call that resolves it both exist.
-    const pageKeys = withoutComments(readFileSync(join(ROOT, 'src/main/browser/page-keys.ts'), 'utf8'))
+    const pageKeys = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/page-keys.ts'), 'utf8')
+    )
     const pageKeyActions = [
       ...(/export type PageKeyAction =([^\n]*)/.exec(pageKeys)?.[1] ?? '').matchAll(/'([a-z-]+)'/g)
     ]
       .flatMap((match) => (match[1] ?? '').split('-'))
       .filter(isShortcutAction)
-    expect(pageKeyActions.length, 'PageKeyAction names no shortcut action any more').toBeGreaterThan(1)
+    expect(
+      pageKeyActions.length,
+      'PageKeyAction names no shortcut action any more'
+    ).toBeGreaterThan(1)
 
     const wiring = (await collect('src/main/browser'))
       // Its own declarations would otherwise stand in for a caller, and a mechanism nobody calls is
@@ -714,9 +915,9 @@ describe('IPC discipline', () => {
     */
     const resolveArgument = (code: string, argument: string): ShortcutAction[] => {
       if (!/^[A-Za-z_$][\w$]*$/.test(argument)) return []
-      const assignment = new RegExp(`(?:const|let)\\s+${argument}\\s*(?::[^=\\n]*)?=\\s*([^\\n]+)`).exec(
-        code
-      )?.[1]
+      const assignment = new RegExp(
+        `(?:const|let)\\s+${argument}\\s*(?::[^=\\n]*)?=\\s*([^\\n]+)`
+      ).exec(code)?.[1]
       const table = /^([A-Z][A-Z0-9_]*)\s*\[/.exec(assignment?.trim() ?? '')?.[1]
       return table === undefined ? [] : tableActions(table)
     }
@@ -755,10 +956,18 @@ describe('IPC discipline', () => {
       'an action argument this scan cannot read is an action it is not checking; teach it, do not skip it'
     ).toEqual([])
     // Floors, so none of this can pass by matching nothing — the failure the whole test is about.
-    expect(callSites, 'no control in the renderer advertises a shortcut any more').toBeGreaterThan(6)
-    expect(fromVariables, 'no non-literal argument resolved; the blind spot is back').toBeGreaterThan(0)
+    expect(callSites, 'no control in the renderer advertises a shortcut any more').toBeGreaterThan(
+      6
+    )
+    expect(
+      fromVariables,
+      'no non-literal argument resolved; the blind spot is back'
+    ).toBeGreaterThan(0)
     expect(advertised.size, 'the advertised set collapsed').toBeGreaterThan(8)
-    expect(registered.size, 'the registered set collapsed, which would pass everything').toBeGreaterThan(20)
+    expect(
+      registered.size,
+      'the registered set collapsed, which would pass everything'
+    ).toBeGreaterThan(20)
 
     for (const [action, where] of advertised) {
       expect(
@@ -796,7 +1005,10 @@ describe('IPC discipline', () => {
 
     /** Declared, not yet honoured. Each line is a bug with a name. */
     const notYetRead = new Map([
-      ['network.killSwitch', 'spec 4 promises no traffic when the tunnel drops; nothing implements it'],
+      [
+        'network.killSwitch',
+        'spec 4 promises no traffic when the tunnel drops; nothing implements it'
+      ],
       ['network.proxyMode', 'no proxy is ever configured from settings'],
       ['network.proxyUrl', 'same; the address is stored and unused'],
       ['privacy.malwareProtection', 'no reputation check exists'],
@@ -830,7 +1042,9 @@ describe('IPC discipline', () => {
       unread.push(key)
     }
 
-    expect(unread, 'nothing in src reads these settings, so switching them does nothing').toEqual([])
+    expect(unread, 'nothing in src reads these settings, so switching them does nothing').toEqual(
+      []
+    )
 
     // The debt list may only shrink: a key that has since gained a reader must leave it, or the list
     // stops describing anything.
@@ -972,17 +1186,64 @@ describe('IPC discipline', () => {
       sending them to the release page.
 
       Coupled in the direction that hurts: if the workflow still disables signing, the source must still
-      say so. The reverse is deliberately not asserted — obtaining a certificate and flipping the constant
-      is a change somebody makes on purpose, and this test must not be the thing that blocks it.
+      say so. The reverse is deliberately not asserted — obtaining a certificate and flipping the row is a
+      change somebody makes on purpose, and this test must not be the thing that blocks it.
     */
-    const workflow = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8')
+    const workflow = workflowCode('release.yml')
     if (!workflow.includes('--config.mac.identity=null')) return
 
-    const source = readFileSync(join(ROOT, 'src/main/updates/UpdateService.ts'), 'utf8')
-    expect(
-      `${source}${readFileSync(join(ROOT, 'src/main/updates/install-updates.ts'), 'utf8')}`,
-      'the workflow builds mac unsigned, so in-place updates must stay off'
-    ).toMatch(/MAC_BUILD_IS_SIGNED\s*[:=]\s*false/)
+    expect(inPlaceUpdatesInSource().darwin, 'the workflow builds mac unsigned').toBe(false)
+  })
+
+  it('keeps Windows in-place updates off while the publish job holds no signing certificate', () => {
+    /*
+      The Windows half has no override to look for, which is what makes it the dangerous one. An
+      unsigned NSIS build is the *default*: electron-builder signs only when it is handed a certificate,
+      and it is handed one through `CSC_LINK` or `WIN_CSC_LINK` in the environment of the job that
+      packages. So "unsigned" is the absence of those names in `publish`, and an in-place row for
+      Windows in that state would have `NsisUpdater` install whatever the release holds.
+
+      Same direction as the macOS test above: an unsigned workflow pins the row to `false`, and adding
+      a certificate is left free. A signing route through Azure Trusted Signing would arrive under
+      other names, and belongs in this pattern the day it is set up.
+    */
+    const publish = workflowJobs(workflowCode('release.yml')).get('publish')
+    expect(publish, 'release.yml has no publish job').toBeDefined()
+    if (/\b(?:WIN_)?CSC_LINK\b/.test(publish ?? '')) return
+
+    expect(inPlaceUpdatesInSource().win32, 'the publish job packages Windows unsigned').toBe(false)
+  })
+
+  it('lets Windows install in place only once the updater is told whose signature to expect', () => {
+    /*
+      A certificate in the workflow is not yet a checked update. `NsisUpdater` compares the downloaded
+      installer's Authenticode signature against `publisherName` from `app-update.yml`, and when that
+      value is absent it skips the check and installs — a signed release and an unsigned impostor then
+      look the same to it. So a Windows row set to `true` requires `win.publisherName` to be written
+      down in `electron-builder.yml`, where the updater's copy is generated from.
+    */
+    if (!inPlaceUpdatesInSource().win32) return
+
+    const config = readFileSync(join(ROOT, 'electron-builder.yml'), 'utf8')
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n')
+    const win = /^win:\s*$([\s\S]*?)^\S/m.exec(config)?.[1] ?? ''
+    expect(win, 'Windows installs in place with no publisher to verify against').toMatch(
+      /^ {2}publisherName:\s*\S/m
+    )
+  })
+
+  it('decides the update route in the service, not in the adapter', () => {
+    /*
+      The three tests above read `IN_PLACE_UPDATES`, and that is only the truth if nothing overrides it.
+      `UpdateServiceOptions.inPlaceUpdates` exists for tests; `install-updates.ts` passing it would put
+      a second table beside the one the fitness functions check, and neither would say so.
+    */
+    const adapter = withoutComments(
+      readFileSync(join(ROOT, 'src/main/updates/install-updates.ts'), 'utf8')
+    )
+    expect(adapter, 'the adapter overrides the in-place table').not.toMatch(/inPlaceUpdates/)
   })
 
   it('leaves no shape assertion pointing in only one direction', async () => {
@@ -1032,7 +1293,9 @@ describe('IPC discipline', () => {
         // A narrowing of a third-party type, not a mirror of one of ours.
         if (right !== undefined && fromElectron.has(right)) continue
         if (pairs.has(`${right ?? ''}→${left ?? ''}`)) continue
-        missing.push(`${file.relative}: nothing asserts ${right ?? ''} is assignable to ${left ?? ''}`)
+        missing.push(
+          `${file.relative}: nothing asserts ${right ?? ''} is assignable to ${left ?? ''}`
+        )
       }
     }
 
@@ -1055,7 +1318,10 @@ describe('IPC discipline', () => {
       the user typed" convenience — each of them a one-line subscription, and each of them a plaintext
       master password somewhere it must never be.
     */
-    const allowed = new Set(['src/main/ipc/password-handlers.ts', 'src/main/passwords/overlay-keys.ts'])
+    const allowed = new Set([
+      'src/main/ipc/password-handlers.ts',
+      'src/main/passwords/overlay-keys.ts'
+    ])
 
     for (const file of await collect('src')) {
       if (allowed.has(file.relative)) continue
@@ -1109,7 +1375,10 @@ describe('IPC discipline', () => {
       }
     }
 
-    expect(offenders, 'the CDP harness is back; see this test for why that alerts somebody').toEqual([])
+    expect(
+      offenders,
+      'the CDP harness is back; see this test for why that alerts somebody'
+    ).toEqual([])
   })
 
   it('keeps the application from statically importing its own checks', () => {
@@ -1202,7 +1471,9 @@ describe('IPC discipline', () => {
       because the condition sits next to the accelerator, and this one was four hundred lines away.
     */
     const menu = readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8')
-    const conditionalPushes = [...menu.matchAll(/if\s*\(\s*isMac\s*\)\s*template\.push\(([^)]*)\)/g)]
+    const conditionalPushes = [
+      ...menu.matchAll(/if\s*\(\s*isMac\s*\)\s*template\.push\(([^)]*)\)/g)
+    ]
 
     for (const push of conditionalPushes) {
       const names = (push[1] ?? '').split(',').map((name) => name.trim())
@@ -1421,12 +1692,16 @@ describe('IPC discipline', () => {
     const events = ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived']
     for (const event of events) {
       const registrations = files.flatMap((file) =>
-        [...file.text.matchAll(new RegExp(`webRequest\\.${event}\\(`, 'g'))].map(() => file.relative)
+        [...file.text.matchAll(new RegExp(`webRequest\\.${event}\\(`, 'g'))].map(
+          () => file.relative
+        )
       )
       // `RequestPipeline` registers `onBeforeRequest` twice: once to install and
       // once with null to remove it.
       const expected = event === 'onBeforeRequest' ? 2 : 1
-      expect(registrations.length, `${event} registered in ${registrations.join(', ')}`).toBe(expected)
+      expect(registrations.length, `${event} registered in ${registrations.join(', ')}`).toBe(
+        expected
+      )
     }
   })
 })
@@ -1660,12 +1935,96 @@ describe('internal page scrolling', () => {
       const css = withoutComments(sheet.text)
       if (!/overflow(-y)?\s*:\s*visible/.test(css)) continue
       expect(
-        /body\s*\{[^}]*height:\s*auto/.test(css) || /html,\s*body\s*\{[^}]*height:\s*auto/.test(css),
+        /body\s*\{[^}]*height:\s*auto/.test(css) ||
+          /html,\s*body\s*\{[^}]*height:\s*auto/.test(css),
         `${sheet.relative} sets overflow: visible on the body but leaves height: 100% from the chrome ` +
           'reset in force. A visible overflow out of a fixed-height box still cannot be scrolled to; ' +
           'add height: auto (with min-height: 100% to keep the background) beside it.'
       ).toBe(true)
     }
+  })
+})
+
+describe('startup', () => {
+  /*
+    `index.ts` is excluded from coverage and cannot run under Node, so the order of its first statements
+    is asserted here. Every rule these tests guard was once broken in that file with nothing to show it:
+    a second instance called `app.quit()`, which returns, and went on to run `main()` against the
+    running instance's profile; and the listeners for addresses from outside were attached after the
+    session restore, so a link that started the browser was lost.
+  */
+  const ENTRY = 'src/main/index.ts'
+
+  it('ends a second instance at the lock, before anything else can run', () => {
+    const entry = codeOnly(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    const lock = entry.indexOf('requestSingleInstanceLock(')
+    expect(lock, 'nothing asks for the single-instance lock').toBeGreaterThan(-1)
+
+    // The first thing asked of `app` after the lock is to exit — not `quit`, which returns and lets the
+    // rest of the module run.
+    const next = /\bapp\.(\w+)\(/.exec(entry.slice(lock + 'requestSingleInstanceLock('.length))
+    expect(next?.[1], 'the second instance is not ended right after the lock').toBe('exit')
+  })
+
+  it('runs nothing at the top level of the entry point outside the lock branch', () => {
+    /*
+      `app.exit` ends the process, but the statements after it are still code, and "it never gets there"
+      is a claim about Electron that no test here can check. So every statement with an effect sits
+      inside a branch that holds the lock: a bare call at the top level — the flags, the scheme, a
+      listener, `main()` — is one a second instance would also run.
+
+      A top-level line is one that starts in the first column; a call there, other than a conditional,
+      is a statement of its own.
+    */
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    const bare = entry
+      .split('\n')
+      .filter((line) =>
+        /^(?!(?:if|for|while|switch)\b)(?:void\s+)?[A-Za-z_$][\w$.]*\s*\(/.test(line)
+      )
+    expect(bare, 'these run in a second instance as well').toEqual([])
+    expect(entry, 'main() is not started from the lock branch').toMatch(
+      /if \(primaryInstance\) \{[^}]*void main\(\)/
+    )
+  })
+
+  it('listens for addresses from outside before the first await', () => {
+    /*
+      macOS delivers the link that starts the browser as `open-url` before `ready`, and a second launch
+      can arrive while the stores are opening. A listener attached after an `await` — as both were, at
+      the end of `main()` — misses exactly those. Literals are kept for this check: the event names are
+      what is being located.
+    */
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    const firstAwait = entry.search(/\bawait\b/)
+    expect(firstAwait, 'the entry point no longer awaits anything').toBeGreaterThan(-1)
+    for (const event of ['open-url', 'second-instance']) {
+      const listener = entry.indexOf(`app.on('${event}'`)
+      expect(listener, `nothing listens for ${event}`).toBeGreaterThan(-1)
+      expect(listener, `${event} is attached after the first await`).toBeLessThan(firstAwait)
+    }
+  })
+
+  it('reads the first launch its own address and delivers what was held only after the restore', () => {
+    /*
+      Windows and Linux hand a cold-start link over on the command line (`build/installer.nsh`
+      registers `"%1"`), and nothing read it. And delivering before the restore would open the link in
+      a window the restored ones then cover — or, with no window yet, in one of its own beside them.
+    */
+    const entry = codeOnly(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    expect(entry, 'the first instance ignores its own command line').toMatch(
+      /firstExternalAddress\(\s*process\.argv\s*\)/
+    )
+    expect(entry, 'the second instance sends nothing with the lock').toMatch(
+      /requestSingleInstanceLock\(\s*\{\s*url:\s*launchAddress\s*\}\s*\)/
+    )
+    const restore = entry.indexOf('applySessionRestore(')
+    const delivery = entry.indexOf('externalAddresses.deliverTo(')
+    expect(restore, 'the restore moved out of the entry point').toBeGreaterThan(-1)
+    expect(delivery, 'nothing ever opens the held addresses').toBeGreaterThan(restore)
+    expect(entry, 'the window is not chosen by the tested rule').toMatch(
+      /externalAddressWindow\(\s*\w+\.byRecentFocus\s*\)/
+    )
   })
 })
 
@@ -1707,7 +2066,9 @@ describe('privacy invariants', () => {
         // it; matching case-insensitively on the stem catches a store nobody registered.
         const stem = (store ?? '').replace(/Store$/, '').toLowerCase()
         const found = registered.some((name) => (name ?? '').toLowerCase().startsWith(stem))
-        expect(found, `${store ?? ''} has a flush() but nothing registers it in index.ts`).toBe(true)
+        expect(found, `${store ?? ''} has a flush() but nothing registers it in index.ts`).toBe(
+          true
+        )
         checked += 1
       }
     }
@@ -1789,10 +2150,13 @@ describe('resource discipline', () => {
       /\.on\(\s*'closed'/
     )
 
-    const events = withoutComments(readFileSync(join(ROOT, 'src/main/browser/window-events.ts'), 'utf8'))
-    expect(events, 'the teardown moved behind the host, which cannot reach what it disposes').not.toMatch(
-      /'closed'/
+    const events = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/window-events.ts'), 'utf8')
     )
+    expect(
+      events,
+      'the teardown moved behind the host, which cannot reach what it disposes'
+    ).not.toMatch(/'closed'/)
   })
 
   it('cleans up every renderer subscription', async () => {
@@ -1896,9 +2260,10 @@ describe('product identity', () => {
     const scanned = catalogues.map((file) => file.text).join('\n')
     // The placeholder the messages use *instead* of the name. Its absence would mean the sentences are
     // no longer in view, which is precisely the failure above.
-    expect(scanned, 'no message in the scan uses {app}, so the messages are somewhere else again').toContain(
-      '{app}'
-    )
+    expect(
+      scanned,
+      'no message in the scan uses {app}, so the messages are somewhere else again'
+    ).toContain('{app}')
 
     for (const file of catalogues) {
       // Comments stripped, string literals kept: a message is a literal, so the literal is the subject —
@@ -1975,6 +2340,525 @@ describe('product identity', () => {
     const config = readFileSync(join(ROOT, 'electron-builder.yml'), 'utf8')
     expect(config, 'nsis.include no longer points at build/installer.nsh').toMatch(
       /include:\s*build\/installer\.nsh/
+    )
+  })
+})
+
+describe('continuous integration', () => {
+  it('fails a missing or stale build in CI and skips it locally', () => {
+    const at = { artifact: 'out/renderer/assets', newestSourceAt: 2_000 }
+
+    const missingInCi = judgeBuild({ ...at, ci: true, builtAt: null })
+    expect(missingInCi.kind).toBe('fail')
+    // The message has to say what to do, not only what is wrong.
+    expect(missingInCi.kind === 'check' ? '' : missingInCi.reason).toContain('pnpm build')
+
+    expect(judgeBuild({ ...at, ci: true, builtAt: 1_000 }).kind, 'stale in CI').toBe('fail')
+    expect(judgeBuild({ ...at, ci: false, builtAt: null }).kind, 'missing locally').toBe('skip')
+
+    const staleLocally = judgeBuild({ ...at, ci: false, builtAt: 1_000 })
+    expect(staleLocally.kind).toBe('skip')
+    expect(staleLocally.kind === 'check' ? '' : staleLocally.reason).toMatch(/older than src\//)
+
+    // Equal times count as fresh: a build that finishes in the same tick as the last save is current.
+    expect(judgeBuild({ ...at, ci: true, builtAt: 2_000 }).kind).toBe('check')
+    expect(judgeBuild({ ...at, ci: false, builtAt: 3_000 }).kind).toBe('check')
+  })
+
+  it('runs every gate on pull requests and on main, building before the tests', () => {
+    /*
+      Until this workflow existed the floors in `vitest.config.ts` were enforced by nothing: the only CI
+      was the release, and it ran `pnpm test` without coverage. A floor that only a tag push can trip is
+      a floor that trips after the merge, which is the moment it is least useful.
+
+      `build` before `test:coverage` is not style. The bundle budgets read `out/`, and in CI a missing
+      `out/` fails them — so the wrong order is a red pipeline rather than a silently skipped budget.
+    */
+    const gates = workflowCode('gates.yml')
+    expect(gates, 'release.yml cannot call it without this').toMatch(/^ {2}workflow_call:/m)
+    expect(gates, 'pull requests are not gated').toMatch(/^ {2}pull_request:/m)
+    expect(gates, 'pushes to main are not gated').toMatch(/^ {2}push:\s*\n\s+branches:\s*\[main\]/m)
+
+    const steps = [
+      'pnpm install --frozen-lockfile',
+      'pnpm run build',
+      'pnpm run lint',
+      'pnpm run format:check',
+      'pnpm run test:coverage'
+    ]
+    // Whole `run:` lines, so `pnpm run build` is not found inside some longer command.
+    const runs = [...gates.matchAll(/^\s*- run:\s*(.+?)\s*$/gm)].map((match) => match[1])
+    for (const step of steps) expect(runs, `the gates do not run ${step}`).toContain(step)
+    expect(runs.indexOf('pnpm run build'), 'the tests run before the build').toBeLessThan(
+      runs.indexOf('pnpm run test:coverage')
+    )
+  })
+
+  it('lets no gate fail quietly except the format check until the reformat', () => {
+    /*
+      The test above finds each step's `run:` line and nothing more, so it would stay green if a step
+      beside it gained `continue-on-error: true`. That one line turns a gate into a log entry: the
+      coverage floors or the build would still run, fail, and let the pull request through.
+
+      The format check is the single exception, and a temporary one: it may fail until the one-off
+      reformat (U18 in the review-hardening plan) lands. When it does, this list becomes empty.
+    */
+    const allowed = ['pnpm run format:check']
+    // Each `continue-on-error` is attributed to the step it sits under — the `run:` command, or the
+    // whole first line of a step that does something else. One outside any step is the job's own.
+    const lenient: string[] = []
+    let step = 'the job itself'
+    for (const line of workflowCode('gates.yml').split('\n')) {
+      const start = /^\s*-\s+(\w[\w-]*):\s*(.*?)\s*$/.exec(line)
+      if (start) step = start[1] === 'run' ? start[2]! : `${start[1]}: ${start[2]}`
+      if (/^\s*(?:-\s+)?continue-on-error:/.test(line)) lenient.push(step)
+    }
+    expect(lenient, 'a gate is allowed to fail').toEqual(allowed)
+  })
+
+  it('has the release take its gates from the same workflow as pull requests', () => {
+    // A second copy of the gates would drift — the release's copy already had: no coverage, no format
+    // check. Calling the one workflow is what keeps a release from being held to a lower bar than a PR.
+    const release = workflowCode('release.yml')
+    const jobs = workflowJobs(release)
+    expect(jobs.get('gates'), 'release.yml has no gates job').toBeDefined()
+    expect(jobs.get('gates')).toMatch(/^\s+uses:\s*\.\/\.github\/workflows\/gates\.yml\s*$/m)
+    expect(release, 'release.yml runs a gate of its own').not.toMatch(
+      /pnpm (?:run )?(?:lint|test|format:check)\b/
+    )
+    for (const name of ['release', 'publish']) {
+      expect(jobs.get(name), `${name} does not wait for the gates`).toMatch(
+        /needs:\s*(?:gates\b|\[[^\]]*\bgates\b)/
+      )
+    }
+  })
+
+  it('grants write access only to the jobs that publish', () => {
+    // Everything that runs code from dependencies — install, build, the test suite — runs read-only, so
+    // a compromised package in the build cannot push to the repository or tamper with a release.
+    for (const name of ['gates.yml', 'release.yml']) {
+      expect(workflowCode(name), `${name} top-level permissions`).toMatch(
+        /^permissions:\s*\n {2}contents: read\s*$/m
+      )
+    }
+    const jobs = workflowJobs(workflowCode('release.yml'))
+    for (const [name, block] of jobs) {
+      const writes = /contents:\s*write/.test(block)
+      expect(writes, `${name} ${writes ? 'must not have' : 'needs'} contents: write`).toBe(
+        name === 'release' || name === 'publish'
+      )
+    }
+  })
+
+  it('pins every third-party action to a commit rather than a tag', () => {
+    // A tag is a pointer its owner can move; a commit is not. The comment keeps the pin reviewable,
+    // since nobody can tell from forty hex digits which release they are looking at.
+    const directory = join(ROOT, '.github/workflows')
+    const workflows = readdirSync(directory).filter((name) => /\.ya?ml$/.test(name))
+    expect(workflows).toContain('gates.yml')
+    for (const name of workflows) {
+      const text = readFileSync(join(directory, name), 'utf8')
+      for (const line of text.split('\n')) {
+        const reference = /^\s*(?:-\s*)?uses:\s*(\S+)/.exec(line)?.[1]
+        if (reference === undefined || reference.startsWith('./')) continue
+        expect(line, `${name}: ${reference} is not pinned to a commit`).toMatch(
+          /@[0-9a-f]{40}\s+#\s*v\d+(?:\.\d+)*\s*$/
+        )
+      }
+    }
+  })
+})
+
+describe('shutdown', () => {
+  /*
+    `before-quit` used to guard itself with one boolean: a second Cmd+Q during the flushes ran the
+    clearing and every flush again, a hung write held the process forever, and the vault's own flush
+    was not waited for when a lock had just emptied it. The sequence in `shutdown.ts` owns all of that
+    now; these keep `index.ts` going through it rather than growing a guard of its own beside it.
+  */
+  const ENTRY_FILE = 'src/main/index.ts'
+
+  it('quits only through the shutdown sequence', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY_FILE), 'utf8'))
+    expect(entry).toMatch(/app\.on\('before-quit', onBeforeQuit\)/)
+    expect(entry, 'the quit is held other than by asking the sequence').toMatch(
+      /function onBeforeQuit\(event: Electron\.Event\): void \{\s*if \(!shutdown\.beforeQuit\(beginShutdown\)\) event\.preventDefault\(\)\s*\}/
+    )
+    expect(entry, 'the sequence does not quit when it is done').toMatch(
+      /new ShutdownSequence\(\{[\s\S]*?finish: \(report\) => \{[\s\S]*?app\.quit\(\)/
+    )
+    expect(
+      codeOnly(readFileSync(join(ROOT, ENTRY_FILE), 'utf8')),
+      'a guard of its own beside the sequence'
+    ).not.toMatch(/shutdownComplete/)
+  })
+
+  it('stops the vault timer, seals the session and flushes the registry in the shutdown', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY_FILE), 'utf8'))
+    const begin = /function beginShutdown\(\): ShutdownWork \{[\s\S]*?\n\}/.exec(entry)?.[0] ?? ''
+    expect(begin, 'passwords.dispose() is not in the shutdown').toMatch(/passwords\?\.dispose\(\)/)
+    expect(begin).toMatch(/sessionStore\?\.seal\(\)/)
+    expect(begin).toMatch(/flushes: flushOnExit\.entries\(\)/)
+    // A lock after the quit began would start a write the ending process does not wait for.
+    expect(entry).toMatch(/if \(!quitting\(\)\) void passwords\?\.lock\(\)/)
+  })
+
+  it('ends startup at its phase boundaries once a quit has begun, and catches up the clearing first', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY_FILE), 'utf8'))
+    const start = entry.indexOf('async function main()')
+    const main = entry.slice(start, entry.indexOf('\n}\n', start))
+    const check = /if \(quitting\(\)\) return/
+    expect([...main.matchAll(/if \(quitting\(\)\) return/g)].length).toBeGreaterThanOrEqual(3)
+    expect(main.indexOf('catchUpPendingClear(')).toBeGreaterThan(
+      main.indexOf('await app.whenReady()')
+    )
+    expect(main.indexOf('catchUpPendingClear(')).toBeLessThan(
+      main.indexOf('openLocalDataProtection(')
+    )
+    expect(main.indexOf('if (quitting()) return')).toBeLessThan(
+      main.indexOf('openLocalDataProtection(')
+    )
+    expect(
+      main.slice(main.indexOf('PermissionStore.open('), main.indexOf('new WindowRegistry('))
+    ).toMatch(check)
+    expect(main.slice(main.indexOf('beginRun('), main.indexOf('applySessionRestore('))).toMatch(
+      check
+    )
+  })
+
+  it('names every write registered for shutdown, so a hung one can be reported', () => {
+    const entry = readFileSync(join(ROOT, ENTRY_FILE), 'utf8')
+    const pushes = (entry.match(/flushOnExit\.push\(/g) ?? []).length
+    const named = [...entry.matchAll(/flushOnExit\.push\(\(\)\s*=>[^\n]*,\s*'[^']+'\)\n/g)].length
+    expect(pushes).toBeGreaterThan(3)
+    expect(named).toBe(pushes)
+  })
+})
+
+describe('release hardening', () => {
+  /*
+    `ELECTRON_RENDERER_URL` was read in three places, none of them asking whether the build was
+    packaged, so a variable in a shipped browser's environment could swap its whole UI for a remote
+    page with the full bridge. The fuses and the debugging guard close the other ways in.
+  */
+  it('reads the dev server address only through devServerUrl', () => {
+    const offenders: string[] = []
+    for (const file of filesUnder(join(ROOT, 'src'))) {
+      if (!/\.(ts|tsx)$/.test(file)) continue
+      const path = relative(ROOT, file)
+      if (path === join('src', 'main', 'startup-flags.ts')) continue
+      if (readFileSync(file, 'utf8').includes('ELECTRON_RENDERER_URL')) offenders.push(path)
+    }
+    expect(
+      offenders,
+      'read devServerUrl(process.env, { packaged: app.isPackaged }) instead'
+    ).toEqual([])
+    for (const path of [
+      'src/main/browser/BrowserWindowController.ts',
+      'src/main/browser/OverlayLayer.ts',
+      'src/main/protocol.ts',
+      'src/main/ipc/router.ts'
+    ]) {
+      expect(withoutComments(readFileSync(join(ROOT, path), 'utf8')), path).toMatch(
+        /devServerUrl\(process\.env, \{ packaged: app\.isPackaged \}\)/
+      )
+    }
+  })
+
+  it('ends a packaged build started with a debugging switch before the lock', () => {
+    const entry = codeOnly(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const guard = entry.search(
+      /refusedDebugSwitch\(\s*\(\s*(\w+)\s*\)\s*=>\s*app\.commandLine\.hasSwitch\(\s*\1\s*\)/
+    )
+    expect(guard, 'the guard is not handed app.commandLine.hasSwitch').toBeGreaterThan(-1)
+    expect(guard, 'the guard runs after the lock').toBeLessThan(
+      entry.indexOf('requestSingleInstanceLock(')
+    )
+    const flags = withoutComments(readFileSync(join(ROOT, 'src/main/startup-flags.ts'), 'utf8'))
+    const body = flags.slice(flags.indexOf('export function refusedDebugSwitch('))
+    expect(body.slice(0, body.indexOf('\n}\n')), 'the guard reads argv itself').not.toMatch(
+      /argv|process\./
+    )
+  })
+
+  it('ships with the Node fuses off', () => {
+    const block =
+      /^electronFuses:\n((?: {2}.*\n)+)/m.exec(
+        readFileSync(join(ROOT, 'electron-builder.yml'), 'utf8')
+      )?.[1] ?? ''
+    for (const fuse of [
+      'runAsNode',
+      'enableNodeOptionsEnvironmentVariable',
+      'enableNodeCliInspectArguments'
+    ]) {
+      expect(block, `${fuse} is not switched off`).toMatch(new RegExp(`^ {2}${fuse}: false$`, 'm'))
+    }
+    expect(block, 'stays at its default until the chrome UI has its own scheme').not.toMatch(
+      /grantFileProtocolExtraPrivileges/
+    )
+  })
+
+  it('asks macOS for JIT only', () => {
+    // Comments stripped: the plist explains the two removed keys by name.
+    const plist = readFileSync(join(ROOT, 'build/entitlements.mac.plist'), 'utf8').replace(
+      /<!--[\s\S]*?-->/g,
+      ''
+    )
+    expect(plist).toContain('<key>com.apple.security.cs.allow-jit</key>')
+    expect(plist).not.toContain('allow-unsigned-executable-memory')
+    expect(plist).not.toContain('files.user-selected.read-write')
+  })
+})
+
+describe('chrome surface guard', () => {
+  /*
+    Tabs had a navigation guard and a window-open handler; the chrome window and the overlay had
+    neither, and the router trusted a chrome identity whatever document it held. Drag and drop is off
+    by default in Electron 43, so this is depth rather than a door that stood open — which is why it
+    is pinned at every layer rather than argued once.
+  */
+  for (const path of [
+    'src/main/browser/BrowserWindowController.ts',
+    'src/main/browser/OverlayLayer.ts'
+  ]) {
+    it(`keeps ${path} on its own document`, () => {
+      const code = withoutComments(readFileSync(join(ROOT, path), 'utf8'))
+      expect(code).toMatch(/'will-frame-navigate'/)
+      expect(code).toMatch(/decideChromeNavigation\(/)
+      expect(code).toMatch(/\.prevent\(\)/)
+      expect(code).toMatch(/setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/)
+      expect(code).toMatch(/'will-attach-webview'/)
+      expect(code).not.toMatch(/'will-navigate'/)
+    })
+  }
+
+  it('subscribes the window guard through #on, before the first load', () => {
+    const code = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/BrowserWindowController.ts'), 'utf8')
+    )
+    expect(code).toMatch(/this\.#on\(\s*'will-frame-navigate'/)
+    expect(code).toMatch(/this\.#on\(\s*'will-attach-webview'/)
+    const guard = code.indexOf('this.#guardChrome()')
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(code.indexOf('this.#loadChrome()'))
+  })
+
+  it('guards every overlay view it builds, in #ensureView', () => {
+    const code = withoutComments(
+      readFileSync(join(ROOT, 'src/main/browser/OverlayLayer.ts'), 'utf8')
+    )
+    const ensureView = code.slice(
+      code.indexOf('#ensureView(): WebContentsView {'),
+      code.indexOf('#load(view: WebContentsView)')
+    )
+    for (const marker of [
+      "'will-frame-navigate'",
+      "'will-attach-webview'",
+      'setWindowOpenHandler('
+    ]) {
+      expect(ensureView).toContain(marker)
+    }
+    expect(ensureView.indexOf("'will-frame-navigate'")).toBeLessThan(
+      ensureView.indexOf('this.#load(view)')
+    )
+  })
+
+  it('refuses drops in both chrome renderers', () => {
+    for (const path of ['src/renderer/src/main.tsx', 'src/renderer/src/overlay.tsx']) {
+      const code = withoutComments(readFileSync(join(ROOT, path), 'utf8'))
+      expect(code, path).toMatch(
+        /addEventListener\('dragover', \(event\) => \{\s*event\.preventDefault\(\)/
+      )
+      expect(code, path).toMatch(
+        /addEventListener\('drop', \(event\) => \{\s*event\.preventDefault\(\)/
+      )
+    }
+  })
+
+  it('hands the router the frame and the expected chrome address', () => {
+    const router = withoutComments(readFileSync(join(ROOT, 'src/main/ipc/router.ts'), 'utf8'))
+    expect(router).toMatch(/decideAccess\(channel, senderOf\(event\), chromeAddresses\)/)
+    expect(router).toMatch(/isMainFrame: frame\.parent === null/)
+  })
+})
+
+describe('store loading', () => {
+  /*
+    A file that failed its schema used to become defaults that the next write put over it, and a
+    file from a newer version counted as failed. `store-load.ts` decides what a file is before
+    anything is written; these keep every store on it and every deletion path taking the copies too.
+  */
+  it('classes every JSON store as critical or degradable, and only bookmarks and passwords as critical', async () => {
+    const critical: string[] = []
+    const unclassed: string[] = []
+    for (const file of await collect('src/main/data')) {
+      const code = withoutComments(file.text)
+      if (!/JsonStore\.open(?:<[^>]*>)?\(/.test(code)) continue
+      const name = file.relative.split(sep).join('/')
+      if (!code.includes('criticality:')) unclassed.push(name)
+      if (/criticality:\s*'critical'/.test(code)) critical.push(name)
+    }
+    expect(unclassed, 'a store that says nothing about what losing it costs').toEqual([])
+    expect(critical.sort()).toEqual([
+      'src/main/data/BookmarkStore.ts',
+      'src/main/data/PasswordStore.ts'
+    ])
+  })
+
+  it('removes a category’s copies wherever the category is deleted', () => {
+    const handlers = withoutComments(readFileSync(join(ROOT, 'src/main/ipc/handlers.ts'), 'utf8'))
+    const downloads = withoutComments(
+      readFileSync(join(ROOT, 'src/main/ipc/download-handlers.ts'), 'utf8')
+    )
+    const index = withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const vault = withoutComments(
+      readFileSync(join(ROOT, 'src/main/passwords/PasswordVault.ts'), 'utf8')
+    )
+    expect(handlers).toMatch(/handle\('history:clear'[\s\S]*?await history\.discardCopies\(\)/)
+    expect(downloads).toMatch(/handle\('downloads:clear'[\s\S]*?await discardCopies\(\)/)
+    expect(index).toMatch(/discardDownloadCopies:\s*\(\)\s*=>\s*downloads\?\.discardCopies\(\)/)
+    expect(vault).toMatch(/resetVault[\s\S]*?removeCopiesOf\(this\.#options\.documentPath\)/)
+  })
+})
+
+describe('public suffix list', () => {
+  /*
+    `configurePublicSuffixes` existed from the first commit and nothing called it, so every site
+    under an unlisted suffix — `com.sg`, `myshopify.com` — was one site with its neighbours, and
+    autofill offered passwords across them. These pin the wiring that finally installs a list.
+  */
+  const index = (): string => withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+
+  it('installs the list after the settings and before anything keyed on a site opens', () => {
+    const entry = index()
+    const load = entry.indexOf('await publicSuffixes.load()')
+    expect(load, 'the list is never installed').toBeGreaterThan(-1)
+    expect(load).toBeGreaterThan(entry.indexOf('SettingsStore.open('))
+    expect(load).toBeLessThan(entry.indexOf('FaviconStore.open('))
+    expect(load).toBeLessThan(entry.indexOf('UserRuleStore.open('))
+    expect(entry).toMatch(/flushOnExit\.push\(\(\) => publicSuffixes\.whenIdle\(\)/)
+  })
+
+  it('fetches it through Chromium, in the filter lists’ channel and moment', () => {
+    const entry = index()
+    expect(entry).toMatch(/readPublicSuffixBody\(await net\.fetch\(/)
+    expect(entry).toMatch(/toAscii: domainToASCII/)
+    expect(entry.indexOf('publicSuffixes.refresh()')).toBeGreaterThan(
+      entry.indexOf('filterSubscription.start()')
+    )
+  })
+
+  it('lets only the subscription install a list, and keeps it with the profile', async () => {
+    const callers = (await collect('src'))
+      .filter((file) => /\bconfigurePublicSuffixes\(/.test(codeOnly(file.text)))
+      .map((file) => file.relative.split(sep).join('/'))
+      .filter((name) => name !== 'src/shared/url/domain.ts')
+    expect(callers).toEqual(['src/main/privacy/PublicSuffixSubscription.ts'])
+    const paths = withoutComments(readFileSync(join(ROOT, 'src/main/paths.ts'), 'utf8'))
+    expect(paths).toMatch(/function publicSuffixDir\(\)[^{]*\{\s*return join\(userDataDir\(\)/)
+  })
+})
+
+describe('image cache', () => {
+  it('checks the image cache token before it asks a store', () => {
+    /*
+      Any web page may point an <img> at `tessera://favicon` or `tessera://thumbnail`, so a hit it
+      could tell from a miss would say which sites the user has seen. The token is the only thing a
+      page cannot supply, and it has to be checked before the store is asked.
+    */
+    const protocol = codeOnly(readFileSync(join(ROOT, 'src/main/protocol.ts'), 'utf8'))
+    const body =
+      /async function serveCachedImage\([\s\S]*?\{([\s\S]*?)\n\}/.exec(protocol)?.[1] ?? ''
+    const check = body.indexOf('if (!route.tokenMatches(url)) return noImage()')
+    expect(check, 'serveCachedImage no longer checks the token').toBeGreaterThanOrEqual(0)
+    expect(
+      body.indexOf('route.keyOf('),
+      'the token is checked after the key is read'
+    ).toBeGreaterThan(check)
+    expect(
+      body.indexOf('route.resolve('),
+      'the token is checked after the store is asked'
+    ).toBeGreaterThan(check)
+    expect(protocol).toMatch(/tokenMatches: faviconTokenMatches, keyOf: faviconSiteOf/)
+    expect(protocol).toMatch(/tokenMatches: thumbnailTokenMatches, keyOf: thumbnailPageOf/)
+  })
+
+  it('draws both image cache tokens per start, before the protocol can answer', () => {
+    const entry = codeOnly(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const registered = entry.search(/registerInternalProtocol\(\{/)
+    const favicon = entry.search(/configureFaviconToken\(randomBytes\(16\)\.toString\(''\)\)/)
+    const thumbnail = entry.search(/configureThumbnailToken\(randomBytes\(16\)\.toString\(''\)\)/)
+    expect(registered, 'could not find registerInternalProtocol').toBeGreaterThanOrEqual(0)
+    expect(favicon, 'no fresh favicon token per start').toBeGreaterThanOrEqual(0)
+    expect(thumbnail, 'no fresh thumbnail token per start').toBeGreaterThanOrEqual(0)
+    expect(favicon).toBeLessThan(registered)
+    expect(thumbnail).toBeLessThan(registered)
+  })
+
+  it('lets no picture be dragged out of the interface', async () => {
+    // Every <img>, not only cached ones: a cache address carries this run's token, and an image
+    // dragged into a web page hands the page its address.
+    let seen = 0
+    for (const file of await collect('src/renderer', ['.tsx'])) {
+      for (const element of withoutComments(file.text).match(/<img\b[\s\S]*?\/>/g) ?? []) {
+        seen += 1
+        expect(element, `${file.relative} has a draggable <img>`).toMatch(/draggable=\{false\}/)
+      }
+    }
+    expect(seen, 'found no <img> at all, so the pattern no longer matches').toBeGreaterThanOrEqual(
+      2
+    )
+  })
+})
+
+describe('permission host', () => {
+  it('lets the window controller carry the whole permission host', () => {
+    /*
+      A dialog raised by a background tab once sat over whatever page was in front. The arbiter now
+      waits for the asking tab; that only works while the controller reports every change it needs.
+    */
+    const controller = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/BrowserWindowController.ts'), 'utf8')
+    )
+    const registry = codeOnly(
+      readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    )
+    expect(controller).toMatch(/export class BrowserWindowController implements PermissionHost\b/)
+    expect(controller).toMatch(/this\.#tellPermissionListeners\(\{ kind: '' \}\)/)
+    expect(controller).toMatch(/this\.#tellPermissionListeners\(\{ kind: '',/)
+    expect(controller).toMatch(/this\.#reportNavigation\(source\)/)
+    expect(controller).toMatch(/this\.#reportActiveTab\(\)/)
+    expect(registry).toMatch(
+      /this\.#deps\.permissions\.ask\(\s*request,\s*this\.controllerForWebContents\(webContents\.id\) \?\? null,\s*webContents\.id\s*\)/
+    )
+  })
+})
+
+describe('key store strength', () => {
+  /*
+    R14. Linux's basic text answers "encryption available" and protects nothing, so what the key store
+    is worth is decided once, after `ready`, from the backend — and then carried rather than asked again.
+  */
+  it('asks for the Linux backend in one place only', async () => {
+    const callers = (await collect('src'))
+      .filter((file) => /\bgetSelectedStorageBackend\b/.test(codeOnly(file.text)))
+      .map((file) => file.relative.split(sep).join('/'))
+      .sort()
+    expect(callers).toEqual([
+      'src/main/crypto/keystore-strength.ts',
+      // The declaration on `SafeStorageLike`, which is not a call.
+      'src/main/crypto/local-data-key.ts'
+    ])
+  })
+
+  it('classifies after ready and hands the same answer to the vault', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    expect(entry).toMatch(
+      /openLocalDataProtection\(\{\s*safeStorage,\s*platform: process\.platform,/
+    )
+    expect(entry).toMatch(/PasswordVault\.open\(\{[^}]*keystoreStrength: protection\.keystore,/)
+    expect(entry.indexOf('openLocalDataProtection(')).toBeGreaterThan(
+      entry.indexOf('app.whenReady()')
     )
   })
 })

@@ -8,6 +8,7 @@ import {
   type ExtensionInfo
 } from '@shared/extensions/model.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import type { StoreLoadReport } from './store-load.js'
 
 /**
  * Loads unpacked extensions and remembers which folders to reload.
@@ -25,7 +26,7 @@ import { JsonStore, type DocumentCodec } from './JsonStore.js'
  * leave nothing behind.
  */
 
-const extensionDocumentSchema = z.object({
+const extensionDocumentSchema = z.looseObject({
   version: z.literal(1),
   paths: z.array(z.string())
 })
@@ -49,6 +50,9 @@ export class ExtensionStore {
       filePath: options.filePath,
       schema: extensionDocumentSchema,
       fallback: emptyExtensionDocument,
+      // Version 1 is the only one there has been; see `StoreMigrations`.
+      migrations: [],
+      criticality: 'degradable',
       ...(options.codec === undefined ? {} : { codec: options.codec }),
       ...(options.debounceMs === undefined ? {} : { debounceMs: options.debounceMs })
     })
@@ -115,6 +119,11 @@ export class ExtensionStore {
 
   flush(): Promise<void> {
     return this.#store.flush()
+  }
+
+  /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
+  get loadReport(): StoreLoadReport {
+    return this.#store.loadReport
   }
 
   #requireSession(): Session {

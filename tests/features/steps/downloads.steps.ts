@@ -236,7 +236,8 @@ Given('a window with the downloads page open in one of its tabs', async (state: 
   registerDownloadHandlers({
     handle,
     downloads: manager,
-    windows: { downloadWindows: [window], onDownloadsPanelPresented: () => {} }
+    windows: { downloadWindows: [window], onDownloadsPanelPresented: () => {} },
+    discardCopies: () => Promise.resolve()
   })
   scope(state).scratch['downloadPanel'] = world
 })

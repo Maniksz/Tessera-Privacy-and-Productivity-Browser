@@ -1,0 +1,75 @@
+# The gates every change passes: typecheck, lint, format, build, and the test suite with its coverage floors.
+#
+# ## Why one workflow for pull requests, `main` and releases
+#
+# The floors in `vitest.config.ts` existed for a long time without anything enforcing them. The only CI was
+# the release workflow, and it ran `pnpm test` — no coverage, so no floors — and only on a tag push, which is
+# after the merge and therefore the moment a failing floor is least useful. A gate that trips only once the
+# change is on `main` is a report, not a gate.
+#
+# `release.yml` calls this file rather than carrying its own copy. Two copies of a gate list drift, and the
+# release's copy already had: it was missing the coverage floors and the format check. With one list, a
+# release is held to exactly what a pull request was held to, and adding a gate is one edit.
+name: Gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+# Everything here runs code from dependencies — the install scripts, the build, the tests. None of it needs
+# to write anything, so none of it can: a compromised package gets a token that can read the repository and
+# nothing more. When called from `release.yml`, a caller cannot widen this either.
+permissions:
+  contents: read
+
+jobs:
+  # Once and not per platform, and that is a correction rather than a saving. Run on all three, the suite
+  # failed on Windows — not on anything about the product, but on four assertions that read a file's POSIX
+  # mode, which Windows does not have. So a release with no `.exe` was produced by a *test* that could never
+  # have passed there, and the Windows job died before it built anything.
+  #
+  # These are pure-logic tests over shared modules; there is nothing platform-specific for them to catch that
+  # three runs would find and one would not. What *is* platform-specific is the build, and `release.yml`
+  # still does that on each.
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to commits, not tags: a tag is a pointer its owner can move, and these run with the
+      # repository's token. The comment names the release the commit belongs to.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        with:
+          # The version this repository is developed with, the same as `packageManager` in
+          # `package.json`. A different pnpm resolves the lockfile differently, and tests that ran
+          # against other dependencies than the release ships have tested nothing that ships.
+          version: 10.32.1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # `--frozen-lockfile`, so a lockfile that no longer matches `package.json` fails here instead of
+      # being quietly rewritten into dependencies nobody reviewed.
+      - run: pnpm install --frozen-lockfile
+
+      # `build` is `typecheck && electron-vite build`, so this is the type check too. It runs before the
+      # tests on purpose: the bundle budgets and the preload checks in `tests/architecture.test.ts` read
+      # `out/`, and in CI a missing or stale `out/` fails them rather than skipping.
+      - run: pnpm run build
+
+      - run: pnpm run lint
+
+      # Allowed to fail until the one-off reformat (U18 in the review-hardening plan) lands: well over a
+      # hundred files predate the Prettier config, and failing every pull request on them would bury the
+      # gates that matter. It still runs, so the count is visible in every log. Once the reformat is merged,
+      # `continue-on-error` goes and this is a gate like the others.
+      - run: pnpm run format:check
+        continue-on-error: true
+
+      # `test:coverage` rather than `test`: the coverage run is what applies the floors in
+      # `vitest.config.ts`. Without it a floor is a number in a file.
+      - run: pnpm run test:coverage

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { pathToFileURL } from 'node:url'
+import { readFile, rm } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
+import { domainToASCII, pathToFileURL } from 'node:url'
 import {
   app,
   BrowserWindow,
@@ -13,18 +14,27 @@ import {
   webContents
 } from 'electron'
 import { resolveLocale, translate, type Locale } from '@shared/i18n/catalog.js'
+import { configureFaviconToken } from '@shared/favicons/model.js'
+import { configureThumbnailToken } from '@shared/thumbnails/model.js'
+import { PublicSuffixSubscription, readPublicSuffixBody } from './privacy/PublicSuffixSubscription.js'
 import { SettingsStore } from './settings/SettingsStore.js'
 import { WindowRegistry } from './browser/WindowRegistry.js'
 import { registerIpcHandlers } from './ipc/handlers.js'
 import { installApplicationMenu } from './menu/appMenu.js'
 import { applyRuntimeFlags } from './runtime-flags.js'
 import {
+  ExternalAddressInbox,
+  externalAddressWindow,
+  firstExternalAddress,
   readCheckModule,
   readStartupFlags,
+  refusedDebugSwitch,
+  secondInstanceAddress,
   startupFlagsFrom,
   writeStartupFlags
 } from './startup-flags.js'
 import { openLocalDataProtection } from './data/local-data-protection.js'
+import { describeStoreLoad, type StoreLoadReport } from './data/store-load.js'
 import { applySecureDns } from './session/hardening.js'
 import { registerAsDefaultBrowser, registerInternalProtocol, registerInternalSchemePrivileges } from './protocol.js'
 import {
@@ -40,6 +50,8 @@ import {
   permissionsFile,
   passwordsFile,
   passwordVaultKeyFile,
+  pendingClearFile,
+  publicSuffixDir,
   quickLinksFile,
   sessionStateFile,
   settingsFile,
@@ -59,6 +71,7 @@ import { TabGroupStore } from './data/TabGroupStore.js'
 import { SessionStore } from './data/SessionStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
 import { DownloadStore } from './data/DownloadStore.js'
+import { removeTempFilesOf, writeFileAtomically } from './data/atomic-write.js'
 import { applySessionRestore } from './session-restore/apply.js'
 import { restoreSettingsFrom } from './session-restore/settings.js'
 import { FilterSubscription } from './privacy/FilterSubscription.js'
@@ -80,6 +93,16 @@ import { MasterPasswordPrompt } from './passwords/MasterPasswordPrompt.js'
 import { internalUrl } from '@shared/product.js'
 import { installUpdateChecks } from './updates/install-updates.js'
 import type { UpdateService } from './updates/UpdateService.js'
+import {
+  CLEAR_TIMEOUT_MS,
+  FLUSH_TIMEOUT_MS,
+  FlushRegistry,
+  ShutdownSequence,
+  catchUpPendingClear,
+  pendingClearText,
+  type After,
+  type ShutdownWork
+} from './shutdown.js'
 
 /**
  * Application entry point.
@@ -88,10 +111,70 @@ import type { UpdateService } from './updates/UpdateService.js'
  * why it sits where it does.
  */
 
-// A second instance must hand its URL to the running one rather than opening a
-// separate browser with a separate session.
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
+/*
+  One browser per profile, decided before anything else runs.
+
+  A second instance must hand its address to the running one rather than open a separate browser on
+  the same files. `app.quit()` used to stand here, and it stopped nothing: it asks for a quit and
+  returns, so every statement below still ran, `main()` included — and whether the quit beat `main()`
+  to opening the stores of a profile the running instance was writing to was down to timing. `app.exit`
+  ends the process without `before-quit`, and every other statement in this file with an effect runs
+  only where `primaryInstance` says the lock is held.
+
+  The address travels as `additionalData`, read here off this process's own command line, because the
+  `argv` the running instance is handed carries switches Chromium added on the way. See
+  `secondInstanceAddress`.
+*/
+/*
+  A packaged build never runs with Chromium's remote debugging on. The fuses close Node's inspector and
+  `ELECTRON_RUN_AS_NODE`, but not the DevTools protocol, and that is the one that hands whoever opened
+  the port the chrome UI, its IPC and every cookie, under this app's own identity. Asked through
+  `hasSwitch` rather than by reading argv, because Chromium accepts the switch with one dash, two, or
+  on Windows a slash, in any case — an argv scan would miss the spellings Chromium itself honours.
+  Before the lock, so a refused process does not take it; `app.exit` returns, so `primaryInstance` is
+  false below and nothing else in this file runs.
+*/
+const refusedSwitch = refusedDebugSwitch((name) => app.commandLine.hasSwitch(name), {
+  packaged: app.isPackaged
+})
+if (refusedSwitch !== null) {
+  console.error(`[startup] a packaged build does not run with ${refusedSwitch}; exiting`)
+  app.exit(1)
+}
+
+const launchAddress = firstExternalAddress(process.argv)
+const primaryInstance =
+  refusedSwitch === null && app.requestSingleInstanceLock({ url: launchAddress })
+if (refusedSwitch === null && !primaryInstance) app.exit(0)
+
+/*
+  Addresses from outside, listened for from the first moment and held until the session is back.
+
+  Both listeners used to be attached at the end of `main()`, after every store had opened and the
+  session had been restored. A link that *started* the browser therefore went nowhere: on macOS it is
+  delivered as `open-url` before `ready`, on Windows and Linux it is on this process's own command line,
+  which nothing read. They are attached here, before the first `await` anywhere in this file, and what
+  they receive waits in the inbox until `main()` opens it after the restore — so the link lands beside
+  the restored windows instead of in one the restore then buries.
+*/
+const externalAddresses = new ExternalAddressInbox()
+
+if (primaryInstance) {
+  externalAddresses.receive(launchAddress)
+
+  // macOS: links from other applications, whether the browser is running or being started by one.
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    externalAddresses.receive(url)
+  })
+
+  app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
+    const address = secondInstanceAddress(additionalData, argv)
+    // A second launch with no address is somebody reaching for the browser: bring the last window used
+    // forward. With one, the inbox opens it and brings its window forward itself.
+    if (address === null) windows?.byRecentFocus[0]?.window.focus()
+    else externalAddresses.receive(address)
+  })
 }
 
 /**
@@ -114,8 +197,11 @@ function bootstrapFlags(): void {
   applyRuntimeFlags(flags)
 }
 
-bootstrapFlags()
-registerInternalSchemePrivileges()
+if (primaryInstance) {
+  bootstrapFlags()
+  // Before `ready`, which is the only time Chromium accepts it.
+  registerInternalSchemePrivileges()
+}
 
 // Never started, and stated explicitly rather than by omission (spec 4).
 // crashReporter.start() is intentionally absent.
@@ -148,21 +234,61 @@ let permissionStore: PermissionStore | null = null
  * a different part of a different file from the store being added. Registering at the point of opening
  * puts the two lines next to each other, and the architecture test below asserts that every store with
  * a `flush` is in here.
+ *
+ * Each under a name, because the shutdown now gives up on a write that does not finish in time, and
+ * "a store hung" is not something anybody can act on. See `shutdown.ts`.
  */
-const flushOnExit: Array<() => Promise<unknown>> = []
+const flushOnExit = new FlushRegistry()
 
 async function main(): Promise<void> {
   await app.whenReady()
+
+  /*
+    The clearing the last quit ran out of time for, done before anything can load a page.
+
+    Here, first thing after `ready`, because that is the earliest `session.defaultSession` exists, and
+    because the cookies the user asked to be rid of must be gone before the first restored tab can send
+    them. Not a reason to refuse to start: a failure keeps the note for the next start and is said out
+    loud, and `catchUpPendingClear` bounds the wait so a hanging clearing cannot keep the window away.
+  */
+  await catchUpPendingClear({
+    read: () =>
+      readFile(pendingClearFile(), 'utf8').catch((error: unknown) => {
+        if ((error as { code?: string }).code === 'ENOENT') return null
+        throw error
+      }),
+    clear: (categories) => clearDataOnExit(categories),
+    forget: () => rm(pendingClearFile(), { force: true }),
+    fallback: EVERY_CLEARED_CATEGORY,
+    after: nodeAfter
+  })
+    .then((outcome) => {
+      if (outcome === 'still-pending') {
+        console.warn(
+          '[clear-on-exit] the clearing from the last quit did not finish again; kept for later'
+        )
+      }
+    })
+    .catch((error: unknown) => {
+      console.warn(
+        '[clear-on-exit] the note from the last quit could not be handled:',
+        String(error)
+      )
+    })
+  // Each of these is a point where a quit that arrived during startup ends it; see `quitting`.
+  if (quitting()) return
 
   /*
     One decision about protection, made once and handed to every store, so the browser cannot end
     up with an encrypted quick-links file next to a readable settings one.
 
     `safeStorage` is asked only after `whenReady`, which is the earliest it answers reliably on
-    Linux — the reason the two startup switches come from their own file instead.
+    Linux — the reason the two startup switches come from their own file instead. That includes
+    which backend Linux chose, the one question that tells a keyring from basic text.
   */
   const protection = await openLocalDataProtection({
     safeStorage,
+    platform: process.platform,
     keyFilePath: localDataKeyFile(),
     noticeFilePath: unencryptedDataNoticeFile()
   })
@@ -171,7 +297,7 @@ async function main(): Promise<void> {
   }
 
   settings = await SettingsStore.open(settingsFile(), protection.codec)
-  flushOnExit.push(() => settings?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => settings?.flush() ?? Promise.resolve(), 'settings')
   if (settings.quarantinedFileOnLoad !== null) {
     // Not a warning to shrug at: the previous settings are intact in that file, and most often the
     // cause is a missing key rather than damage.
@@ -182,6 +308,21 @@ async function main(): Promise<void> {
   }
 
   applySecureDns(settings.snapshot())
+
+  /*
+    The Public Suffix List decides what counts as one site, and several things below key on that:
+    the favicon index, the user's element rules, password autofill, the third-party test. So it is
+    installed here, before any of them opens, from disk only; the download that keeps it current
+    runs later, in the filter lists' channel, and only ever takes effect at the next start, so a site
+    means the same thing from the first key to the last in one run.
+  */
+  const publicSuffixes = new PublicSuffixSubscription({
+    directory: publicSuffixDir(),
+    fetchList: async (url) => readPublicSuffixBody(await net.fetch(url)),
+    toAscii: domainToASCII
+  })
+  await publicSuffixes.load()
+  flushOnExit.push(() => publicSuffixes.whenIdle(), 'public suffix list')
 
   /*
     Opened before the protocol is registered, and that ordering is load-bearing.
@@ -200,7 +341,8 @@ async function main(): Promise<void> {
     codec: protection.codec
   })
   favicons = faviconStore
-  flushOnExit.push(() => faviconStore.flush())
+  flushOnExit.push(() => faviconStore.flush(), 'favicons')
+  warnAboutStoreLoad('favicons', faviconStore.loadReport)
   if (faviconStore.recoveredFromInvalidFile) {
     console.warn('[favicons] index could not be used; icons will be fetched again')
   }
@@ -229,10 +371,19 @@ async function main(): Promise<void> {
     codec: protection.codec
   })
   thumbnails = thumbnailStore
-  flushOnExit.push(() => thumbnailStore.flush())
+  flushOnExit.push(() => thumbnailStore.flush(), 'thumbnails')
+  warnAboutStoreLoad('thumbnails', thumbnailStore.loadReport)
   if (thumbnailStore.recoveredFromInvalidFile) {
     console.warn('[thumbnails] index could not be used; pictures will be taken again')
   }
+
+  /*
+    Drawn fresh per start, before the protocol can answer. A web page can point an <img> at either
+    cache and learn from load or error whether the user has been somewhere; the token is the one part
+    of the address no page can know, and a new one per start means no address outlives the run.
+  */
+  configureFaviconToken(randomBytes(16).toString('base64url'))
+  configureThumbnailToken(randomBytes(16).toString('base64url'))
 
   // Closed over as locals, not read from the module variables: the handler runs long after this
   // line, and a `?.` there would say a store might be missing when the ordering above is exactly
@@ -252,7 +403,8 @@ async function main(): Promise<void> {
   registerAsDefaultBrowser()
 
   quickLinks = await QuickLinkStore.open({ filePath: quickLinksFile(), codec: protection.codec })
-  flushOnExit.push(() => quickLinks?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => quickLinks?.flush() ?? Promise.resolve(), 'quicklinks')
+  warnAboutStoreLoad('quicklinks', quickLinks.loadReport)
   if (quickLinks.recoveredFromInvalidFile) {
     console.warn('[quicklinks] file could not be used; started from an empty set')
   }
@@ -264,14 +416,16 @@ async function main(): Promise<void> {
    * putting third-party code there would defeat the point.
    */
   extensions = await ExtensionStore.open({ filePath: extensionsFile(), codec: protection.codec })
-  flushOnExit.push(() => extensions?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => extensions?.flush() ?? Promise.resolve(), 'extensions')
+  warnAboutStoreLoad('extensions', extensions.loadReport)
   const extensionFailures = await extensions.attach(session.defaultSession)
   for (const failure of extensionFailures) {
     console.warn('[extensions] could not reload, dropped from the list:', failure)
   }
 
   history = await HistoryStore.open({ filePath: historyFile(), codec: protection.codec })
-  flushOnExit.push(() => history?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => history?.flush() ?? Promise.resolve(), 'history')
+  warnAboutStoreLoad('history', history.loadReport)
   if (history.recoveredFromInvalidFile) {
     console.warn('[history] file could not be used; started from an empty history')
   }
@@ -290,11 +444,20 @@ async function main(): Promise<void> {
       console.warn('[startup-flags] could not be written:', String(error))
     })
   }
+  /*
+    Leftovers a crash left beside the flags file, removed once before the first write. Not inside
+    `writeStartupFlags`: its calls are not serialised, and a cleanup there would delete the temporary
+    another call is about to rename.
+  */
+  await removeTempFilesOf(startupFlagsFile()).catch((error: unknown) => {
+    console.warn('[startup-flags] could not remove leftover temporaries:', String(error))
+  })
   persistStartupFlags(settings.snapshot())
   settings.onChange(({ snapshot }) => persistStartupFlags(snapshot))
 
   tabGroups = await TabGroupStore.open({ filePath: tabGroupsFile(), codec: protection.codec })
-  flushOnExit.push(() => tabGroups?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => tabGroups?.flush() ?? Promise.resolve(), 'tabgroups')
+  warnAboutStoreLoad('tabgroups', tabGroups.loadReport)
   if (tabGroups.recoveredFromInvalidFile) {
     console.warn('[tabgroups] file could not be used; started with no groups')
   }
@@ -312,14 +475,16 @@ async function main(): Promise<void> {
     from thirty seconds before Quit was simply missing from the file.
   */
   bookmarks = await BookmarkStore.open({ filePath: bookmarksFile(), codec: protection.codec })
-  flushOnExit.push(() => bookmarks?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => bookmarks?.flush() ?? Promise.resolve(), 'bookmarks')
+  warnAboutStoreLoad('bookmarks', bookmarks.loadReport)
   if (bookmarks.recoveredFromInvalidFile) {
     // Worth a warning rather than a shrug: a bookmark collection is built by hand over years and
     // nothing else can recreate it.
     console.warn('[bookmarks] file could not be used; started from an empty set')
   }
   downloads = await DownloadStore.open({ filePath: downloadsFile(), codec: protection.codec })
-  flushOnExit.push(() => downloads?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => downloads?.flush() ?? Promise.resolve(), 'downloads')
+  warnAboutStoreLoad('downloads', downloads.loadReport)
 
   /*
     The vault, which owns its own `PasswordStore` rather than being one.
@@ -335,6 +500,8 @@ async function main(): Promise<void> {
     documentPath: passwordsFile(),
     safeStorage,
     previousCodec: protection.codec,
+    // What the key store is worth, as the decision above found it, so the page says the same thing.
+    keystoreStrength: protection.keystore,
     /*
       `passwords.lockAfterMinutes`, read at every idle check rather than captured here.
 
@@ -345,7 +512,7 @@ async function main(): Promise<void> {
     */
     idleTimeoutMs: () => (settings?.get('passwords.lockAfterMinutes') ?? 15) * 60_000
   })
-  flushOnExit.push(() => passwords?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => passwords?.flush() ?? Promise.resolve(), 'passwords')
 
   /*
     The download manager, which is the Electron-bound half.
@@ -508,7 +675,8 @@ async function main(): Promise<void> {
   })
 
   sessionStore = await SessionStore.open({ filePath: sessionStateFile(), codec: protection.codec })
-  flushOnExit.push(() => sessionStore?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => sessionStore?.flush() ?? Promise.resolve(), 'session')
+  warnAboutStoreLoad('session', sessionStore.loadReport)
   if (sessionStore.recoveredFromInvalidFile) {
     console.warn('[session] file could not be used; started with no session to restore')
   }
@@ -534,7 +702,8 @@ async function main(): Promise<void> {
     hand-made rule changes far more often than a published list does.
   */
   userRules = await UserRuleStore.open({ filePath: userRulesFile(), codec: protection.codec })
-  flushOnExit.push(() => userRules?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => userRules?.flush() ?? Promise.resolve(), 'user-rules')
+  warnAboutStoreLoad('user-rules', userRules.loadReport)
   if (userRules.recoveredFromInvalidFile) {
     // Worth a warning rather than a shrug: these are rules the user made by hand, and nothing else
     // can recreate them.
@@ -727,10 +896,14 @@ async function main(): Promise<void> {
     filePath: permissionsFile(),
     codec: protection.codec
   })
-  flushOnExit.push(() => permissionStore?.flush() ?? Promise.resolve())
+  flushOnExit.push(() => permissionStore?.flush() ?? Promise.resolve(), 'permissions')
+  warnAboutStoreLoad('permissions', permissionStore.loadReport)
   if (permissionStore.recoveredFromInvalidFile) {
     console.warn('[permissions] file could not be used; every site will be asked again')
   }
+  // The last store is open. Past here come the windows, the handlers and the timers, none of which a
+  // quit that is already running would wait for.
+  if (quitting()) return
   const permissionArbiter = new PermissionArbiter({
     /*
       The forgetful rules as the fallback, not a throw.
@@ -760,7 +933,7 @@ async function main(): Promise<void> {
     a `.tmp` file and no manifest, which the next launch reads as "nothing cached" and re-downloads
     every list.
   */
-  flushOnExit.push(() => filterSubscription.whenIdle())
+  flushOnExit.push(() => filterSubscription.whenIdle(), 'filter lists')
 
   windows = new WindowRegistry({
     settings,
@@ -780,6 +953,9 @@ async function main(): Promise<void> {
     // Bound to a browsing mode where the session is created, so a private window holds a recorder
     // that discards rather than a flag somebody has to remember to check.
     downloads: downloadManager,
+    // Every session asks through the one arbiter, so two windows' prompts queue in one place and a
+    // check reads the same memory the answer was written to.
+    permissions: permissionArbiter,
     /*
       The page's right-click menu is assembled here because this is the only layer that has all of it: the
       language, whether the blocker is on, the element picker, and the window to open a link beside.
@@ -845,6 +1021,7 @@ async function main(): Promise<void> {
     history,
     bookmarks,
     downloads: downloadManager,
+    discardDownloadCopies: () => downloads?.discardCopies() ?? Promise.resolve(),
     passwords: passwordApi,
     prompt: masterPasswordPrompt,
     permissions: permissionArbiter,
@@ -912,6 +1089,8 @@ async function main(): Promise<void> {
     than of ones that finished. `retainTabs` is then called once, with every id that actually came back.
   */
   const plan = await sessionStore.beginRun(restoreSettingsFrom(settings.snapshot()))
+  // No windows for a shutdown that began while the plan was being read; the session is sealed by now.
+  if (quitting()) return
   if (plan.kind === 'skip') {
     // Worth saying rather than shrugging at: a user who asked for their session and did not get it has no other
     // way to find out why, and `restore-keeps-crashing` is the reason they would most want to know.
@@ -951,6 +1130,24 @@ async function main(): Promise<void> {
   }
 
   /*
+    Addresses from outside, opened from here on: everything held since startup, then each as it comes.
+
+    After the restore, so a link lands beside the windows that came back rather than first in line for
+    them to cover. In the normal window used most recently and never in a private one — see
+    `externalAddressWindow` for why the old `focused() ?? controllers[0]` got both halves of that wrong.
+  */
+  const openWindows = windows
+  externalAddresses.deliverTo((url) => {
+    const target = externalAddressWindow(openWindows.byRecentFocus)
+    if (target === undefined) {
+      openWindows.createWindow({ privateMode: false }).createTab({ url })
+      return
+    }
+    target.window.focus()
+    target.createTab({ url })
+  })
+
+  /*
     The lists, compiled after the window rather than before it.
 
     This used to be awaited two hundred lines up, where it put the whole compile — six hundred to
@@ -966,6 +1163,11 @@ async function main(): Promise<void> {
   void filterSubscription.start().catch((error: unknown) => {
     console.warn('[filters] lists could not be compiled:', String(error))
   })
+  // Same moment and same channel as the filter lists: after the session, its proxy and kill switch
+  // exist. What it fetches is only cached here; the list in force changes at the next start.
+  void publicSuffixes.refresh().catch((error: unknown) => {
+    console.warn('[public-suffix] refresh failed:', String(error))
+  })
 
   /*
     Development only: the application drives its own checks and exits with the verdict.
@@ -978,22 +1180,6 @@ async function main(): Promise<void> {
   */
   const checkModule = readCheckModule(process.argv, { packaged: app.isPackaged })
   if (checkModule !== null) void runOwnChecks(checkModule)
-
-  app.on('second-instance', (_event, argv) => {
-    const url = argv.find((arg) => /^https?:\/\//i.test(arg))
-    const target = windows?.focused() ?? windows?.controllers[0]
-    if (!target) return
-    target.window.focus()
-    if (url !== undefined) target.createTab({ url })
-  })
-
-  // macOS: links from other applications, and the Dock's "new window".
-  app.on('open-url', (event, url) => {
-    event.preventDefault()
-    const target = windows?.focused() ?? windows?.controllers[0]
-    if (target) target.createTab({ url })
-    else windows?.createWindow({ privateMode: false }).createTab({ url })
-  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -1011,9 +1197,14 @@ async function main(): Promise<void> {
       finished — and `reveal.ts` names all three as the bound the unlock is held to.
 
       Before the quit, so the flush that `before-quit` performs writes a vault that has already been
-      closed rather than one being closed underneath it.
+      closed rather than one being closed underneath it — and that flush waits for this lock's own write
+      rather than finding no store and answering at once, which is how the last change used to be lost
+      when the last window was closed on Windows (see `PasswordVault.lock`).
+
+      Not once a quit has begun: the windows are closing *because* of it, the vault has been flushed or
+      is being flushed, and a lock now would start a write the ending process does not wait for.
     */
-    void passwords?.lock()
+    if (!quitting()) void passwords?.lock()
     // macOS keeps the application running with no windows; the others quit.
     if (process.platform !== 'darwin') app.quit()
   })
@@ -1086,14 +1277,53 @@ function uiLocale(store: SettingsStore | null): Locale {
  * the process exits — spec 4 is explicit that a clear-on-exit which races the
  * shutdown runs into nothing. So the first pass cancels the quit, does the work,
  * and only then quits for real.
+ *
+ * The decisions — hold a second quit, give up on a write after ten seconds, on the clearing after
+ * thirty, leave a note when the clearing did not finish — are `ShutdownSequence`'s, and tested
+ * there. What is here is only what it needs from Electron and from the stores this file opened.
  */
-let shutdownComplete = false
+const shutdown = new ShutdownSequence({
+  after: nodeAfter,
+  finish: (report) => {
+    if (report.clear === 'timed-out') {
+      const seconds = String(CLEAR_TIMEOUT_MS / 1000)
+      console.error(`[shutdown] clearing on exit took over ${seconds} s; it runs at the next start`)
+    }
+    if (report.clear === 'failed') {
+      console.error('[shutdown] clearing on exit did not finish; it runs again at the next start')
+    }
+    if (report.hung.length > 0) {
+      const seconds = String(FLUSH_TIMEOUT_MS / 1000)
+      console.error(
+        `[shutdown] still writing after ${seconds} s, not waited for:`,
+        report.hung.join(', ')
+      )
+    }
+    for (const { name, reason } of report.failed) {
+      console.error(`[shutdown] ${name} could not be flushed:`, reason)
+    }
+    app.quit()
+  }
+})
 
-app.on('before-quit', (event) => {
-  const store = settings
-  if (shutdownComplete || store === null) return
-  event.preventDefault()
+/**
+ * Whether a quit has begun.
+ *
+ * Read by `main()` at the points between its phases, because a quit can arrive while it is still
+ * opening stores — a second launch that quits at once, a user who closes the first window before the
+ * restore has finished. Without the check, startup went on to open windows, start the update timer
+ * and restore a session the shutdown had already sealed and flushed, in a process about to end.
+ */
+function quitting(): boolean {
+  return shutdown.phase !== 'idle'
+}
 
+function onBeforeQuit(event: Electron.Event): void {
+  if (!shutdown.beforeQuit(beginShutdown)) event.preventDefault()
+}
+
+/** What the first quit does before it starts waiting, and what it waits for. */
+function beginShutdown(): ShutdownWork {
   /*
     No more session writes from here on.
 
@@ -1106,27 +1336,65 @@ app.on('before-quit', (event) => {
     run. Sealing belongs to the shutdown, next to the flush the comment is about.
   */
   sessionStore?.seal()
+  // The idle timer, which could otherwise start a lock of its own halfway through the flushes.
+  passwords?.dispose()
 
-  void (async () => {
-    try {
-      if (store.get('clearData.onExit')) {
-        await clearDataOnExit(store.get('clearData.onExitCategories'))
-      }
-      // Anything written after the process exits is lost, so everything registered is flushed and
-      // awaited here rather than left to a debounce timer. `allSettled`, not `all`: one store that
-      // cannot write must not stop the others from trying.
-      const results = await Promise.allSettled(flushOnExit.map((flush) => flush()))
-      for (const result of results) {
-        if (result.status === 'rejected') console.error('[shutdown] a store could not be flushed:', result.reason)
-      }
-    } catch (error) {
-      console.error('[shutdown] cleanup failed:', error)
-    } finally {
-      shutdownComplete = true
-      app.quit()
-    }
-  })()
-})
+  // No store yet means a quit during startup, before anybody could have asked for anything to go.
+  const store = settings
+  const categories =
+    store?.get('clearData.onExit') === true ? store.get('clearData.onExitCategories') : null
+  return {
+    clear:
+      categories === null
+        ? null
+        : {
+            run: () =>
+              clearDataOnExit(categories).catch((error: unknown) => {
+                // Said here because the sequence records only that it failed, not why.
+                console.error('[shutdown] clearing on exit failed:', error)
+                throw error
+              }),
+            remember: () =>
+              writeFileAtomically(pendingClearFile(), pendingClearText(categories), { mode: 0o600 })
+          },
+    // Anything written after the process exits is lost, so everything registered is flushed and
+    // awaited rather than left to a debounce timer.
+    flushes: flushOnExit.entries()
+  }
+}
+
+/**
+ * `setTimeout` in the shape `shutdown.ts` asks for.
+ *
+ * A function declaration, not a constant: `shutdown` above is built with it while this file is still
+ * being evaluated, and a `const` down here would not exist yet.
+ */
+function nodeAfter(ms: number, callback: () => void): ReturnType<After> {
+  const timer = setTimeout(callback, ms)
+  return () => {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * The one line about a store's load, when there is one: a newer version's file left alone, an older
+ * one upgraded, a broken one copied aside — and whether this run's changes will be kept.
+ *
+ * Next to every store's own `recoveredFromInvalidFile` warning rather than instead of it: that one says
+ * what the store lost, this one says where the original is and what the run may write. The wording is
+ * `describeStoreLoad`'s, so the dozen stores cannot describe one situation a dozen ways.
+ */
+function warnAboutStoreLoad(label: string, report: StoreLoadReport): void {
+  const message = describeStoreLoad(report)
+  if (message !== null) console.warn(`[${label}] ${message}`)
+}
+
+
+/**
+ * What a note is read as when it cannot be read: everything `clearDataOnExit` knows how to clear.
+ * The note exists because the user asked for their data to go.
+ */
+const EVERY_CLEARED_CATEGORY = ['cookies', 'storage', 'cache'] as const
 
 type StorageType = NonNullable<
   NonNullable<Parameters<Electron.Session['clearStorageData']>[0]>['storages']
@@ -1151,7 +1419,11 @@ async function clearDataOnExit(categories: readonly string[]): Promise<void> {
   await Promise.all(work)
 }
 
-void main().catch((error: unknown) => {
-  console.error('[startup] failed:', error)
-  app.exit(1)
-})
+// Only in the instance holding the lock: a second one exits above, and must open nothing.
+if (primaryInstance) {
+  app.on('before-quit', onBeforeQuit)
+  void main().catch((error: unknown) => {
+    console.error('[startup] failed:', error)
+    app.exit(1)
+  })
+}

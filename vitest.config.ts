@@ -124,7 +124,6 @@ export default defineConfig({
         'src/main/paths.ts',
         'src/main/session/hardening.ts',
         'src/main/ipc/handlers.ts',
-        'src/main/ipc/router.ts',
         'src/main/ipc/media-handlers.ts',
         'src/main/ipc/permission-handlers.ts',
         /*
@@ -241,6 +240,28 @@ export default defineConfig({
         // `apply.ts` patches nine browser APIs; two of its guards need a page that lacks one.
         'src/shared/fingerprint/**': { lines: 100, functions: 100, branches: 98, statements: 100 },
         'src/main/crypto/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          The password manager, both halves, which the mutation run already named and nothing here did.
+
+          The shared half is the rules — who may be filled, what a save bar may ask, what a renderer's
+          report is allowed to contain — and it is held at all of it: every branch there is a refusal,
+          and every one is reachable from a unit test with no vault and no window.
+
+          The main half is held at what it reaches, and each gap is a guard that cannot fire without
+          editing the source:
+
+            - `AutofillService` checks for a site twice, once in `offerFor` and once in `#prompt`,
+              after `fillableSubjects` and `passwordOriginOf` have already proved the page has one.
+              Guarded rather than asserted because the alternative is a heading reading "undefined".
+            - `MasterPasswordPrompt` guards three times against a step index outside `stepsFor`: when a
+              question is asked, shown and submitted. Every purpose has at least one step and `#advance`
+              never passes the last, so none of the three can be met.
+            - `PasswordVault.#openStore` rethrows a failure of `PasswordStore.open` that is not
+              `UnreadableDocumentError`, and today there is none: `JsonStore.open` turns every other
+              read failure into "use the defaults". The rethrow is kept for the day it stops doing so.
+        */
+        'src/main/passwords/**': { lines: 99, functions: 100, branches: 98, statements: 98 },
+        'src/shared/passwords/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/main/privacy/**': {
           // The stage-order guard throws only if a future edit reorders the array,
           // and `FilterListEngine.cosmeticStylesFor` has no implementation until
@@ -301,6 +322,22 @@ export default defineConfig({
           statements: 100
         },
         /*
+          The router, which is where the two halves above are applied — and so the third half.
+
+          It sat on the exclude list as Electron-bound, and that was true only of its first import:
+          `ipcMain.handle` is one call, and a fake `ipcMain` in `tests/ipc-router.test.ts` stands in
+          for it. Everything else in the file is a decision about order, and each one is a refusal:
+          the sender before the payload, a vanished frame as no frame rather than a crash that skips
+          the check, a response held to the contract outside a packaged build. A policy that is right
+          and a router that asks it second, or with the wrong frame, would pass every test above.
+        */
+        'src/main/ipc/router.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           The escape ladder and the keys that drive it.
 
           These two answer "what comes off next" and "what did the user just press", and both were
@@ -343,6 +380,70 @@ export default defineConfig({
           statements: 100
         },
         /*
+          Which window an IPC call acts for, carved out of `WindowRegistry.ts` so it could be measured.
+
+          The registry is excluded as Electron-bound, and this decision in it was wrong for as long as
+          it existed without a number ever saying so: no tab sender matched, so every internal page
+          acted for the focused window, and a private window's settings page wrote into the normal
+          profile. A floor below all of it would leave room for exactly that branch to go untested again.
+        */
+        /*
+          The one place a file is replaced on disk. Every store's promise that a crash leaves the old
+          file or the new one, never half of each, is this module's promise, and every branch in it is
+          a failure stage: a floor below all of it would leave room for exactly the stage nobody tested.
+        */
+        /*
+          The shutdown sequence: hold a second quit, give up on a write after ten seconds and on the
+          clearing after thirty, leave a note for the next start. Every branch is either a lost last
+          change or a browser that cannot be closed, and each is reachable with an injected timer.
+        */
+        'src/main/shutdown.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
+          What a store's file is — current, older, newer, not ours — decided before anything is
+          written. Every branch is a way to lose or keep the user's data, so a floor below all of it
+          leaves room for exactly the branch nobody tested.
+        */
+        'src/main/data/store-load.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          The copies a store keeps before it replaces a file, and their removal in the deletion
+          paths. A copy that is not made loses data; one that is not removed breaks a deletion promise.
+        */
+        'src/main/data/quarantine.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          The Public Suffix List's download, its checks and the fallbacks at start. A list that is
+          accepted wrongly merges sites and offers passwords across them, so each refusal is a branch
+          a test has to reach.
+        */
+        'src/main/privacy/PublicSuffixSubscription.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/privacy/FilterListStore.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/data/atomic-write.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/browser/sender-window.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           Held at all of it because it was carved out of a file that is excluded.
 
           These nine handlers lived in `BrowserWindowController.ts`, which is on the exclude list
@@ -353,6 +454,22 @@ export default defineConfig({
           decision someone has to write down.
         */
         'src/main/browser/window-events.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
+          What the entry point decides before anything is ready, carved out of `index.ts` so it could be
+          measured.
+
+          Which address from outside may be opened, and in which window, used to be two lines in the
+          excluded entry point, and both were wrong there with nothing to say so: a link that started the
+          browser was lost, and one arriving while a private window was in front opened in it. Every
+          branch here is a refusal or a choice of window, and a floor below all of it would leave room
+          for exactly that branch to go untested again.
+        */
+        'src/main/startup-flags.ts': {
           lines: 100,
           functions: 100,
           branches: 100,

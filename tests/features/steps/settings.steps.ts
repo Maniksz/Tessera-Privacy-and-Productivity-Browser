@@ -159,20 +159,29 @@ When('the settings are read', async (state: unknown) => {
 
 // --- when: ipc access --------------------------------------------------------
 
+/** The chrome surfaces as `pnpm dev` loads them, from electron-vite's server. */
+const DEV_CHROME = { devServer: 'http://localhost:5173', bundle: [] }
+
 When('a sender on {string} calls {string}', (state: unknown, origin: string, channel: string) => {
-  scope(state).accessAllowed = decideAccess(channel, {
-    frameUrl: origin,
-    isChromeRenderer: false
-  }).allowed
+  scope(state).accessAllowed = decideAccess(
+    channel,
+    { frameUrl: origin, isChromeRenderer: false, isMainFrame: true },
+    DEV_CHROME
+  ).allowed
 })
 
 When('the chrome UI calls {string}', (state: unknown, channel: string) => {
-  scope(state).accessAllowed = decideAccess(channel, {
-    // In development the chrome UI is served over http, which is why identity and
-    // not the URL decides.
-    frameUrl: 'http://localhost:5173/index.html',
-    isChromeRenderer: true
-  }).allowed
+  scope(state).accessAllowed = decideAccess(
+    channel,
+    {
+      // In development the chrome UI is served over http, which is why identity decides first —
+      // and why the address it must be at is the dev server's, not any http page.
+      frameUrl: 'http://localhost:5173/index.html',
+      isChromeRenderer: true,
+      isMainFrame: true
+    },
+    DEV_CHROME
+  ).allowed
 })
 
 // --- then --------------------------------------------------------------------

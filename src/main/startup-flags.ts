@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
-import { mkdir, rename, writeFile } from 'node:fs/promises'
+import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
+import { writeFileAtomically } from './data/atomic-write.js'
 
 /**
  * The two settings that have to be known *before* the application is ready.
@@ -103,6 +104,66 @@ export function readCheckModule(
   return modulePath === '' ? null : modulePath
 }
 
+/**
+ * The development server the chrome UI loads from, or `null` for "load the bundle from disk".
+ *
+ * ## Why it is refused in a packaged build
+ *
+ * electron-vite sets `ELECTRON_RENDERER_URL` for `pnpm dev`, and whatever it names becomes the chrome
+ * UI — the one renderer that holds every IPC channel there is. An environment variable is something
+ * any launcher can set, so a shipped build that honoured it would hand the whole browser to whoever
+ * wrote the shortcut. There the bundle is the only answer, which is also why this is the only place
+ * the variable is read: three call sites each checking it themselves is three chances to forget the
+ * `packaged` half. Pure, with `app.isPackaged` supplied by the caller, as `readCheckModule` is.
+ *
+ * An empty value counts as unset, because that is how a shell clears a variable for one command.
+ */
+export function devServerUrl(
+  env: Readonly<Record<string, string | undefined>>,
+  options: { packaged: boolean }
+): string | null {
+  if (options.packaged) return null
+  const url = env['ELECTRON_RENDERER_URL']
+  return url === undefined || url === '' ? null : url
+}
+
+/**
+ * The Chromium switches that open the DevTools protocol to another process.
+ *
+ * The fuses in `electron-builder.yml` turn off Node's inspector switches and
+ * `ELECTRON_RUN_AS_NODE`, but nothing there reaches Chromium's own debugger — and that one is the
+ * whole browser: every page, every cookie, script in any tab. `remote-debugging-pipe` is the same
+ * protocol over a file descriptor.
+ */
+const DEBUG_SWITCHES = ['remote-debugging-port', 'remote-debugging-pipe'] as const
+
+/**
+ * The debugging switch a packaged build was started with, or `null` when it may run.
+ *
+ * The caller exits on anything but `null`, before the single-instance lock: a shipped browser started
+ * with one of these was started by something other than its user, and there is no safe degraded mode
+ * for "a remote process may drive every tab".
+ *
+ * ## Why it asks rather than reads argv
+ *
+ * Chromium accepts a switch with two leading dashes, with one, and on Windows with `/`, in any
+ * capitalisation. A search of argv would have to reproduce all of that and would be wrong the day
+ * Chromium accepts another spelling; `app.commandLine.hasSwitch` is Chromium's own parser
+ * answering. So the question is injected, and this stays pure and testable. (The switches are
+ * named here without their dashes on purpose: `tests/architecture.test.ts` bans the dashed
+ * spelling anywhere in the source, for reasons given there.)
+ *
+ * A development build is never refused: a developer attaching DevTools to their own build is the
+ * switch doing its job.
+ */
+export function refusedDebugSwitch(
+  hasSwitch: (name: string) => boolean,
+  options: { packaged: boolean }
+): string | null {
+  if (!options.packaged) return null
+  return DEBUG_SWITCHES.find((name) => hasSwitch(name)) ?? null
+}
+
 /** The subset of the settings snapshot that reaches the command line. */
 export function startupFlagsFrom(settings: SettingsSnapshot): StartupFlags {
   return {
@@ -114,13 +175,121 @@ export function startupFlagsFrom(settings: SettingsSnapshot): StartupFlags {
 /**
  * Writes the flags for the next launch.
  *
- * Write-then-rename, so a crash mid-write cannot leave a half-written file that the next startup
- * would read as "no usable flags" — the one failure mode that would make this file worse than the
- * problem it solves.
+ * Atomically, so a crash mid-write cannot leave a half-written file that the next startup would read
+ * as "no usable flags" — the one failure mode that would make this file worse than the problem it
+ * solves. The caller does not serialise these writes (every settings change starts one), which the
+ * helper's unique temporary name is what makes safe.
  */
 export async function writeStartupFlags(filePath: string, flags: StartupFlags): Promise<void> {
   await mkdir(dirname(filePath), { recursive: true })
-  const temp = `${filePath}.tmp`
-  await writeFile(temp, `${JSON.stringify(flags, null, 2)}\n`, { mode: 0o600 })
-  await rename(temp, filePath)
+  await writeFileAtomically(filePath, `${JSON.stringify(flags, null, 2)}\n`, { mode: 0o600 })
+}
+
+/*
+  Addresses handed in from outside the browser.
+
+  They live here rather than in `index.ts` because they are startup decisions of the same kind as the
+  two above — read off the command line, before anything is ready — and `index.ts` is excluded from
+  coverage as Electron-bound. Every rule below used to be a line in that file, and two of them were wrong
+  there without a number ever saying so: a link that started the browser was lost, because the handler
+  that would have opened it was attached only after the session was restored; and one arriving while a
+  private window was focused opened in that window.
+*/
+
+/**
+ * The address, if it is one a page outside the browser may open, and `null` otherwise.
+ *
+ * Web addresses only. The command line, `open-url` and a second launch are all input from outside:
+ * `build/installer.nsh` registers the browser for links with `"%1"`, so a shortcut or a `.desktop` file
+ * can put anything after the executable. An internal page opened that way would be one no user asked
+ * for, and a `file:` document is one that can read its neighbours. The scheme is checked rather than
+ * "does it parse", because a Windows path such as `C:\Tessera\tessera.exe` parses as an address with
+ * the scheme `c:`.
+ */
+export function acceptExternalAddress(candidate: string): string | null {
+  if (!URL.canParse(candidate)) return null
+  const address = new URL(candidate)
+  return address.protocol === 'https:' || address.protocol === 'http:' ? address.href : null
+}
+
+/**
+ * The first web address on a command line, or `null` for an ordinary launch.
+ *
+ * Windows and Linux open a link in a closed browser as `tessera.exe <address>`, but the address is not
+ * reliably the second argument: Chromium adds switches of its own, and a development launch carries the
+ * entry script. So the whole line is searched, and the first acceptable address wins.
+ */
+export function firstExternalAddress(argv: readonly string[]): string | null {
+  for (const argument of argv) {
+    const address = acceptExternalAddress(argument)
+    if (address !== null) return address
+  }
+  return null
+}
+
+/**
+ * The address a second launch hands to the running browser.
+ *
+ * The second instance sends what it found on its own command line as `additionalData`, and that is
+ * preferred: the `argv` the running instance is given carries switches Chromium added on the way, and
+ * Electron leaves it empty when the second launch runs as a different user. That raw `argv` is still
+ * searched when nothing usable was sent — a build from before the lock carried any data. Either way the
+ * result is checked here: any process running as this user can reach the other end of the lock.
+ */
+export function secondInstanceAddress(
+  additionalData: unknown,
+  argv: readonly string[]
+): string | null {
+  const sent =
+    additionalData !== null && typeof additionalData === 'object' && 'url' in additionalData
+      ? additionalData.url
+      : undefined
+  return typeof sent === 'string' ? acceptExternalAddress(sent) : firstExternalAddress(argv)
+}
+
+/**
+ * The window an address from outside opens in: the normal window focused most recently, or `undefined`
+ * for "open a new normal window".
+ *
+ * Never a private one, even the one in front. A link clicked in a mail client says nothing about wanting
+ * privacy, and a private window keeps no history — the visit would be one the user never finds again,
+ * in a session they did not choose for it. That is the case the old `focused() ?? controllers[0]` got
+ * wrong, and it got the other one wrong as well: with nothing focused — the usual state while another
+ * application is in front — it fell back to the *oldest* window rather than the last one used.
+ */
+export function externalAddressWindow<W extends { readonly privateMode: boolean }>(
+  mostRecentFirst: readonly W[]
+): W | undefined {
+  return mostRecentFirst.find((window) => !window.privateMode)
+}
+
+/**
+ * Holds addresses from outside until there is somewhere to open them.
+ *
+ * A link that starts the browser arrives before any window exists — on macOS as `open-url` before
+ * `ready`, elsewhere on the command line — and a second launch can arrive while the stores are still
+ * opening. Everything is held until `deliverTo` is called, which the entry point does once the previous
+ * session is back: opened earlier, a link would land in a window that the restore then buries.
+ *
+ * Checks each address on the way in, so no caller can hand over one that `acceptExternalAddress` would
+ * refuse.
+ */
+export class ExternalAddressInbox {
+  #pending: string[] = []
+  #open: ((address: string) => void) | null = null
+
+  receive(candidate: string | null): void {
+    const address = candidate === null ? null : acceptExternalAddress(candidate)
+    if (address === null) return
+    if (this.#open === null) this.#pending.push(address)
+    else this.#open(address)
+  }
+
+  /** Opens everything held so far, in the order it arrived, and every later address as it comes. */
+  deliverTo(open: (address: string) => void): void {
+    this.#open = open
+    const held = this.#pending
+    this.#pending = []
+    for (const address of held) open(address)
+  }
 }

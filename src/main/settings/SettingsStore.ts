@@ -1,5 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
+import { removeTempFilesOf, writeFileAtomically } from '../data/atomic-write.js'
 import type { DocumentCodec } from '../data/JsonStore.js'
+import { quarantineCopy } from '../data/quarantine.js'
 import { dirname } from 'node:path'
 import {
   defaultSettings,
@@ -79,33 +81,6 @@ function asSettingsObject(decoded: unknown): Record<string, unknown> {
   return decoded as Record<string, unknown>
 }
 
-/**
- * Moves an unreadable settings file aside, and says where it went.
- *
- * The alternative is what this code used to do: warn to a console nobody reads, start with
- * defaults, and destroy the file on the next write. That turns "I cannot read this" into "your
- * settings are gone", which is the worse of the two failures by a wide margin — especially once
- * the file is ciphertext, where unreadable most often means *the key is missing*, not that the
- * data is broken.
- *
- * A failed rename is rethrown rather than ignored: if the file cannot be moved out of the way,
- * the next write would overwrite it, and refusing to start is the only remaining way not to.
- */
-async function quarantineUnreadable(filePath: string): Promise<string> {
-  for (let attempt = 0; ; attempt += 1) {
-    const target = attempt === 0 ? `${filePath}.unreadable` : `${filePath}.unreadable.${attempt}`
-    try {
-      // `wx` fails if the name is taken, which is how a previous quarantine is preserved instead
-      // of being overwritten by this one.
-      await writeFile(target, await readFile(filePath), { flag: 'wx', mode: 0o600 })
-      return target
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'EEXIST') throw error
-      // Name taken by an earlier quarantine; try the next one.
-    }
-  }
-}
-
 export class SettingsStore {
   #values: Record<string, unknown>
   /**
@@ -157,6 +132,11 @@ export class SettingsStore {
 
     let quarantined: string | null = null
 
+    // Before the first write, as in `JsonStore.open`, and for the same reason.
+    await removeTempFilesOf(filePath).catch((error: unknown) => {
+      console.warn(`[settings] could not remove temporary files beside ${filePath}:`, error)
+    })
+
     try {
       const bytes = await readFile(filePath)
       const stored = asSettingsObject(await codec.decode(bytes))
@@ -175,10 +155,23 @@ export class SettingsStore {
     } catch (error) {
       const code = (error as { code?: string }).code
       if (code !== 'ENOENT') {
-        // The file is there and this build cannot read it. Defaults are the right thing to run
-        // with; overwriting the file with them is not, and that is exactly what the next write
-        // would do. See `quarantineUnreadable`.
-        quarantined = await quarantineUnreadable(filePath)
+        /*
+          The file is there and this build cannot read it. Defaults are the right thing to run
+          with; overwriting the file with them is not, and that is exactly what the next write
+          would do. So the file is copied aside first — see `quarantine.ts`.
+
+          The alternative is what this code used to do: warn to a console nobody reads, start with
+          defaults, and destroy the file on the next write. That turns "I cannot read this" into
+          "your settings are gone", which is the worse of the two failures by a wide margin —
+          especially once the file is ciphertext, where unreadable most often means *the key is
+          missing*, not that the data is broken.
+
+          A failed copy is let out rather than ignored, and here that means the browser does not
+          start: without the copy the next write would overwrite the file, and refusing to start is
+          the only remaining way not to. `JsonStore` goes read-only instead; it can, because the
+          browser runs without any one of its stores, but not without its settings.
+        */
+        quarantined = await quarantineCopy(filePath)
       }
     }
 
@@ -190,7 +183,7 @@ export class SettingsStore {
   }
 
   /**
-   * Where an unreadable settings file was moved on load, or null.
+   * Where an unreadable settings file was copied on load, or null.
    *
    * Exposed rather than logged so the diagnostics surface can tell the user their previous
    * settings still exist and where — the difference between a recoverable morning and a lost one.
@@ -296,11 +289,9 @@ export class SettingsStore {
       try {
         await mkdir(dirname(this.filePath), { recursive: true })
         const bytes = await this.codec.encode(data)
-        // Write-then-rename: a crash mid-write leaves the previous file intact
-        // instead of a truncated one.
-        const temp = `${this.filePath}.tmp`
-        await writeFile(temp, bytes, { mode: 0o600 })
-        await rename(temp, this.filePath)
+        // A crash mid-write leaves the previous file intact instead of a
+        // truncated one. See `atomic-write.ts`.
+        await writeFileAtomically(this.filePath, bytes, { mode: 0o600 })
       } catch (error) {
         console.error('[settings] write failed:', error)
       }

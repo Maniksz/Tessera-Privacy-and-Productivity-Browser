@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   MAX_THUMBNAIL_ENTRIES,
   MAX_THUMBNAIL_TITLE_LENGTH,
+  MIN_THUMBNAIL_TOKEN_LENGTH,
   THUMBNAIL_MAX_AGE_MS,
   THUMBNAIL_SETTLE_DELAY_MS,
   THUMBNAIL_TARGET,
+  THUMBNAIL_TOKEN_PARAM,
+  configureThumbnailToken,
   discardingThumbnailCapturer,
   emptyThumbnailCounts,
   emptyThumbnailIndex,
@@ -18,6 +21,7 @@ import {
   thumbnailPageOf,
   thumbnailSiteOf,
   thumbnailTitleOf,
+  thumbnailTokenMatches,
   thumbnailUrl,
   type ThumbnailEntry,
   type ThumbnailSize
@@ -122,6 +126,95 @@ describe('the address a renderer draws from', () => {
     expect(thumbnailPageOf('tessera://thumbnail?url=file:///etc/passwd')).toBeNull()
     expect(thumbnailPageOf('tessera://thumbnail')).toBeNull()
     expect(thumbnailPageOf('nonsense')).toBeNull()
+  })
+})
+
+describe('the token that makes an address worth answering', () => {
+  /*
+    Any web page may point an `<img>` at `tessera://thumbnail?url=…`, so without a token whether it
+    loaded said whether the user had seen that page. The protocol handler asks
+    `thumbnailTokenMatches` before the store and answers a mismatch exactly like a miss; these are the
+    rules it relies on.
+  */
+  const THIS_RUN = 'a'.repeat(22)
+  const NEXT_RUN = 'b'.repeat(22)
+
+  /** The same address with its token replaced, or removed for `null`. */
+  function withToken(url: string, token: string | null): string {
+    const parsed = new URL(url)
+    if (token === null) parsed.searchParams.delete(THUMBNAIL_TOKEN_PARAM)
+    else parsed.searchParams.set(THUMBNAIL_TOKEN_PARAM, token)
+    return parsed.toString()
+  }
+
+  it("accepts an address the core built with this run's token", () => {
+    configureThumbnailToken(THIS_RUN)
+    const url = thumbnailUrl(entry())
+    expect(new URL(url).searchParams.get(THUMBNAIL_TOKEN_PARAM)).toBe(THIS_RUN)
+    expect(thumbnailTokenMatches(url)).toBe(true)
+    // The token rides along; it does not change what the address asks for.
+    expect(thumbnailPageOf(url)).toBe('https://example.com/')
+  })
+
+  it('reads its own token, not one inside the page address it names', () => {
+    // The page's own query is encoded into `url=`, so a `t=` in it is part of the subject and never
+    // mistaken for the token.
+    configureThumbnailToken(THIS_RUN)
+    const url = thumbnailUrl(entry({ url: `https://example.com/?t=${NEXT_RUN}` }))
+    expect(thumbnailTokenMatches(url)).toBe(true)
+    expect(thumbnailPageOf(url)).toBe(`https://example.com/?t=${NEXT_RUN}`)
+  })
+
+  it('refuses an address without the token, with a wrong one, or with an empty one', () => {
+    configureThumbnailToken(THIS_RUN)
+    const url = thumbnailUrl(entry())
+    expect(thumbnailTokenMatches(withToken(url, null))).toBe(false)
+    expect(thumbnailTokenMatches(withToken(url, NEXT_RUN))).toBe(false)
+    expect(thumbnailTokenMatches(withToken(url, ''))).toBe(false)
+    // A prefix is not the token: the comparison is whole, not "starts with".
+    expect(thumbnailTokenMatches(withToken(url, THIS_RUN.slice(1)))).toBe(false)
+    expect(thumbnailTokenMatches('nonsense')).toBe(false)
+  })
+
+  it("stops accepting the last run's addresses once a new token is drawn", () => {
+    // Also what keeps the handler's `immutable` caching correct: a new run builds new addresses.
+    configureThumbnailToken(THIS_RUN)
+    const before = thumbnailUrl(entry())
+    configureThumbnailToken(NEXT_RUN)
+    const after = thumbnailUrl(entry())
+
+    expect(thumbnailTokenMatches(before)).toBe(false)
+    expect(thumbnailTokenMatches(after)).toBe(true)
+    expect(after).not.toBe(before)
+  })
+
+  it('refuses a token short enough to guess, and keeps the one it had', () => {
+    configureThumbnailToken(THIS_RUN)
+    expect(() => configureThumbnailToken('')).toThrow(RangeError)
+    expect(() => configureThumbnailToken('x'.repeat(MIN_THUMBNAIL_TOKEN_LENGTH - 1))).toThrow(
+      RangeError
+    )
+    expect(thumbnailTokenMatches(thumbnailUrl(entry()))).toBe(true)
+
+    // The boundary itself is long enough.
+    const shortest = 'y'.repeat(MIN_THUMBNAIL_TOKEN_LENGTH)
+    configureThumbnailToken(shortest)
+    expect(thumbnailTokenMatches(withToken(thumbnailUrl(entry()), shortest))).toBe(true)
+  })
+
+  it('accepts nothing before the core has configured a token', async () => {
+    /*
+      A fresh copy of the module, because the token is module state and the tests above have set it.
+      An unconfigured core must serve no pictures rather than serve them to anyone — including to an
+      address that simply leaves the token out, which is what a missing token would otherwise equal.
+    */
+    vi.resetModules()
+    const fresh = await import('@shared/thumbnails/model.js')
+    const url = fresh.thumbnailUrl(entry())
+
+    expect(new URL(url).searchParams.get(fresh.THUMBNAIL_TOKEN_PARAM)).toBe('')
+    expect(fresh.thumbnailTokenMatches(url)).toBe(false)
+    expect(fresh.thumbnailTokenMatches(withToken(url, null))).toBe(false)
   })
 })
 

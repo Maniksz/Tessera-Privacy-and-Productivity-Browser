@@ -1,4 +1,4 @@
-import { BrowserWindow, type Session } from 'electron'
+import { app, BrowserWindow, type Session } from 'electron'
 import { join } from 'node:path'
 import type { ChromeInsets, WindowState } from '@shared/model.js'
 
@@ -8,6 +8,7 @@ import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Fractions, LayoutId, Rect } from '@shared/split/layout.js'
 import { chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { decideAutomaticNavigation } from './automatic-navigation.js'
+import { decideChromeNavigation, pendingNavigationOf } from './navigation-policy.js'
 import { AutomaticNavigationPrompt } from './AutomaticNavigationPrompt.js'
 import { HOME_URL, resolveOmniboxInput } from '@shared/url/omnibox.js'
 import {
@@ -32,12 +33,15 @@ import { nextZoomPercent } from '@shared/gestures/zoom.js'
 import { decideZoomTarget } from '@shared/gestures/wheel-zoom.js'
 import type { PaneZoom } from '@shared/zoom/model.js'
 import type { PageContextTarget } from '../menu/page-context-items.js'
+import type { PermissionHost } from '../permissions/PermissionArbiter.js'
+import type { PermissionTabChange } from '../permissions/model.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SessionRecorder } from '@shared/session/model.js'
 import type { SplitSnapshotForPersistence } from './SplitController.js'
 import { OverlayLayer } from './OverlayLayer.js'
 import { SplitController, type TileDirection } from './SplitController.js'
 import { currentPlatform, preloadFile, preloadRoleArgument } from '../paths.js'
+import { devServerUrl } from '../startup-flags.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
 import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
 import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
@@ -114,7 +118,19 @@ function hostOf(url: string): string {
   }
 }
 
-export class BrowserWindowController {
+/**
+ * `preventDefault` on an Electron event that arrived through `#on` as `unknown`.
+ *
+ * A declaration rather than a cast, as in `pendingNavigationOf`: `object` is assignable to a type
+ * whose only field is optional, so this narrows without asserting anything unchecked.
+ */
+function preventDefaultOf(event: unknown): void {
+  if (typeof event !== 'object' || event === null) return
+  const cancellable: { preventDefault?: () => void } = event
+  cancellable.preventDefault?.()
+}
+
+export class BrowserWindowController implements PermissionHost {
   readonly window: BrowserWindow
   readonly split: SplitController
   readonly privateMode: boolean
@@ -182,6 +198,21 @@ export class BrowserWindowController {
   #disposers: Array<() => void> = []
   /** See `downloadsPanelPresentedAt`. */
   #downloadsPanelPresentedAt: number | null = null
+  /**
+   * Whoever waits on this window's tabs to answer a permission question: the arbiter, while it has
+   * something queued here. See `onPermissionTabChange`.
+   */
+  readonly #permissionListeners = new Set<(change: PermissionTabChange) => void>()
+  /**
+   * What the permission listeners were last told about each tab.
+   *
+   * The `webContents` id is read once, when the tab is made, because it is needed again when the tab
+   * closes — and a view that is being torn down is the one thing whose id may no longer be readable.
+   * A `WeakMap`, so a closed tab takes its entry with it.
+   */
+  readonly #permissionTabs = new WeakMap<Tab, { readonly webContentsId: number; url: string }>()
+  /** The tab in front as the permission listeners last heard it; see `#reportActiveTab`. */
+  #reportedActiveWebContentsId: number | null = null
 
   private readonly getSettings: () => SettingsSnapshot
   private readonly options: WindowControllerOptions
@@ -292,15 +323,66 @@ export class BrowserWindowController {
       scheduleBroadcast: () => this.#scheduleBroadcast()
     })
     this.#wireLifecycle()
+    this.#guardChrome()
     this.#loadChrome()
     this.#seams.fullscreen.applyPolicy()
   }
 
   // --- lifecycle -----------------------------------------------------------
 
+  /**
+   * Keeps the chrome UI on the document the core loaded into it.
+   *
+   * This renderer holds every IPC channel there is, so whatever it shows is trusted with all of them
+   * — which makes "it shows only what `#loadChrome` put there" a security property, not a nicety.
+   * Three ways a page could otherwise replace it, each closed here before the first load:
+   *
+   *   - `will-frame-navigate`: a dropped link, an assignment to `location`. The core never moves this
+   *     view that way (`loadURL` does not fire the event), so `decideChromeNavigation` refuses
+   *     everything but Vite's own reload in `pnpm dev`. Only this event, not `will-navigate` as well —
+   *     it is the documented superset, the reasoning in `navigation-policy.ts`.
+   *   - `setWindowOpenHandler`: nothing in the chrome UI opens a window, so every request is denied.
+   *   - `will-attach-webview`: `webviewTag` is off, and this is what holds if it is ever switched on.
+   *
+   * Through `#on`, so the listeners go with the window like every other subscription here. The IPC
+   * router checks the address on every call as well (`classifySender`), because a guard that cannot
+   * see the core's own loads cannot be the only line.
+   */
+  #guardChrome(): void {
+    const contents = this.window.webContents
+    const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
+
+    this.#on(
+      'will-frame-navigate',
+      (details: unknown) => {
+        const pending = pendingNavigationOf(details, 'frame')
+        if (pending === null) {
+          // A payload this build does not recognise is refused rather than waved through: for
+          // this surface there is no navigation it would have been right to follow.
+          preventDefaultOf(details)
+          return
+        }
+        const decision = decideChromeNavigation(pending, devServer)
+        if (decision.allowed) return
+        pending.prevent()
+        console.warn(`[chrome] refused: ${decision.reason}`)
+      },
+      contents
+    )
+    this.#on(
+      'will-attach-webview',
+      (event: unknown) => {
+        preventDefaultOf(event)
+        console.warn('[chrome] refused: the chrome UI may not attach a <webview>')
+      },
+      contents
+    )
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  }
+
   #loadChrome(): void {
-    const devServer = process.env.ELECTRON_RENDERER_URL
-    if (devServer !== undefined && devServer !== '') {
+    const devServer = devServerUrl(process.env, { packaged: app.isPackaged })
+    if (devServer !== null) {
       void this.window.loadURL(devServer)
     } else {
       void this.window.loadFile(join(__dirname, '../renderer/index.html'))
@@ -319,9 +401,15 @@ export class BrowserWindowController {
    *
    * Reached from `window-events.ts` as `WindowEventHost.on` rather than copied into it: the disposers are
    * this window's, and the pairing only means anything where the thing being torn down lives.
+   *
+   * The window by default; `#guardChrome` passes the window's `webContents`, whose navigation events
+   * are not the window's.
    */
-  #on(event: string, handler: (...args: unknown[]) => void): void {
-    const emitter: NodeJS.EventEmitter = this.window
+  #on(
+    event: string,
+    handler: (...args: unknown[]) => void,
+    emitter: NodeJS.EventEmitter = this.window
+  ): void {
     emitter.on(event, handler)
     this.#disposers.push(() => {
       emitter.removeListener(event, handler)
@@ -368,6 +456,13 @@ export class BrowserWindowController {
     })
 
     this.window.on('closed', () => {
+      /*
+        Anything still waiting on a tab here is refused before the listeners go. The overlay reports
+        only the prompt it shows, so without this a question waiting in a background tab would be left
+        pending on a window that no longer exists.
+      */
+      this.#tellPermissionListeners({ kind: 'gone' })
+      this.#permissionListeners.clear()
       for (const dispose of this.#disposers) dispose()
       this.#disposers = []
       // A timer outliving the window it would act on is the same class of leak the disposers above
@@ -421,7 +516,10 @@ export class BrowserWindowController {
       ...(options.ephemeral === undefined ? {} : { ephemeral: options.ephemeral }),
       ...(options.zoomPercent === undefined ? {} : { zoomPercent: options.zoomPercent }),
       callbacks: {
-        onStateChanged: () => this.#scheduleBroadcast(),
+        onStateChanged: (source) => {
+          this.#reportNavigation(source)
+          this.#scheduleBroadcast()
+        },
         /*
           A tab a page asked for, which is not the same as a tab the user asked for.
 
@@ -510,6 +608,7 @@ export class BrowserWindowController {
     })
 
     this.#tabs.set(tab.id, tab)
+    this.#permissionTabs.set(tab, { webContentsId: tab.view.webContents.id, url: tab.currentUrl })
     this.#tabOrder.push(tab.id)
     // Index 0 puts the tab view at the bottom of the child stack, which keeps the overlay
     // layer above every tab no matter when each was added. Appending instead would put the
@@ -569,6 +668,11 @@ export class BrowserWindowController {
     this.#tabs.delete(tabId)
     this.window.contentView.removeChildView(tab.view)
     tab.destroy()
+    // After the tab has left `#tabs` and the split, so the arbiter, reacting, cannot find it in front.
+    const permissionTab = this.#permissionTabs.get(tab)
+    if (permissionTab !== undefined) {
+      this.#tellPermissionListeners({ kind: 'closed', webContentsId: permissionTab.webContentsId })
+    }
 
     this.#seams.occupancy.afterTabClosed(vacatedTile)
 
@@ -699,6 +803,83 @@ export class BrowserWindowController {
 
   resolveTab(tabId?: string): Tab | undefined {
     return tabId === undefined ? this.activeTab() : this.#tabs.get(tabId)
+  }
+
+  // --- permission questions --------------------------------------------------
+
+  /**
+   * `PermissionHost`: the tab a permission dialogue may appear over, as its `webContents` id.
+   *
+   * The active tile's tab and no other. In a split layout the other tiles are visible too, but the
+   * active one is where the user's attention and keyboard are, and clicking into another tile makes
+   * that one active — so a question from a visible tile comes up the moment the user turns to it.
+   */
+  activeTabWebContentsId(): number | null {
+    const tab = this.activeTab()
+    if (tab === undefined) return null
+    return this.#permissionTabs.get(tab)?.webContentsId ?? null
+  }
+
+  /**
+   * `PermissionHost`: tells a listener when the tab in front may have changed, when a tab commits a
+   * new address or closes, and when the window goes. Returns the way off.
+   *
+   * A set with its own unsubscribe rather than `#on`: the arbiter subscribes whenever a queue opens
+   * here and unsubscribes whenever it empties, many times over a window's life, and `#disposers` only
+   * ever grows. The window's own teardown clears the set as well, in `#wireLifecycle`.
+   */
+  onPermissionTabChange(listener: (change: PermissionTabChange) => void): () => void {
+    this.#permissionListeners.add(listener)
+    return () => {
+      this.#permissionListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Guarded per listener, as `notifyOverlayVacancy` is: this runs inside `closeTab` and the window's
+   * teardown, and a listener that threw must not leave a tab half closed.
+   */
+  #tellPermissionListeners(change: PermissionTabChange): void {
+    for (const listener of [...this.#permissionListeners]) {
+      try {
+        listener(change)
+      } catch (error) {
+        console.error('[permissions] a tab listener threw:', error)
+      }
+    }
+  }
+
+  /**
+   * A tab's committed address, reported when it changes and not otherwise.
+   *
+   * `onStateChanged` fires for a title, a favicon or a load starting as well, and `currentUrl` moves
+   * only on a commit — so comparing with what was last reported turns the one callback into a
+   * navigation event without reaching into `Tab`'s own subscriptions.
+   */
+  #reportNavigation(tab: Tab): void {
+    const reported = this.#permissionTabs.get(tab)
+    if (reported === undefined || reported.url === tab.currentUrl) return
+    reported.url = tab.currentUrl
+    this.#tellPermissionListeners({
+      kind: 'navigated',
+      webContentsId: reported.webContentsId,
+      url: tab.currentUrl
+    })
+  }
+
+  /**
+   * Tells the listeners the tab in front changed, once per change.
+   *
+   * From the broadcast round rather than from every place that moves the active tile — tab
+   * activation, tile focus, layouts, closing, groups folding — because that round is where every one
+   * of them already arrives, for the same reason the tab strip is told there: the list of causes has
+   * grown before and hooking each is how one gets missed.
+   */
+  #reportActiveTab(): void {
+    const active = this.activeTabWebContentsId()
+    if (active === this.#reportedActiveWebContentsId) return
+    this.#reportedActiveWebContentsId = active
+    this.#tellPermissionListeners({ kind: 'activated' })
   }
 
   // --- navigation ----------------------------------------------------------
@@ -1278,6 +1459,8 @@ export class BrowserWindowController {
       */
       const tabs = this.#seams.groups.displayOrder().map((id) => this.#tabs.get(id)).filter((tab): tab is Tab => tab !== undefined).map((tab) => tab.toState())
       this.emit('tabs:changed', { tabs, activeTabId: this.split.activeTabId() })
+      // The same tick the strip learns which tab is active, a waiting permission question does too.
+      this.#reportActiveTab()
       /*
         An open tile bar reads the tab again, from the same tick the strip does.
 

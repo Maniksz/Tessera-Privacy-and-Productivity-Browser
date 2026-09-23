@@ -235,3 +235,20 @@ describe('reaching the group commands at all', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 })
+
+describe("a tab's icon", () => {
+  it('cannot be dragged out, because the address carries the cache token', () => {
+    /*
+      Here rather than in a file of its own because this file already has the strip's bridge and
+      fixtures. The icon cache answers only an address carrying this run's token, which is what keeps
+      a web page from asking it which sites the user has been to; an icon dragged into a page would
+      hand that address over.
+    */
+    installBridge()
+    renderBar([tab('t1', { faviconUrl: 'tessera://favicon?site=example.com&v=1&t=token' })], [])
+
+    const icon = document.querySelector('[data-tab-id="t1"] img.tab__faviconImage')
+    expect(icon?.getAttribute('src')).toContain('tessera://favicon')
+    expect(icon?.getAttribute('draggable')).toBe('false')
+  })
+})

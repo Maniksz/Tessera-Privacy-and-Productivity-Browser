@@ -166,6 +166,12 @@ export interface DownloadHandlerDeps {
   readonly windows: DownloadHandlerWindows
   /** The clock a state change is stamped with. `Date.now`, the manager's own, unless a test says. */
   readonly now?: () => number
+  /**
+   * Removes the stored list's backup, quarantine and temporary copies. A closure over the store rather
+   * than a method on the manager, because the copies are the file's business and the manager's is the
+   * live transfers. See `DownloadStore.discardCopies`.
+   */
+  readonly discardCopies: () => Promise<void>
 }
 
 /**
@@ -204,7 +210,7 @@ function sameSummary(left: DownloadButtonSummary, right: DownloadButtonSummary):
 }
 
 export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
-  const { handle, downloads, windows } = deps
+  const { handle, downloads, windows, discardCopies } = deps
   const now = deps.now ?? Date.now
   const memory = new WeakMap<DownloadHandlerWindow, ButtonMemory>()
   const stateTimes = new WeakMap<DownloadViewer['session'], StateTimes>()
@@ -346,7 +352,15 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   handle('downloads:remove', ({ id }, event) => ({
     removed: mayTouch(event, id) && downloads.remove(id)
   }))
-  handle('downloads:clear', (_payload, event) => ({ removed: downloads.clear(sender(event)) }))
+  /*
+    The copies go too, and before the answer: an older state of the list in a `.v1.bak` or an
+    `.unreadable` would keep what the user just cleared. A failed removal rejects the call.
+  */
+  handle('downloads:clear', async (_payload, event) => {
+    const removed = downloads.clear(sender(event))
+    await discardCopies()
+    return { removed }
+  })
 
   /*
     The authoritative presence checks, both of them.

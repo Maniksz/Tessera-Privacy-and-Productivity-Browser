@@ -12,6 +12,7 @@ import {
 import {
   RESET_VAULT_CONFIRMATION,
   vaultHasMasterPassword,
+  vaultKeyIsExposed,
   type VaultKeyProtection,
   type VaultStatus
 } from '@shared/passwords/vault.js'
@@ -81,8 +82,10 @@ const TICK_MS = 1000
  */
 const PROTECTION_MESSAGES: Readonly<Record<VaultKeyProtection, MessageKey>> = {
   'keystore+master': 'passwords.protection.keystoreMaster',
+  'weak-keystore+master': 'passwords.protection.weakKeystoreMaster',
   master: 'passwords.protection.master',
   keystore: 'passwords.protection.keystore',
+  'weak-keystore': 'passwords.protection.weakKeystore',
   plain: 'passwords.protection.plain'
 }
 
@@ -428,6 +431,12 @@ export function PasswordsPage(): React.ReactNode {
   }
 
   const hasMaster = vaultHasMasterPassword(vault.protection)
+  /*
+    A key file a newer version wrote. Unreadable here, and not damaged: the reset this page offers for a
+    damaged key would delete a vault the newer version still opens, so it is not offered. See
+    `VaultStatus.newer`.
+  */
+  const keyNewer = vault.unreadable && vault.newer === true
   const idleMinutes = Math.round(vault.idleTimeoutMs / 60_000)
 
   return (
@@ -455,7 +464,19 @@ export function PasswordsPage(): React.ReactNode {
         logged in as this user can read them either way. A manager that mentioned neither would be
         misrepresenting itself on its own front page.
       */}
-      <p className="passwords__protection" role="note">
+      {/*
+        Set apart when the key itself is readable to anyone with this folder — no key store and no master
+        password, or Linux's basic text standing in for one. The other levels are facts to know; these two
+        are "this is not protected", and the calm styling would round that up.
+      */}
+      <p
+        className={
+          vaultKeyIsExposed(vault.protection)
+            ? 'passwords__protection passwords__protection--exposed'
+            : 'passwords__protection'
+        }
+        role="note"
+      >
         {/*
           One sentence per protection level, keyed by the level itself.
 
@@ -490,7 +511,9 @@ export function PasswordsPage(): React.ReactNode {
         {vault.unreadable ? (
           <>
             <h3 className="passwords__lockTitle">{t('passwords.unreadableTitle')}</h3>
-            <p className="passwords__lockBody">{t('passwords.unreadableBody')}</p>
+            <p className="passwords__lockBody">
+              {t(keyNewer ? 'passwords.keyNewer' : 'passwords.unreadableBody')}
+            </p>
           </>
         ) : (
           !vault.unlocked && (
@@ -507,6 +530,31 @@ export function PasswordsPage(): React.ReactNode {
               </button>
             </>
           )
+        )}
+
+        {/*
+          What opening the document found, when it was not a clean load. Only ever set on an unlocked vault,
+          and each line only when it is true, so a vault that loaded normally shows none of them.
+
+          The read-only line is not repeated for a newer file, whose own sentence already says it; and a
+          document that could not be used is only said to have been kept when the copy was made — that is
+          exactly the case in which the vault is *not* read-only. See `VaultStatus`.
+        */}
+        {vault.newer === true && !vault.unreadable && (
+          <p className="passwords__lockBody">{t('passwords.documentNewer')}</p>
+        )}
+        {vault.invalid === true && vault.readOnly !== true && (
+          <p className="passwords__lockBody">{t('passwords.documentInvalid')}</p>
+        )}
+        {vault.readOnly === true && vault.newer !== true && (
+          <p className="passwords__lockBody">{t('passwords.documentReadOnly')}</p>
+        )}
+        {vault.unreadableEntries !== undefined && (
+          <p className="passwords__lockBody">
+            {vault.unreadableEntries === 1
+              ? t('passwords.unreadableEntry')
+              : t('passwords.unreadableEntries', { count: vault.unreadableEntries })}
+          </p>
         )}
 
         <div className="passwords__vaultActions">
@@ -544,16 +592,19 @@ export function PasswordsPage(): React.ReactNode {
           )}
           {/*
             Offered even while locked, and especially then: a forgotten master password is the only reason
-            anybody wants this, and it is exactly the state in which nothing else on this page works.
+            anybody wants this, and it is exactly the state in which nothing else on this page works. Not for
+            a key file from a newer version, which is not lost at all.
           */}
-          <button
-            type="button"
-            className="passwords__action--danger"
-            disabled={busy !== null}
-            onClick={resetVault}
-          >
-            {t('passwords.resetVault')}
-          </button>
+          {!keyNewer && (
+            <button
+              type="button"
+              className="passwords__action--danger"
+              disabled={busy !== null}
+              onClick={resetVault}
+            >
+              {t('passwords.resetVault')}
+            </button>
+          )}
         </div>
 
         {importReport !== null && (

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   CHECK_INTERVAL_MS,
   FIRST_CHECK_DELAY_MS,
-  MAC_BUILD_IS_SIGNED,
+  IN_PLACE_UPDATES,
   UpdateService,
   offerPrompt,
   noticePrompt,
@@ -10,6 +10,7 @@ import {
   restartPrompt,
   updateDelivery,
   updatePolicyFor,
+  type InPlaceUpdates,
   type UpdateAnswer,
   type UpdateDownloadResult,
   type UpdateFeedResult,
@@ -17,6 +18,7 @@ import {
   type UpdatePrompt,
   type UpdateServiceOptions
 } from '@main/updates/UpdateService.js'
+import type { Platform } from '@shared/model.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
 
 /**
@@ -31,8 +33,10 @@ import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definit
  *     ordinary, all reached by a timer nobody set off. A message box for each one is how a user
  *     learns to switch update checks off, which costs them the security fixes the check exists to
  *     deliver.
- *   - **A macOS download that cannot work.** Squirrel.Mac will not replace an unsigned application.
- *     Offering the download anyway produces a progress bar, a restart, and the same old version.
+ *   - **A download nothing verifies.** No build of this browser is signed yet. Squirrel.Mac will not
+ *     replace an unsigned application at all, and on Windows and Linux `electron-updater` would
+ *     install whatever the release holds without checking who made it. So every platform is sent
+ *     to the release page until its row in `IN_PLACE_UPDATES` says otherwise.
  *   - **An alpha user told there is nothing new.** GitHub's "latest release" excludes prereleases, so
  *     a lost `allowPrerelease` does not fail — it reports "no update" for ever.
  *
@@ -58,7 +62,7 @@ function harness(
     readonly download?: UpdateDownloadResult
     readonly answer?: (prompt: UpdatePrompt) => UpdateAnswer
     readonly platform?: UpdateServiceOptions['platform']
-    readonly macBuildIsSigned?: boolean
+    readonly inPlaceUpdates?: InPlaceUpdates
     /**
      * `0`, which installs no timer at all, unless a test says otherwise.
      *
@@ -99,9 +103,7 @@ function harness(
     platform: overrides.platform ?? 'win32',
     // Absent rather than `undefined`, so a test that does not name it exercises the constant this
     // application actually ships with.
-    ...(overrides.macBuildIsSigned === undefined
-      ? {}
-      : { macBuildIsSigned: overrides.macBuildIsSigned }),
+    ...(overrides.inPlaceUpdates === undefined ? {} : { inPlaceUpdates: overrides.inPlaceUpdates }),
     showPrompt:
       overrides.showPrompt ??
       ((prompt) => {
@@ -146,39 +148,65 @@ async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve))
 }
 
+const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
+
+/**
+ * Every platform able to install in place — the state a signed release would be in.
+ *
+ * Named by the tests that exercise the second and third consents, which only exist on that path. A
+ * test that names nothing gets the table the application ships with, and that sends everybody to
+ * the release page.
+ */
+const IN_PLACE_EVERYWHERE: InPlaceUpdates = { darwin: true, win32: true, linux: true }
+
 /** Silences the one line an ordinary failure is allowed to leave, and lets a test read it. */
 function quietWarnings(): ReturnType<typeof vi.spyOn> {
   return vi.spyOn(console, 'warn').mockImplementation(() => {})
 }
 
 describe('which platform is offered a download', () => {
-  it('sends an unsigned macOS build to the release page instead', () => {
+  it('sends every platform to the release page while none of them may install in place', () => {
     /*
-      Squirrel.Mac refuses to replace an application whose code signature it cannot verify, and this
-      project has no Developer ID: `release.yml` builds macOS with `--config.mac.identity=null`. A
-      download offered here would download, restart, and leave the user on the same version — with
-      the failure reported by a framework rather than by us.
+      No build of this browser is signed, and each platform turns that into a different failure.
+      Squirrel.Mac refuses to replace an unsigned application, so a macOS download would restart into
+      the same old version. `NsisUpdater` and the AppImage updater would not refuse — they would
+      install whatever the release holds without checking who made it, which is worse. The release
+      page is the one route that works and that leaves the decision with the person.
     */
-    expect(updateDelivery({ platform: 'darwin', macBuildIsSigned: false })).toBe('release-page')
+    for (const platform of PLATFORMS) {
+      expect(updateDelivery({ platform, inPlaceUpdates: IN_PLACE_UPDATES }), platform).toBe(
+        'release-page'
+      )
+    }
   })
 
-  it('offers the download on macOS the moment the build is signed', () => {
-    // The seamless path has to be one condition away, not a rewrite. This is that condition.
-    expect(updateDelivery({ platform: 'darwin', macBuildIsSigned: true })).toBe('in-place')
+  it('offers the download on Windows the moment its row says so', () => {
+    // The seamless path has to be one value away, not a rewrite — and one platform's value, not a
+    // switch that would carry the other two along with it.
+    const windowsSigned: InPlaceUpdates = { ...IN_PLACE_UPDATES, win32: true }
+
+    expect(updateDelivery({ platform: 'win32', inPlaceUpdates: windowsSigned })).toBe('in-place')
+    expect(updateDelivery({ platform: 'darwin', inPlaceUpdates: windowsSigned })).toBe(
+      'release-page'
+    )
+    expect(updateDelivery({ platform: 'linux', inPlaceUpdates: windowsSigned })).toBe(
+      'release-page'
+    )
   })
 
-  it('offers the download on Windows and Linux', () => {
-    expect(updateDelivery({ platform: 'win32', macBuildIsSigned: false })).toBe('in-place')
-    expect(updateDelivery({ platform: 'linux', macBuildIsSigned: false })).toBe('in-place')
+  it('offers the download on macOS the moment its row says so', () => {
+    const macSigned: InPlaceUpdates = { ...IN_PLACE_UPDATES, darwin: true }
+    expect(updateDelivery({ platform: 'darwin', inPlaceUpdates: macSigned })).toBe('in-place')
   })
 
-  it('ships with macOS signing off, because it is', () => {
+  it('ships with in-place updates off on every platform, because no build is signed', () => {
     /*
-      Not a tautology about a constant: it is the assertion that nobody has flipped the flag while
-      the workflow still passes `--config.mac.identity=null`. Flipping one without the other is the
-      one mistake here that produces a broken update for real users rather than a failing test.
+      Not a tautology about a constant: it is the assertion that nobody has flipped a row while the
+      release still ships that platform unsigned. `architecture.test.ts` ties the macOS and Windows
+      rows to `release.yml`; this is the whole table, Linux included, whose AppImage updater checks
+      no signature at all and so has nothing in the workflow to be tied to.
     */
-    expect(MAC_BUILD_IS_SIGNED).toBe(false)
+    expect(IN_PLACE_UPDATES).toEqual({ darwin: false, win32: false, linux: false })
   })
 })
 
@@ -219,7 +247,7 @@ describe('what the updater is told before a check', () => {
   })
 })
 
-describe('the release page a mac user is sent to', () => {
+describe('the release page a user is sent to', () => {
   it('names the tag of the version that was offered', () => {
     // The version they were just told about, not `/releases/latest` — which on GitHub means the
     // newest *non-prerelease* release and does not exist for this project.
@@ -366,6 +394,7 @@ describe('the first consent: told, not downloaded', () => {
       offer to download something already downloaded.
     */
     const h = harness({
+      inPlaceUpdates: IN_PLACE_EVERYWHERE,
       current: '1.0.0',
       feed: { kind: 'offer', version: '1.1.0' },
       answer: (prompt) => (prompt.kind === 'offer' ? 'download' : 'dismiss')
@@ -387,7 +416,8 @@ describe('the first consent: told, not downloaded', () => {
       locale: 'en',
       current: '1.0.0',
       version: '1.1.0',
-      delivery: 'in-place'
+      delivery: 'in-place',
+      platform: 'win32'
     })
     const [accepting] = prompt.buttons.slice(0, 1)
     const [cancelling] = prompt.buttons.slice(prompt.cancelIndex, prompt.cancelIndex + 1)
@@ -402,7 +432,8 @@ describe('the first consent: told, not downloaded', () => {
       locale: 'en',
       current: '1.0.0',
       version: '1.1.0',
-      delivery: 'in-place'
+      delivery: 'in-place',
+      platform: 'win32'
     })
     expect(prompt.message).toContain('1.1.0')
     expect(prompt.message).toContain('1.0.0')
@@ -410,44 +441,111 @@ describe('the first consent: told, not downloaded', () => {
 
   it('offers the release page rather than a download when the platform cannot install one', () => {
     /*
-      Same dialogue, different button: a mac user is told the version exists and is given the one
-      route that works. Offering a Download button here would be the browser promising something the
-      operating system refuses.
+      Same dialogue, different button: the user is told the version exists and is given the one route
+      that works. Offering a Download button here would be the browser promising something it must not
+      do on its own.
     */
-    const prompt = offerPrompt({
-      locale: 'en',
-      current: '1.0.0',
-      version: '1.1.0',
-      delivery: 'release-page'
-    })
-    expect(prompt.buttons.map((button) => button.answer)).toEqual(['release-page', 'dismiss'])
-    expect(prompt.detail, 'the reason is not stated').toContain('macOS')
+    for (const platform of PLATFORMS) {
+      const prompt = offerPrompt({
+        locale: 'en',
+        current: '1.0.0',
+        version: '1.1.0',
+        delivery: 'release-page',
+        platform
+      })
+      expect(
+        prompt.buttons.map((button) => button.answer),
+        platform
+      ).toEqual(['release-page', 'dismiss'])
+    }
   })
 
-  it('opens the release page and downloads nothing when that is the answer', async () => {
+  it('gives each platform its own reason, in its own words', () => {
+    // A macOS sentence shown to a Windows user is a reason that is plainly not theirs, which reads as
+    // the dialogue not knowing what it is talking about.
+    const detail = (platform: Platform): string =>
+      offerPrompt({
+        locale: 'en',
+        current: '1.0.0',
+        version: '1.1.0',
+        delivery: 'release-page',
+        platform
+      }).detail ?? ''
+
+    expect(detail('darwin')).toContain('macOS')
+    expect(detail('linux')).toContain('AppImage')
+    expect(new Set(PLATFORMS.map(detail)).size, 'two platforms share one sentence').toBe(3)
+  })
+
+  it('warns a Windows user about the warning they will see when installing by hand', () => {
     /*
-      No `macBuildIsSigned` given, so this is the state the application ships in: a mac user is
-      offered the page, never the download. That is the assertion — if the shipped default ever
-      flipped without the workflow being changed, this is where it shows.
+      An unsigned installer is exactly what SmartScreen stops, with a full-window "Windows protected
+      your PC" and the way on hidden behind "More info". Somebody who was not told to expect it will
+      reasonably read it as the download being malicious — and the release page is then a dead end
+      instead of the route that works. Checked in both locales, because the German one is what this
+      project's own user reads.
+    */
+    for (const locale of ['en', 'de'] as const) {
+      const prompt = offerPrompt({
+        locale,
+        current: '1.0.0',
+        version: '1.1.0',
+        delivery: 'release-page',
+        platform: 'win32'
+      })
+      expect(prompt.detail, locale).toContain('SmartScreen')
+    }
+  })
+
+  for (const platform of PLATFORMS) {
+    it(`opens the release page and downloads nothing on ${platform} as shipped`, async () => {
+      /*
+        No `inPlaceUpdates` given, so this is the state the application ships in: every user is
+        offered the page, never the download. That is the assertion — if the shipped table ever
+        flipped a row without the release being signed, this is where it shows.
+      */
+      const h = harness({
+        platform,
+        current: '1.0.0',
+        feed: { kind: 'offer', version: '1.1.0' },
+        answer: () => 'release-page'
+      })
+      const outcome = await h.service.checkOnDemand()
+
+      const [offer] = h.prompts.slice(0, 1)
+      expect(offer?.buttons.map((button) => button.answer)).toEqual(['release-page', 'dismiss'])
+      expect(h.opened).toEqual([releasePageUrl('1.1.0')])
+      expect(h.downloads, `${platform} was sent down the in-place path`).toBe(0)
+      expect(outcome).toEqual({ kind: 'sent-to-release-page', version: '1.1.0' })
+    })
+  }
+
+  it('downloads nothing on a release-page platform even if the answer claims download', async () => {
+    /*
+      The button is not the only thing standing between an unsigned update and this machine. The
+      prompt layer can only hand back an answer it drew, today — but "which buttons were drawn" is a
+      presentation fact, and R15 is a rule about what gets installed. So the service checks the route
+      itself, and an answer the offer never carried changes nothing.
     */
     const h = harness({
-      platform: 'darwin',
+      platform: 'win32',
       current: '1.0.0',
       feed: { kind: 'offer', version: '1.1.0' },
-      answer: () => 'release-page'
+      answer: () => 'download'
     })
     const outcome = await h.service.checkOnDemand()
 
-    expect(h.opened).toEqual([releasePageUrl('1.1.0')])
-    expect(h.downloads, 'macOS was sent down the in-place path').toBe(0)
-    expect(outcome).toEqual({ kind: 'sent-to-release-page', version: '1.1.0' })
+    expect(h.downloads, 'an unsigned update was downloaded').toBe(0)
+    expect(h.installs).toBe(0)
+    expect(h.opened).toEqual([])
+    expect(outcome).toEqual({ kind: 'declined', version: '1.1.0' })
   })
 
-  it('offers a signed macOS build the download, with nothing else changing', async () => {
-    // The whole of "one condition away", end to end: the same flow, the other button.
+  it('offers a platform that may install in place the download, with nothing else changing', async () => {
+    // The whole of "one value away", end to end: the same flow, the other button.
     const h = harness({
       platform: 'darwin',
-      macBuildIsSigned: true,
+      inPlaceUpdates: { ...IN_PLACE_UPDATES, darwin: true },
       current: '1.0.0',
       feed: { kind: 'offer', version: '1.1.0' },
       answer: (prompt) => (prompt.kind === 'offer' ? 'download' : 'dismiss')
@@ -456,6 +554,15 @@ describe('the first consent: told, not downloaded', () => {
 
     const [offer] = h.prompts.slice(0, 1)
     expect(offer?.buttons.map((button) => button.answer)).toEqual(['download', 'dismiss'])
+    expect(offer?.detail).toBe(
+      offerPrompt({
+        locale: 'en',
+        current: '1.0.0',
+        version: '1.1.0',
+        delivery: 'in-place',
+        platform: 'darwin'
+      }).detail
+    )
     expect(h.downloads).toBe(1)
     expect(h.opened).toEqual([])
   })
@@ -464,6 +571,7 @@ describe('the first consent: told, not downloaded', () => {
 describe('the second and third consents: downloaded, then restarted', () => {
   it('downloads on approval and then asks when to restart', async () => {
     const h = harness({
+      inPlaceUpdates: IN_PLACE_EVERYWHERE,
       current: '1.0.0',
       feed: { kind: 'offer', version: '1.1.0' },
       answer: (prompt) => (prompt.kind === 'offer' ? 'download' : 'dismiss')
@@ -484,6 +592,7 @@ describe('the second and third consents: downloaded, then restarted', () => {
 
   it('installs only when the restart is chosen', async () => {
     const h = harness({
+      inPlaceUpdates: IN_PLACE_EVERYWHERE,
       current: '1.0.0',
       feed: { kind: 'offer', version: '1.1.0' },
       answer: (prompt) => (prompt.kind === 'offer' ? 'download' : 'restart')
@@ -513,6 +622,7 @@ describe('the second and third consents: downloaded, then restarted', () => {
     const warn = quietWarnings()
     try {
       const h = harness({
+        inPlaceUpdates: IN_PLACE_EVERYWHERE,
         current: '1.0.0',
         feed: { kind: 'offer', version: '1.1.0' },
         download: { kind: 'failed', detail: 'ENOSPC' },

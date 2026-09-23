@@ -225,7 +225,8 @@ export function lookupScriptlet(payload: string): ScriptletLookup {
   if (inner === null) return { kind: 'none' }
 
   const args = parseScriptletArgs(inner)
-  const rawName = args[0] ?? ''
+  // `parseScriptletArgs` always yields at least one argument, even for an empty payload.
+  const rawName = args[0]!
   if (rawName === '') return { kind: 'unimplemented', name: '' }
 
   const name = canonicalScriptletName(rawName)
@@ -244,7 +245,7 @@ export function lookupScriptlet(payload: string): ScriptletLookup {
  * moment an argument contained a tab.
  */
 export function scriptletSignature(call: ScriptletCall): string {
-  return [call.name, ...call.args].join(' ')
+  return [call.name, ...call.args].join('\u0000')
 }
 
 export interface ScriptletIndex {

@@ -101,7 +101,7 @@ Verbindungsstellen fehlen. Dieser Zustand ist aufgelöst — alles unten läuft 
 | Tab-Gruppen | Chip, Farbband, Einklappen, Inline-Umbenennen, Kontextmenü |
 | Fingerprint-Maskierung | In der Sitzung verdrahtet. iframes und Worker bleiben unmaskiert — der Preis dafür, Chromium nicht zu forken |
 | Medien-Erkennung | Beobachtung in der Anfrage-Pipeline, HLS- und DASH-Manifeste, Download mit benannten Verweigerungsgründen |
-| Berechtigungs-Dialog | Auf der Overlay-Schicht, mit Warteschlange. Escape blockiert; ein privates Fenster merkt sich nichts |
+| Berechtigungs-Dialog | Auf der Overlay-Schicht, mit Warteschlange. Escape blockiert; ein privates Fenster merkt sich nichts. **Korrektur 23.09.2026:** der Dialog war bis dahin *nicht* angeschlossen — `PermissionArbiter.ask()` hatte keinen Produktionsaufrufer, „Fragen" war ein stilles Nein (IMPROVEMENT-PLAN V1). Jetzt verdrahtet, siehe „Härtung nach dem Projekt-Review" |
 
 Der Schlussstein ist das **pro-Seite-Rechtemodell**. Jede interne Seite bekommt nur ihre eigenen
 Kanäle — die Startseite Quicklinks, die Settings-Seite Settings, der Verlauf den Verlauf. Vorher
@@ -1194,12 +1194,84 @@ unsigniert weiter, mit der Folge im gleichen Satz: eine unsignierte Mac-App inst
 sich **nicht selbst aktualisieren**. Zwei Override-Zeilen zu entfernen ist die ganze Änderung, sobald das
 Zertifikat existiert.
 
+**Seit 23.09.2026 gilt das für alle drei Plattformen.** Windows und Linux installierten Updates bis dahin
+selbst, ohne Signaturprüfung: ohne `publisherName` prüft `electron-updater` kein Authenticode, und AppImage
+hat keine Signatur. `IN_PLACE_UPDATES` hat jetzt eine Zeile je Plattform, alle aus, jede mit dem, was sie
+einschalten würde; jedes unsignierte Build führt zur Release-Seite (U15, `46b0aa9`).
+
+## Härtung nach dem Projekt-Review (23.09.2026)
+
+Plan: `docs/plans/2026-09-23-002-fix-review-hardening-plan.md`, Branch `fix/review-hardening`. Behoben sind
+die verifizierten Befunde des Projekt-Reviews vom selben Tag aus Main-Prozess, Build und CI; die
+Renderer-UX-Befunde des Reviews sind bewusst nicht dabei. 18 von 19 Einheiten sind gebaut, **U18 ist offen**.
+
+✅ heißt in dieser Tabelle: gebaut, durch Tests und Architekturtests belegt. **In der laufenden App und im
+gepackten Build ist nichts davon belegt**; was dort zu prüfen ist, steht darunter und liegt beim Benutzer.
+
+| Einheit | Befund und was jetzt gilt | Stand | Commit |
+|---|---|---|---|
+| U1 | Es gab nur einen Tag-Workflow ohne Coverage, die Floors liefen nie. Jetzt `gates.yml` bei jedem Push und PR: Typecheck, Lint, Build, Formatprüfung, `test:coverage` mit Floors; `release.yml` ruft dieselben Gates. Rechte nur lesend außer beim Veröffentlichen, Actions per SHA gepinnt. Die Formatprüfung ist bis U18 nicht blockierend, und ein Architekturtest erlaubt `continue-on-error` nur dort. `pnpm quality` prüft die Floors wieder, weil die Formatprüfung jetzt zuletzt läuft | ✅ | `340110a`, `a3a852f` |
+| U2 | `.stryker-tmp/` war versioniert. Nicht mehr; Agenten-Worktrees sind ignoriert | ✅ | `599e1b3` |
+| U3 | Eine zweite Instanz lief trotz fehlendem Lock weiter in `main()` gegen die Stores der ersten. Jetzt endet sie sofort und übergibt ihre Adresse. Ein Link, der den Browser startet, wird gepuffert (argv unter Windows und Linux, `open-url` unter macOS), nach der Sitzungswiederherstellung geöffnet, nur `http(s)`, nie in einem privaten Fenster | ✅ | `98c207d` |
+| U4 | Beim Schließen des letzten Fensters ging die letzte Tresor-Änderung verloren, ein zweites Beenden startete alles neu, ein hängender Schreibvorgang hielt den Prozess ewig. Jetzt ein Zustandsautomat mit 10 s für die Flushes und 30 s für das Löschen beim Beenden, Nachholen beim nächsten Start; Sperren und Zurücksetzen des Tresors warten auf ein laufendes Sperren. Siehe `docs/ARCHITECTURE.md`, „Herunterfahren" | ✅ | `fb70779`, `aa6766b`, `5db3824` |
+| U5 | Acht Stellen schrieben Temp-then-rename ohne `fsync` und mit festem Temp-Namen. Jetzt ein Helfer, `atomic-write.ts`, mit eindeutigem Namen und `sync` auf Datei und Verzeichnis; Reste werden beim Öffnen und in jedem Löschpfad entfernt | ✅ | `17cb1ba` |
+| U6 | Ein einziger schemafremder Eintrag ließ `JsonStore` auf Standardwerte fallen, und das nächste Speichern überschrieb die Datei; `version: 2` galt als kaputt. Jetzt die Ladepipeline mit vier Ausgängen: migriert hinter `.v<N>.bak`, neuer nur lesend, kaputt erst als `.unreadable` kopiert. Unbekannte Felder bleiben; Löschen nimmt die Kopien mit. Siehe `docs/ARCHITECTURE.md`, „Stores laden", und `docs/QA.md` 7.6–7.10 samt Wiederherstellung | ✅ | `832481a` |
+| U7 | Passwörter und Lesezeichen parsen Eintrag für Eintrag: ein kaputter Eintrag kostet nur sich selbst, bleibt roh in der Datei, erscheint nie in Autofill oder Export; die Seiten nennen die Zahl | ✅ | `832481a` |
+| U8 | Chrome-Fenster und Overlay-Schicht lehnen jede Navigation, jedes Popup und jede Webview ab, die Chrome-Renderer jeden Drop. Der Router glaubt einer Chrome-Identität nur aus ihrem Hauptframe an der geladenen Adresse | ✅ | `aa6766b` |
+| U9 | Fuses aus: `runAsNode`, `NODE_OPTIONS`, Node-Inspector; an: Cookie-Verschlüsselung, Asar-Integrität, nur aus Asar laden. Ein gepacktes Build mit Remote-Debugging-Schalter endet, geprüft über `hasSwitch`, also jede Schreibweise, die Chromium annimmt. `ELECTRON_RENDERER_URL` gilt im gepackten Build nicht | ✅ | `aa6766b` |
+| U10 | `configurePublicSuffixes` hatte keinen Aufrufer, also waren `bank.com.sg` und `evil.com.sg` eine Site, und Autofill bot das Passwort der einen auf der anderen an. Jetzt lädt der Kern die Public Suffix List zur Laufzeit, prüft sie vor dem Speichern und spielt sie nur beim Start ein. Siehe `docs/ARCHITECTURE.md`, „Public Suffix List", und `docs/QA.md` 6.1 und 6.10 | ✅ | `e91441b` |
+| U11 | Jede Seite konnte per `<img>` auf `tessera://favicon` und `tessera://thumbnail` prüfen, welche Sites besucht wurden. Jetzt braucht der Abruf ein Token pro Start, ein falsches bekommt dieselbe leere Antwort wie ein Fehltreffer; Cache-Bilder in der Oberfläche sind nicht ziehbar | ✅ | `a3716f4` |
+| U12 | Eine interne Seite fiel auf das fokussierte Fenster zurück, sodass die Einstellungsseite eines privaten Fensters die Regeln des normalen Profils schreiben konnte. Jetzt handelt sie für das Fenster ihres Tabs, ohne Treffer gar nicht | ✅ | `2d6c08f` |
+| U13 | „Fragen" war ein stilles Nein (IMPROVEMENT-PLAN V1). Jetzt fragt der Arbiter bei Anfrage und Prüfung; gemerkt wird nur eine Antwort des Nutzers. Kamera, Mikrofon und Bildschirmfreigabe unverändert | ✅ | `51f4369` |
+| U19 | Ein Hintergrund-Tab konnte seinen Dialog über die Seite im Vordergrund legen. Jetzt wartet die Anfrage, bis ihr Tab aktiv ist; Tab zu oder Origin gewechselt lehnt einmalig ab; die Knöpfe sind erst nach etwa 500 ms scharf | ✅ | `a519a98` |
+| U14 | Unter Linux mit `basic_text` meldet `safeStorage` Verschlüsselung, siegelt aber mit einem festen Passwort, und das Profil galt als geschützt. Jetzt stuft der Kern den Schutz zur Laufzeit als schwach ein; ein neues Profil startet dort unverschlüsselt, ein bestehendes bleibt lesbar und sagt, dass es nicht wirklich geschützt ist. Ein Tresor-Schlüssel neuerer Version gilt als neuer, nicht als Anlass für einen Reset | ✅ | `46dfdfd` |
+| U15 | Windows und Linux installierten unsignierte Updates selbst. Jetzt führen alle drei Plattformen zur Release-Seite, siehe „macOS bleibt vorerst unsigniert" | ✅ | `46b0aa9` |
+| U16 | Ein Punkt am Hostende oder Benutzerangaben in der URL schoben den Host unter `\|\|domain^` weg. Jetzt wie uBlock Origin, dazu `@@…$document` und `@@…$important` | ✅ | `2e59ab1` |
+| U17 | Der Router war von der Coverage ausgeschlossen und ohne eigenen Test. Jetzt eigene Tests über ein gefälschtes `electron`, Floors für `ipc/router.ts` und den Passwort-Code | ✅ | `d37930e`, `832481a` |
+| U18 | Einmalige Prettier-Umformatierung samt `.git-blame-ignore-revs`; danach wird die Formatprüfung in `gates.yml` blockierend | ⬜ | läuft erst, wenn `feat/autofill-trigger`, `feat/autofill-trigger-model`, `fix/element-picker` und `fix/tab-group-ownership` gemergt sind |
+
+Nebenbei: die Filter- und Pipeline-Dateien auf ihre alten Floors gebracht, die nie als Gate liefen (`77cbd8f`,
+`5318bc1`); Duplikate der neuen Module zusammengelegt (`c01a94a`); ein Einstellungs-Test, der unter Last
+zufällig fiel (`0d25d81`); vier Quelldateien mit rohem NUL-Byte, die git als binär ansah und ohne Diff zeigte
+(`5f9f166`). Der Mutationsbericht in `reports/mutation/` ist auf diesem Branch nicht erneuert.
+
+### Bewusst nicht geändert
+
+- **Kamera, Mikrofon und Bildschirmfreigabe** verhalten sich in jeder Einstellung wie vorher; „Fragen" bleibt
+  dort ein stilles Nein. Das ist die Haltung des Benutzers, keine Lücke, und sie steht über IMPROVEMENT-PLAN V1.
+- **Alle Berechtigungen stehen ab Werk weiter auf „Verweigern".** Der Dialog erscheint nur, wenn jemand eine
+  Berechtigung auf „Fragen" stellt.
+- **`grantFileProtocolExtraPrivileges` bleibt an**, solange die Chrome-UI über `file://` lädt. Siehe
+  „Bekannte Risiken".
+- **„Beim Beenden löschen"** leert Verlauf und Downloads weiterhin nicht, also auch nicht deren Sicherungs-
+  und Quarantäne-Kopien. Folgearbeit laut Plan.
+- Code-Signing, die Renderer-UX-Befunde und die übrigen Main-Prozess-Befunde des Reviews stehen im Plan unter
+  „Deferred to Follow-Up Work".
+
+### Was nur der Benutzer prüfen kann
+
+Laufende App (`pnpm dev`) und gepackter Build. Kein Agent startet die App.
+
+| Prüfung | Erwartung |
+|---|---|
+| Kaltstart über einen Link (Windows und Linux: Adresse in argv; macOS: `open-url`) | Der Link geht nicht verloren, öffnet nach der Sitzungswiederherstellung im zuletzt fokussierten normalen Fenster, nie in einem privaten |
+| Zweite Instanz starten, mit und ohne Adresse (QA 4.7) | Sie öffnet keinen Store und kein Fenster; die Adresse landet in der laufenden |
+| Windows: Passwort ändern, letztes Fenster per X schließen, neu starten (QA 7.11) | Die Änderung ist da, der Prozess endet ohne Hänger |
+| `pnpm dev`: Chrome-UI per Vite neu laden | Der Navigations-Guard aus U8 lässt das Neuladen durch |
+| Gepackter Build auf macOS, Windows und Linux | Startet, die Chrome-UI lädt (Asar-Integrität, Ad-hoc-Signatur auf Apple Silicon). `ELECTRON_RUN_AS_NODE=1` startet keinen Node-Prozess, `--inspect` öffnet keinen Debugger, `--remote-debugging-port` beendet den Start |
+| Eine Berechtigung auf „Fragen", etwa Standort, mit mehreren Tabs | Der Dialog erscheint nur über dem fragenden Tab; ein Hintergrund-Tab wartet, bis er aktiv ist; Fenster schließen ohne Antwort merkt nichts. Kamera auf „Fragen" wird ohne Dialog verweigert |
+| Benachrichtigungen auf „Fragen" | Die Seite fragt überhaupt an und bricht nicht schon an der Prüfung ab (Plan, Risiken) |
+| Linux mit `--password-store=basic` | Einstellungen und Tresor nennen den Schutz schwach; ein neues Profil startet unverschlüsselt; ein bestehendes bleibt lesbar |
+| Eine Testseite, die `tessera://favicon` und `tessera://thumbnail` per `<img>` abfragt | Treffer und Fehltreffer sehen gleich aus |
+| Tab-Leiste und Startseite | Favicons und Vorschaubilder erscheinen weiter, die Oberfläche hängt das Token also richtig an |
+
 ## Bekannte Risiken
 
 | Risiko | Warum es offen ist |
 |---|---|
 | `setFullScreenable(false)` als Mechanismus für Kachel-Vollbild — **auf Windows bestätigt**, Linux offen | Vom Benutzer am 29.07.2026 gemeldet: „auf windows klappen die full screens innerhalb der kacheln." Damit ist das größte Unbekannte dieses Risikos abgeräumt — der Mechanismus trägt auf zwei von drei Plattformen. Offen bleibt **Linux, besonders Wayland**, wo ein Compositor die Fenstergröße anders verhandelt. Erster Punkt in `docs/QA.md` |
 | **Ein Player im Vollbild passt sich einer geänderten Kachelgröße nicht an** | Ebenfalls am 29.07.2026 gemeldet, und es ist die Kehrseite des Befundes darüber: das Kachel-Vollbild trägt, aber der Inhalt darin folgt nicht immer. Ursache und was auf unserer Seite möglich ist, steht unter „Vollbild und Kachelgröße" |
+| **`grantFileProtocolExtraPrivileges` bleibt an** (seit 23.09.2026 benannt) | Die Chrome-UI lädt über `file://` und braucht das Fuse vermutlich für ihre Module. Solange es an ist, darf ein `file://`-Dokument in einem Tab andere lokale Dateien per `fetch` lesen, etwa eine heruntergeladene HTML-Datei die unverschlüsselten Profildateien. Offene Produktfrage an den Benutzer: `file:` aus der Tab-Navigation nehmen, bis die Chrome-UI auf ein eigenes Schema umgezogen ist. Siehe Plan, Open Questions |
 | Optische Transparenz der Overlay-Schicht | Braucht einen Screenshot des zusammengesetzten Fensters; Bildschirmaufnahme ist in der Entwicklungsumgebung blockiert. Funktional belegt, optisch nicht |
 | ~~Die Ziehprüfung im Smoke-Test flackert~~ **behoben, und die Ursache war dieselbe wie bei den Store-Tests** | Zwei von vier Läufen fielen durch, jedes Mal an einer *anderen* Zone — was nach Produktfehler aussieht und eine Stoppuhr war: nach dem Mausdruck wartete die Prüfung fest 600 ms darauf, dass die Zonen über `overlay:presented` zurückkommen, und weitere 350 ms darauf, dass die Overlay-Schicht die Hervorhebung zeichnet. Auf einer belasteten Maschine reicht keins von beidem. Jetzt wird auf den **Zustand** gewartet (`waitFor`), nicht auf die Uhr — und der letzte Messwert wird zurückgegeben statt zu werfen, damit die Zusicherung des Aufrufers die Fehlermeldung bleibt. Fünf Läufe hintereinander grün, 440 Prüfungen |
 | ~~Tab-Gruppen überleben keinen Neustart~~ **behoben** | Die Sitzungswiederherstellung rekonziliert sie. Die damals genannte Gefahr — fremde neue Tabs in alten Gruppen — ist der Grund für die Reihenfolge in `session-restore/apply.ts`: jede wiederhergestellte Id muss existieren, *bevor* `retainTabs` läuft, und `retainTabs` läuft **einmal** mit der Vereinigung aller Fenster. Pro Fenster gerufen würde das zweite die Gruppen des ersten leerräumen |

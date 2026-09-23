@@ -5,6 +5,7 @@ import {
   type ProceduralSelector
 } from '@shared/filters/procedural.js'
 import {
+  PROCEDURAL_MARK,
   applyProceduralRules,
   matchProcedural,
   textMatcher,
@@ -99,6 +100,24 @@ describe('telling a procedural selector from a CSS one', () => {
     // `.md\:flex` is one class whose name contains a colon.
     expect(isProceduralSelector('[title=":has-text(x)"]')).toBe(false)
     expect(isProceduralSelector('.md\\:flex')).toBe(false)
+  })
+
+  it('keeps a string a string even outside brackets, escaped or never closed', () => {
+    // A quote at the top level is not valid CSS, but it is still a string to the scanner — and an
+    // operator inside one is text, not a step. An unterminated one runs to the end rather than ending
+    // early and exposing what follows it.
+    expect(isProceduralSelector(`'it\\'s :has-text(x)'`)).toBe(false)
+    expect(isProceduralSelector('".a:has-text(x)')).toBe(false)
+  })
+
+  it('reads an unclosed bracket or argument as plain text rather than as an operator', () => {
+    /*
+      Nothing after an unbalanced `[` or `(` can be split reliably, so it stays CSS — where
+      `selector-safety.ts` refuses the unbalanced selector and counts it. Reading the tail as an operator
+      would hand a half-parsed chain to the matcher.
+    */
+    expect(isProceduralSelector('.a[title=:has-text(x)')).toBe(false)
+    expect(isProceduralSelector('.a:has-text(x')).toBe(false)
   })
 
   it('does not read a nested operator as a step of the chain', () => {
@@ -260,6 +279,61 @@ describe('parsing the chain', () => {
     // this is belt to that brace, and it costs one line.
     expect(problemOf('.a:style(height: 0} body { display: none)')).toBe('procedural-bad-argument')
   })
+
+  it('does not end an argument at an escaped parenthesis', () => {
+    // `\)` is a literal in CSS and in a text pattern alike. Closing the argument there would cut the
+    // pattern short and read what follows as trailing CSS.
+    expect(selectorOf('.a:has-text(\\))').steps).toEqual([{ op: 'has-text', pattern: '\\)' }])
+  })
+
+  it('refuses a CSS pseudo-class that follows a procedural step', () => {
+    // The same rule as trailing CSS in general: `:not(.b)` after `:has-text(x)` would have to be
+    // evaluated against the chain's output, which no CSS engine is asked to do here.
+    expect(problemOf('.a:has-text(x):not(.b)')).toBe('procedural-trailing-css')
+  })
+
+  it('says so when handed a selector with no operator at all', () => {
+    // Not this parser's business, and the docblock says what it answers. A plain `.a` belongs on the
+    // declarative path, and accepting it here would be script doing a stylesheet's work.
+    expect(problemOf('.a')).toBe('procedural-no-css-prefix')
+  })
+
+  it('refuses each operator whose argument cannot mean anything', () => {
+    /*
+      Counted as a bad argument rather than guessed at. Each of these would otherwise become a rule that
+      matches everything (`:has-text()`), nothing it was meant to (`:min-text-length(x)`), or an action with
+      nothing to do.
+    */
+    for (const selector of [
+      '.a:has-text()',
+      '.a:min-text-length(x)',
+      '.a:min-text-length(-1)',
+      '.a:upward()',
+      '.a:matches-css(position)',
+      '.a:matches-css(:fixed)',
+      '.a:matches-css(position:)',
+      '.a:style()',
+      '.a:remove(now)',
+      '.a:remove-attr(1x)',
+      '.a:remove-class(\'\')'
+    ]) {
+      expect(problemOf(selector), selector).toBe('procedural-bad-argument')
+    }
+  })
+
+  it('reads :matches-css as a property and a value', () => {
+    expect(selectorOf('.a:matches-css(position: fixed)').steps).toEqual([
+      { op: 'matches-css', property: 'position', value: 'fixed' }
+    ])
+  })
+
+  it('refuses the pseudo-element forms of :matches-css by name', () => {
+    // They test a pseudo-element's computed style, a different call. Treating them as the plain form
+    // would test the wrong element.
+    expect(problemOf('.a:matches-css-before(content: "Ad")')).toBe(
+      'procedural-unimplemented:matches-css-before'
+    )
+  })
 })
 
 describe('matching a real document', () => {
@@ -324,6 +398,117 @@ describe('matching a real document', () => {
   it('narrows step by step, so an empty set ends the chain', () => {
     const dom = documentOf('<div class="box"><span>Article</span></div>')
     expect(matchProcedural(selectorOf('.box:has-text(Advert):upward(1)'), dom)).toEqual([])
+  })
+
+  it('keeps the elements whose computed style matches, as text or as a pattern', () => {
+    const dom = documentOf(
+      '<div class="bar" id="stuck" style="position: fixed"></div><div class="bar" id="flow"></div>'
+    )
+    const exact = matchProcedural(selectorOf('.bar:matches-css(position: fixed)'), dom)
+    expect(exact.map((element) => (element as unknown as Element).id)).toEqual(['stuck'])
+    expect(matchProcedural(selectorOf('.bar:matches-css(position: /^fix/)'), dom)).toHaveLength(1)
+  })
+
+  it('answers with nothing when the selector form of :upward starts at the root', () => {
+    // `<html>` has no parent element, so there is no ancestor to look for — and `closest()` on the root
+    // itself would be the element-includes-itself mistake above.
+    const dom = documentOf('<p></p>')
+    expect(matchProcedural(selectorOf('html:upward(body)'), dom)).toEqual([])
+  })
+})
+
+describe('a document that is not all there', () => {
+  /**
+   * The matcher runs on every mutation burst, on documents that may be mid-teardown, against selectors
+   * that crossed IPC with only their outer shape checked (`asProceduralSelectors` says so). Each case
+   * below is one of those, and the answer that matters is the same every time: nothing matches, nothing
+   * throws, and the rest of the pass still runs.
+   *
+   * Most of these are stubs rather than happy-dom documents, and that is the point rather than a
+   * shortcut — a real document always has the method whose absence is being tested.
+   */
+  it('matches nothing in a document with no query method', () => {
+    expect(matchProcedural(hideOnly('.ad'), {})).toEqual([])
+  })
+
+  it('matches nothing by computed style in a document with no window', () => {
+    // A document made by `createHTMLDocument` is real and has no `defaultView`, which is exactly the
+    // detached case the guard is for.
+    const detached = document.implementation.createHTMLDocument('')
+    detached.body.innerHTML = '<div class="bar" style="position: fixed"></div>'
+    const dom = detached as unknown as MatchableDocument
+    expect(matchProcedural(selectorOf('.bar:matches-css(position: fixed)'), dom)).toEqual([])
+  })
+
+  it('matches nothing by computed style when the window cannot compute one', () => {
+    const element = { textContent: 'x' }
+    const withView = (defaultView: NonNullable<MatchableDocument['defaultView']>): MatchableDocument => ({
+      querySelectorAll: () => [element],
+      defaultView
+    })
+    const selector = selectorOf('.bar:matches-css(position: fixed)')
+
+    expect(matchProcedural(selector, withView({})), 'no getComputedStyle').toEqual([])
+    expect(
+      matchProcedural(selector, withView({ getComputedStyle: () => null })),
+      'no style for the element'
+    ).toEqual([])
+    expect(
+      matchProcedural(
+        selector,
+        withView({
+          getComputedStyle: () => {
+            throw new Error('element is gone')
+          }
+        })
+      ),
+      'the element went between the query and the style read'
+    ).toEqual([])
+  })
+
+  it('reads an element with no text as empty text', () => {
+    // A node whose `textContent` is null — a doctype or a document, reached through an odd prefix —
+    // has no text to match, and must not throw on the way to saying so.
+    const dom: MatchableDocument = { querySelectorAll: () => [{ textContent: null }] }
+    expect(matchProcedural(selectorOf('.a:has-text(x)'), dom)).toEqual([])
+    expect(matchProcedural(selectorOf('.a:min-text-length(0)'), dom)).toHaveLength(1)
+  })
+
+  it('climbs nowhere from an ancestor that cannot be searched', () => {
+    const dom: MatchableDocument = { querySelectorAll: () => [{ parentElement: {} }] }
+    expect(matchProcedural(selectorOf('.a:upward(.box)'), dom)).toEqual([])
+  })
+
+  it('stays on the element for an :upward that arrived with neither a count nor a selector', () => {
+    // No parser produces one, but the preload receives steps over IPC unchecked. Climbing zero levels is
+    // the reading that neither hides an ancestor nobody named nor throws.
+    const [selector] = asProceduralSelectors([
+      { css: '.a', steps: [{ op: 'upward', levels: null, selector: null }], action: { kind: 'hide' } }
+    ])
+    const element = { textContent: 'x' }
+    expect(matchProcedural(selector!, { querySelectorAll: () => [element] })).toEqual([element])
+  })
+
+  it('does what it can to an element that lacks the means to be restyled or stripped', () => {
+    // An element with no `style`, no attribute list and no class list is left as it was, and marked
+    // where it can be — rather than a throw that would end the pass for every element after it.
+    const marked: string[] = []
+    const bare = {
+      setAttribute: (name: string): void => {
+        marked.push(name)
+      }
+    }
+    const dom: MatchableDocument = { querySelectorAll: () => [bare] }
+    const touched = applyProceduralRules(
+      [
+        selectorOf('.a:style(top: 0)'),
+        selectorOf('.a:remove-attr(/^on/)'),
+        selectorOf('.a:remove-class(/ad/)')
+      ],
+      dom
+    )
+    expect(touched).toBe(3)
+    expect(marked).toEqual([PROCEDURAL_MARK])
   })
 })
 
@@ -445,6 +630,12 @@ describe('which rules a host gets', () => {
     // the same elements on every mutation burst, forever.
     const built = index('example.com##.a:has-text(x)\nexample.com##.a:has-text(x)')
     expect(proceduralSelectorsFor(built, 'example.com')).toHaveLength(1)
+  })
+
+  it('answers nothing for a document with no host', () => {
+    // `about:blank` and its kind. The empty string is not a host, and walking its parent chain would ask
+    // the index about labels that do not exist.
+    expect(proceduralSelectorsFor(index('example.com##.a:has-text(x)'), '')).toEqual([])
   })
 
   it('has no bucket for a rule that names no host', () => {

@@ -219,6 +219,10 @@ export const de = {
     'Das ist keine Adresse. Gib eine Domain oder eine vollständige URL ein.',
   'bookmarks.save': 'Speichern',
   'bookmarks.cancel': 'Abbrechen',
+  'bookmarks.unreadableEntry':
+    'Ein Lesezeichen konnte nicht gelesen werden und bleibt unverändert erhalten.',
+  'bookmarks.unreadableEntries':
+    '{count} Lesezeichen konnten nicht gelesen werden und bleiben unverändert erhalten.',
 
   'downloads.title': 'Downloads',
   'downloads.empty': 'Noch nichts heruntergeladen.',
@@ -249,10 +253,14 @@ export const de = {
   'passwords.title': 'Passwörter',
   'passwords.protection.keystoreMaster':
     'Doppelt geschützt: durch einen Schlüssel, den dein Betriebssystem aufbewahrt, und durch dein Master-Passwort. Zum Öffnen braucht es beides.',
+  'passwords.protection.weakKeystoreMaster':
+    'Der Schlüsselspeicher dieses Systems ist schwach (Linux ohne Schlüsselbund). Nur dein Master-Passwort schützt deine Zugangsdaten.',
   'passwords.protection.master':
     'Nur durch dein Master-Passwort geschützt — dieses Gerät hat keinen Schlüsselspeicher angeboten. Dieses Passwort ist das Einzige zwischen diesem Ordner und deinen Zugangsdaten.',
   'passwords.protection.keystore':
     'Mit einem Schlüssel verschlüsselt, den dein Betriebssystem aufbewahrt. Wer als du angemeldet ist, kann sie lesen. Setz ein Master-Passwort, wenn du das ändern willst.',
+  'passwords.protection.weakKeystore':
+    'Kein echter Schutz. Der Schlüsselspeicher dieses Systems ist schwach (Linux ohne Schlüsselbund), und es ist kein Master-Passwort gesetzt — wer diesen Ordner lesen kann, kann deine Passwörter lesen.',
   'passwords.protection.plain':
     'Nicht geschützt. Es gab keinen Schlüsselspeicher des Systems, und es ist kein Master-Passwort gesetzt — der Schlüssel liegt neben der Datei, die er schützt.',
 
@@ -265,9 +273,21 @@ export const de = {
   'passwords.unreadableTitle': 'Dieser Tresor lässt sich nicht öffnen',
   'passwords.unreadableBody':
     'Die Schlüsseldatei ist beschädigt, oder der Schlüsselspeicher des Systems, der sie umschlossen hat, ist weg. Kein Master-Passwort hilft hier. Du kannst eine Kopie sichern und neu anfangen.',
+  'passwords.keyNewer':
+    'Eine neuere Version hat den Schlüssel dieses Tresors gespeichert. Diese Version kann ihn nicht öffnen und lässt ihn unverändert.',
   'passwords.lockNow': 'Jetzt sperren',
   'passwords.idleNotice':
     'Der Tresor sperrt sich nach {minutes} Minuten ohne Nutzung, wenn du ihn sperrst, und wenn das letzte Fenster schließt.',
+  'passwords.unreadableEntry':
+    '1 Eintrag konnte nicht gelesen werden. Er bleibt unverändert erhalten und wird nie ausgefüllt.',
+  'passwords.unreadableEntries':
+    '{count} Einträge konnten nicht gelesen werden. Sie bleiben unverändert erhalten und werden nie ausgefüllt.',
+  'passwords.documentNewer':
+    'Eine neuere Version hat diesen Tresor gespeichert. Er wird angezeigt, lässt sich aber nicht ändern.',
+  'passwords.documentInvalid':
+    'Die Tresordatei ließ sich nicht lesen und liegt als passwords.json.unreadable daneben. Der Tresor beginnt leer.',
+  'passwords.documentReadOnly':
+    'Die Tresordatei ließ sich nicht sichern, deshalb lässt sich bis zum nächsten Start nichts ändern.',
 
   'passwords.masterPasswordTitle': 'Master-Passwort',
   'passwords.setMasterPassword': 'Master-Passwort setzen',
@@ -533,34 +553,6 @@ export const de = {
     'Windows nutzt diese Kombination in Eingabefeldern für die wortweise Auswahl. Alternative: {alternative}.',
 
   'updates.checkNow': 'Nach Updates suchen…',
-  'updates.offerTitle': 'Eine neue Version ist verfügbar',
-  'updates.offerMessage': 'Version {version} ist veröffentlicht. Diese Kopie ist {current}.',
-  'updates.offerDetail':
-    'Nichts wird ohne dein Ja heruntergeladen und nichts ohne Neustart installiert. Die Datei kommt von GitHub.',
-  'updates.download': 'Herunterladen',
-  'updates.notNow': 'Jetzt nicht',
-  'updates.openReleasePage': 'Release-Seite öffnen',
-  'updates.macNotSignedDetail':
-    'macOS ersetzt keine Anwendung, die Apple nicht signiert hat, und dieser Build ist nicht signiert. Auf der Release-Seite liegt die Datei zum Installieren von Hand.',
-  'updates.readyTitle': 'Das Update ist bereit',
-  'updates.readyMessage':
-    'Version {version} wurde heruntergeladen. Installiert wird beim Neustart von {app}; bis dahin ändert sich nichts.',
-  'updates.restartNow': 'Jetzt neu starten',
-  'updates.later': 'Später',
-  'updates.upToDateTitle': 'Keine neue Version',
-  'updates.upToDateMessage': 'Diese Kopie ist {current}; Neueres ist nicht veröffentlicht.',
-  'updates.nothingPublishedMessage':
-    'Es ist noch keine Version veröffentlicht, also gibt es nichts Neueres als diese Kopie.',
-  'updates.checkFailedTitle': 'Die Suche konnte nicht abgeschlossen werden',
-  'updates.checkFailedMessage':
-    'GitHub war nicht erreichbar, es gibt also nichts zu berichten. Diese Kopie ist unverändert; du kannst es später erneut versuchen.',
-  'updates.downloadFailedTitle': 'Der Download konnte nicht abgeschlossen werden',
-  'updates.downloadFailedMessage':
-    'Es wurde nichts installiert und diese Kopie ist unverändert. Du kannst es erneut versuchen oder die Datei von der Release-Seite holen.',
-  'updates.noFeedTitle': 'Diese Kopie kann sich nicht selbst aktualisieren',
-  'updates.noFeedMessage':
-    'Sie wurde nicht aus einem Release installiert, es gibt also nichts zu ersetzen. Neu bauen aktualisiert sie.',
-  'updates.ok': 'OK',
 
   'error.dnsFailed': 'Der Server für {host} wurde nicht gefunden.',
   'error.offline': 'Keine Netzwerkverbindung.',

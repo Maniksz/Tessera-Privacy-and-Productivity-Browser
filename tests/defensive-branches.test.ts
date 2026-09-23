@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { clampFraction, computeTileRects, tileInDirection } from '@shared/split/layout.js'
-import { registrableDomain, configurePublicSuffixes } from '@shared/url/domain.js'
+import {
+  configurePublicSuffixes,
+  registrableDomain,
+  resetPublicSuffixes
+} from '@shared/url/domain.js'
 
 /**
  * Defensive branches.
@@ -92,6 +96,11 @@ describe('tileInDirection with gaps in the list', () => {
 })
 
 describe('registrableDomain edges', () => {
+  // The rules are set once per run; each case here starts from the bootstrap again.
+  beforeEach(() => {
+    resetPublicSuffixes()
+  })
+
   it('returns a single-label host unchanged', () => {
     // An intranet name has no registrable domain to derive.
     expect(registrableDomain('intranet')).toBe('intranet')
@@ -110,8 +119,16 @@ describe('registrableDomain edges', () => {
   })
 
   it('falls back to the last two labels for an unlisted suffix', () => {
-    configurePublicSuffixes([])
+    // The implicit `*` rule: an unknown top-level label is a suffix of its own.
     expect(registrableDomain('a.b.example.com')).toBe('example.com')
     expect(registrableDomain('example.zzz')).toBe('example.zzz')
+    expect(registrableDomain('a.b.example.zzz')).toBe('example.zzz')
+  })
+
+  it('lets an exception on a top-level label leave that label alone as the site', () => {
+    // No checked list carries one (an exception needs a wildcard above it), but the seam accepts
+    // rules unchecked, and this is what the lookup does with it rather than failing.
+    configurePublicSuffixes(['!zz'])
+    expect(registrableDomain('a.b.zz')).toBe('zz')
   })
 })

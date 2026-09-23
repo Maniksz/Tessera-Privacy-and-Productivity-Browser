@@ -8,15 +8,25 @@
  *
  * The correct data source is the Public Suffix List. The set below is a
  * deliberately small bootstrap covering the multi-label suffixes that break
- * things most visibly; `configurePublicSuffixes` exists so the real list can be
- * loaded at startup and kept up to date without touching this logic.
+ * things most visibly; the real list is downloaded by the core, checked by
+ * `public-suffix.ts`, and put in force at startup through
+ * `configurePublicSuffixes` — once per run, see there.
+ *
+ * Only the lookup lives here, not the parser or the checks. This module is
+ * imported by renderer bundles (the history page groups by site), and they have
+ * no business carrying the machinery that decides whether a download may be
+ * trusted.
  */
 
 /**
  * Multi-label public suffixes. Single-label suffixes (`com`, `de`, …) need no
  * entry: they are the default assumption.
+ *
+ * Exported because the downloaded list is checked against it: a list that would
+ * undo one of these is refused (`public-suffix.ts`), since what is in force is
+ * always the union of the two.
  */
-const BOOTSTRAP_SUFFIXES: readonly string[] = [
+export const BOOTSTRAP_SUFFIXES: readonly string[] = [
   // United Kingdom
   'co.uk',
   'org.uk',
@@ -108,14 +118,87 @@ const BOOTSTRAP_SUFFIXES: readonly string[] = [
   's3.amazonaws.com'
 ]
 
-let publicSuffixes: ReadonlySet<string> = new Set(BOOTSTRAP_SUFFIXES)
+/**
+ * A rule set compiled for lookup, in the three shapes the Public Suffix List has.
+ *
+ * `exact` holds `co.uk`; `wildcards` holds `kawasaki.jp` for the rule
+ * `*.kawasaki.jp`; `exceptions` holds `city.kawasaki.jp` for `!city.kawasaki.jp`.
+ * The fourth rule, the implicit `*` that makes every top-level label a suffix,
+ * is not stored: it is what the lookup answers when nothing else matches.
+ */
+export interface SuffixRules {
+  readonly exact: ReadonlySet<string>
+  readonly wildcards: ReadonlySet<string>
+  readonly exceptions: ReadonlySet<string>
+}
 
 /**
- * Replaces the suffix set, e.g. with a freshly downloaded Public Suffix List.
- * Entries are expected lower-case and without a leading dot.
+ * Sorts rule lines into the three sets. Entries are lower-cased and lose a
+ * leading dot; anything else about their spelling is the caller's business.
  */
-export function configurePublicSuffixes(suffixes: Iterable<string>): void {
-  publicSuffixes = new Set([...suffixes].map((s) => s.toLowerCase().replace(/^\./, '')))
+export function compileSuffixRules(rules: Iterable<string>): SuffixRules {
+  const exact = new Set<string>()
+  const wildcards = new Set<string>()
+  const exceptions = new Set<string>()
+  for (const raw of rules) {
+    const rule = raw.toLowerCase().replace(/^\./, '')
+    if (rule.startsWith('!')) exceptions.add(rule.slice(1))
+    else if (rule.startsWith('*.')) wildcards.add(rule.slice(2))
+    else exact.add(rule)
+  }
+  return { exact, wildcards, exceptions }
+}
+
+/**
+ * How many trailing labels of `labels` are the public suffix.
+ *
+ * The algorithm the list itself specifies: an exception rule prevails over every
+ * other match, wherever it sits, and its suffix is the exception minus its
+ * leftmost label. Otherwise the longest exact or wildcard match wins, and with no
+ * match at all the implicit `*` makes the last label the suffix.
+ */
+export function publicSuffixLength(rules: SuffixRules, labels: readonly string[]): number {
+  const tails = labels.map((_, start) => labels.slice(start).join('.'))
+  for (let start = 0; start < labels.length; start++) {
+    if (rules.exceptions.has(tails[start]!)) return labels.length - start - 1
+  }
+  for (let start = 0; start < labels.length; start++) {
+    // `*.kawasaki.jp` makes `b.kawasaki.jp` a suffix: the label in front of the parent is the
+    // wildcard, so the match is one label longer than the tail — and is checked first for that.
+    if (start > 0 && rules.wildcards.has(tails[start]!)) return labels.length - start + 1
+    if (rules.exact.has(tails[start]!)) return labels.length - start
+  }
+  return 1
+}
+
+let activeRules: SuffixRules = compileSuffixRules(BOOTSTRAP_SUFFIXES)
+let configured = false
+
+/**
+ * Puts a checked Public Suffix List in force, as a union with the bootstrap.
+ *
+ * Union rather than replacement, so a list that lost an entry the bootstrap has
+ * cannot merge sites this build has always kept apart.
+ *
+ * Once per run, and a second call throws rather than being ignored. Every site
+ * key computed during a run — a partition, a permission origin, a password's
+ * site — has to stay what it was when it was computed, so a list downloaded
+ * mid-run waits for the next start (R7). Making that a property of the seam
+ * rather than of its one caller means a future caller cannot quietly break it.
+ */
+export function configurePublicSuffixes(rules: Iterable<string>): void {
+  if (configured) throw new Error('The public suffix rules are set once per run')
+  activeRules = compileSuffixRules([...BOOTSTRAP_SUFFIXES, ...rules])
+  configured = true
+}
+
+/**
+ * Back to the bootstrap, with the once-per-run guard lifted. For tests only:
+ * nothing in the application undoes the rules it started with.
+ */
+export function resetPublicSuffixes(): void {
+  activeRules = compileSuffixRules(BOOTSTRAP_SUFFIXES)
+  configured = false
 }
 
 export function normalizeHost(host: string): string {
@@ -136,22 +219,37 @@ export function isIpAddress(host: string): boolean {
  * which have no registrable domain to derive.
  */
 export function registrableDomain(host: string): string {
+  return registrableDomainUnder(activeRules, host)
+}
+
+/** `registrableDomain` against a rule set of the caller's, e.g. a list being checked. */
+export function registrableDomainUnder(rules: SuffixRules, host: string): string {
   const normalized = normalizeHost(host)
   if (normalized === '' || isIpAddress(normalized) || normalized === 'localhost') return normalized
 
   const labels = normalized.split('.')
   if (labels.length < 2) return normalized
 
-  // Longest matching public suffix wins, so `co.uk` beats `uk`.
-  for (let start = 0; start < labels.length - 1; start++) {
-    const candidate = labels.slice(start).join('.')
-    if (publicSuffixes.has(candidate)) {
-      // Need one label in front of the suffix to have a registrable domain.
-      return start === 0 ? normalized : labels.slice(start - 1).join('.')
-    }
-  }
+  const suffix = publicSuffixLength(rules, labels)
+  // Need one label in front of the suffix to have a registrable domain.
+  if (suffix >= labels.length) return normalized
+  return labels.slice(labels.length - suffix - 1).join('.')
+}
 
-  return labels.slice(-2).join('.')
+/**
+ * Whether a host is itself a public suffix under the rules in force: `co.uk`,
+ * `github.io`, and — with the full list — `com.sg`.
+ *
+ * False for IP addresses and single-label names. An intranet name is a site in
+ * its own right, which is how `registrableDomain` has always treated it, and a
+ * key derived from one is not "too broad" for being a single label.
+ */
+export function isPublicSuffix(host: string): boolean {
+  const normalized = normalizeHost(host)
+  if (isIpAddress(normalized)) return false
+  const labels = normalized.split('.')
+  if (labels.length < 2) return false
+  return publicSuffixLength(activeRules, labels) >= labels.length
 }
 
 /** Registrable domain of a URL, or `null` when it has no host. */
