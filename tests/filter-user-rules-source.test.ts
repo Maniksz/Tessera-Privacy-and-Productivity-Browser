@@ -109,8 +109,31 @@ describe('reading one line', () => {
   })
 
   it('refuses an uncommented line that is not a rule', () => {
-    expect(readUserRuleLine('||ads.example^')).toEqual({ kind: 'rejected' })
-    expect(readUserRuleLine('nonsense')).toEqual({ kind: 'rejected' })
+    expect(readUserRuleLine('||ads.example^')).toEqual({ kind: 'rejected', reason: 'unsupported' })
+    expect(readUserRuleLine('nonsense')).toEqual({ kind: 'rejected', reason: 'unsupported' })
+  })
+
+  it('refuses a rule the editor cannot hold, and keeps a commented one a note', () => {
+    // A private window's editor: a rule it has no way to deliver is refused as it stands, and — the
+    // security ordering again — its commented form is no switched-off rule either, only a note.
+    const declarativeOnly = (text: string): boolean => !text.includes(':has-text(')
+    expect(readUserRuleLine('example.com##.box:has-text(Ad)', declarativeOnly)).toEqual({
+      kind: 'rejected',
+      reason: 'private-window'
+    })
+    expect(readUserRuleLine('! example.com##.box:has-text(Ad)', declarativeOnly)).toEqual({
+      kind: 'note'
+    })
+    expect(readUserRuleLine('example.com##.ad', declarativeOnly)).toEqual({
+      kind: 'rule',
+      text: 'example.com##.ad',
+      enabled: true
+    })
+    // What the parser refuses is refused for that reason first, whatever the editor could hold.
+    expect(readUserRuleLine('||ads.example^', () => false)).toEqual({
+      kind: 'rejected',
+      reason: 'unsupported'
+    })
   })
 
   it('reads a line of nothing but space as blank', () => {
@@ -168,7 +191,7 @@ describe('the rules as a text', () => {
   it('keeps a refused line where it was, and names it', () => {
     const view = projectUserRuleSource([ruleOf({})], 'example.com##.ad\n  ||ads.example^\n')
     expect(view.source).toBe('example.com##.ad\n  ||ads.example^\n')
-    expect(view.rejected).toEqual(['||ads.example^'])
+    expect(view.rejected).toEqual([{ line: '||ads.example^', reason: 'unsupported' }])
   })
 })
 
@@ -261,7 +284,9 @@ describe('taking the text back', () => {
     expect(result.source).toBe(
       'example.com##.ad\n||ads.example^\nshop.example##.promo\nnew.example##.x'
     )
-    expect(projectUserRuleSource(result.rules, result.source).rejected).toEqual(['||ads.example^'])
+    expect(projectUserRuleSource(result.rules, result.source).rejected).toEqual([
+      { line: '||ads.example^', reason: 'unsupported' }
+    ])
   })
 
   it('makes two identical lines one rule, and one line', () => {
@@ -301,8 +326,33 @@ describe('taking the text back', () => {
       outcome: 'limit-reached',
       rules: stored,
       source: unchanged,
-      changed: false
+      changed: false,
+      refused: []
     })
+  })
+
+  it('takes a deletion from a list that is already over the limit', () => {
+    /*
+      A private window's list is the stored rules plus the session's, and a normal window can grow the
+      stored half after the session wrote — so the list the page shows can be past the limit through no
+      save of its own. Refusing every save of such a list would refuse the one thing that brings it back
+      under: taking lines out. Only a save that *grows* the list past the limit is refused.
+    */
+    const over = Array.from({ length: MAX_USER_RULES + 5 }, (_unused, index) =>
+      ruleOf({ id: `o${index}`, text: `x.example##.n${index}` })
+    )
+    const text = over.map((rule) => rule.text)
+    const deleted = current({ rules: over }, text.slice(1).join('\n'))
+    expect(deleted.outcome).toBe('applied')
+    expect(deleted.rules).toHaveLength(MAX_USER_RULES + 4)
+
+    const toggled = current({ rules: over }, [`! ${text[0]!}`, ...text.slice(1)].join('\n'))
+    expect(toggled.outcome).toBe('applied')
+    expect(toggled.rules[0]?.enabled).toBe(false)
+
+    const added = current({ rules: over }, [...text, 'more.example##.x'].join('\n'))
+    expect(added.outcome).toBe('limit-reached')
+    expect(added.changed).toBe(false)
   })
 
   it('takes a text that fills the list exactly', () => {
@@ -335,6 +385,115 @@ describe('taking the text back', () => {
     const result = current({ rules: stored }, '')
     expect(result.rules).toEqual([])
     expect(result.source).toBe('')
+  })
+})
+
+/**
+ * An editor that cannot hold every rule, or cannot change every rule it lists.
+ *
+ * A private window's editor is the one that exists: its own rules reach a page as an additive stylesheet
+ * per view, so it can carry neither a procedural rule nor a `#@#` exception, and it can switch a stored rule
+ * on but cannot switch one off or take one away. The text has to say so on the line concerned rather than
+ * accept the line and let it do nothing.
+ */
+describe('a text taken back by an editor with limits', () => {
+  const stored = [
+    ruleOf({ id: 'on', text: 'example.com##.on', enabled: true }),
+    ruleOf({ id: 'off', text: 'example.com##.off', enabled: false })
+  ]
+  const unchanged = 'example.com##.on\n! example.com##.off'
+  const limits = {
+    admits: (text: string): boolean => !text.includes(':has-text(') && !text.includes('#@#'),
+    canSetEnabled: (rule: UserRule, enabled: boolean): boolean => enabled || rule.id !== 'on',
+    canRemove: (): boolean => false
+  }
+
+  function limited(text: string): ApplyUserRuleSourceResult {
+    return applyUserRuleSource({ rules: stored, source: unchanged }, text, {
+      ...context(),
+      loaded: new Set(stored.map((rule) => rule.id)),
+      ...limits
+    })
+  }
+
+  it('refuses a rule it cannot hold, keeps the line, and stores nothing for it', () => {
+    const text = `${unchanged}\nexample.com##.box:has-text(Ad)\nexample.com#@#.box\n! example.com##.x:has-text(y)`
+    const result = limited(text)
+    expect(result.rules.map((rule) => rule.text)).toEqual(['example.com##.on', 'example.com##.off'])
+    expect(result.source).toBe(text)
+
+    const view = projectUserRuleSource(result.rules, result.source, limits)
+    expect(view.rejected).toEqual([
+      { line: 'example.com##.box:has-text(Ad)', reason: 'private-window' },
+      { line: 'example.com#@#.box', reason: 'private-window' }
+    ])
+  })
+
+  it('still reads a rule it already has, whatever that rule is', () => {
+    // A stored procedural rule applies through the engine in every window; the limit is on new ones.
+    const procedural = [ruleOf({ id: 'p', text: 'example.com##.box:has-text(Ad)' })]
+    const view = projectUserRuleSource(procedural, 'example.com##.box:has-text(Ad)', limits)
+    expect(view).toEqual({ source: 'example.com##.box:has-text(Ad)', rejected: [] })
+  })
+
+  it('switches a rule on that it may switch on', () => {
+    const result = limited('example.com##.on\nexample.com##.off')
+    expect(result.rules.map((rule) => rule.enabled)).toEqual([true, true])
+    expect(result.refused).toEqual([])
+  })
+
+  it('keeps a rule it may not switch off as it is, and says which', () => {
+    const result = limited('! example.com##.on\n! example.com##.off')
+    expect(result.outcome).toBe('applied')
+    expect(result.rules).toEqual(stored)
+    expect(result.refused).toEqual(['on'])
+  })
+
+  it('keeps a rule it may not delete, and says which', () => {
+    const result = limited('! example.com##.off')
+    expect(result.rules).toEqual(stored)
+    expect(result.refused).toEqual(['on'])
+    // `off` is gone from the text too, and is kept the same way — it is not this editor's to delete.
+    const both = limited('')
+    expect(both.rules).toEqual(stored)
+    expect(both.refused).toEqual(['on', 'off'])
+  })
+
+  it('marks the line of a refused change where the rule is shown', () => {
+    // Commented out: the line stays where it was and shows the rule as it still is.
+    const commented = projectUserRuleSource(
+      stored,
+      '! note\n! example.com##.on\n! example.com##.off',
+      {
+        ...limits,
+        refused: new Set(['on'])
+      }
+    )
+    expect(commented.source).toBe('! note\nexample.com##.on\n! example.com##.off')
+    expect(commented.rejected).toEqual([{ line: 'example.com##.on', reason: 'normal-profile' }])
+
+    // Deleted: the rule comes back at the end, where every rule the text does not name is shown.
+    const deleted = projectUserRuleSource(stored, '! example.com##.off', {
+      ...limits,
+      refused: new Set(['on'])
+    })
+    expect(deleted.source).toBe('! example.com##.off\nexample.com##.on')
+    expect(deleted.rejected).toEqual([{ line: 'example.com##.on', reason: 'normal-profile' }])
+  })
+
+  it('counts a rule it refused to delete against the limit', () => {
+    // The text makes room by deleting a rule the editor keeps, and fills the room with a new one.
+    const full = Array.from({ length: MAX_USER_RULES }, (_unused, index) =>
+      ruleOf({ id: index === 0 ? 'on' : `f${index}`, text: `x.example##.n${index}` })
+    )
+    const text = [...full.slice(1).map((rule) => rule.text), 'new.example##.x'].join('\n')
+    const result = applyUserRuleSource({ rules: full }, text, {
+      ...context(),
+      loaded: new Set(full.map((rule) => rule.id)),
+      ...limits
+    })
+    expect(result.outcome).toBe('limit-reached')
+    expect(result.changed).toBe(false)
   })
 })
 
@@ -459,17 +618,34 @@ describe('the lines, for the editor', () => {
   it('marks a refused line where it is, and nothing else', () => {
     const lines = annotateSourceLines('example.com##.ad\n ||ads.example^ \n! note', {
       rules: [],
-      rejected: ['||ads.example^'],
+      rejected: [{ line: '||ads.example^', reason: 'unsupported' }],
       term: ''
     })
     expect(lines.map((line) => line.rejected)).toEqual([false, true, false])
+  })
+
+  it('carries the reason a line was refused to the line', () => {
+    const lines = annotateSourceLines('a.example##.x:has-text(y)\nb.example##.on\nnonsense', {
+      rules: [],
+      rejected: [
+        { line: 'a.example##.x:has-text(y)', reason: 'private-window' },
+        { line: 'b.example##.on', reason: 'normal-profile' },
+        { line: 'nonsense', reason: 'unsupported' }
+      ],
+      term: ''
+    })
+    expect(lines.map((line) => line.refusal)).toEqual([
+      'private-window',
+      'normal-profile',
+      'unsupported'
+    ])
   })
 
   it('stops marking a refused line the moment it is corrected', () => {
     // The verdict was about that text. Edited, the line is one nobody has judged yet.
     const lines = annotateSourceLines('||ads.example^$third-party', {
       rules: [],
-      rejected: ['||ads.example^'],
+      rejected: [{ line: '||ads.example^', reason: 'unsupported' }],
       term: ''
     })
     expect(lines[0]?.rejected).toBe(false)
@@ -689,13 +865,17 @@ describe('the text, in a private window', () => {
     const { store } = await storeAt()
     saveFresh(store.editorFor('normal'), 'example.com##.stored')
     const session = store.editorFor('private')
-    saveFresh(session, '! session note\n! example.com##.stored\nprivate.example##.x')
+    saveFresh(
+      session,
+      '! session note\nexample.com##.stored\n! private.example##.y\nprivate.example##.x'
+    )
 
     expect(session.source().source).toBe(
-      '! session note\n! example.com##.stored\nprivate.example##.x'
+      '! session note\nexample.com##.stored\n! private.example##.y\nprivate.example##.x'
     )
     expect(session.list().map((rule) => [rule.text, rule.enabled])).toEqual([
-      ['example.com##.stored', false],
+      ['example.com##.stored', true],
+      ['private.example##.y', false],
       ['private.example##.x', true]
     ])
     expect(session.list()[1]?.id).toMatch(/^session-/)
@@ -707,28 +887,150 @@ describe('the text, in a private window', () => {
     expect(store.editorFor('private').source().source).toBe('! mine\nexample.com##.stored')
   })
 
-  it('can take a stored rule out of the session and put a session rule back on', async () => {
+  it('switches its own rule off and on, and deletes it', async () => {
     const { store } = await storeAt()
-    saveFresh(store.editorFor('normal'), 'example.com##.stored')
     const session = store.editorFor('private')
+    saveFresh(session, 'private.example##.x\nprivate.example##.y')
     saveFresh(session, '! private.example##.x')
-    saveFresh(session, 'private.example##.x')
 
     expect(session.list().map((rule) => [rule.text, rule.enabled])).toEqual([
-      ['private.example##.x', true]
+      ['private.example##.x', false]
     ])
-    expect(store.rules().map((rule) => rule.text)).toEqual(['example.com##.stored'])
+    saveFresh(session, 'private.example##.x')
+    expect(session.list().map((rule) => rule.enabled)).toEqual([true])
+    expect(session.source().rejected).toEqual([])
   })
 
-  it('switches a stored rule off and back on inside the session', async () => {
+  it('switches on a stored rule that is off, for the session and not in the file', async () => {
+    const { path, store } = await storeAt()
+    saveFresh(store.editorFor('normal'), '! example.com##.stored')
+    await store.flush()
+    const onDisk = await readFileJson(path)
+    const session = store.editorFor('private')
+
+    expect(saveFresh(session, 'example.com##.stored').outcome).toBe('applied')
+    expect(session.list().map((rule) => [rule.text, rule.enabled])).toEqual([
+      ['example.com##.stored', true]
+    ])
+    // What a private window's views are served, through `sessionStylesFor`.
+    expect(session.enabledText()).toBe('example.com##.stored')
+    expect(session.source()).toEqual({ source: 'example.com##.stored', rejected: [] })
+    await store.flush()
+    expect(await readFileJson(path)).toEqual(onDisk)
+    // The engine's global slot is fed from the file, and the file still has it off.
+    expect(store.enabledText()).toBe('')
+
+    // And back off: it is the session's own switch it takes back, so that is honoured too.
+    saveFresh(session, '! example.com##.stored')
+    expect(session.enabledText()).toBe('')
+
+    saveFresh(session, 'example.com##.stored')
+    store.endPrivateSession()
+    expect(session.list().map((rule) => rule.enabled)).toEqual([false])
+    expect(session.enabledText()).toBe('')
+  })
+
+  it('refuses to switch off a stored rule that is on, and marks its line', async () => {
+    /*
+      A stored rule reaches every window through the engine's one global slot, and a private window can only
+      add to what its pages get. Switched off here, it would be listed as off and go on hiding its element —
+      so the text is not taken for that line, and the line says why where it stands.
+    */
+    const { path, store } = await storeAt()
+    saveFresh(store.editorFor('normal'), 'example.com##.stored')
+    await store.flush()
+    const onDisk = await readFileJson(path)
+    const session = store.editorFor('private')
+
+    expect(saveFresh(session, '! note\n! example.com##.stored').outcome).toBe('applied')
+    expect(session.list().map((rule) => [rule.text, rule.enabled])).toEqual([
+      ['example.com##.stored', true]
+    ])
+    expect(session.source()).toEqual({
+      source: '! note\nexample.com##.stored',
+      rejected: [{ line: 'example.com##.stored', reason: 'normal-profile' }]
+    })
+    await store.flush()
+    expect(await readFileJson(path)).toEqual(onDisk)
+  })
+
+  it('refuses to delete a stored rule, and marks the line it comes back on', async () => {
     const { store } = await storeAt()
     saveFresh(store.editorFor('normal'), 'example.com##.stored')
     const session = store.editorFor('private')
-    saveFresh(session, '! example.com##.stored')
-    expect(session.list().map((rule) => rule.enabled)).toEqual([false])
-    saveFresh(session, 'example.com##.stored')
-    expect(session.list().map((rule) => rule.enabled)).toEqual([true])
-    expect(store.rules().map((rule) => rule.enabled)).toEqual([true])
+
+    saveFresh(session, 'private.example##.x')
+    expect(session.list().map((rule) => rule.text)).toEqual([
+      'example.com##.stored',
+      'private.example##.x'
+    ])
+    expect(session.source()).toEqual({
+      source: 'private.example##.x\nexample.com##.stored',
+      rejected: [{ line: 'example.com##.stored', reason: 'normal-profile' }]
+    })
+
+    // The next save that leaves it alone takes the mark away; the end of the session does as well.
+    saveFresh(session, session.source().source)
+    expect(session.source().rejected).toEqual([])
+    saveFresh(session, 'private.example##.x')
+    store.endPrivateSession()
+    expect(session.source().rejected).toEqual([])
+  })
+
+  it('refuses a procedural rule and an exception it cannot deliver, and marks them', async () => {
+    const { store } = await storeAt()
+    const session = store.editorFor('private')
+    const text = 'example.com##.box:has-text(Ad)\nexample.com#@#.box\nexample.com##.plain'
+
+    expect(saveFresh(session, text).outcome).toBe('applied')
+    expect(session.list().map((rule) => rule.text)).toEqual(['example.com##.plain'])
+    expect(session.source()).toEqual({
+      source: text,
+      rejected: [
+        { line: 'example.com##.box:has-text(Ad)', reason: 'private-window' },
+        { line: 'example.com#@#.box', reason: 'private-window' }
+      ]
+    })
+    expect(store.rules()).toEqual([])
+  })
+
+  it('takes the same lines in a normal window, where the engine applies them', async () => {
+    const { store } = await storeAt()
+    const editor = store.editorFor('normal')
+    const text = 'example.com##.box:has-text(Ad)\nexample.com#@#.box'
+
+    saveFresh(editor, text)
+    expect(editor.list().map((rule) => rule.text)).toEqual([
+      'example.com##.box:has-text(Ad)',
+      'example.com#@#.box'
+    ])
+    expect(editor.source()).toEqual({ source: text, rejected: [] })
+  })
+
+  it('takes a deletion when the stored rules grew past the limit behind it', async () => {
+    const { store } = await storeAt()
+    const session = store.editorFor('private')
+    for (let index = 0; index < 10; index += 1) {
+      session.add({ text: `private.example##.n${index}`, origin: 'picker' })
+    }
+    const normal = store.editorFor('normal')
+    for (let index = 0; index < MAX_USER_RULES - 5; index += 1) {
+      normal.add({ text: `stored.example##.n${index}`, origin: 'picker' })
+    }
+    expect(session.list()).toHaveLength(MAX_USER_RULES + 5)
+    const shown = session.source().source
+
+    expect(saveFresh(session, shown.replace('private.example##.n0\n', '')).outcome).toBe('applied')
+    expect(session.list()).toHaveLength(MAX_USER_RULES + 4)
+    expect(
+      saveFresh(
+        session,
+        session.source().source.replace('private.example##.n1', '! private.example##.n1')
+      ).outcome
+    ).toBe('applied')
+    expect(saveFresh(session, `${session.source().source}\nprivate.example##.more`).outcome).toBe(
+      'limit-reached'
+    )
   })
 
   it('refuses a session text over the limit, counting the stored rules', async () => {

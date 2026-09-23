@@ -50,6 +50,35 @@ export function disabledRuleLine(text: string): string {
   return `${COMMENT_MARK} ${text}`
 }
 
+/**
+ * Why a line was not taken, one word per sentence the editor has to say about it.
+ *
+ * Three, because the three have different remedies and only one of them is a mistake in the line:
+ *
+ *   - `unsupported` — the browser cannot apply it anywhere: request-blocking syntax, a scriptlet, a line the
+ *     parser makes nothing of. The line needs correcting.
+ *   - `private-window` — a good rule that a private window has no way to deliver: a procedural rule or a
+ *     `#@#` exception. A private window's own rules reach its pages as a stylesheet added to each view
+ *     (`viewStylesheet`), which can only add `display: none` and can neither run the procedural engine nor
+ *     cancel what a list contributed. The same line in a normal window is taken.
+ *   - `normal-profile` — a change to a rule from the normal profile that a private window cannot make:
+ *     switching it off or deleting it. Stored rules reach every window through the engine's one global slot,
+ *     so the rule goes on hiding its element here whatever this window's list says. The line shows the rule
+ *     as it still is.
+ *
+ * Here rather than beside the parser, because the settings page draws a different tag for each and imports
+ * this file by value — see the module docblock.
+ */
+export const USER_RULE_LINE_REFUSALS = ['unsupported', 'private-window', 'normal-profile'] as const
+
+export type UserRuleLineRefusal = (typeof USER_RULE_LINE_REFUSALS)[number]
+
+/** A line the core did not take, as it saw it — trimmed — and why. */
+export interface RejectedUserRuleLine {
+  readonly line: string
+  readonly reason: UserRuleLineRefusal
+}
+
 /** What the editor knows about a stored rule, which is all a tag beside its line can say. */
 export interface AnnotatableRule {
   readonly text: string
@@ -59,8 +88,8 @@ export interface AnnotatableRule {
 
 export interface LineAnnotationContext {
   readonly rules: readonly AnnotatableRule[]
-  /** The lines the core refused, as it saw them — trimmed. */
-  readonly rejected: readonly string[]
+  /** The lines the core refused, as it saw them — trimmed — each with its reason. */
+  readonly rejected: readonly RejectedUserRuleLine[]
   /** The settings search, already trimmed and lower-cased; empty for none. */
   readonly term: string
 }
@@ -70,6 +99,8 @@ export interface AnnotatedLine {
   /** The line as typed, because it is drawn under the text box and has to sit exactly where the text does. */
   readonly text: string
   readonly rejected: boolean
+  /** Why it was refused, for the tag drawn beside it; null exactly when `rejected` is false. */
+  readonly refusal: UserRuleLineRefusal | null
   readonly procedural: boolean
   readonly picked: boolean
   readonly match: boolean
@@ -95,13 +126,15 @@ export function annotateSourceLines(
   context: LineAnnotationContext
 ): AnnotatedLine[] {
   const rules = new Map(context.rules.map((rule) => [rule.text, rule]))
-  const rejected = new Set(context.rejected)
+  const rejected = new Map(context.rejected.map((entry) => [entry.line, entry.reason]))
   return sourceLines(draft).map((text) => {
     const trimmed = text.trim()
     const rule = rules.get(commentBody(text) ?? trimmed)
+    const refusal = rejected.get(trimmed) ?? null
     return {
       text,
-      rejected: rejected.has(trimmed),
+      rejected: refusal !== null,
+      refusal,
       procedural: rule?.kind === 'procedural',
       picked: rule?.origin === 'picker',
       match: context.term !== '' && text.toLowerCase().includes(context.term)

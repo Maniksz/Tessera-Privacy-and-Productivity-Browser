@@ -18,6 +18,7 @@ import { tabGroupColorSchema, tabGroupSchema } from '../tabgroups/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
+import { USER_RULE_LINE_REFUSALS } from '../filters/user-rules-lines.js'
 // The bound the store enforces, so the schema and the storage cannot disagree about what is too long.
 import {
   APPLY_USER_RULE_SOURCE_OUTCOMES,
@@ -701,6 +702,10 @@ export const invokeContract = {
    * the browser matches, and a procedural one is script re-run on every mutation burst. An editor that
    * showed them identically would hide the one thing worth knowing about a rule just typed.
    *
+   * `rejected` carries a reason per line, because a private window refuses lines for two reasons a normal
+   * one never has — a rule it cannot deliver, and a change to a stored rule it cannot make — and each needs
+   * its own tag and its own next step. See `USER_RULE_LINE_REFUSALS`.
+   *
    * `session` says the answer came from a private window's editor, whose changes are not saved and which
    * cannot stop a stored rule from applying — something the screen has to say rather than leave to be found.
    */
@@ -710,7 +715,7 @@ export const invokeContract = {
       rules: z.array(userRuleSchema.extend({ kind: z.enum(['declarative', 'procedural']) })),
       text: z.record(z.string(), z.string()),
       source: z.string(),
-      rejected: z.array(z.string()),
+      rejected: z.array(z.object({ line: z.string(), reason: z.enum(USER_RULE_LINE_REFUSALS) })),
       session: z.boolean()
     })
   },

@@ -13,6 +13,7 @@ import {
   type UserRuleDocument,
   type UserRuleInput
 } from '@shared/filters/user-rules.js'
+import { isAdditionRule } from '@shared/filters/preview-styles.js'
 import {
   applyUserRuleSource,
   projectUserRuleSource,
@@ -125,6 +126,16 @@ export interface UserRuleEditor {
  * the picker's wiring narrows it.
  */
 export interface UserRuleTextEditor extends UserRuleEditor {
+  /**
+   * Whether `setEnabled(id, enabled)` would be honoured — what a surface asks before it offers the switch.
+   *
+   * Always, for a rule a normal window's editor has. A private window's cannot switch a rule from the
+   * normal profile off, or on when it has no way to deliver it; see `SessionUserRuleEditor`. On this wider
+   * interface rather than the picker's, which never offers either.
+   */
+  canSetEnabled(id: string, enabled: boolean): boolean
+  /** Whether `remove(id)` would be honoured; the same question, for deleting. */
+  canRemove(id: string): boolean
   /** The rules as the text the editor shows, and the lines in it the browser refuses. */
   source(): UserRuleSourceView
   /**
@@ -173,6 +184,8 @@ export class UserRuleStore {
       add: (input) => this.#add(input),
       setEnabled: (id, enabled) => this.#setEnabled(id, enabled),
       remove: (id) => this.#remove(id),
+      canSetEnabled: (id) => this.#store.get().rules.some((rule) => rule.id === id),
+      canRemove: (id) => this.#store.get().rules.some((rule) => rule.id === id),
       list: () => this.rules(),
       forHost: (hostname) => userRulesForHost(this.rules(), hostname),
       enabledText: () => enabledUserRuleText(this.rules()),
@@ -222,8 +235,12 @@ export class UserRuleStore {
    * vanish; a hiding rule is meant to hide something, and an editor that accepted the
    * rule and did nothing would make the picker appear broken in exactly the window
    * where a user is most likely to be trying it. So the private editor is an overlay:
-   * it reads the stored rules through and keeps its own additions and its own disabling
-   * in memory. The rule works, the file is untouched.
+   * it reads the stored rules through and keeps its own rules, and its switching on of
+   * stored ones, in memory. The rule works, the file is untouched.
+   *
+   * The overlay can only add, and it says so rather than pretending otherwise: it cannot
+   * switch off or delete a stored rule, nor hold a rule its pages have no way to receive.
+   * `SessionUserRuleEditor` gives the reason.
    *
    * ## Why the same object comes back every time
    *
@@ -393,6 +410,33 @@ export class UserRuleStore {
  * One of these exists per browsing mode and outlives every window; `endSession` is what
  * ends a session, and `UserRuleStore.editorFor` argues why the object is the long-lived
  * one and the session is not.
+ *
+ * ## What it can change, and why only that
+ *
+ * Its rules reach a page one way: `CosmeticInjector` asks `sessionStylesFor` for this
+ * editor's `enabledText()` and `viewStylesheet` appends it to the view's stylesheet
+ * (KTD3). The stored rules reach every window — this one included — a second way, through
+ * the engine's one global slot, which is fed from the file and must stay that way (R20).
+ * An addition can only add. So:
+ *
+ *   - **Its own rules**: anything. They exist only in the addition.
+ *   - **A stored rule that is off**: can be switched on (`#enabled`), and back off again,
+ *     because that is taking back the session's own switch. Switched on, it is in
+ *     `enabledText()` and so in the addition. Not when it is procedural or an exception —
+ *     `viewStylesheet` drops those, and a rule listed on that does nothing is the lie this
+ *     section exists against.
+ *   - **A stored rule that is on**: cannot be switched off or deleted. The global slot goes
+ *     on hiding its element here whatever this list says, and making it true would take a
+ *     per-view *exception* stylesheet, which is a change to the injector and not here.
+ *   - **A new procedural rule or exception**: refused, for the same reason as above.
+ *
+ * `setEnabled` and `remove` refuse what they cannot do — `false`, nothing changed, nobody
+ * told — rather than keep doing it and rely on every surface not offering it. The old
+ * behaviour recorded the switch and changed the list, and that is exactly how the blocker
+ * menu came to show a rule unchecked while it kept hiding its element: the operation looked
+ * like it worked. A refusal the caller can see cannot be mistaken for a change, and a
+ * future surface that forgets to ask `canSetEnabled` first gets an honest no rather than
+ * a list that lies. The surfaces ask anyway, so that they do not offer it.
  */
 class SessionUserRuleEditor implements UserRuleTextEditor {
   readonly #stored: () => UserRule[]
@@ -407,9 +451,16 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
    * once it does.
    */
   #source: string | undefined = undefined
-  /** Ids the session disabled or deleted, whichever the stored rule was. */
+  /** The session's own rules it switched off, and deleted. Never a stored id — see the class docblock. */
   readonly #disabled = new Set<string>()
   readonly #removed = new Set<string>()
+  /** Stored rules that are off in the file and that this session switched on. */
+  readonly #enabled = new Set<string>()
+  /**
+   * Stored rules whose change the last save asked for and this editor could not make, for the rule
+   * manager to mark (`normal-profile`). Replaced by every save that is taken; emptied with the session.
+   */
+  #refused: ReadonlySet<string> = new Set()
   readonly #listeners = new Set<(rules: UserRule[]) => void>()
   #sequence = 0
 
@@ -430,7 +481,19 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
       at the limit rather than trimming is what closes that, because the answer is the
       outcome rather than a list somebody has to remember to keep.
     */
-    const result = addUserRule(this.list(), input, {
+    /*
+      A rule this session could not deliver is `invalid` here, as its line is refused in the
+      rule manager. The picker never writes one — it writes plain selectors — but this is the
+      editor a typed or menu path reaches too, and "added" for a rule that then hides nothing
+      would be the same lie as listing it. One it already has is still answered as the
+      duplicate it is: a stored procedural rule works here, through the engine.
+    */
+    const text = input.text.trim()
+    const list = this.list()
+    if (!isAdditionRule(text) && !list.some((rule) => rule.text === text)) {
+      return { outcome: 'invalid', rule: null }
+    }
+    const result = addUserRule(list, input, {
       id: `session-${this.#sequence}`,
       now: this.#now()
     })
@@ -441,24 +504,53 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
   }
 
   setEnabled(id: string, enabled: boolean): boolean {
-    if (!this.list().some((rule) => rule.id === id)) return false
-    if (enabled) this.#disabled.delete(id)
-    else this.#disabled.add(id)
+    const rule = this.list().find((entry) => entry.id === id)
+    if (rule === undefined || rule.enabled === enabled || !this.canSetEnabled(id, enabled)) {
+      return false
+    }
+    if (this.#isOwn(id)) {
+      if (enabled) this.#disabled.delete(id)
+      else this.#disabled.add(id)
+    } else if (enabled) {
+      this.#enabled.add(id)
+    } else {
+      this.#enabled.delete(id)
+    }
     this.#notify()
     return true
   }
 
   remove(id: string): boolean {
-    if (!this.list().some((rule) => rule.id === id)) return false
+    if (!this.canRemove(id)) return false
     this.#removed.add(id)
     this.#notify()
     return true
   }
 
+  /**
+   * Any switch of its own rules; for a stored one, on when it can be delivered, and off only
+   * when it was this session that switched it on. The class docblock says why.
+   */
+  canSetEnabled(id: string, enabled: boolean): boolean {
+    if (this.#isOwn(id)) return true
+    const stored = this.#stored().find((rule) => rule.id === id)
+    if (stored === undefined) return false
+    return enabled ? stored.enabled || isAdditionRule(stored.text) : this.#enabled.has(id)
+  }
+
+  /** Its own rules only: a stored rule deleted here would go on hiding its element here. */
+  canRemove(id: string): boolean {
+    return this.#isOwn(id)
+  }
+
   list(): UserRule[] {
     return [...this.#stored(), ...this.#added]
       .filter((rule) => !this.#removed.has(rule.id))
-      .map((rule) => (this.#disabled.has(rule.id) ? { ...rule, enabled: false } : rule))
+      .map((rule) => {
+        if (this.#disabled.has(rule.id)) return { ...rule, enabled: false }
+        if (this.#enabled.has(rule.id) && !rule.enabled) return { ...rule, enabled: true }
+        return rule
+      })
   }
 
   forHost(hostname: string): UserRule[] {
@@ -477,31 +569,27 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
   }
 
   source(): UserRuleSourceView {
-    return projectUserRuleSource(this.list(), this.#currentSource())
+    return projectUserRuleSource(this.list(), this.#currentSource(), {
+      admits: isAdditionRule,
+      refused: this.#refused
+    })
   }
 
   /**
    * The text, taken back into the session's overlay rather than into the file.
    *
    * Computed against `list()` like `add`, so the limit counts the stored rules too, and
-   * then translated into the three things this overlay can hold: stored rules it hides or
-   * switches off, and its own rules. A stored rule's id never lands in `#added`, so the
-   * file's rules stay the file's however the text rearranges them.
-   *
-   * ## What this cannot do, said rather than papered over
-   *
-   * Commenting out or deleting a *stored* rule here changes this session's list and not
-   * what pages show. A private window's own rules reach its pages as an additive
-   * stylesheet per view (KTD3); the stored ones reach every window through the engine's
-   * one global slot, which is fed from the file and must stay that way (R20). So the
-   * stored rule goes on hiding its element in this window. The rule manager says so in a
-   * private window rather than pretending — see `sessionNote` in `user-rules-text.ts`.
-   * Making it true would mean a per-view *exception* stylesheet, which is a change to the
-   * injector and not to this editor.
+   * with this editor's limits, so the pure function refuses what the class docblock says
+   * this editor cannot do: a new procedural or exception line is refused and marked where
+   * it stands (`private-window`), and switching off or deleting a stored rule is left
+   * undone and its line marked (`normal-profile`). The rest of the text is taken, as with
+   * any refused line. What comes back is then translated into the things this overlay can
+   * hold: stored rules it switched on, and its own rules. A stored rule's id never lands in
+   * `#added`, so the file's rules stay the file's however the text rearranges them.
    *
    * `loadedIds` works as it does for the stored editor, over both halves: a rule this
    * session's picker wrote after the page opened, and a rule a normal window wrote to the
-   * file meanwhile, are neither hidden nor removed by a text that never showed them.
+   * file meanwhile, are neither switched nor removed by a text that never showed them.
    */
   applySource(
     text: string,
@@ -516,19 +604,27 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
           return `session-${this.#sequence}`
         },
         now: this.#now(),
-        loaded: new Set(loadedIds)
+        loaded: new Set(loadedIds),
+        admits: isAdditionRule,
+        canSetEnabled: (rule, enabled) => this.canSetEnabled(rule.id, enabled),
+        canRemove: (rule) => this.canRemove(rule.id)
       }
     )
+    if (result.outcome !== 'applied') return { outcome: result.outcome }
+    // Before the early return: a text that changes nothing may still be one asking again for
+    // a change this editor refused, and its mark has to stay. It is read by `source()` only,
+    // which is not what the listeners are for, so no notification either way.
+    this.#refused = new Set(result.refused)
     if (!result.changed) return { outcome: result.outcome }
 
     const kept = new Map(result.rules.map((rule) => [rule.id, rule]))
     const storedIds = new Set<string>()
     for (const rule of this.#stored()) {
       storedIds.add(rule.id)
-      const next = kept.get(rule.id)
-      if (next === undefined) this.#removed.add(rule.id)
-      else if (next.enabled) this.#disabled.delete(rule.id)
-      else this.#disabled.add(rule.id)
+      // Always there: a stored rule cannot be deleted from here, so the text cannot drop one.
+      // What can differ is its switch, and only upwards from the file's — `canSetEnabled`.
+      if (kept.get(rule.id)?.enabled === true && !rule.enabled) this.#enabled.add(rule.id)
+      else this.#enabled.delete(rule.id)
     }
     const own = result.rules.filter((rule) => !storedIds.has(rule.id))
     // The session's own rules carry their switch on the record itself from here on.
@@ -539,13 +635,17 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
     return { outcome: result.outcome }
   }
 
+  #isOwn(id: string): boolean {
+    return this.#added.some((rule) => rule.id === id && !this.#removed.has(rule.id))
+  }
+
   #currentSource(): string | undefined {
     return this.#source ?? this.#storedSource()
   }
 
   /**
-   * Everything this session did, undone: its own rules, its switching off and its
-   * hiding of stored ones.
+   * Everything this session did, undone: its own rules, its switching on of stored ones,
+   * and the marks of what it refused.
    *
    * The listeners are kept — they belong to the wiring, not to the session — and are
    * told, because a private window that is still open (the mode ends with the *last*
@@ -561,6 +661,8 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
       this.#added.length === 0 &&
       this.#disabled.size === 0 &&
       this.#removed.size === 0 &&
+      this.#enabled.size === 0 &&
+      this.#refused.size === 0 &&
       this.#source === undefined
     ) {
       return
@@ -568,6 +670,8 @@ class SessionUserRuleEditor implements UserRuleTextEditor {
     this.#added.length = 0
     this.#disabled.clear()
     this.#removed.clear()
+    this.#enabled.clear()
+    this.#refused = new Set()
     this.#source = undefined
     this.#notify()
   }

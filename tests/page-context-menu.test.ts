@@ -562,3 +562,86 @@ describe('the user\'s own rules, which nothing could show before', () => {
     expect(ruleMenuLabel('shop.example##.ad')).toBe('shop.example##.ad')
   })
 })
+
+describe("the user's own rules, in a private window", () => {
+  /**
+   * A private window's rules reach its pages only as a stylesheet added to each view, and the rules from the
+   * normal profile reach every window through the engine's one global slot. So a private window can switch
+   * a stored rule *on* and has no way to switch one off or take one away. The menu used to offer both, and
+   * then showed a stored rule unchecked while it went on hiding its element.
+   *
+   * The fixture is the ordinary one — two stored rules for this site, one on and one off — with the
+   * session's own rule added, and the capability answered the way the session editor answers it.
+   */
+  const session: UserRule = {
+    id: 'session-1',
+    text: 'shop.example##.promo',
+    enabled: true,
+    createdAt: 400,
+    origin: 'picker'
+  }
+  const stored = new Set(['r1', 'r2', 'r3'])
+  const byId = new Map([...userRules(), session].map((rule) => [rule.id, rule]))
+
+  function privateBlocker(overrides: Partial<BlockerMenuDeps> = {}): BlockerMenuDeps {
+    return blocker({
+      userRules: [...userRules(), session],
+      // On for anything this window owns or may switch on; never off for a stored rule it did not.
+      canSetRuleEnabled: (id, enabled) =>
+        !stored.has(id) || (enabled && byId.get(id)?.enabled === false),
+      canRemoveRule: (id) => !stored.has(id),
+      ...overrides
+    })
+  }
+
+  const note =
+    "Rules from your normal profile can't be switched off or deleted in a private window."
+
+  it('shows a stored rule that is on without a way to switch it off', () => {
+    const onSetRuleEnabled = vi.fn()
+    const item = rulesSubmenu(privateBlocker({ onSetRuleEnabled })).find(
+      (entry) => entry.label === 'shop.example##.banner-ad'
+    )
+    expect(item?.checked).toBe(true)
+    expect(item?.enabled).toBe(false)
+  })
+
+  it("still switches on a stored rule that is off, and the session's own either way", () => {
+    const onSetRuleEnabled = vi.fn()
+    const items = rulesSubmenu(privateBlocker({ onSetRuleEnabled }))
+    click(items, 'shop.example##.sponsored')
+    expect(onSetRuleEnabled).toHaveBeenCalledWith('r2', true)
+    click(items, 'shop.example##.promo')
+    expect(onSetRuleEnabled).toHaveBeenCalledWith('session-1', false)
+  })
+
+  it("deletes only the session's own rules for the site", () => {
+    const onRemoveRules = vi.fn()
+    click(rulesSubmenu(privateBlocker({ onRemoveRules })), 'Delete my rules for this site (1)')
+    expect(onRemoveRules).toHaveBeenCalledWith(['session-1'])
+  })
+
+  it("offers no deletion when every rule listed is the normal profile's", () => {
+    const items = labels(rulesSubmenu(privateBlocker({ userRules: userRules() })))
+    expect(items.some((label) => label.startsWith('Delete my rules'))).toBe(false)
+    expect(items).toContain('Manage in settings…')
+  })
+
+  it('says why, once, in the language of the menu', () => {
+    expect(labels(rulesSubmenu(privateBlocker())).filter((label) => label === note)).toHaveLength(1)
+    const noteItem = rulesSubmenu(privateBlocker()).find((entry) => entry.label === note)
+    expect(noteItem?.enabled).toBe(false)
+    // Found by position rather than by its English label, which is what `rulesSubmenu` goes by.
+    const german = blockerMenuTemplate(privateBlocker({ locale: 'de' })).find((item) =>
+      Array.isArray(item.submenu)
+    )?.submenu as MenuItemConstructorOptions[]
+    expect(labels(german)).toContain(
+      'Regeln aus deinem normalen Profil kannst du in einem privaten Fenster nicht ausschalten oder löschen.'
+    )
+  })
+
+  it("says nothing of the kind in a normal window, or when only the session's rules are listed", () => {
+    expect(labels(rulesSubmenu())).not.toContain(note)
+    expect(labels(rulesSubmenu(privateBlocker({ userRules: [session] })))).not.toContain(note)
+  })
+})

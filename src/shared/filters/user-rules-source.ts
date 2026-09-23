@@ -4,7 +4,13 @@ import {
   describeUserRule,
   type UserRule
 } from './user-rules.js'
-import { commentBody, disabledRuleLine, sourceLines } from './user-rules-lines.js'
+import {
+  commentBody,
+  disabledRuleLine,
+  sourceLines,
+  type RejectedUserRuleLine,
+  type UserRuleLineRefusal
+} from './user-rules-lines.js'
 
 /**
  * The user's own rules as one text, and the way back (KTD7).
@@ -40,6 +46,15 @@ import { commentBody, disabledRuleLine, sourceLines } from './user-rules-lines.j
  * A refused line is kept in the text as well, where the user put it, and is refused again every time the
  * text is read — so it is marked on every visit until it is fixed, rather than vanishing on the first save
  * and taking with it the only copy of whatever the user was trying to write.
+ *
+ * ## An editor that cannot do everything
+ *
+ * Both directions take `UserRuleEditorLimits`, and only a private window's editor passes any. Its rules
+ * reach its pages as a stylesheet added per view, so it can hold neither a procedural rule nor an exception,
+ * and it cannot switch off or delete a rule from the normal profile, which reaches every window through the
+ * engine's global slot. The limits are *answered* by the editor and *applied* here, so that a line the
+ * editor cannot take is refused and marked like any other refused line — in place, with the lines around it
+ * taken — rather than accepted and left to do nothing. See `SessionUserRuleEditor` for the answers.
  */
 
 /**
@@ -77,27 +92,65 @@ export const MAX_LOADED_USER_RULE_IDS = 2 * MAX_USER_RULES
 export type UserRuleLine =
   | { readonly kind: 'blank' }
   | { readonly kind: 'note' }
-  | { readonly kind: 'rejected' }
+  | { readonly kind: 'rejected'; readonly reason: Exclude<UserRuleLineRefusal, 'normal-profile'> }
   | { readonly kind: 'rule'; readonly text: string; readonly enabled: boolean }
+
+/**
+ * What an editor cannot do, answered by the editor. Every member absent means "no limit", which is the
+ * editor a normal window gets.
+ *
+ * Callbacks rather than a flag saying "private", because the answers depend on the editor's own state —
+ * whether a stored rule is on in the file, whether this session is the one that switched it on — and that
+ * state is the editor's. The module only has to apply them the same way on both directions.
+ */
+export interface UserRuleEditorLimits {
+  /**
+   * Whether the editor can hold `text` — a line `describeUserRule` accepts — as a rule it does not already
+   * have. Refused, the line is `rejected` as `private-window`, and its commented form is a note.
+   *
+   * Only asked about new rules: a line naming a rule the editor already lists is that rule, whatever it is,
+   * and a stored procedural rule goes on working in a private window through the engine.
+   */
+  readonly admits?: ((text: string) => boolean) | undefined
+  /** Whether the editor can switch `rule` to `enabled`. Refused, the rule is kept as it is. */
+  readonly canSetEnabled?: ((rule: UserRule, enabled: boolean) => boolean) | undefined
+  /** Whether the editor can delete `rule`. Refused, the rule is kept as it is. */
+  readonly canRemove?: ((rule: UserRule) => boolean) | undefined
+}
 
 /**
  * What one line of the text is.
  *
  * The commented case runs its *body* through `describeUserRule`, never the line: see the module docblock
  * for why a comment is only a switched-off rule once the rule inside it would have been accepted on its own.
+ * `admits` is the same check narrowed for an editor that cannot hold every rule, and it applies to the body
+ * for the same reason: a commented line this editor could not take uncommented is a note, not a rule that is
+ * off and waiting to be switched on into nothing.
  */
-export function readUserRuleLine(line: string): UserRuleLine {
+export function readUserRuleLine(line: string, admits?: (text: string) => boolean): UserRuleLine {
   const trimmed = line.trim()
   if (trimmed === '') return { kind: 'blank' }
   const body = commentBody(trimmed)
   if (body !== null) {
-    return describeUserRule(body) === null
+    return describeUserRule(body) === null || admits?.(body) === false
       ? { kind: 'note' }
       : { kind: 'rule', text: body, enabled: false }
   }
-  return describeUserRule(trimmed) === null
-    ? { kind: 'rejected' }
+  if (describeUserRule(trimmed) === null) return { kind: 'rejected', reason: 'unsupported' }
+  return admits?.(trimmed) === false
+    ? { kind: 'rejected', reason: 'private-window' }
     : { kind: 'rule', text: trimmed, enabled: true }
+}
+
+/**
+ * `admits` as `readUserRuleLine` wants it: every rule the editor already has, and any other it can hold.
+ * Undefined for an editor with no limit, so its lines are read exactly as they always were.
+ */
+function admitting(
+  known: { has(text: string): boolean },
+  admits: ((text: string) => boolean) | undefined
+): ((text: string) => boolean) | undefined {
+  return admits === undefined ? undefined : (text) => known.has(text) || admits(text)
 }
 
 function ruleLine(text: string, enabled: boolean): string {
@@ -107,8 +160,22 @@ function ruleLine(text: string, enabled: boolean): string {
 /** The text as the editor shows it, and which of its lines the browser refuses. */
 export interface UserRuleSourceView {
   readonly source: string
-  /** Each refused line as it was read — trimmed — so the editor can find it by its text. */
-  readonly rejected: string[]
+  /** Each refused line as it was read — trimmed — so the editor can find it by its text, and why. */
+  readonly rejected: RejectedUserRuleLine[]
+}
+
+/** How an editor with limits wants its text shown. */
+export interface UserRuleSourceProjection {
+  readonly admits?: UserRuleEditorLimits['admits']
+  /**
+   * Ids of rules whose change the last save asked for and the editor refused — `refused` on the result of
+   * `applyUserRuleSource`. Their lines are marked `normal-profile`, wherever the rule is shown.
+   *
+   * Carried by the editor rather than read back out of the saved text because one of the two changes leaves
+   * nothing in it to read: a deleted line is simply absent, and the rule comes back at the end like any rule
+   * the text does not name.
+   */
+  readonly refused?: ReadonlySet<string> | undefined
 }
 
 /**
@@ -118,31 +185,41 @@ export interface UserRuleSourceView {
  * storage order, a switched-off one commented out. With one, the saved lines lead: notes and blank lines as
  * they were, a rule line replaced by the rule's state *now* or dropped if the rule has gone, and every rule
  * the saved text does not mention added at the end.
+ *
+ * A line an editor with limits could not take stays where it was and is marked, like a line the parser
+ * refused; a rule whose change it refused is shown as it still is, and its line marked.
  */
 export function projectUserRuleSource(
   rules: readonly UserRule[],
-  source: string | undefined
+  source: string | undefined,
+  options: UserRuleSourceProjection = {}
 ): UserRuleSourceView {
   const byText = new Map(rules.map((rule) => [rule.text, rule]))
+  const admits = admitting(byText, options.admits)
   const shown = new Set<string>()
   const lines: string[] = []
-  const rejected: string[] = []
+  const rejected: RejectedUserRuleLine[] = []
+  const show = (rule: UserRule): void => {
+    const line = ruleLine(rule.text, rule.enabled)
+    lines.push(line)
+    if (options.refused?.has(rule.id) === true) rejected.push({ line, reason: 'normal-profile' })
+  }
 
   for (const raw of sourceLines(source ?? '')) {
-    const line = readUserRuleLine(raw)
+    const line = readUserRuleLine(raw, admits)
     if (line.kind !== 'rule') {
       lines.push(raw)
-      if (line.kind === 'rejected') rejected.push(raw.trim())
+      if (line.kind === 'rejected') rejected.push({ line: raw.trim(), reason: line.reason })
       continue
     }
     const rule = byText.get(line.text)
     if (rule === undefined || shown.has(rule.id)) continue
     shown.add(rule.id)
-    lines.push(ruleLine(rule.text, rule.enabled))
+    show(rule)
   }
 
   for (const rule of rules) {
-    if (!shown.has(rule.id)) lines.push(ruleLine(rule.text, rule.enabled))
+    if (!shown.has(rule.id)) show(rule)
   }
   return { source: lines.join('\n'), rejected }
 }
@@ -152,7 +229,7 @@ export interface UserRuleSourceState {
   readonly source?: string | undefined
 }
 
-export interface ApplyUserRuleSourceContext {
+export interface ApplyUserRuleSourceContext extends UserRuleEditorLimits {
   /** Asked once per rule that is new, and only once the text is known to fit. */
   readonly nextId: () => string
   readonly now: number
@@ -170,6 +247,11 @@ export interface ApplyUserRuleSourceResult {
   readonly source: string | undefined
   /** False when there is nothing to write, which is also what a refusal is. */
   readonly changed: boolean
+  /**
+   * Ids of the rules the text asked to switch or delete and the editor's limits refused, in storage order.
+   * Always empty for an editor with none, and on `limit-reached`, where nothing was taken at all.
+   */
+  readonly refused: string[]
 }
 
 /**
@@ -208,9 +290,21 @@ export interface ApplyUserRuleSourceResult {
  * ## The limit
  *
  * Counted over everything that would be kept, switched off included — a switched-off rule is still a rule
- * the list holds. Past it, nothing is written and nothing is deleted (R18), for the reason `addUserRule`
- * gives: to take "as many as fit" the browser would have to choose which of the user's lines to lose.
- * Notes and refused lines are not counted; they are not rules.
+ * the list holds, and so is one the editor refused to delete. A save that would *grow* the list past it is
+ * refused: nothing is written and nothing is deleted (R18), for the reason `addUserRule` gives — to take "as
+ * many as fit" the browser would have to choose which of the user's lines to lose. Notes and refused lines
+ * are not counted; they are not rules.
+ *
+ * A save that does not grow the list is taken even past the limit. The list can be past it through no save
+ * of its own: a private window's is the stored rules plus the session's, each held to the limit where it is
+ * written, and a normal window can grow the stored half after the session wrote. Refusing every save of
+ * such a list refused deletions too — the one kind of save that brings it back under.
+ *
+ * ## Limits
+ *
+ * An editor with `UserRuleEditorLimits` has a line it cannot hold read as refused (see `readUserRuleLine`),
+ * and a change it cannot make to a rule it lists left unmade: the rule is kept exactly as it was and its id
+ * is reported on `refused`, for the editor to mark. The rest of the text is taken, as with any refused line.
  *
  * ## Repeats
  *
@@ -224,9 +318,11 @@ export function applyUserRuleSource(
 ): ApplyUserRuleSourceResult {
   const wanted = new Map<string, boolean>()
   const lines: string[] = []
+  const stored = new Set(state.rules.map((rule) => rule.text))
+  const admits = admitting(stored, context.admits)
 
   for (const raw of sourceLines(text)) {
-    const line = readUserRuleLine(raw)
+    const line = readUserRuleLine(raw, admits)
     if (line.kind === 'blank') lines.push('')
     else if (line.kind !== 'rule') lines.push(raw.trimEnd())
     else if (!wanted.has(line.text)) {
@@ -237,16 +333,25 @@ export function applyUserRuleSource(
   // Trailing blank lines are the box's own — the line the cursor was left on — and not the user's layout.
   while (lines.at(-1) === '') lines.pop()
 
-  const stored = new Set(state.rules.map((rule) => rule.text))
+  const refused = new Set<string>()
   const fresh = [...wanted].filter(([ruleText]) => !stored.has(ruleText))
-  const kept = state.rules.filter((rule) => wanted.has(rule.text) || !context.loaded.has(rule.id))
+  const kept = state.rules.filter((rule) => {
+    if (wanted.has(rule.text) || !context.loaded.has(rule.id)) return true
+    if (context.canRemove?.(rule) === false) {
+      refused.add(rule.id)
+      return true
+    }
+    return false
+  })
 
-  if (kept.length + fresh.length > MAX_USER_RULES) {
+  const next = kept.length + fresh.length
+  if (next > MAX_USER_RULES && next > state.rules.length) {
     return {
       outcome: 'limit-reached',
       rules: [...state.rules],
       source: state.source,
-      changed: false
+      changed: false,
+      refused: []
     }
   }
 
@@ -254,7 +359,12 @@ export function applyUserRuleSource(
     ...kept.map((rule) => {
       // No line for it is a rule the page never showed, and it is kept exactly as it is.
       const enabled = wanted.get(rule.text) ?? rule.enabled
-      return rule.enabled === enabled ? rule : { ...rule, enabled }
+      if (rule.enabled === enabled) return rule
+      if (context.canSetEnabled?.(rule, enabled) === false) {
+        refused.add(rule.id)
+        return rule
+      }
+      return { ...rule, enabled }
     }),
     ...fresh.map(([ruleText, enabled]): UserRule => ({
       id: context.nextId(),
@@ -269,7 +379,13 @@ export function applyUserRuleSource(
     source !== state.source ||
     rules.length !== state.rules.length ||
     rules.some((rule, index) => rule !== state.rules[index])
-  return { outcome: 'applied', rules, source, changed }
+  return {
+    outcome: 'applied',
+    rules,
+    source,
+    changed,
+    refused: state.rules.filter((rule) => refused.has(rule.id)).map((rule) => rule.id)
+  }
 }
 
 /**

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { DocumentCodec } from '@main/data/JsonStore.js'
-import { UserRuleStore, type UserRuleEditor } from '@main/data/UserRuleStore.js'
+import { UserRuleStore, type UserRuleTextEditor } from '@main/data/UserRuleStore.js'
 import { compileFilterLists } from '@shared/filters/compile.js'
 import { cosmeticSelectorsFor } from '@shared/filters/cosmetic.js'
 import {
@@ -586,7 +586,7 @@ describe('a private window', () => {
   async function privateEditor(): Promise<{
     path: string
     store: UserRuleStore
-    editor: UserRuleEditor
+    editor: UserRuleTextEditor
   }> {
     const { path, store } = await storeAt('user-rules.json')
     return { path, store, editor: store.editorFor('private') }
@@ -621,37 +621,103 @@ describe('a private window', () => {
     expect(editor.list().map((rule) => rule.text)).toEqual(['example.com##.stored'])
   })
 
-  it('can switch a stored rule off without the file changing', async () => {
-    // The escape hatch has to work in a private window too — a page broken by a rule is
-    // broken there as well — and it must not become a write.
+  it('switches on a stored rule that is off, without the file changing', async () => {
+    /*
+      A rule the user switched off at home and needs on the page in front of them. The session's switch
+      goes into the list, and so into `enabledText`, which is what `sessionStylesFor` serves this window's
+      views — the one route a private window has into its pages. The file and the engine's global slot,
+      which every normal window reads, keep it off.
+    */
     const { path, store, editor } = await privateEditor()
-    const stored = store
-      .editorFor('normal')
-      .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
-    await store.flush()
-
-    expect(editor.setEnabled(stored.id, false)).toBe(true)
-    expect(editor.enabledText()).toBe('')
-    expect(editor.list().map((rule) => rule.enabled)).toEqual([false])
-    // And switching it back on inside the session is the same operation, not a write.
-    expect(editor.setEnabled(stored.id, true)).toBe(true)
-    expect(editor.enabledText()).toBe('example.com##.ad')
-    expect(editor.setEnabled(stored.id, false)).toBe(true)
+    const normal = store.editorFor('normal')
+    const stored = normal.add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    normal.setEnabled(stored.id, false)
     await store.flush()
     const onDisk = await readRules(path)
-    expect(onDisk).toMatchObject({ rules: [{ id: stored.id, enabled: true }] })
-    // And the stored set is untouched, so the next normal window still has it.
-    expect(store.enabledText()).toBe('example.com##.ad')
+
+    expect(editor.canSetEnabled(stored.id, true)).toBe(true)
+    expect(editor.setEnabled(stored.id, true)).toBe(true)
+    expect(editor.list().map((rule) => rule.enabled)).toEqual([true])
+    expect(editor.enabledText()).toBe('example.com##.ad')
+    await store.flush()
+    expect(await readRules(path)).toEqual(onDisk)
+    expect(store.enabledText()).toBe('')
+
+    // Its own switch, taken back: honoured, because that is the session's to undo.
+    expect(editor.setEnabled(stored.id, false)).toBe(true)
+    expect(editor.enabledText()).toBe('')
+    editor.setEnabled(stored.id, true)
+    store.endPrivateSession()
+    expect(editor.list().map((rule) => rule.enabled)).toEqual([false])
+    expect(editor.enabledText()).toBe('')
   })
 
-  it('can hide a stored rule from the session without deleting it', async () => {
+  it('refuses to switch off or delete a stored rule, rather than pretend', async () => {
+    /*
+      A stored rule that is on reaches every window through the engine's global slot, and a private
+      window can only add to what its pages get. Listing it as off — or as gone — while it went on hiding
+      its element was the defect; the answer is `false`, and nothing changes or is announced.
+    */
     const { store, editor } = await privateEditor()
     const stored = store
       .editorFor('normal')
       .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
-    expect(editor.remove(stored.id)).toBe(true)
+    let told = 0
+    editor.onChange(() => (told += 1))
+
+    expect(editor.canSetEnabled(stored.id, false)).toBe(false)
+    expect(editor.canRemove(stored.id)).toBe(false)
+    expect(editor.setEnabled(stored.id, false)).toBe(false)
+    expect(editor.remove(stored.id)).toBe(false)
+    expect(editor.list()).toEqual([stored])
+    expect(editor.enabledText()).toBe('example.com##.ad')
+    expect(told).toBe(0)
+  })
+
+  it('does not switch on a stored rule it has no way to deliver', async () => {
+    // A procedural rule or an exception reaches a page through the engine, not through a view's added
+    // stylesheet. Switched on here it would be listed on and do nothing.
+    const { store, editor } = await privateEditor()
+    const normal = store.editorFor('normal')
+    const procedural = normal.add({
+      text: 'example.com##.box:has-text(Ad)',
+      origin: 'manual'
+    }).rule!
+    normal.setEnabled(procedural.id, false)
+    expect(editor.canSetEnabled(procedural.id, true)).toBe(false)
+    expect(editor.setEnabled(procedural.id, true)).toBe(false)
+    expect(editor.list().map((rule) => rule.enabled)).toEqual([false])
+  })
+
+  it('changes its own rules freely', async () => {
+    const { editor } = await privateEditor()
+    const own = editor.add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    expect(editor.canSetEnabled(own.id, false)).toBe(true)
+    expect(editor.canRemove(own.id)).toBe(true)
+    expect(editor.setEnabled(own.id, false)).toBe(true)
+    expect(editor.remove(own.id)).toBe(true)
     expect(editor.list()).toEqual([])
-    expect(store.rules()).toHaveLength(1)
+  })
+
+  it('refuses a procedural rule and an exception, which it could not deliver', async () => {
+    // Nothing on the picker's path writes either; a typed or menu path must not be the way in.
+    const { store, editor } = await privateEditor()
+    expect(editor.add({ text: 'example.com##.box:has-text(Ad)', origin: 'manual' }).outcome).toBe(
+      'invalid'
+    )
+    expect(editor.add({ text: 'example.com#@#.box', origin: 'manual' }).outcome).toBe('invalid')
+    expect(editor.list()).toEqual([])
+
+    // A normal window's editor takes both: the engine applies them there.
+    const normal = store.editorFor('normal')
+    expect(normal.add({ text: 'example.com##.box:has-text(Ad)', origin: 'manual' }).outcome).toBe(
+      'added'
+    )
+    expect(normal.add({ text: 'example.com#@#.box', origin: 'manual' }).outcome).toBe('added')
+    // And a stored one is still recognised in the private window as the rule it is.
+    expect(editor.add({ text: 'example.com#@#.box', origin: 'manual' }).outcome).toBe(
+      'duplicate-active'
+    )
   })
 
   it('refuses the same lines the stored set refuses', async () => {
@@ -665,10 +731,9 @@ describe('a private window', () => {
 
   it('counts a stored duplicate as one, and says it is switched off', async () => {
     const { store, editor } = await privateEditor()
-    const stored = store
-      .editorFor('normal')
-      .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
-    editor.setEnabled(stored.id, false)
+    const normal = store.editorFor('normal')
+    const stored = normal.add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    normal.setEnabled(stored.id, false)
     const result = editor.add({ text: 'example.com##.ad', origin: 'picker' })
     expect(result.outcome).toBe('duplicate-disabled')
     expect(result.rule?.id).toBe(stored.id)
@@ -757,14 +822,13 @@ describe('a private window', () => {
 
   it('lets go of what the session did to the stored rules as well', async () => {
     const { store } = await storeAt('user-rules.json')
-    const stored = store
-      .editorFor('normal')
-      .add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    const normal = store.editorFor('normal')
+    const stored = normal.add({ text: 'example.com##.ad', origin: 'picker' }).rule!
+    normal.setEnabled(stored.id, false)
     const editor = store.editorFor('private')
-    editor.setEnabled(stored.id, false)
-    editor.remove(stored.id)
+    editor.setEnabled(stored.id, true)
     store.endPrivateSession()
-    expect(editor.list()).toEqual([stored])
+    expect(editor.list()).toEqual([{ ...stored, enabled: false }])
   })
 
   it('keeps the listeners the wiring attached across the end of a session', async () => {

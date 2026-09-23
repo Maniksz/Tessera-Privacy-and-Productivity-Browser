@@ -10,7 +10,8 @@ import { describeUserRule, type UserRule } from '@shared/filters/user-rules.js'
 import {
   applyUserRuleSource,
   projectUserRuleSource,
-  type ApplyUserRuleSourceOutcome
+  type ApplyUserRuleSourceOutcome,
+  type UserRuleEditorLimits
 } from '@shared/filters/user-rules-source.js'
 
 /**
@@ -46,6 +47,10 @@ const TEXT: Record<string, string> = {
   rejected: 'The marked lines are not applied.',
   rejectedMark: 'not applied',
   rejectedLines: 'Lines not applied:',
+  rejectedMarkPrivate: 'not in a private window',
+  rejectedPrivate: 'Not in a private window.',
+  rejectedMarkProfile: 'from your normal profile',
+  rejectedProfile: 'Not from a private window.',
   limitReached: 'This text holds more rules than this browser will keep.',
   sessionNote: 'This is a private window.',
   kindProcedural: 'matched by script',
@@ -81,15 +86,18 @@ function harness(
     outcome?: ApplyUserRuleSourceOutcome
     refuseList?: string
     refuseApply?: string
+    /** What the editor behind the page cannot hold or change — a private window's, in practice. */
+    limits?: UserRuleEditorLimits
   } = {}
 ): Harness {
   let rules = options.rules ?? []
   let source = options.source
+  let refused = new Set<string>()
   let ids = 0
   const applied: string[] = []
 
   const answer = (): UserRulesAnswer => {
-    const view = projectUserRuleSource(rules, source)
+    const view = projectUserRuleSource(rules, source, { ...options.limits, refused })
     return {
       rules: rules.map((entry): EditableUserRule => ({
         ...entry,
@@ -120,10 +128,12 @@ function harness(
         const result = applyUserRuleSource({ rules, source }, text, {
           nextId: () => `n${(ids += 1)}`,
           now: 99,
-          loaded: new Set(loadedIds)
+          loaded: new Set(loadedIds),
+          ...options.limits
         })
         rules = result.rules
         source = result.source
+        refused = new Set(result.refused)
         return Promise.resolve(result.outcome)
       }
     }
@@ -372,6 +382,34 @@ describe('in a private window', () => {
     const { host } = harness({ session: true })
     await editor(host)
     expect(screen.getByRole('note').textContent).toBe('This is a private window.')
+  })
+
+  it('marks a line it could not take with why, and explains each reason once', async () => {
+    const { host, rules } = harness({
+      session: true,
+      rules: [rule({ id: 'stored', text: 'example.com##.stored' })],
+      limits: {
+        admits: (text) => !text.includes(':has-text('),
+        canSetEnabled: (entry, enabled) => enabled || entry.id !== 'stored',
+        canRemove: (entry) => entry.id !== 'stored'
+      }
+    })
+    await editor(host)
+    type('! example.com##.stored\nshop.example##.box:has-text(Ad)\nnonsense')
+    save()
+
+    await waitFor(() => expect(drawnLines()[0]?.rejected).toBe(true))
+    expect(drawnLines().map((line) => [line.text, line.marks])).toEqual([
+      ['example.com##.stored', 'from your normal profile'],
+      ['shop.example##.box:has-text(Ad)', 'not in a private window'],
+      ['nonsense', 'not applied']
+    ])
+    expect(rules().map((entry) => [entry.text, entry.enabled])).toEqual([
+      ['example.com##.stored', true]
+    ])
+    expect(screen.getByRole('alert').textContent).toBe(
+      'The marked lines are not applied. Not in a private window. Not from a private window. Lines not applied: 1, 2, 3'
+    )
   })
 
   it('says nothing of the kind in a normal one', async () => {

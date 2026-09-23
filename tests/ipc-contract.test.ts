@@ -129,10 +129,20 @@ describe('the rule manager', () => {
       rules: [],
       text: {},
       source: '! note',
-      rejected: ['||ads.example^'],
+      rejected: [
+        { line: '||ads.example^', reason: 'unsupported' },
+        { line: 'example.com##.box:has-text(Ad)', reason: 'private-window' },
+        { line: 'example.com##.stored', reason: 'normal-profile' }
+      ],
       session: true
     }
     expect(invokeContract['userrules:list'].response.safeParse(answer).success).toBe(true)
+    expect(
+      invokeContract['userrules:list'].response.safeParse({
+        ...answer,
+        rejected: [{ line: 'x', reason: 'because' }]
+      }).success
+    ).toBe(false)
     const { session: _session, ...withoutMode } = answer
     expect(invokeContract['userrules:list'].response.safeParse(withoutMode).success).toBe(false)
   })

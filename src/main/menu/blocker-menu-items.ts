@@ -2,6 +2,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 import { translate, type Locale } from '@shared/i18n/catalog.js'
 import { describeUserRule, type UserRule } from '@shared/filters/user-rules.js'
 import { hostMatchesRule } from '@shared/url/domain.js'
+import { userRulesText } from '../settings/user-rules-text.js'
 
 /**
  * The menu behind the blocker button in the address bar.
@@ -106,6 +107,15 @@ export interface BlockerMenuDeps {
   onSetBlockerEnabledOnSite(host: string, enabled: boolean): void
   onSetRuleEnabled(id: string, enabled: boolean): void
   onRemoveRules(ids: readonly string[]): void
+  /**
+   * Whether the editor behind the menu would honour switching this rule to `enabled`, and deleting it.
+   *
+   * Asked rather than assumed because a private window's editor cannot switch off or delete a rule from the
+   * normal profile (`SessionUserRuleEditor` says why), and a menu that offered it anyway showed the rule
+   * unchecked while it went on hiding its element. Absent means yes, which is a normal window's answer.
+   */
+  canSetRuleEnabled?(id: string, enabled: boolean): boolean
+  canRemoveRule?(id: string): boolean
 }
 
 export function blockerMenuTemplate(deps: BlockerMenuDeps): MenuItemConstructorOptions[] {
@@ -206,6 +216,13 @@ export function blockerMenuTemplate(deps: BlockerMenuDeps): MenuItemConstructorO
  * Deleting is one item for the site rather than one per rule. A per-rule delete needs a second level of
  * submenu on every entry — a menu deep enough that nobody finds it — and the case that actually happens
  * is "I have been clicking the picker on this site and want it back the way it was".
+ *
+ * ## In a private window
+ *
+ * Only what the editor would honour is offered. A rule from the normal profile that is on is shown checked
+ * and cannot be clicked; one that is off can still be switched on, which the session can deliver; and the
+ * delete item covers the session's own rules only, or is absent when there are none. One line that cannot
+ * be clicked says why, under the rules it is about — a greyed checkbox with no reason reads as a fault.
  */
 function myRulesSubmenu(
   deps: BlockerMenuDeps,
@@ -220,21 +237,32 @@ function myRulesSubmenu(
     ]
   }
 
-  const items: MenuItemConstructorOptions[] = rules.map((rule) => ({
-    label: ruleMenuLabel(rule.text),
-    type: 'checkbox',
-    checked: rule.enabled,
-    click: () => deps.onSetRuleEnabled(rule.id, !rule.enabled)
-  }))
+  const canSet = deps.canSetRuleEnabled ?? (() => true)
+  const canRemove = deps.canRemoveRule ?? (() => true)
+  const items: MenuItemConstructorOptions[] = rules.map((rule) => {
+    const switchable = canSet(rule.id, !rule.enabled)
+    return {
+      label: ruleMenuLabel(rule.text),
+      type: 'checkbox',
+      checked: rule.enabled,
+      // Absent rather than a click that does nothing: Electron greys the item, and the note says why.
+      ...(switchable
+        ? { click: () => deps.onSetRuleEnabled(rule.id, !rule.enabled) }
+        : { enabled: false })
+    }
+  })
+  const locked = rules.some((rule) => !canSet(rule.id, !rule.enabled) || !canRemove(rule.id))
+  if (locked) items.push({ label: userRulesText(deps.locale).menuProfileRules, enabled: false })
 
-  items.push(
-    { type: 'separator' },
-    {
-      label: t('blocker.forgetSiteRules', { count: rules.length }),
-      click: () => deps.onRemoveRules(rules.map((rule) => rule.id))
-    },
-    { label: t('blocker.openSettings'), click: () => deps.onOpenSettings() }
-  )
+  items.push({ type: 'separator' })
+  const removable = rules.filter((rule) => canRemove(rule.id))
+  if (removable.length > 0) {
+    items.push({
+      label: t('blocker.forgetSiteRules', { count: removable.length }),
+      click: () => deps.onRemoveRules(removable.map((rule) => rule.id))
+    })
+  }
+  items.push({ label: t('blocker.openSettings'), click: () => deps.onOpenSettings() })
 
   return items
 }

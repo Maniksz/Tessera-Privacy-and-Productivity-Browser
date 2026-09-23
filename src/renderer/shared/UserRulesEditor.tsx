@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { UserRule } from '@shared/filters/user-rules.js'
-import { annotateSourceLines, type AnnotatedLine } from '@shared/filters/user-rules-lines.js'
+import {
+  USER_RULE_LINE_REFUSALS,
+  annotateSourceLines,
+  type AnnotatedLine,
+  type RejectedUserRuleLine,
+  type UserRuleLineRefusal
+} from '@shared/filters/user-rules-lines.js'
 import type { ApplyUserRuleSourceOutcome } from '@shared/filters/user-rules-source.js'
 import { useCoreCall } from './useCoreCall.js'
 
@@ -65,8 +71,8 @@ export interface UserRulesAnswer {
   text: Record<string, string>
   /** The rules as the text to edit, merged with the notes last saved. */
   source: string
-  /** The lines of `source` the browser refuses, trimmed — marked where they stand. */
-  rejected: string[]
+  /** The lines of `source` the browser refuses, trimmed, and why — marked where they stand. */
+  rejected: RejectedUserRuleLine[]
   /** True in a private window, whose changes last for the session and which cannot switch off a stored rule. */
   session: boolean
 }
@@ -87,9 +93,22 @@ export interface UserRulesHost {
   apply(text: string, loadedIds: readonly string[]): Promise<ApplyUserRuleSourceOutcome>
 }
 
+/**
+ * The words for each reason a line is refused: the tag drawn on the line, and the sentence that explains it.
+ *
+ * One pair per reason because the remedies differ — a line to correct, a line to write in a normal window,
+ * a rule to change in a normal window — and one sentence covering all three would give nobody their next
+ * step. The keys are the core's (`main/settings/user-rules-text.ts`).
+ */
+const REFUSAL_WORDS: Record<UserRuleLineRefusal, { mark: string; explanation: string }> = {
+  unsupported: { mark: 'rejectedMark', explanation: 'rejected' },
+  'private-window': { mark: 'rejectedMarkPrivate', explanation: 'rejectedPrivate' },
+  'normal-profile': { mark: 'rejectedMarkProfile', explanation: 'rejectedProfile' }
+}
+
 /** The tags after a line, in the order a reader wants them: the refusal first, then what the rule costs. */
 function tagsOf(line: AnnotatedLine, word: (key: string) => string): string {
-  if (line.rejected) return word('rejectedMark')
+  if (line.refusal !== null) return word(REFUSAL_WORDS[line.refusal].mark)
   return [line.procedural ? word('kindProcedural') : '', line.picked ? word('originPicker') : '']
     .filter((part) => part !== '')
     .join(' · ')
@@ -198,6 +217,12 @@ export function UserRulesEditor({
   const dirty = draft !== saved.source
   /** 1-based, because these are said to a person: "line 2". */
   const refusedAt = lines.flatMap((line, index) => (line.rejected ? [index + 1] : []))
+  /** One sentence per reason on screen, in a fixed order, so the explanation reads the same every time. */
+  const explanation = USER_RULE_LINE_REFUSALS.filter((reason) =>
+    lines.some((line) => line.refusal === reason)
+  )
+    .map((reason) => word(REFUSAL_WORDS[reason].explanation))
+    .join(' ')
 
   const save = async (): Promise<void> => {
     await run(async () => {
@@ -258,8 +283,8 @@ export function UserRulesEditor({
 
       {/*
         The known limit of a private window, said where it applies rather than left for somebody to find.
-        See `SessionUserRuleEditor.applySource` for why a stored rule switched off here keeps hiding its
-        element in this window.
+        See `SessionUserRuleEditor` for why a stored rule can be switched on here and not off: it reaches this
+        window through the engine's global slot, and a private window can only add to what its pages get.
       */}
       {saved.session && (
         <p className="panel__notice" role="note">
@@ -332,13 +357,13 @@ export function UserRulesEditor({
       </div>
 
       {/*
-        One explanation for every mark, and it follows the marks rather than the last save: a refused line
-        kept in the saved text is marked again on every visit, so the sentence that says what the mark means
-        is there whenever a mark is.
+        One explanation for each kind of mark on screen, and it follows the marks rather than the last save: a
+        refused line kept in the saved text is marked again on every visit, so the sentence that says what the
+        mark means is there whenever a mark is.
       */}
       {refusedAt.length > 0 ? (
         <p className="panel__error" role="alert" id="userrules-refused">
-          {word('rejected')}
+          {explanation}
           <span className="userrules__spoken">
             {` ${word('rejectedLines')} ${refusedAt.join(', ')}`}
           </span>

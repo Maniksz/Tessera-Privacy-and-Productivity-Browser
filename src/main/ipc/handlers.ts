@@ -4,6 +4,7 @@ import type { SettingsStore } from '../settings/SettingsStore.js'
 import { describeSettings } from '../settings/describe.js'
 import { userRulesText } from '../settings/user-rules-text.js'
 import { describeUserRule, type UserRule } from '@shared/filters/user-rules.js'
+import type { RejectedUserRuleLine } from '@shared/filters/user-rules-lines.js'
 import type { WindowRegistry } from '../browser/WindowRegistry.js'
 import type { QuickLinkStore } from '../data/QuickLinkStore.js'
 import type { ExtensionStore } from '../data/ExtensionStore.js'
@@ -423,7 +424,12 @@ export function registerIpcHandlers(deps: {
       },
       onRemoveRules: (ids) => {
         for (const id of ids) editor.remove(id)
-      }
+      },
+      // And asked of the same editor, so the menu offers only what it would honour. A private window's
+      // cannot switch off or delete a rule from the normal profile — that rule reaches this window through
+      // the engine's global slot and would go on hiding its element — and refuses if asked anyway.
+      canSetRuleEnabled: (id, enabled) => editor.canSetEnabled(id, enabled),
+      canRemoveRule: (id) => editor.canRemove(id)
     }).popup({ window: window.window })
     return OK
   })
@@ -445,7 +451,7 @@ export function registerIpcHandlers(deps: {
     rules: Array<UserRule & { kind: 'declarative' | 'procedural' }>
     text: Record<string, string>
     source: string
-    rejected: string[]
+    rejected: RejectedUserRuleLine[]
     session: boolean
   } => {
     const editor = editorFor(event)
