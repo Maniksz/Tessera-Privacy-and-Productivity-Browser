@@ -24,7 +24,7 @@
     "src/preload/api.d.ts",
     "src/preload/internal-api.d.ts",
     /*
-      One preload module, because one test in here imports it.
+      Preload modules, one by one, because a test in here imports each of them.
 
       The element picker's page half is all document: where its host hangs, which element a
       capture-phase listener saw, how many things a selector matches and whether any of them is still
@@ -36,7 +36,9 @@
       here. `tsconfig.preload.json` remains the project that checks the preload as a whole, with the
       settings a preload actually builds under.
     */
-    "src/preload/picker.ts"
+    "src/preload/picker.ts",
+    // The cosmetic preload, for the same reason: when its host sheet lands is a question about a document.
+    "src/preload/cosmetic.ts"
   ],
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { COSMETIC_SPECIFIC_CHANNEL } from '@shared/filters/injection.js'
 import {
   PICKER_ESCAPED_CHANNEL,
   PICKER_FREEZE_CHANNEL,
@@ -76,6 +77,8 @@ const electron = vi.hoisted(() => {
 vi.mock('electron', () => ({ app: electron.app, webContents: electron.webContents }))
 
 const { ElementPicker } = await import('@main/privacy/ElementPicker.js')
+const { CosmeticInjector } = await import('@main/privacy/CosmeticInjector.js')
+const { FilterEngine } = await import('@main/privacy/FilterEngine.js')
 
 const DOCUMENT = 'https://example.com/article'
 
@@ -146,6 +149,13 @@ class FakeView {
   ask(payload: unknown): unknown {
     const event: { returnValue: unknown } = { returnValue: undefined }
     this.emit('ipc-message-sync', event, PICKER_PROPOSE_CHANNEL, payload)
+    return event.returnValue
+  }
+
+  /** The host-stylesheet question a new document asks at `document-start`, answered synchronously. */
+  askStyles(): unknown {
+    const event: { returnValue: unknown } = { returnValue: undefined }
+    this.emit('ipc-message-sync', event, COSMETIC_SPECIFIC_CHANNEL, this.url)
     return event.returnValue
   }
 
@@ -269,11 +279,19 @@ interface Harness {
 }
 
 function harnessFor(
-  options: { url?: string; settings?: Partial<SettingsSnapshot>; tileIndex?: number | null } = {}
+  options: {
+    url?: string
+    settings?: Partial<SettingsSnapshot>
+    tileIndex?: number | null
+    /** An editor that does more than record, for a test that needs the rule to reach an engine. */
+    editor?: FakeEditor
+    /** Where a preview goes besides the record, for the same kind of test. */
+    preview?: (id: number, rule: string | null) => void
+  } = {}
 ): Harness {
   const view = new FakeView(1, options.url ?? DOCUMENT)
   const window = new FakeWindow(3)
-  const editor = new FakeEditor()
+  const editor = options.editor ?? new FakeEditor()
   const previews: Array<{ id: number; rule: string | null }> = []
   const timeline: string[] = []
   const settings = { ...defaultSettings(), ...options.settings }
@@ -286,6 +304,7 @@ function harnessFor(
     preview: (id, rule) => {
       previews.push({ id, rule })
       timeline.push(rule === null ? 'preview:off' : 'preview:on')
+      options.preview?.(id, rule)
     },
     hostFor: (id) =>
       id === view.id
@@ -704,5 +723,75 @@ describe('every way one ends', () => {
     expect(harness.picker.start(harness.view.id)).toBe(true)
     expect(harness.window.bar()?.mode).toBe('showing')
     expect(harness.window.bar()?.sessionId).not.toBe(first)
+  })
+})
+
+describe('a picked rule across rapid reloads', () => {
+  /** The rule editor as the application wires it: a stored rule recompiles the engine and re-serves. */
+  class StoringEditor extends FakeEditor {
+    readonly #onStored: (text: string) => void
+    #text = ''
+
+    constructor(onStored: (text: string) => void) {
+      super()
+      this.#onStored = onStored
+    }
+
+    override add(input: UserRuleInput): AddRuleResult {
+      const result = super.add(input)
+      if (result.outcome === 'added') {
+        this.#text = this.#text === '' ? input.text : `${this.#text}\n${input.text}`
+        this.#onStored(this.#text)
+      }
+      return result
+    }
+  }
+
+  it('is in every new document’s first answer, and nothing is pushed while reloading', () => {
+    /*
+      The core's half of "reloading quickly sometimes shows the element". It was not the cause — the
+      page applied the answer too late (`tests/components/cosmetic-preload.test.ts`) — and this is what
+      rules the core out, and keeps it ruled out: after a pick is confirmed and measured, every reload
+      is a new document that asks once and gets the rule, and the navigation itself pushes nothing a
+      half-built document could receive in place of it.
+    */
+    const settings = defaultSettings()
+    const engine = new FilterEngine({ lists: ['[Adblock Plus 2.0]'], getSettings: () => settings })
+    const injector = new CosmeticInjector({
+      getSettings: () => settings,
+      stylesFor: (url) => engine.cosmeticStylesFor(url),
+      openFeed: (url) => engine.openCosmeticFeed(url),
+      scriptletsFor: () => [],
+      proceduralFor: () => []
+    })
+    injector.install()
+    const harness = harnessFor({
+      // `index.ts`'s `userRules.onChange`, in its order: recompile, then re-serve.
+      editor: new StoringEditor((text) => {
+        engine.replaceUserRules(text)
+        injector.refresh()
+      }),
+      preview: (id, rule) => {
+        injector.setPreview(id, rule)
+      }
+    })
+    const ruled = '.ad-slot { display: none !important; }'
+    const pushes = (): unknown[] =>
+      harness.view.sent
+        .filter((entry) => entry.channel === COSMETIC_SPECIFIC_CHANNEL)
+        .map((entry) => entry.payload)
+
+    harness.view.askStyles()
+    const sessionId = frozen(harness)
+    harness.picker.barAction(sessionId, 'confirm')
+    harness.view.tell(PICKER_MEASURED_CHANNEL, { sessionId, matches: 3, visible: 0 })
+    expect(harness.window.bar()?.outcome).toBe('saved-effective')
+
+    const before = pushes().length
+    for (let reload = 0; reload < 10; reload += 1) {
+      harness.view.navigate({ isMainFrame: true, isSameDocument: false, url: DOCUMENT })
+      expect(harness.view.askStyles(), `reload ${String(reload)}`).toContain(ruled)
+    }
+    expect(pushes().slice(before)).toEqual([])
   })
 })
