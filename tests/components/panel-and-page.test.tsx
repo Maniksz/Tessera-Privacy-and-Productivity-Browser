@@ -425,7 +425,12 @@ describe('the settings surface, which is now only a page', () => {
     define('tesseraInternal', internal.bridge)
     render(<SettingsPage />)
     await waitFor(() => expect(screen.getByLabelText(BLOCKER)).toHaveProperty('checked', true))
-    const before = internal.channels().length
+    // Counted by channel rather than in total: the page's other first loads (its descriptors, the rule
+    // editor's list) can still be landing when the checkbox first shows, and under a loaded run one of
+    // them arriving after this line made the test fail without the page having re-fetched anything.
+    const fetches = (): number =>
+      internal.channels().filter((channel) => channel === 'settings:getAll').length
+    const before = fetches()
 
     internal.emit('settings:changed', {
       changed: { 'privacy.blockerEnabled': false },
@@ -433,7 +438,7 @@ describe('the settings surface, which is now only a page', () => {
     })
 
     await waitFor(() => expect(screen.getByLabelText(BLOCKER)).toHaveProperty('checked', false))
-    expect(internal.channels().length, 'the page re-fetched what the event already carried').toBe(before)
+    expect(fetches(), 'the page re-fetched what the event already carried').toBe(before)
   })
 
   it('re-describes when the language changes, because the labels come from the core', async () => {
