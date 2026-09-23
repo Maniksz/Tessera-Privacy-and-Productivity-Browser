@@ -5,7 +5,7 @@ import type { DownloadRecord, DownloadState } from './model.js'
  *
  * Zod-free and Electron-free for the reason `model.ts` gives: the result is computed in the
  * core but its shape is read by the chrome UI, and anything the renderer can reach must not
- * drag a validation library into its bundle. It is also a pure function of its three inputs,
+ * drag a validation library into its bundle. It is also a pure function of its inputs,
  * so every row of the decision table below is a unit test rather than a walk through the app.
  *
  * ## Why the window's own downloads, not the list
@@ -65,6 +65,13 @@ import type { DownloadRecord, DownloadState } from './model.js'
  * end is exact; an observation can only be later — by a coalescing tick, or by a good deal more
  * for a download a closing window handed on to this one — and a later time could only ever turn
  * something the panel already showed back into news.
+ *
+ * **A handed-on download was seen in the window it came from.** When a window closes, its claims
+ * move to another window, whose own `lastPresentedAt` says nothing about them: it may never have
+ * presented its panel, or last did so before the closing window showed the list. So the caller may
+ * also pass `handedOnSeenAt`: per inherited id, when a window that held it last presented its
+ * panel. An outcome counts as seen up to the later of that and this window's own presentation, and
+ * only for that id — the closing window never showed this window's own downloads.
  */
 
 /** An outcome worth a mark on the button, heaviest first. Cancelled has none, on purpose. */
@@ -112,12 +119,15 @@ const NO_OBSERVATIONS: ReadonlyMap<string, number> = new Map()
  * @param stateChangedAt Per id, when the caller first saw the entry in its current state; used
  *   for a pause, which the record gives no time of its own. An id without one falls back to the
  *   start.
+ * @param handedOnSeenAt Per id a closing window handed to this one, when a window that held it
+ *   last presented its panel. An id without one was seen only as far as `lastPresentedAt` says.
  */
 export function summarizeWindowDownloads(
   entries: readonly DownloadRecord[],
   startedHere: ReadonlySet<string>,
   lastPresentedAt: number | null,
-  stateChangedAt: ReadonlyMap<string, number> = NO_OBSERVATIONS
+  stateChangedAt: ReadonlyMap<string, number> = NO_OBSERVATIONS,
+  handedOnSeenAt: ReadonlyMap<string, number> = NO_OBSERVATIONS
 ): DownloadButtonSummary {
   const mine = entries.filter((entry) => startedHere.has(entry.id))
   if (mine.length === 0) return NO_DOWNLOAD_BUTTON
@@ -125,9 +135,10 @@ export function summarizeWindowDownloads(
   const running = mine.filter((entry) => entry.state === 'progressing')
   if (running.length > 0) return { visible: true, activity: activityOf(running), marker: null }
 
-  const unseen = mine.filter(
-    (entry) => lastPresentedAt === null || outcomeTime(entry, stateChangedAt) > lastPresentedAt
-  )
+  // Never presented anywhere is `-Infinity`, which every outcome comes after.
+  const seenUntil = (id: string): number =>
+    Math.max(lastPresentedAt ?? -Infinity, handedOnSeenAt.get(id) ?? -Infinity)
+  const unseen = mine.filter((entry) => outcomeTime(entry, stateChangedAt) > seenUntil(entry.id))
   return { visible: true, activity: null, marker: heaviestMarker(unseen) }
 }
 

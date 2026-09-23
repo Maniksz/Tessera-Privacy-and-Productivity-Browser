@@ -292,6 +292,11 @@ export class DownloadManager {
     return this.#owners.idsOf(windowId)
   }
 
+  /** Per id a closed window handed to this one, when it was last seen; see `DownloadOwnership`. */
+  handedOnSeenAt(windowId: number): ReadonlyMap<string, number> {
+    return this.#owners.seenAtOf(windowId)
+  }
+
   /** Called when a download starts, ends, is paused, or advances. Coalesced; see the header. */
   onChange(listener: () => void): () => void {
     this.#listeners.add(listener)
@@ -441,17 +446,12 @@ export class DownloadManager {
   }
 
   /**
-   * A window closed: its claims on downloads go to `successor`, or are dropped.
-   *
-   * Separate from `releaseSession` because the two are different events for a normal window.
-   * The default session outlives every window that shares it, so a normal window's downloads keep
-   * running when it closes — they only lose the window whose button showed them. The registry
-   * names the successor, the normal window focused most recently, because it is the one that
-   * knows the focus order; with none left, as on macOS with every window closed, the downloads
-   * are still listed and simply belong to no button.
+   * A window closed: its claims go to `successor` with its panel's last `seenAt`, or are dropped.
+   * Not `releaseSession`: the default session outlives the windows sharing it, so their downloads keep
+   * running and only lose a button. The registry names the successor, as it knows the focus order.
    */
-  releaseWindow(windowId: number, successor: number | undefined): void {
-    this.#owners.handOver(windowId, successor)
+  releaseWindow(windowId: number, successor: number | undefined, seenAt?: number | null): void {
+    this.#owners.handOver(windowId, successor, seenAt ?? null)
     this.#emitNow()
   }
 

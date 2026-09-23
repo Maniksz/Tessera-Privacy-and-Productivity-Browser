@@ -93,6 +93,8 @@ export type DownloadHandle = <C extends DownloadInvokeChannel>(
 export interface DownloadHandlerManager {
   /** The downloads started in this window during this run; what the button counts (KTD7). */
   idsStartedIn(windowId: number): ReadonlySet<string>
+  /** Per id a closing window handed this one, when that id was last seen on a panel. */
+  handedOnSeenAt(windowId: number): ReadonlyMap<string, number>
   /** Freshly probed. The path a click takes. */
   list(viewer: DownloadViewer): DownloadEntry[]
   /** From what is already known, for the pushed event. */
@@ -197,26 +199,28 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   const memory = new WeakMap<DownloadHandlerWindow, ButtonMemory>()
 
   /*
-    The button's summary for one window, as it stands, with the state times brought up to date.
+    The window's state times, brought up to date with these rows.
 
     The state times are why this keeps memory at all. A paused record has no time of its own —
     `endedAt` belongs to terminal states — so the summary would have to take the start for the pause,
     and a download begun before the panel was presented and paused after it would count as seen. This
     runs on every coalesced change, and `DownloadManager` never coalesces a state change away, so the
     first pass that sees a new state is within a tick of it happening: that pass stamps it.
+
+    Idempotent for the same rows — a state already remembered keeps its time — which is what lets the
+    change loop below stamp before it re-presents the panel and the summary stamp again after.
   */
-  const currentSummary = (
+  const rememberStates = (
     window: DownloadHandlerWindow,
-    entries: readonly DownloadEntry[]
-  ): { summary: DownloadButtonSummary; remembered: ButtonMemory } => {
+    entries: readonly DownloadEntry[],
+    startedHere: ReadonlySet<string> = downloads.idsStartedIn(window.viewer.windowId)
+  ): ButtonMemory => {
     let remembered = memory.get(window)
     if (remembered === undefined) {
       // What a chrome UI shows before it has been told anything: no button.
       remembered = { states: new Map(), last: NO_DOWNLOAD_BUTTON }
       memory.set(window, remembered)
     }
-    const startedHere = downloads.idsStartedIn(window.viewer.windowId)
-
     const stillListed = new Set<string>()
     for (const entry of entries) {
       if (!startedHere.has(entry.id)) continue
@@ -229,13 +233,24 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
     for (const id of remembered.states.keys()) {
       if (!stillListed.has(id)) remembered.states.delete(id)
     }
+    return remembered
+  }
 
+  /** The button's summary for one window, as it stands, with the state times brought up to date. */
+  const currentSummary = (
+    window: DownloadHandlerWindow,
+    entries: readonly DownloadEntry[]
+  ): { summary: DownloadButtonSummary; remembered: ButtonMemory } => {
+    const { windowId } = window.viewer
+    const startedHere = downloads.idsStartedIn(windowId)
+    const remembered = rememberStates(window, entries, startedHere)
     const since = new Map([...remembered.states].map(([id, seen]) => [id, seen.since]))
     const summary = summarizeWindowDownloads(
       entries,
       startedHere,
       window.downloadsPanelPresentedAt,
-      since
+      since,
+      downloads.handedOnSeenAt(windowId)
     )
     return { summary, remembered }
   }
@@ -357,7 +372,14 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
         The panel before the button. A panel that is up and re-presented counts as looked at, which
         sends the button its summary at once (`onDownloadsPanelPresented`); the de-duplicated publish
         below then has nothing new to say, rather than sending a mark the panel has just cleared.
+
+        But the state times before the panel. Re-presenting stamps the presentation with the clock,
+        and the summary it triggers would only then stamp a new state with a second reading. A pause
+        has no end time to fall back on, so a millisecond between the two would leave the pause the
+        panel is showing later than the showing, and marked until the panel is next opened. Stamped
+        first, every state time is no later than the presentation that shows it.
       */
+      rememberStates(window, entries)
       window.refreshDownloadsPanel(entries)
       publishSummary(window, entries, false)
     }

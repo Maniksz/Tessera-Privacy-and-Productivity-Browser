@@ -55,6 +55,8 @@ function fakeManager(
     visible?: Record<number, readonly string[]>
     /** Which ids each window started — `DownloadManager.idsStartedIn`. None, unless said. */
     startedIn?: Record<number, readonly string[]>
+    /** Per window, the ids a closing window handed it and when that window last showed its panel. */
+    handedOn?: Record<number, Record<string, number>>
   } = {}
 ) {
   const calls: string[] = []
@@ -62,6 +64,7 @@ function fakeManager(
   const byWindow = options.byWindow ?? {}
   const visible = options.visible ?? {}
   const startedIn = options.startedIn ?? {}
+  const handedOn = options.handedOn ?? {}
   const manager: FakeManager = {
     calls,
     fire: () => {
@@ -76,6 +79,7 @@ function fakeManager(
       return byWindow[viewer.windowId] ?? []
     },
     idsStartedIn: (windowId) => new Set(startedIn[windowId] ?? []),
+    handedOnSeenAt: (windowId) => new Map(Object.entries(handedOn[windowId] ?? {})),
     canSee: (viewer, id) =>
       (visible[viewer.windowId] ?? ['live', 'finished', 'here', 'gone', 'a']).includes(id),
     pause: (id) => {
@@ -562,6 +566,34 @@ describe('the download button summary', () => {
     expect(a.chrome.at(-1)).toEqual({ visible: true, activity: null, marker: 'paused' })
   })
 
+  it('leaves no pause mark after the panel closes on a pause made while it was open', () => {
+    /*
+      The order the controller really runs: re-presenting the open panel stamps the presentation, and
+      only then is the button's summary worked out. Between the two the clock can move on — here by
+      one millisecond — and a pause, which has no end time of its own, must not come out later than
+      the presentation that showed it.
+    */
+    const clock = { now: T0 }
+    const a = fakeWindow(1, false)
+    const byWindow = { 1: [entry('a', { state: 'progressing', receivedBytes: 50, endedAt: null })] }
+    const manager = fakeManager({ byWindow, startedIn: { 1: ['a'] } })
+    const { present } = harness({ manager, windows: [a], clock })
+    manager.fire()
+    present(a, T0 + 1)
+    a.refreshDownloadsPanel = (entries) => {
+      a.panel.push(entries)
+      const presentedAt = clock.now
+      clock.now += 1
+      present(a, presentedAt)
+    }
+
+    clock.now = T0 + 5
+    byWindow[1] = [entry('a', { state: 'paused', receivedBytes: 50, endedAt: null })]
+    manager.fire()
+
+    expect(a.chrome.at(-1)).toEqual(QUIET)
+  })
+
   it('counts a pause the panel was presented after as seen', () => {
     const clock = { now: T0 }
     const a = fakeWindow(1, false)
@@ -581,6 +613,36 @@ describe('the download button summary', () => {
     present(a, T0 + 10)
 
     expect(a.chrome.at(-1)).toEqual(QUIET)
+  })
+
+  it('does not mark what the closing window had already shown on the button of the one it went to', () => {
+    // A finished `f` at T0 + 1 and showed it at T0 + 5, then closed; B inherited `f` and has never
+    // presented its own panel.
+    const b = fakeWindow(3, false)
+    const manager = fakeManager({
+      byWindow: { 3: [entry('f', { state: 'completed', endedAt: T0 + 1 })] },
+      startedIn: { 3: ['f'] },
+      handedOn: { 3: { f: T0 + 5 } }
+    })
+    harness({ manager, windows: [b] })
+
+    manager.fire()
+
+    expect(b.chrome).toEqual([QUIET])
+  })
+
+  it('marks on the inheriting button what finished after the closing window last showed its panel', () => {
+    const b = fakeWindow(3, false)
+    const manager = fakeManager({
+      byWindow: { 3: [entry('f', { state: 'completed', endedAt: T0 + 9 })] },
+      startedIn: { 3: ['f'] },
+      handedOn: { 3: { f: T0 + 5 } }
+    })
+    harness({ manager, windows: [b] })
+
+    manager.fire()
+
+    expect(b.chrome).toEqual([{ visible: true, activity: null, marker: 'completed' }])
   })
 
   /*

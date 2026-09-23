@@ -424,6 +424,47 @@ describe('DownloadManager, per window', () => {
     expect(urls(manager, second)).toEqual([item.url])
   })
 
+  it('hands on when the closing window last showed its panel, with each claim it hands on', async () => {
+    const { manager } = await fixture({ windowFor: ({ source }) => source?.id })
+    const first = windowOf(manager, 1, 'normal')
+    windowOf(manager, 2, 'normal', first.session)
+    const third = windowOf(manager, 3, 'normal', first.session)
+    const item = first.session.download(new FakeItem('https://files.example/a.zip'), 1)
+    third.session.download(new FakeItem('https://files.example/own.zip'), 3)
+    const id = idOf(manager, first, item.url)
+
+    manager.releaseWindow(1, 2, T0 + 5)
+    expect([...manager.handedOnSeenAt(2)]).toEqual([[id, T0 + 5]])
+    expect(manager.handedOnSeenAt(1).size).toBe(0)
+
+    // A window that never showed its panel hands on the sighting it was given, not a loss of it.
+    manager.releaseWindow(2, 3, null)
+    expect([...manager.handedOnSeenAt(3)]).toEqual([[id, T0 + 5]])
+
+    // Forgotten with the row, the way the claim is.
+    manager.remove(id)
+    expect(manager.handedOnSeenAt(3).size).toBe(0)
+  })
+
+  it('keeps the later sighting when a handed-on download is handed on again', async () => {
+    const { manager } = await fixture({ windowFor: () => 1 })
+    const normal = windowOf(manager, 1, 'normal')
+    const id = idOf(
+      manager,
+      normal,
+      normal.session.download(new FakeItem('https://files.example/a.zip')).url
+    )
+
+    manager.releaseWindow(1, 2, T0 + 5)
+    manager.releaseWindow(2, 3, T0 + 9)
+    expect([...manager.handedOnSeenAt(3)]).toEqual([[id, T0 + 9]])
+
+    // And no window left to hand it to drops the sighting along with the claim.
+    manager.releaseWindow(3, undefined, T0 + 12)
+    expect(manager.handedOnSeenAt(3).size).toBe(0)
+    expect(manager.idsStartedIn(3).size).toBe(0)
+  })
+
   it('leaves a closing normal window’s downloads unclaimed when no other window is open', async () => {
     const { manager } = await fixture({ windowFor: () => 1 })
     const normal = windowOf(manager, 1, 'normal')

@@ -238,4 +238,45 @@ describe('summarizeWindowDownloads', () => {
     const done = entry({ state: 'completed', startedAt: 1_000, endedAt: null })
     expect(summarizeWindowDownloads([done], startedHere(done), 3_000).marker).toBeNull()
   })
+
+  it('counts a handed-on outcome the closing window had shown as seen, though this panel never was', () => {
+    // Window A finished it at 2 000 and presented its panel at 3 000; this window inherited it.
+    const done = entry({ state: 'completed', endedAt: 2_000 })
+    const handedOn = new Map([[done.id, 3_000]])
+    expect(
+      summarizeWindowDownloads([done], startedHere(done), null, new Map(), handedOn).marker
+    ).toBeNull()
+  })
+
+  it('marks a handed-on outcome that came after the closing window last showed its panel', () => {
+    const done = entry({ state: 'completed', endedAt: 4_000 })
+    const handedOn = new Map([[done.id, 3_000]])
+    expect(
+      summarizeWindowDownloads([done], startedHere(done), null, new Map(), handedOn).marker
+    ).toBe('completed')
+  })
+
+  it('takes the later of the two sightings, whichever window it was', () => {
+    // Seen here at 5 000, after the closing window's 3 000: the later sighting covers it.
+    const done = entry({ state: 'completed', endedAt: 4_000 })
+    const handedOn = new Map([[done.id, 3_000]])
+    expect(
+      summarizeWindowDownloads([done], startedHere(done), 5_000, new Map(), handedOn).marker
+    ).toBeNull()
+  })
+
+  it('lets a handed-on sighting cover only the download it came with', () => {
+    const inherited = entry({ state: 'completed', endedAt: 2_000 })
+    const own = entry({ state: 'interrupted', endedAt: 2_000 })
+    const handedOn = new Map([[inherited.id, 3_000]])
+    expect(
+      summarizeWindowDownloads(
+        [inherited, own],
+        startedHere(inherited, own),
+        null,
+        new Map(),
+        handedOn
+      ).marker
+    ).toBe('failed')
+  })
 })

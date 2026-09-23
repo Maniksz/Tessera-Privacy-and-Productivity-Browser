@@ -52,8 +52,12 @@ export interface DownloadSubscriber {
    * record", and the reason an unfinished private download does not outlive its window.
    */
   releaseSession(session: Session): void
-  /** A window closed: its downloads are filed under `successor` instead, or under no window. */
-  releaseWindow(windowId: number, successor: number | undefined): void
+  /**
+   * A window closed: its downloads are filed under `successor` instead, or under no window — with
+   * `seenAt`, when the closing window last presented its downloads panel, so what it showed is not
+   * news on the successor's button.
+   */
+  releaseWindow(windowId: number, successor: number | undefined, seenAt: number | null): void
   /**
    * One window's list, freshly probed — what its downloads panel opens with.
    *
@@ -334,11 +338,17 @@ export class WindowRegistry {
           the normal window focused most recently, whose button is the one a person would now look at.
           A private window's are already stopped; `undefined` just drops the claim. So does the case
           with no normal window left, which on macOS is an application still running with none open.
+          What the closing window's panel last showed goes along, so the successor's button does not
+          mark it again (`DownloadOwnership`).
         */
         const successor = closed.privateMode
           ? undefined
           : this.#recency.latest((open) => !open.controller.privateMode)?.windowId
-        this.#deps.downloads.releaseWindow(opened.windowId, successor)
+        this.#deps.downloads.releaseWindow(
+          opened.windowId,
+          successor,
+          closed.downloadsPanelPresentedAt
+        )
       },
       onPageContextMenu: (tab, target) => {
         // The controller travels with it: the menu opens a new tab beside the page that was clicked, and
