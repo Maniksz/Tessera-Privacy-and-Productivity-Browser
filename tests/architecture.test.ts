@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   INTERNAL_PAGES,
@@ -252,6 +252,25 @@ function workflowCode(name: string): string {
     .join('\n')
 }
 
+/**
+ * `IN_PLACE_UPDATES` as `UpdateService.ts` declares it, one boolean per platform.
+ *
+ * Read from the source like everything else here. A missing row fails rather than reading as
+ * `false`: a reshaped table would otherwise make the couplings below pass by finding nothing.
+ */
+function inPlaceUpdatesInSource(): Record<'darwin' | 'win32' | 'linux', boolean> {
+  const source = withoutComments(
+    readFileSync(join(ROOT, 'src/main/updates/UpdateService.ts'), 'utf8')
+  )
+  const table = /\bIN_PLACE_UPDATES\b[^=]*=\s*\{([^}]*)\}/.exec(source)?.[1] ?? ''
+  const row = (platform: string): boolean => {
+    const value = new RegExp(`(?:^|[\\s,])${platform}:\\s*(true|false)\\b`).exec(table)?.[1]
+    expect(value, `IN_PLACE_UPDATES has no literal row for ${platform}`).toBeDefined()
+    return value === 'true'
+  }
+  return { darwin: row('darwin'), win32: row('win32'), linux: row('linux') }
+}
+
 /** The jobs of a workflow by name, each as the text of its block. Two-space indentation, as written. */
 function workflowJobs(code: string): Map<string, string> {
   const jobs = new Map<string, string>()
@@ -436,6 +455,13 @@ describe('bundle weight', () => {
         and both of which are their own pass: the per-locale split named above, and a core-side catalogue
         for strings only the core renders, on the precedent `settings-text.ts` set. Whoever hits this budget
         next should do one of them rather than raise the number a third time.
+
+        ## Hit again, and answered with the core-side catalogue
+
+        The update check's release-page sentences for Windows and Linux took the chunk to 48.18 kB. Instead
+        of a third raise, every `updates.*` sentence that only its native message boxes show moved to
+        `main/updates/update-text.*`, which brought it to 44.20 kB; `updates.checkNow` stayed, because the
+        settings screen renders it. The `menu.*` keys are the obvious next candidates for the same move.
       */
       { match: /^catalog-.*\.js$/, maxKb: 48, note: 'message catalogue, both locales' },
       { match: /\.js$/, maxKb: 40, note: 'shared chunk' }
@@ -603,6 +629,59 @@ describe('sandbox rules', () => {
 })
 
 describe('IPC discipline', () => {
+  it('lets only the atomic write helper rename a temporary file into place', async () => {
+    /*
+      Eight stores each spelled out write-then-rename for themselves, none with an fsync and all with a
+      fixed `.tmp` name two processes could share. `atomic-write.ts` is now the one place; a ninth
+      copy would bring back exactly what it removed. `MediaDownloader.ts` renames a finished `.part`
+      download, which is a transfer, not a store.
+    */
+    const allowed = new Set(['src/main/data/atomic-write.ts', 'src/main/media/MediaDownloader.ts'])
+    const renameImport =
+      /import\s*\{[^}]*\brename(?:Sync)?\b[^}]*\}\s*from\s*'(?:node:)?fs(?:\/promises)?'/
+    const renameMember = /\b(?:fs|fsp|promises)\.rename(?:Sync)?\s*\(/
+    const fixedTemp = /\$\{[^}]*\}\.tmp\b/
+    const offenders = (await collect('src/main'))
+      .filter((file) => !allowed.has(file.relative.split(sep).join('/')))
+      .filter(
+        (file) =>
+          renameImport.test(file.text) || renameMember.test(file.text) || fixedTemp.test(file.text)
+      )
+      .map((file) => file.relative)
+    expect(offenders).toEqual([])
+  })
+
+  it('hands every session to the permission arbiter, for requests and checks alike', () => {
+    /*
+      The arbiter was built, tested and never called: `applySessionHardening` got no
+      `requestFromUser`, so every "ask" setting answered with a silent refusal and no dialog ever
+      appeared. These pin the wiring at both ends, and pin that the hardening decides only through
+      the policy, so the settings and the dialog cannot drift apart again.
+    */
+    const registry = codeOnly(readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8'))
+    const index = codeOnly(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const hardening = codeOnly(readFileSync(join(ROOT, 'src/main/session/hardening.ts'), 'utf8'))
+    expect(registry).toMatch(
+      /applySessionHardening\(\{[\s\S]*?requestFromUser:[\s\S]*?this\.#deps\.permissions\.ask\(/
+    )
+    expect(registry).toMatch(
+      /checkPermission:\s*\(check\)\s*=>\s*this\.#deps\.permissions\.check\(check,\s*mode\)/
+    )
+    expect(index).toMatch(/new WindowRegistry\(\{[\s\S]*?permissions:\s*permissionArbiter/)
+    expect(hardening).toMatch(/setPermissionRequestHandler[\s\S]*?ask\(request, webContents\)/)
+    expect(hardening).toMatch(/setPermissionCheckHandler[\s\S]*?check\(\{/)
+    expect(hardening).not.toMatch(/decidePermission\(|decideMediaPermission\(/)
+  })
+
+  it('keeps the refusal nobody answered off the wire', () => {
+    // A window closed, a queue full, a dialog displaced: refused once and never remembered. If that
+    // value could be sent as an answer, a page-reachable surface could clear a site's decision.
+    const answers = readFileSync(join(ROOT, 'src/shared/overlay/permission.ts'), 'utf8')
+    const policy = readFileSync(join(ROOT, 'src/main/session/permission-policy.ts'), 'utf8')
+    expect(answers).not.toMatch(/unanswered/)
+    expect(policy).toMatch(/export const UNANSWERED = 'unanswered'/)
+  })
+
   it('resolves the window of a request from its sender, never from focus', () => {
     /*
       A settings page in a private window once wrote its user rules into the normal profile whenever
@@ -1077,17 +1156,64 @@ describe('IPC discipline', () => {
       sending them to the release page.
 
       Coupled in the direction that hurts: if the workflow still disables signing, the source must still
-      say so. The reverse is deliberately not asserted — obtaining a certificate and flipping the constant
-      is a change somebody makes on purpose, and this test must not be the thing that blocks it.
+      say so. The reverse is deliberately not asserted — obtaining a certificate and flipping the row is a
+      change somebody makes on purpose, and this test must not be the thing that blocks it.
     */
-    const workflow = readFileSync(join(ROOT, '.github/workflows/release.yml'), 'utf8')
+    const workflow = workflowCode('release.yml')
     if (!workflow.includes('--config.mac.identity=null')) return
 
-    const source = readFileSync(join(ROOT, 'src/main/updates/UpdateService.ts'), 'utf8')
-    expect(
-      `${source}${readFileSync(join(ROOT, 'src/main/updates/install-updates.ts'), 'utf8')}`,
-      'the workflow builds mac unsigned, so in-place updates must stay off'
-    ).toMatch(/MAC_BUILD_IS_SIGNED\s*[:=]\s*false/)
+    expect(inPlaceUpdatesInSource().darwin, 'the workflow builds mac unsigned').toBe(false)
+  })
+
+  it('keeps Windows in-place updates off while the publish job holds no signing certificate', () => {
+    /*
+      The Windows half has no override to look for, which is what makes it the dangerous one. An
+      unsigned NSIS build is the *default*: electron-builder signs only when it is handed a certificate,
+      and it is handed one through `CSC_LINK` or `WIN_CSC_LINK` in the environment of the job that
+      packages. So "unsigned" is the absence of those names in `publish`, and an in-place row for
+      Windows in that state would have `NsisUpdater` install whatever the release holds.
+
+      Same direction as the macOS test above: an unsigned workflow pins the row to `false`, and adding
+      a certificate is left free. A signing route through Azure Trusted Signing would arrive under
+      other names, and belongs in this pattern the day it is set up.
+    */
+    const publish = workflowJobs(workflowCode('release.yml')).get('publish')
+    expect(publish, 'release.yml has no publish job').toBeDefined()
+    if (/\b(?:WIN_)?CSC_LINK\b/.test(publish ?? '')) return
+
+    expect(inPlaceUpdatesInSource().win32, 'the publish job packages Windows unsigned').toBe(false)
+  })
+
+  it('lets Windows install in place only once the updater is told whose signature to expect', () => {
+    /*
+      A certificate in the workflow is not yet a checked update. `NsisUpdater` compares the downloaded
+      installer's Authenticode signature against `publisherName` from `app-update.yml`, and when that
+      value is absent it skips the check and installs — a signed release and an unsigned impostor then
+      look the same to it. So a Windows row set to `true` requires `win.publisherName` to be written
+      down in `electron-builder.yml`, where the updater's copy is generated from.
+    */
+    if (!inPlaceUpdatesInSource().win32) return
+
+    const config = readFileSync(join(ROOT, 'electron-builder.yml'), 'utf8')
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .join('\n')
+    const win = /^win:\s*$([\s\S]*?)^\S/m.exec(config)?.[1] ?? ''
+    expect(win, 'Windows installs in place with no publisher to verify against').toMatch(
+      /^ {2}publisherName:\s*\S/m
+    )
+  })
+
+  it('decides the update route in the service, not in the adapter', () => {
+    /*
+      The three tests above read `IN_PLACE_UPDATES`, and that is only the truth if nothing overrides it.
+      `UpdateServiceOptions.inPlaceUpdates` exists for tests; `install-updates.ts` passing it would put
+      a second table beside the one the fitness functions check, and neither would say so.
+    */
+    const adapter = withoutComments(
+      readFileSync(join(ROOT, 'src/main/updates/install-updates.ts'), 'utf8')
+    )
+    expect(adapter, 'the adapter overrides the in-place table').not.toMatch(/inPlaceUpdates/)
   })
 
   it('leaves no shape assertion pointing in only one direction', async () => {

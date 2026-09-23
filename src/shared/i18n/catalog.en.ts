@@ -663,39 +663,11 @@ export const en = {
   /*
     Updates.
 
-    Every sentence here names what state the user's own copy is in, because that is the fact they are
-    actually asking about — and the failures say it explicitly ("unchanged"), since a person who has
-    just been told something went wrong will otherwise wonder whether it went wrong halfway.
+    Only the command is here, because the settings screen renders it as well as the Help menu. What
+    the check then says — offers, notices, failures — is drawn in native message boxes by the core
+    alone, so it lives in `main/updates/update-text.*` and costs the renderers nothing.
   */
   'updates.checkNow': 'Check for Updates…',
-  'updates.offerTitle': 'A new version is available',
-  'updates.offerMessage': 'Version {version} has been published. This copy is {current}.',
-  'updates.offerDetail':
-    'Nothing is downloaded until you agree, and nothing is installed until you restart. The file comes from GitHub.',
-  'updates.download': 'Download',
-  'updates.notNow': 'Not now',
-  'updates.openReleasePage': 'Open the release page',
-  'updates.macNotSignedDetail':
-    'macOS refuses to replace an application Apple has not signed, and this build is not signed. The release page has the file to install by hand.',
-  'updates.readyTitle': 'The update is ready',
-  'updates.readyMessage':
-    'Version {version} has been downloaded. It is installed while {app} restarts; nothing changes until you choose to.',
-  'updates.restartNow': 'Restart now',
-  'updates.later': 'Later',
-  'updates.upToDateTitle': 'No new version',
-  'updates.upToDateMessage': 'This copy is {current}, and nothing newer has been published.',
-  'updates.nothingPublishedMessage':
-    'No version has been published yet, so there is nothing newer than this copy.',
-  'updates.checkFailedTitle': 'The check could not be completed',
-  'updates.checkFailedMessage':
-    'GitHub could not be reached, so there is nothing to report. This copy is unchanged; you can try again later.',
-  'updates.downloadFailedTitle': 'The download could not be completed',
-  'updates.downloadFailedMessage':
-    'Nothing was installed and this copy is unchanged. You can try again, or fetch the file from the release page.',
-  'updates.noFeedTitle': 'This copy cannot update itself',
-  'updates.noFeedMessage':
-    'It was not installed from a release, so there is nothing to replace. Build it again to update it.',
-  'updates.ok': 'OK',
 
   // errors
   'error.dnsFailed': 'Could not find the server for {host}.',

@@ -135,6 +135,7 @@
     "src/main/browser/sender-window.ts",
     "src/main/browser/tab-strip-position.ts",
     "src/main/updates/UpdateService.ts",
+    "src/main/updates/update-text.ts",
     "src/main/updates/version.ts",
     "src/shared/gestures/**/*.ts",
     "src/main/startup-flags.ts",

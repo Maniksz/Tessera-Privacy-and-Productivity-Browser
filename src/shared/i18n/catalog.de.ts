@@ -501,34 +501,6 @@ export const de = {
     'Windows nutzt diese Kombination in Eingabefeldern für die wortweise Auswahl. Alternative: {alternative}.',
 
   'updates.checkNow': 'Nach Updates suchen…',
-  'updates.offerTitle': 'Eine neue Version ist verfügbar',
-  'updates.offerMessage': 'Version {version} ist veröffentlicht. Diese Kopie ist {current}.',
-  'updates.offerDetail':
-    'Nichts wird ohne dein Ja heruntergeladen und nichts ohne Neustart installiert. Die Datei kommt von GitHub.',
-  'updates.download': 'Herunterladen',
-  'updates.notNow': 'Jetzt nicht',
-  'updates.openReleasePage': 'Release-Seite öffnen',
-  'updates.macNotSignedDetail':
-    'macOS ersetzt keine Anwendung, die Apple nicht signiert hat, und dieser Build ist nicht signiert. Auf der Release-Seite liegt die Datei zum Installieren von Hand.',
-  'updates.readyTitle': 'Das Update ist bereit',
-  'updates.readyMessage':
-    'Version {version} wurde heruntergeladen. Installiert wird beim Neustart von {app}; bis dahin ändert sich nichts.',
-  'updates.restartNow': 'Jetzt neu starten',
-  'updates.later': 'Später',
-  'updates.upToDateTitle': 'Keine neue Version',
-  'updates.upToDateMessage': 'Diese Kopie ist {current}; Neueres ist nicht veröffentlicht.',
-  'updates.nothingPublishedMessage':
-    'Es ist noch keine Version veröffentlicht, also gibt es nichts Neueres als diese Kopie.',
-  'updates.checkFailedTitle': 'Die Suche konnte nicht abgeschlossen werden',
-  'updates.checkFailedMessage':
-    'GitHub war nicht erreichbar, es gibt also nichts zu berichten. Diese Kopie ist unverändert; du kannst es später erneut versuchen.',
-  'updates.downloadFailedTitle': 'Der Download konnte nicht abgeschlossen werden',
-  'updates.downloadFailedMessage':
-    'Es wurde nichts installiert und diese Kopie ist unverändert. Du kannst es erneut versuchen oder die Datei von der Release-Seite holen.',
-  'updates.noFeedTitle': 'Diese Kopie kann sich nicht selbst aktualisieren',
-  'updates.noFeedMessage':
-    'Sie wurde nicht aus einem Release installiert, es gibt also nichts zu ersetzen. Neu bauen aktualisiert sie.',
-  'updates.ok': 'OK',
 
   'error.dnsFailed': 'Der Server für {host} wurde nicht gefunden.',
   'error.offline': 'Keine Netzwerkverbindung.',
