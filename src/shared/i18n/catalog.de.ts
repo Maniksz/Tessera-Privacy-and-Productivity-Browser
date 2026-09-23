@@ -370,36 +370,6 @@ export const de = {
   'permission.subject.storageAccess': 'seitenübergreifend Daten zu speichern',
   'permission.subject.topLevelStorageAccess': 'seitenübergreifend Daten zu speichern',
 
-  'picker.outcome.saved-effective': 'Geblockt. Die Regel ist gespeichert und das Element ist weg.',
-  'picker.outcome.saved-ineffective':
-    'Gespeichert, aber auf dieser Seite hat sich nichts geändert. Das Element kann später noch nachladen, oder die Seite baut es anders auf.',
-  'picker.outcome.invalid': 'Das ist keine Regel, die dieser Browser anwenden kann.',
-  'picker.outcome.duplicate-active': 'Diese Regel haben Sie bereits, und sie ist eingeschaltet.',
-  'picker.outcome.duplicate-disabled':
-    'Diese Regel haben Sie bereits, und sie ist ausgeschaltet. Schalten Sie sie in Ihren Regeln wieder ein.',
-  'picker.outcome.limit-reached':
-    'Sie haben so viele Regeln, wie dieser Browser behält. Löschen Sie eine, die Sie nicht mehr brauchen, und blocken Sie das hier erneut.',
-  'picker.outcome.no-host':
-    'Dieses Dokument gehört zu keiner Website, es gibt also nichts, wofür sich eine Regel schreiben ließe.',
-  'picker.outcome.not-filterable':
-    'Auf dieser Seite lässt sich nichts blocken. Entweder ist es keine Website, oder das Filtern ist hier abgeschaltet.',
-
-  'picker.bar.label': 'Element in Kachel {index} blocken',
-  'picker.bar.choosing': 'Fahren Sie über das Element, das verschwinden soll, und klicken Sie es an.',
-  'picker.bar.counting': 'Zählt, was ausgeblendet würde …',
-  'picker.bar.matchesNone': 'Das trifft auf dieser Seite nichts.',
-  'picker.bar.matchesOne': 'Das würde 1 Element auf dieser Seite ausblenden.',
-  'picker.bar.matches': 'Das würde {count} Elemente auf dieser Seite ausblenden.',
-  'picker.bar.writing': 'Regel wird gespeichert …',
-  'picker.bar.measuring': 'Prüft, ob die Regel hier wirkt …',
-  'picker.bar.widen': 'Mehr auswählen',
-  'picker.bar.narrow': 'Weniger auswählen',
-  'picker.bar.confirm': 'Blocken',
-  'picker.bar.cancel': 'Abbrechen',
-  'picker.bar.close': 'Schließen',
-  'picker.bar.undo': 'Rückgängig',
-  'picker.bar.openRules': 'Meine Regeln',
-
   'page.openLinkInNewTab': 'Link in neuem Tab öffnen',
   'page.copyLinkAddress': 'Linkadresse kopieren',
   'page.copyImageAddress': 'Bildadresse kopieren',

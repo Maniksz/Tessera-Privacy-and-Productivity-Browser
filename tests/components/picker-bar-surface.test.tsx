@@ -9,7 +9,7 @@ import {
   PICKER_BAR_WIDTH,
   type PickerBarMode
 } from '@shared/overlay/picker-bar.js'
-import { DEFAULT_LOCALE, catalogs, interpolate } from '@shared/i18n/catalog.js'
+import { interpolate } from '@shared/i18n/catalog.js'
 
 /**
  * The element picker's confirmation bar, rendered.
@@ -31,9 +31,9 @@ import { DEFAULT_LOCALE, catalogs, interpolate } from '@shared/i18n/catalog.js'
  * Four things, each of which looks right while being wrong.
  *
  * That every one of the eight outcomes reaches the screen, *including* one the surface has never heard
- * of. The bar receives an opaque key and resolves it against the catalogue; a ninth outcome added later
- * must render its own name rather than an empty bar, because a blank is the one thing that reads as
- * reassuring while meaning nothing was said.
+ * of. The bar receives an opaque key and resolves it against the words the core sent with it; a ninth
+ * outcome added later must render its own name rather than an empty bar, because a blank is the one
+ * thing that reads as reassuring while meaning nothing was said.
  *
  * That the waiting states cannot be confirmed. `writing` and `measuring` are the window in which a
  * second press would write a second rule, and a button that merely *looks* pressed-out still fires.
@@ -47,6 +47,11 @@ import { DEFAULT_LOCALE, catalogs, interpolate } from '@shared/i18n/catalog.js'
  *
  * The bridge is replaced rather than mocked at the module level, for the find bar's reason: `bridge.ts`
  * reads `window.tessera` on every call, which is the seam a sandboxed renderer actually has.
+ *
+ * The words are stubbed rather than real, on the rule editor's precedent: they come from the core, on the
+ * presentation (see `main/privacy/picker-bar-text.ts`), and `tests/picker-presentation.test.ts` holds the
+ * two languages to each other and to the eight outcomes. What this file pins is which word each mode reads,
+ * with which parameters — and that it is the presentation's word, not a catalogue's.
  */
 
 interface Call {
@@ -75,16 +80,41 @@ function installBridge(): Call[] {
   return calls
 }
 
-const messages = catalogs[DEFAULT_LOCALE] as Record<string, string>
+/**
+ * Stand-in words, one for every key the core sends.
+ *
+ * Deliberately not the real sentences: a component that still read the catalogue would render the
+ * catalogue's wording, and a fixture equal to it could not tell the two routes apart.
+ */
+const TEXT: Record<string, string> = {
+  label: 'Pick in tile {index}',
+  choosing: 'Point at something.',
+  counting: 'Counting.',
+  matchesNone: 'Hits nothing.',
+  matchesOne: 'Hits one.',
+  matches: 'Hits {count}.',
+  writing: 'Writing.',
+  measuring: 'Measuring.',
+  widen: 'Wider',
+  narrow: 'Narrower',
+  confirm: 'Do it',
+  cancel: 'Stop',
+  close: 'Done',
+  undo: 'Take back',
+  openRules: 'Rules',
+  ...Object.fromEntries(
+    PICKER_OUTCOMES.map((outcome) => [`outcome.${outcome}`, `Said: ${outcome}.`])
+  )
+}
 
 /**
- * The same lookup the component performs with no provider above it, fallback to the key included.
+ * The lookup the component performs, fallback to the key included.
  *
- * Compared against the catalogue rather than against English text, so what is pinned is the *mapping* —
- * which key, with which parameters — and not a wording the catalogue is free to improve.
+ * Compared against the fixture rather than against literal text, so what is pinned is the *mapping* —
+ * which key, with which parameters — and not a wording the core is free to improve.
  */
 function t(key: string, params?: Record<string, string | number>): string {
-  return interpolate(messages[key] ?? key, params)
+  return interpolate(TEXT[key] ?? key, params)
 }
 
 function presentation(overrides: Partial<PickerBarPresentation> = {}): PickerBarPresentation {
@@ -101,6 +131,7 @@ function presentation(overrides: Partial<PickerBarPresentation> = {}): PickerBar
     canNarrow: true,
     outcome: null,
     canUndo: false,
+    text: TEXT,
     ...overrides
   }
 }
@@ -146,21 +177,21 @@ describe('what the bar offers in each mode', () => {
     )
 
     expect(screen.getByText('example.com##.promo')).toBeTruthy()
-    expect(noButton(t('picker.bar.confirm'))).toBeNull()
-    expect(noButton(t('picker.bar.widen'))).toBeNull()
+    expect(noButton(t('confirm'))).toBeNull()
+    expect(noButton(t('widen'))).toBeNull()
     // Cancel is the one control every mode has: the way out must never depend on the state.
-    expect(button(t('picker.bar.cancel'))).toBeTruthy()
+    expect(button(t('cancel'))).toBeTruthy()
   })
 
   it('offers the count and all four controls once the click has frozen a selection', () => {
     installBridge()
     render(<PickerBarSurface presentation={presentation({ matches: 3 })} />)
 
-    expect(screen.getByRole('status').textContent).toBe(t('picker.bar.matches', { count: 3 }))
-    expect(button(t('picker.bar.widen'))).toBeTruthy()
-    expect(button(t('picker.bar.narrow'))).toBeTruthy()
-    expect(button(t('picker.bar.confirm'))).toBeTruthy()
-    expect(button(t('picker.bar.cancel'))).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toBe(t('matches', { count: 3 }))
+    expect(button(t('widen'))).toBeTruthy()
+    expect(button(t('narrow'))).toBeTruthy()
+    expect(button(t('confirm'))).toBeTruthy()
+    expect(button(t('cancel'))).toBeTruthy()
   })
 
   it('dims the end of the ancestor chain rather than hiding the control', () => {
@@ -169,8 +200,8 @@ describe('what the bar offers in each mode', () => {
     installBridge()
     render(<PickerBarSurface presentation={presentation({ canWiden: false, canNarrow: true })} />)
 
-    expect(button(t('picker.bar.widen')).hasAttribute('disabled')).toBe(true)
-    expect(button(t('picker.bar.narrow')).hasAttribute('disabled')).toBe(false)
+    expect(button(t('widen')).hasAttribute('disabled')).toBe(true)
+    expect(button(t('narrow')).hasAttribute('disabled')).toBe(false)
   })
 
   it('shows the whole selector however long it is', () => {
@@ -195,7 +226,7 @@ describe('the waiting states', () => {
   it.each(waiting)('says work is under way in %s rather than showing a stale count', (mode) => {
     installBridge()
     render(<PickerBarSurface presentation={presentation({ mode })} />)
-    expect(screen.getByRole('status').textContent).toBe(t(`picker.bar.${mode}`))
+    expect(screen.getByRole('status').textContent).toBe(t(mode))
   })
 
   it.each(waiting)('cannot be confirmed a second time in %s', (mode) => {
@@ -208,7 +239,7 @@ describe('the waiting states', () => {
     const calls = installBridge()
     render(<PickerBarSurface presentation={presentation({ mode })} />)
 
-    const confirm = button(t('picker.bar.confirm'))
+    const confirm = button(t('confirm'))
     expect(confirm.hasAttribute('disabled')).toBe(true)
     fireEvent.click(confirm)
     fireEvent.keyDown(confirm, { key: 'Enter' })
@@ -233,7 +264,7 @@ describe('the waiting states', () => {
     const calls = installBridge()
     render(<PickerBarSurface presentation={presentation({ mode: 'writing' })} />)
 
-    fireEvent.click(button(t('picker.bar.cancel')))
+    fireEvent.click(button(t('cancel')))
     expect(calls).toEqual([
       { channel: 'picker:barAction', payload: { sessionId: 'pick-1', action: 'cancel' } }
     ])
@@ -249,16 +280,16 @@ describe('the measured count', () => {
     */
     installBridge()
     const { rerender } = render(<PickerBarSurface presentation={presentation({ matches: null })} />)
-    expect(screen.getByRole('status').textContent).toBe(t('picker.bar.counting'))
+    expect(screen.getByRole('status').textContent).toBe(t('counting'))
 
     rerender(<PickerBarSurface presentation={presentation({ matches: 0 })} />)
-    expect(screen.getByRole('status').textContent).toBe(t('picker.bar.matchesNone'))
+    expect(screen.getByRole('status').textContent).toBe(t('matchesNone'))
   })
 
   it('does not offer a single element a plural', () => {
     installBridge()
     render(<PickerBarSurface presentation={presentation({ matches: 1 })} />)
-    expect(screen.getByRole('status').textContent).toBe(t('picker.bar.matchesOne'))
+    expect(screen.getByRole('status').textContent).toBe(t('matchesOne'))
   })
 
   it('keeps the live region in the tree while it is being refined', () => {
@@ -278,10 +309,10 @@ describe('the measured count', () => {
 describe('the eight answers', () => {
   it.each(PICKER_OUTCOMES)('says what became of the attempt for %s', (outcome) => {
     // R1 and R3 from the surface's side: no path ends without a sentence, and each sentence is the
-    // catalogue's rather than one assembled here.
+    // core's rather than one assembled here.
     installBridge()
     render(<PickerBarSurface presentation={ended(outcome)} />)
-    expect(screen.getByRole('status').textContent).toBe(t(`picker.outcome.${outcome}`))
+    expect(screen.getByRole('status').textContent).toBe(t(`outcome.${outcome}`))
   })
 
   it('renders the key of an outcome it has never heard of', () => {
@@ -292,7 +323,31 @@ describe('the eight answers', () => {
     */
     installBridge()
     render(<PickerBarSurface presentation={ended('reticulating-splines')} />)
-    expect(screen.getByRole('status').textContent).toBe('picker.outcome.reticulating-splines')
+    expect(screen.getByRole('status').textContent).toBe('outcome.reticulating-splines')
+  })
+
+  it('renders the key of a word the core did not send', () => {
+    // The same rule for the chrome as for the outcomes: a word missing from the presentation is a name on
+    // screen, never an unlabelled button — which a screen reader would announce as nothing at all.
+    installBridge()
+    render(<PickerBarSurface presentation={presentation({ text: {} })} />)
+    expect(button('confirm')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toBe('matches')
+  })
+
+  it('says what the presentation says, in whatever language it arrived in', () => {
+    /*
+      The words are the core's, resolved for the language the interface is in. A bar that still reached
+      for a catalogue of its own would say English over a German presentation — exactly the mismatch
+      that looks fine to everybody testing in English.
+    */
+    installBridge()
+    const german = { ...TEXT, confirm: 'Blocken', 'outcome.saved-effective': 'Geblockt.' }
+    const { rerender } = render(<PickerBarSurface presentation={presentation({ text: german })} />)
+    expect(button('Blocken')).toBeTruthy()
+
+    rerender(<PickerBarSurface presentation={{ ...ended('saved-effective'), text: german }} />)
+    expect(screen.getByRole('status').textContent).toBe('Geblockt.')
   })
 
   it('offers the way back and the way to the rules after a rule was written', () => {
@@ -301,8 +356,8 @@ describe('the eight answers', () => {
     installBridge()
     render(<PickerBarSurface presentation={ended('saved-effective', true)} />)
 
-    expect(button(t('picker.bar.undo'))).toBeTruthy()
-    expect(button(t('picker.bar.openRules'))).toBeTruthy()
+    expect(button(t('undo'))).toBeTruthy()
+    expect(button(t('openRules'))).toBeTruthy()
   })
 
   it('offers no undo when this attempt wrote nothing', () => {
@@ -314,18 +369,18 @@ describe('the eight answers', () => {
     installBridge()
     render(<PickerBarSurface presentation={ended('duplicate-disabled', false)} />)
 
-    expect(noButton(t('picker.bar.undo'))).toBeNull()
+    expect(noButton(t('undo'))).toBeNull()
     // Still the way to the rules: the sentence for this outcome tells the user to switch it back on
     // there, and a next step named without a way to take it is half an answer.
-    expect(button(t('picker.bar.openRules'))).toBeTruthy()
+    expect(button(t('openRules'))).toBeTruthy()
   })
 
   it('sends the two follow-up actions for its own session', () => {
     const calls = installBridge()
     render(<PickerBarSurface presentation={ended('saved-effective', true)} />)
 
-    fireEvent.click(button(t('picker.bar.undo')))
-    fireEvent.click(button(t('picker.bar.openRules')))
+    fireEvent.click(button(t('undo')))
+    fireEvent.click(button(t('openRules')))
 
     expect(calls).toEqual([
       { channel: 'picker:barAction', payload: { sessionId: 'pick-1', action: 'undo' } },
@@ -339,8 +394,8 @@ describe('the eight answers', () => {
     const calls = installBridge()
     render(<PickerBarSurface presentation={ended('saved-effective', true)} />)
 
-    expect(noButton(t('picker.bar.cancel'))).toBeNull()
-    fireEvent.click(button(t('picker.bar.close')))
+    expect(noButton(t('cancel'))).toBeNull()
+    fireEvent.click(button(t('close')))
     expect(calls).toEqual([
       { channel: 'picker:barAction', payload: { sessionId: 'pick-1', action: 'cancel' } }
     ])
@@ -442,17 +497,17 @@ describe('the keyboard contract', () => {
     const bar = screen.getByRole('group')
 
     fireEvent.keyDown(bar, { key: 'Tab' })
-    expect(document.activeElement).toBe(button(t('picker.bar.widen')))
+    expect(document.activeElement).toBe(button(t('widen')))
 
     fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(button(t('picker.bar.cancel')))
+    expect(document.activeElement).toBe(button(t('cancel')))
   })
 
   it('names the tile it belongs to, so a screen reader can place it', () => {
     installBridge()
     render(<PickerBarSurface presentation={presentation({ tileIndex: 2 })} />)
     // One-based in the label, zero-based in the payload. The user counts from one.
-    expect(screen.getByRole('group', { name: t('picker.bar.label', { index: 3 }) })).toBeTruthy()
+    expect(screen.getByRole('group', { name: t('label', { index: 3 }) })).toBeTruthy()
   })
 })
 
@@ -494,9 +549,9 @@ describe('the layer choosing this surface', () => {
     const present = layer()
     present(presentation())
     await waitFor(() =>
-      expect(screen.getByRole('group', { name: t('picker.bar.label', { index: 2 }) })).toBeTruthy()
+      expect(screen.getByRole('group', { name: t('label', { index: 2 }) })).toBeTruthy()
     )
-    expect(button(t('picker.bar.confirm'))).toBeTruthy()
+    expect(button(t('confirm'))).toBeTruthy()
   })
 
   it('holds the consent dialogue instead while one is up', async () => {
@@ -519,8 +574,8 @@ describe('the layer choosing this surface', () => {
     })
 
     await waitFor(() =>
-      expect(screen.queryByRole('group', { name: t('picker.bar.label', { index: 2 }) })).toBeNull()
+      expect(screen.queryByRole('group', { name: t('label', { index: 2 }) })).toBeNull()
     )
-    expect(noButton(t('picker.bar.confirm'))).toBeNull()
+    expect(noButton(t('confirm'))).toBeNull()
   })
 })

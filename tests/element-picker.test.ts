@@ -281,6 +281,7 @@ function harnessFor(
   const picker = new ElementPicker({
     chrome: () => ({ styles: '.box{}', hint: 'hint', noRule: 'none', warnings: {} }),
     getSettings: () => settings,
+    locale: () => 'en',
     editorFor: () => editor,
     preview: (id, rule) => {
       previews.push({ id, rule })

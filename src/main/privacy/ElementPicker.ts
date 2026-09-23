@@ -32,6 +32,7 @@ import {
   type OverlayPresentation,
   type OverlayState
 } from '@shared/overlay/surface.js'
+import type { Locale } from '@shared/i18n/catalog.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Rect } from '@shared/ui/anchor.js'
 import { onOverlayVacancy, type OverlayVacancyReason } from '../permissions/vacancy.js'
@@ -124,14 +125,23 @@ export interface PickerHost {
 
 export interface ElementPickerOptions {
   /**
-   * The picker's stylesheet and wording, for the language in force *now*.
+   * The picker's stylesheet: the one thing that still crosses into the page.
    *
-   * Read per start rather than once, so a language change reaches the next picker session rather than
-   * the next restart — and so the preload never has to hold a translation catalogue.
+   * It carried wording too, once, and the preload never had to hold a translation catalogue for it. The
+   * words are the confirmation bar's now, and they travel on the bar's presentation; see `locale` below.
    */
   readonly chrome: () => PickerChrome
   /** Read per start, because whether this document may be filtered is a live answer. */
   readonly getSettings: () => SettingsSnapshot
+  /**
+   * The language the interface is in, read per presentation.
+   *
+   * The bar's words are resolved here in the core (`picker-bar-text.ts`) and sent with every
+   * presentation, so this is asked each time rather than once per session: a language changed under an
+   * open bar is in force by the next thing the bar says. A closure rather than `getSettings`, because
+   * `'system'` means the desktop's language and only `app.getLocale()` knows what that is.
+   */
+  readonly locale: () => Locale
   /**
    * Where a picked rule goes. Bound to a browsing mode by `UserRuleStore.editorFor`, so a private
    * window's picker writes nothing to disk — which is a property of the object rather than a check
@@ -603,6 +613,7 @@ export class ElementPicker {
       hovered: attempt.hovered,
       outcome,
       canUndo: attempt.written !== null,
+      locale: this.#options.locale(),
       place: {
         tabId: attempt.host.tabId,
         tileIndex: attempt.host.tileIndex,

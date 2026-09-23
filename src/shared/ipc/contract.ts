@@ -267,7 +267,12 @@ const overlayPresentationSchema = z.discriminatedUnion('kind', [
     /** The key of a named outcome, or `null` while the attempt is still going on. */
     outcome: z.string().nullable(),
     /** Whether a rule was actually written, which is the one thing Undo may act on. */
-    canUndo: z.boolean()
+    canUndo: z.boolean(),
+    /**
+     * The bar's words, resolved in the core for the interface language; see `main/privacy/picker-bar-text.ts`
+     * for why they are not in the renderer's catalogue. A record like `userrules:list`'s, for its reason.
+     */
+    text: z.record(z.string(), z.string())
   })
 ])
 

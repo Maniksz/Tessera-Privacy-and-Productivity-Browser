@@ -9,9 +9,9 @@ import type { PickerChrome } from '@shared/filters/picker-wire.js'
  *
  * There used to be words here as well: a hint, a "no rule for this element", and a sentence for each
  * selector warning, because the picker drew a confirmation bar inside the page and the preload cannot
- * read the i18n catalogue. The bar is an overlay surface now (KTD1), so those sentences are read there
- * under `picker.bar.*` and `picker.outcome.*`, in the renderer's own language. What is left is the one
- * thing that is genuinely in the page.
+ * read the i18n catalogue. The bar is an overlay surface now (KTD1), and its sentences are resolved in
+ * the core by `picker-bar-text.ts` and sent with the bar's presentation, in the interface's language.
+ * What is left here is the one thing that is genuinely in the page.
  *
  * The colours are literals rather than `var(--…)` references, and that is the one unavoidable duplication
  * here: this stylesheet is injected into a *page*, where the browser's own custom properties do not exist.

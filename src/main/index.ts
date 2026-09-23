@@ -643,10 +643,11 @@ async function main(): Promise<void> {
     would block a request, because hiding a banner and cutting a site off must not sit behind one click.
   */
   elementPicker = new ElementPicker({
-    // No language here any more: the picker's words are the confirmation bar's, and the bar is an
-    // overlay surface that reads them in the renderer. What crosses into the page is a stylesheet.
+    // No language in the chrome any more: what crosses into the page is a stylesheet. The words are the
+    // confirmation bar's, resolved in the core and sent with its presentation — hence `locale`.
     chrome: pickerChrome,
     getSettings: () => settings?.snapshot() ?? defaultSettings(),
+    locale: () => uiLocale(settings),
     editorFor: (webContentsId) => {
       const controller = windows?.controllerForWebContents(webContentsId)
       if (controller === undefined) return null

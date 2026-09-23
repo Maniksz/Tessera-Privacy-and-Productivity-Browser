@@ -218,8 +218,8 @@ describe('the chrome the core builds', () => {
     /*
       It used to send four things: the stylesheet, a hint, a "no rule for this element", and a sentence for
       each selector warning — because the picker drew a confirmation bar inside the document and a preload
-      cannot read the i18n catalogue. The bar is an overlay surface now, so those sentences are read in the
-      renderer under `picker.bar.*`, and this holds the wire down to the one thing that is still in the page.
+      cannot read the i18n catalogue. The bar is an overlay surface now, and its sentences travel on the
+      bar's presentation from `picker-bar-text.ts`; this holds the wire down to the one thing still in the page.
       A second copy of the words shipped into every picked document would be a translation nobody reads.
     */
     expect(Object.keys(pickerChrome())).toEqual(['styles'])

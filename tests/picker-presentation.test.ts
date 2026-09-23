@@ -4,14 +4,16 @@ import {
   pickableDocument,
   vacancyAbortReason
 } from '@main/privacy/picker-entry.js'
+import { pickerBarText } from '@main/privacy/picker-bar-text.js'
 import { pickerBarPresentation } from '@main/privacy/picker-presentation.js'
 import {
   PICKER_OUTCOMES,
   pickerStep,
   type PickerCandidate,
+  type PickerOutcome,
   type PickerSession
 } from '@shared/filters/picker-session.js'
-import { catalogs, type MessageKey } from '@shared/i18n/catalog.js'
+import { catalogs } from '@shared/i18n/catalog.js'
 import { PICKER_BAR_HEIGHT, PICKER_BAR_WIDTH } from '@shared/overlay/picker-bar.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
 
@@ -83,6 +85,7 @@ describe('what the confirmation bar is told', () => {
       hovered: '.banner',
       outcome: null,
       canUndo: false,
+      locale: 'en',
       place: PLACE
     })
     expect(bar?.mode).toBe('showing')
@@ -101,6 +104,7 @@ describe('what the confirmation bar is told', () => {
       hovered: '.banner',
       outcome: null,
       canUndo: false,
+      locale: 'en',
       place: PLACE
     })
     expect(bar?.mode).toBe('frozen')
@@ -125,6 +129,7 @@ describe('what the confirmation bar is told', () => {
       hovered: '',
       outcome: null,
       canUndo: false,
+      locale: 'en',
       place: PLACE
     })
     expect(bar?.canWiden).toBe(false)
@@ -141,6 +146,7 @@ describe('what the confirmation bar is told', () => {
         hovered: '',
         outcome: null,
         canUndo: false,
+        locale: 'en',
         place: PLACE
       })?.mode
     ).toBe('writing')
@@ -158,6 +164,7 @@ describe('what the confirmation bar is told', () => {
         hovered: '',
         outcome: null,
         canUndo: true,
+        locale: 'en',
         place: PLACE
       })?.mode
     ).toBe('measuring')
@@ -173,6 +180,7 @@ describe('what the confirmation bar is told', () => {
         hovered: '',
         outcome,
         canUndo: false,
+        locale: 'en',
         place: PLACE
       })
       expect(bar?.mode, outcome).toBe('outcome')
@@ -193,6 +201,7 @@ describe('what the confirmation bar is told', () => {
       hovered: '',
       outcome: 'not-filterable',
       canUndo: false,
+      locale: 'en',
       place: PLACE
     })
     expect(bar).not.toBeNull()
@@ -216,6 +225,7 @@ describe('what the confirmation bar is told', () => {
         hovered: '',
         outcome: null,
         canUndo: false,
+        locale: 'en',
         place: PLACE
       })
     ).toBeNull()
@@ -231,6 +241,7 @@ describe('what the confirmation bar is told', () => {
         hovered: '.x',
         outcome: null,
         canUndo: false,
+        locale: 'en',
         place: { ...PLACE, tileRect: { x: 0, y: 0, width: 8, height: 8 } }
       })
     ).toBeNull()
@@ -245,6 +256,7 @@ describe('what the confirmation bar is told', () => {
       hovered: '.x',
       outcome: null,
       canUndo: false,
+      locale: 'en',
       place: { ...PLACE, tileIndex: 2, tileRect: { x: 600, y: 40, width: 600, height: 760 } }
     })
     expect(bar?.tileIndex).toBe(2)
@@ -380,37 +392,93 @@ describe('what ends a session, as the core hears it', () => {
   })
 })
 
-describe('the words the eight answers are said in', () => {
+describe('the words the bar is said in', () => {
+  /*
+    The words come from the core and travel on the presentation, for the reason
+    `main/privacy/picker-bar-text.ts` gives at length: the renderer's catalogue is one measured chunk
+    holding both locales, and a surface only one feature ever raises should not be paying into it.
+
+    What that move makes it possible to get wrong is asserted here rather than in the component test,
+    because it is all on this side: which language the words are in, whether every outcome has one,
+    and whether a translation still carries the placeholders the bar fills in.
+  */
+  const LOCALES = ['en', 'de'] as const
+
+  function barIn(locale: 'en' | 'de', outcome: PickerOutcome | null = null) {
+    return pickerBarPresentation({
+      session: outcome === null ? frozen() : null,
+      sessionId: 'picker-1',
+      hovered: '',
+      outcome,
+      canUndo: false,
+      locale,
+      place: PLACE
+    })
+  }
+
+  it('carries the words for the language the interface is in', () => {
+    // The same bar, twice, differing only in the setting. If the locale were dropped anywhere between
+    // the setting and the surface, both would come out English — and English is what a test would read.
+    const english = barIn('en')
+    const german = barIn('de')
+    expect(english?.text).toEqual(pickerBarText('en'))
+    expect(german?.text).toEqual(pickerBarText('de'))
+    expect(german?.text.confirm).not.toBe(english?.text.confirm)
+  })
+
+  it('carries the words on a refusal that never had a session', () => {
+    // `no-host` and `not-filterable` are the answers with no session behind them, and they are the ones
+    // where the sentence is the only thing on the bar worth reading.
+    const bar = barIn('de', 'no-host')
+    expect(bar?.text['outcome.no-host']).toBe(pickerBarText('de')['outcome.no-host'])
+  })
+
   it('words every outcome in both languages, keyed by the outcome itself', () => {
     /*
-      R1 and R3 from the wording's side. The bar receives a *key* — the set of outcomes belongs to
-      the session, which is where they are held to being exhaustive — and resolves
-      `picker.outcome.${outcome}`, so the key here is the outcome's own name with no table in
-      between. A ninth outcome added to the session therefore shows its own name rather than an empty
-      bar, which is visible in testing and never a reassuring blank.
-
-      Both catalogues, and neither empty: the compiler holds the two key sets together, and nothing
-      but this holds a translation to being a translation. A blank German string would render as a
-      bar with buttons and no sentence, in the one place this feature exists to put a sentence.
+      R1 and R3 from the wording's side. The bar receives an outcome as a key and resolves
+      `outcome.${outcome}` in these words, so the key here is the outcome's own name with no table in
+      between. The compiler already holds the table to `PICKER_OUTCOMES`; what it cannot hold is a
+      translation to being a translation, and a blank German string would render as a bar with buttons
+      and no sentence — in the one place this feature exists to put a sentence.
     */
-    for (const outcome of PICKER_OUTCOMES) {
-      for (const locale of ['en', 'de'] as const) {
-        const key = `picker.outcome.${outcome}` as MessageKey
-        expect(catalogs[locale][key], `${locale} ${outcome}`).toBeTruthy()
+    for (const locale of LOCALES) {
+      const text: Record<string, string> = pickerBarText(locale)
+      for (const outcome of PICKER_OUTCOMES) {
+        expect(text[`outcome.${outcome}`]?.trim(), `${locale} ${outcome}`).toBeTruthy()
+      }
+      for (const [key, words] of Object.entries(text)) {
+        expect(words.trim(), `${locale} ${key}`).not.toBe('')
       }
     }
   })
 
-  it('says something different in each language, so the setting reaches this bar too', () => {
-    expect(catalogs.de['picker.outcome.saved-effective']).not.toBe(
-      catalogs.en['picker.outcome.saved-effective']
-    )
+  it('keeps every placeholder the bar fills in, in both languages', () => {
+    // `{index}` names the tile and `{count}` the matches. A German sentence that lost one would render
+    // the tile's label without its number — readable, plausible, and wrong.
+    const placeholders = (words: string): string[] => (words.match(/\{\w+\}/g) ?? []).sort()
+    const en: Record<string, string> = pickerBarText('en')
+    const de: Record<string, string> = pickerBarText('de')
+    expect(Object.keys(de).sort()).toEqual(Object.keys(en).sort())
+    for (const key of Object.keys(en)) {
+      expect(placeholders(de[key] ?? ''), key).toEqual(placeholders(en[key] ?? ''))
+    }
+    expect(en.label).toContain('{index}')
+    expect(en.matches).toContain('{count}')
   })
 
   it('names a next step wherever the user has one to take', () => {
     // A refusal a person can do nothing about is half an answer. Which of the eight has a next step
     // is the difference between a list that is full and a list they chose to leave as it is.
-    expect(catalogs.en['picker.outcome.limit-reached']).toMatch(/delete/i)
-    expect(catalogs.en['picker.outcome.duplicate-disabled']).toMatch(/rules/i)
+    expect(pickerBarText('en')['outcome.limit-reached']).toMatch(/delete/i)
+    expect(pickerBarText('en')['outcome.duplicate-disabled']).toMatch(/rules/i)
+  })
+
+  it('has left the renderer catalogue', () => {
+    // The point of the move. A key left behind would be paid for twice: once in the chunk every
+    // renderer parses, and once on the wire where the bar actually reads it.
+    for (const locale of LOCALES) {
+      const stray = Object.keys(catalogs[locale]).filter((key) => key.startsWith('picker.'))
+      expect(stray, locale).toEqual([])
+    }
   })
 })

@@ -477,12 +477,12 @@ export interface PickerBarPresentation {
   /**
    * What became of the attempt, as a key, or `null` while it is still going on.
    *
-   * A key rather than a sentence: the wording belongs to the core, which has the language. A key rather
-   * than an enum declared here, too, and that is deliberate — the set of outcomes belongs to the picking
-   * session, which is where they are produced and where they are held to being exhaustive. Two lists of
-   * the same eight names in two modules is how a ninth outcome comes to render as nothing at all; the
-   * surface renders the key itself if it does not recognise it, which is a name on screen instead of an
-   * empty bar.
+   * A key rather than a sentence: the sentence is looked up in `text` below, under `outcome.${outcome}`.
+   * A key rather than an enum declared here, too, and that is deliberate — the set of outcomes belongs to
+   * the picking session, which is where they are produced and where they are held to being exhaustive.
+   * Two lists of the same eight names in two modules is how a ninth outcome comes to render as nothing at
+   * all; the surface renders the key itself if it does not recognise it, which is a name on screen
+   * instead of an empty bar.
    */
   outcome: string | null
   /**
@@ -494,6 +494,20 @@ export interface PickerBarPresentation {
    * second pair would be a button that removes something the user never added.
    */
   canUndo: boolean
+  /**
+   * Every word the bar can say, already in the language the interface is in.
+   *
+   * The core's, like every other field here: the prose lives in `main/privacy/picker-bar-text.ts` rather
+   * than in the renderer's catalogue, and that module says why — the catalogue is one measured chunk that
+   * every renderer parses, and only this surface ever shows these sentences. The whole table travels,
+   * not just the sentence the current mode needs, so the surface still chooses which one a mode says and
+   * still resolves an outcome by its key.
+   *
+   * A record of strings rather than a type naming each key, on the precedent of `userrules:list`: a word
+   * missing from it renders as its own key, which is a name on screen rather than an unlabelled button.
+   * `{index}` and `{count}` arrive as placeholders and are filled in by the surface.
+   */
+  text: Readonly<Record<string, string>>
 }
 
 export type OverlayPresentation =
