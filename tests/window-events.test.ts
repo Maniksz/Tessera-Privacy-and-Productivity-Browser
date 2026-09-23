@@ -109,6 +109,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(tile-bar)',
       'overlay.dismissKind(find-bar)',
       'overlay.dismissKind(picker-bar)',
+      'overlay.dismissKind(downloads-panel)',
       'relayout'
     ])
   })
@@ -124,6 +125,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(tile-bar)',
       'overlay.dismissKind(find-bar)',
       'overlay.dismissKind(picker-bar)',
+      'overlay.dismissKind(downloads-panel)',
       'broadcastWindowState'
     ])
   })
@@ -179,13 +181,23 @@ describe('window event wiring', () => {
       built for: it awaits no answer, so an interruption may take it, and what its departure *does* cost —
       the provisional rule it leaves in the document — is undone by the vacancy report rather than by
       keeping the bar on a window the user has just resized.
+
+      The downloads panel joined the same way. It awaits no answer, it is anchored to a toolbar button a
+      resize moves, and nothing is lost when it goes: the list it shows is the downloads page's list.
     */
     const window = harness()
     window.emit('resize')
     const dismissed = window.calls
       .filter((call) => call.startsWith('overlay.dismissKind('))
       .map((call) => call.slice('overlay.dismissKind('.length, -1))
-    expect(dismissed).toEqual(['layout-menu', 'tab-drop', 'tile-bar', 'find-bar', 'picker-bar'])
+    expect(dismissed).toEqual([
+      'layout-menu',
+      'tab-drop',
+      'tile-bar',
+      'find-bar',
+      'picker-bar',
+      'downloads-panel'
+    ])
   })
 
   it('tells the chrome UI about maximise, unmaximise and focus, and nothing else', () => {

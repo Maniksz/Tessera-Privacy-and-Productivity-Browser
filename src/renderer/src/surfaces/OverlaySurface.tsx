@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import type { OverlayState } from '@shared/overlay/surface.js'
 import type { Platform } from '@shared/model.js'
 import { invoke, subscribe } from '../bridge.js'
@@ -6,10 +6,34 @@ import { LayoutMenuSurface } from './LayoutMenuSurface.js'
 import { TabDropSurface } from './TabDropSurface.js'
 import { PermissionSurface } from './PermissionSurface.js'
 import { NavigationRequestSurface } from './NavigationRequestSurface.js'
-import { MasterPasswordSurface } from './MasterPasswordSurface.js'
 import { TileBarSurface } from '../../overlay/TileBarSurface.js'
 import { FindBarSurface } from '../../overlay/FindBarSurface.js'
 import { PickerBarSurface } from '../../overlay/PickerBarSurface.js'
+
+/**
+ * The two surfaces this bundle fetches the first time they are shown, and not before.
+ *
+ * The layer's bundle is loaded into every window, and it has a budget (`tests/architecture.test.ts`,
+ * 20 kB) that it sat a few hundred bytes under when the downloads panel arrived (KTD1). The panel is the
+ * largest surface this layer has, so it lives in a chunk of its own — and the first dynamic import in
+ * this renderer brings Vite's preload helper into the layer's bundle with it, which the few hundred bytes
+ * did not cover either.
+ *
+ * The master-password prompt is the other half of that bargain, by decision: the surface this layer shows
+ * most rarely, moved behind the same boundary so the helper is paid for without raising a budget. What it
+ * costs is one local chunk fetch the first time a window shows the prompt, and nothing it does: the core
+ * takes the keystrokes before this renderer sees them either way (`capturesKeyboard`), so a prompt that
+ * appears a frame later loses no character — the count it is re-presented with already includes them.
+ *
+ * `lazy` wants a default export and these are named ones, so each import is mapped; the names stay the
+ * only way the rest of the renderer refers to them.
+ */
+const DownloadsPanelSurface = lazy(() =>
+  import('./DownloadsPanelSurface.js').then((module) => ({ default: module.DownloadsPanelSurface }))
+)
+const MasterPasswordSurface = lazy(() =>
+  import('./MasterPasswordSurface.js').then((module) => ({ default: module.MasterPasswordSurface }))
+)
 
 /**
  * Root of the window's topmost layer.
@@ -131,7 +155,13 @@ export function OverlaySurface(): React.ReactNode {
     through typing — with no way to tell them that is what happened.
   */
   if (presentation.kind === 'master-password') {
-    return <MasterPasswordSurface presentation={presentation} />
+    // Nothing while the chunk arrives, rather than a placeholder: the prompt draws a count the core
+    // keeps, so there is nothing a placeholder could show that the real surface would not a moment later.
+    return (
+      <Suspense fallback={null}>
+        <MasterPasswordSurface presentation={presentation} />
+      </Suspense>
+    )
   }
 
   /*
@@ -197,6 +227,11 @@ export function OverlaySurface(): React.ReactNode {
     >
       {presentation.kind === 'layout-menu' && (
         <LayoutMenuSurface presentation={presentation} platform={platform} overrides={overrides} />
+      )}
+      {presentation.kind === 'downloads-panel' && (
+        <Suspense fallback={null}>
+          <DownloadsPanelSurface presentation={presentation} />
+        </Suspense>
       )}
     </div>
   )

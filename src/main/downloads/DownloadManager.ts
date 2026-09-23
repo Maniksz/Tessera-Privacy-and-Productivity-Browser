@@ -711,7 +711,8 @@ export class DownloadManager {
   }
 
   #entryFor(record: DownloadRecord): DownloadEntry {
-    return { ...record, onDisk: this.#lookUp(record) }
+    const canPause = foreign.rowCanPause(record, this.#live.get(record.id)?.item)
+    return { ...record, onDisk: this.#lookUp(record), canPause }
   }
 
   /**

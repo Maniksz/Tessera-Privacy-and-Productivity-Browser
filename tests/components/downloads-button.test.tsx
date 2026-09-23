@@ -155,12 +155,11 @@ describe('opening and closing the panel', () => {
     }
     expect(isDownloadsPanel(null)).toBe(false)
     expect(isDownloadsPanel(layoutMenu)).toBe(false)
-    /*
-      Forced, because no such presentation exists yet: the kind joins the overlay contract with the
-      panel itself (U5). Until then this checks the one thing this file decides — that the button
-      recognises the panel by that name — and U5 replaces the cast with a real presentation.
-    */
-    const panel = { kind: DOWNLOADS_PANEL_KIND } as unknown as OverlayState
+    const panel: OverlayState = {
+      kind: DOWNLOADS_PANEL_KIND,
+      anchor: { x: 0, y: 0, width: 32, height: 32 },
+      downloads: []
+    }
     expect(isDownloadsPanel(panel)).toBe(true)
   })
 
@@ -171,10 +170,23 @@ describe('opening and closing the panel', () => {
     expect(calls).toEqual([{ channel: 'overlay:dismiss', payload: undefined }])
   })
 
-  it.todo(
-    'asks the overlay layer for the downloads panel, anchored to the button, when it is closed — ' +
-      'completed by U5, which adds the kind to the overlay contract'
-  )
+  it('asks the overlay layer for the downloads panel, anchored to the button, when it is closed', () => {
+    installBridge()
+    render(<DownloadsButton summary={summary({})} open={false} />)
+    const button = theButton()
+    button.getBoundingClientRect = () => new DOMRect(1200, 44, 32, 28)
+    fireEvent.click(button)
+    /*
+      Kind and anchor, and nothing else. The chrome UI is never sent the list, so it has no rows to
+      give — the core puts them in, and `overlay:present` refuses a request that brings its own (KTD2).
+    */
+    expect(calls).toEqual([
+      {
+        channel: 'overlay:present',
+        payload: { kind: 'downloads-panel', anchor: { x: 1200, y: 44, width: 32, height: 28 } }
+      }
+    ])
+  })
 
   it('takes the focus back when the panel goes', () => {
     installBridge()

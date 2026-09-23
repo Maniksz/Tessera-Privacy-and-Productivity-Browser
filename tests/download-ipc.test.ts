@@ -35,6 +35,7 @@ function entry(id: string, overrides: Partial<DownloadEntry> = {}): DownloadEntr
     endedAt: T0 + 1,
     interruptReason: '',
     onDisk: true,
+    canPause: false,
     ...overrides
   }
 }
@@ -122,6 +123,8 @@ interface FakeWindow extends DownloadHandlerWindow {
   readonly chrome: EventPayload<'downloads:summaryChanged'>[]
   /** Stands in for the controller's own record; set by `present` below. */
   downloadsPanelPresentedAt: number | null
+  /** Every set of rows the window was handed for its panel, in order; `refreshDownloadsPanel`. */
+  readonly panel: Array<readonly DownloadEntry[]>
 }
 
 /**
@@ -134,6 +137,7 @@ interface FakeWindow extends DownloadHandlerWindow {
 function fakeWindow(windowId: number, privateMode: boolean): FakeWindow {
   const pushed: EventPayload<'downloads:changed'>[] = []
   const chrome: EventPayload<'downloads:summaryChanged'>[] = []
+  const panel: Array<readonly DownloadEntry[]> = []
   const contents = [windowId, windowId * 10 + 1, windowId * 10 + 2]
   return {
     // A session per window, as the registry gives each private window its own partition.
@@ -147,6 +151,10 @@ function fakeWindow(windowId: number, privateMode: boolean): FakeWindow {
     },
     emit: (_channel, payload) => {
       chrome.push(payload)
+    },
+    panel,
+    refreshDownloadsPanel: (entries) => {
+      panel.push(entries)
     }
   }
 }
@@ -344,6 +352,24 @@ describe('downloads IPC', () => {
     expect(priv.pushed).toEqual([{ downloads: [entry('p')], privateWindow: true }])
     // `snapshot`, not `list`: the pushed path reuses probes, four times a second.
     expect(manager.calls).toEqual(['snapshot:1', 'snapshot:2'])
+  })
+
+  it('hands each window’s panel the very rows its page is pushed (R9)', () => {
+    /*
+      The window decides whether a panel is up to take them (`BrowserWindowController.refreshDownloadsPanel`);
+      what is decided here is that it is offered the same snapshot as the page, per window, on every change —
+      so the panel and the page cannot show one download in two states.
+    */
+    const normal = fakeWindow(1, false)
+    const priv = fakeWindow(2, true)
+    const manager = fakeManager({ byWindow: { 1: [entry('a')], 2: [entry('p')] } })
+    harness({ manager, windows: [normal, priv] })
+
+    manager.fire()
+
+    expect(normal.panel).toEqual([normal.pushed[0]?.downloads])
+    expect(priv.panel).toEqual([priv.pushed[0]?.downloads])
+    expect(priv.panel[0]).toBe(priv.pushed[0]?.downloads)
   })
 })
 

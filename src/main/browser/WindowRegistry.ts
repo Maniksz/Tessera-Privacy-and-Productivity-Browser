@@ -15,6 +15,7 @@ import type { PageContextTarget } from '../menu/page-context-items.js'
 import type { Tab } from './Tab.js'
 import { quickLinkCards, type QuickLinkCard } from '@shared/quicklinks/cards.js'
 import type { QuickLink } from '@shared/quicklinks/model.js'
+import type { DownloadEntry } from '@shared/downloads/model.js'
 import { applySessionHardening } from '../session/hardening.js'
 import { installRequestPipeline } from '../privacy/RequestPipeline.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
@@ -53,6 +54,13 @@ export interface DownloadSubscriber {
   releaseSession(session: Session): void
   /** A window closed: its downloads are filed under `successor` instead, or under no window. */
   releaseWindow(windowId: number, successor: number | undefined): void
+  /**
+   * One window's list, freshly probed — what its downloads panel opens with.
+   *
+   * The same call `downloads:list` answers the page with, so the panel is the head of the page's list
+   * and not a list of its own (KTD7).
+   */
+  list(viewer: DownloadWindow['viewer']): DownloadEntry[]
 }
 
 /**
@@ -75,6 +83,8 @@ export interface DownloadWindow {
   emit: BrowserWindowController['emit']
   /** The controller's record; see `BrowserWindowController.downloadsPanelPresentedAt`. */
   readonly downloadsPanelPresentedAt: number | null
+  /** The window's panel with fresh rows, if it is up; see `BrowserWindowController.refreshDownloadsPanel`. */
+  refreshDownloadsPanel: BrowserWindowController['refreshDownloadsPanel']
 }
 
 /** What the registry remembers about one open window beyond the controller itself. */
@@ -340,7 +350,8 @@ export class WindowRegistry {
       },
       onDownloadsPanelPresented: () => {
         for (const listener of this.#downloadsPanelListeners) listener(opened.downloads)
-      }
+      },
+      downloadsPanelEntries: () => this.#deps.downloads.list(opened.downloads.viewer)
     })
 
     this.#controllers.add(controller)
@@ -360,6 +371,9 @@ export class WindowRegistry {
         },
         get downloadsPanelPresentedAt() {
           return controller.downloadsPanelPresentedAt
+        },
+        refreshDownloadsPanel: (entries) => {
+          controller.refreshDownloadsPanel(entries)
         }
       }
     }

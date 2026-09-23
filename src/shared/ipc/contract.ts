@@ -27,6 +27,11 @@ import {
 } from '../overlay/permission.js'
 import { PICKER_BAR_ACTIONS, PICKER_BAR_MODES } from '../overlay/picker-bar.js'
 import {
+  DOWNLOADS_PANEL_ROWS,
+  type OverlayPresentation,
+  type OverlayRequest
+} from '../overlay/surface.js'
+import {
   mediaCancelRequestSchema,
   mediaCancelResponseSchema,
   mediaDescribeRequestSchema,
@@ -98,6 +103,37 @@ const rectSchema = z.object({
 })
 
 /**
+ * One download, plus the two fields that are never stored.
+ *
+ * `onDisk` is derived when the list is read and is deliberately absent from the document — a
+ * stored flag could only ever be wrong, because nothing tells the browser when a user deletes a
+ * file. `canPause` is derived at the same moment, from the live transfer. See `DownloadEntry`.
+ *
+ * Above the overlay presentations rather than beside the other download shapes, because the
+ * downloads panel carries these rows and a schema has to exist before a union can name it.
+ */
+const downloadEntrySchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  fileName: z.string(),
+  savePath: z.string(),
+  mimeType: z.string(),
+  /** `0` when the server declared no length, which is what Electron reports. */
+  totalBytes: z.number(),
+  receivedBytes: z.number(),
+  state: z.enum(DOWNLOAD_STATES),
+  startedAt: z.number(),
+  endedAt: z.number().nullable(),
+  interruptReason: z.string(),
+  onDisk: z.boolean(),
+  canPause: z.boolean()
+})
+
+const _downloadWireMatchesModel: SameShape<z.output<typeof downloadEntrySchema>, DownloadEntry> =
+  true
+void _downloadWireMatchesModel
+
+/**
  * One member per overlay kind, discriminated so each carries exactly the data its surface
  * needs — the layout menu needs the current layout, a future drop-zone surface will need
  * something else, and neither has to accept the other's fields.
@@ -113,7 +149,7 @@ const dropZoneSchema = z.object({
   tileIndex: z.number().int().nonnegative()
 })
 
-const overlayPresentationSchema = z.discriminatedUnion('kind', [
+const overlaySurfaceSchemas = [
   z.object({
     kind: z.literal('layout-menu'),
     /** The opening button's rect, in window coordinates. */
@@ -270,7 +306,53 @@ const overlayPresentationSchema = z.discriminatedUnion('kind', [
     /** Whether a rule was actually written, which is the one thing Undo may act on. */
     canUndo: z.boolean()
   })
+] as const
+
+/**
+ * The toolbar's downloads panel, as the layer is sent it: the anchor, and the rows the core put in.
+ *
+ * At most the panel's own count, so a presentation cannot become the way the full list — up to a
+ * thousand rows naming what somebody downloaded — reaches a renderer four times a second (KTD2).
+ */
+const downloadsPanelPresentationSchema = z.object({
+  kind: z.literal('downloads-panel'),
+  anchor: rectSchema,
+  downloads: z.array(downloadEntrySchema).max(DOWNLOADS_PANEL_ROWS)
+})
+
+/**
+ * The same panel, as the chrome UI asks for it: which kind and where its button is, and nothing else.
+ *
+ * Strict, and the strictness is the point. The chrome UI is never sent the list, so rows in a request
+ * can only be rows somebody made up — a panel showing a list the window may not see. Refused here
+ * rather than overwritten in the core, so the attempt is an error and not a silent correction.
+ */
+const downloadsPanelRequestSchema = z.strictObject({
+  kind: z.literal('downloads-panel'),
+  anchor: rectSchema
+})
+
+const overlayPresentationSchema = z.discriminatedUnion('kind', [
+  ...overlaySurfaceSchemas,
+  downloadsPanelPresentationSchema
 ])
+
+/** What `overlay:present` accepts: every surface as presented, except the panel, asked for bare. */
+const overlayRequestSchema = z.discriminatedUnion('kind', [
+  ...overlaySurfaceSchemas,
+  downloadsPanelRequestSchema
+])
+
+const _overlayPresentationWireMatchesModel: SameShape<
+  z.output<typeof overlayPresentationSchema>,
+  OverlayPresentation
+> = true
+void _overlayPresentationWireMatchesModel
+const _overlayRequestWireMatchesModel: SameShape<
+  z.output<typeof overlayRequestSchema>,
+  OverlayRequest
+> = true
+void _overlayRequestWireMatchesModel
 
 /**
  * One recorded visit, on the wire.
@@ -338,33 +420,6 @@ const bookmarkSchema = z.object({
 
 const _bookmarkWireMatchesModel: SameShape<z.output<typeof bookmarkSchema>, Bookmark> = true
 void _bookmarkWireMatchesModel
-
-/**
- * One download, plus the one field that is never stored.
- *
- * `onDisk` is derived when the list is read and is deliberately absent from the document — a
- * stored flag could only ever be wrong, because nothing tells the browser when a user deletes a
- * file. See `DownloadEntry`.
- */
-const downloadEntrySchema = z.object({
-  id: z.string(),
-  url: z.string(),
-  fileName: z.string(),
-  savePath: z.string(),
-  mimeType: z.string(),
-  /** `0` when the server declared no length, which is what Electron reports. */
-  totalBytes: z.number(),
-  receivedBytes: z.number(),
-  state: z.enum(DOWNLOAD_STATES),
-  startedAt: z.number(),
-  endedAt: z.number().nullable(),
-  interruptReason: z.string(),
-  onDisk: z.boolean()
-})
-
-const _downloadWireMatchesModel: SameShape<z.output<typeof downloadEntrySchema>, DownloadEntry> =
-  true
-void _downloadWireMatchesModel
 
 const downloadListingSchema = z.object({
   downloads: z.array(downloadEntrySchema),
@@ -489,7 +544,7 @@ export const invokeContract = {
    * page content, because tab content is rendered by native views stacked above the
    * chrome renderer.
    */
-  'overlay:present': { request: overlayPresentationSchema, response: ok },
+  'overlay:present': { request: overlayRequestSchema, response: ok },
   'overlay:dismiss': { request: nothing, response: ok },
 
   // --- dragging a tab into a tile ------------------------------------------

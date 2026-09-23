@@ -1,6 +1,10 @@
 import { basename, isAbsolute, normalize } from 'node:path'
 import { safeDownloadFileName } from '@shared/downloads/filename.js'
-import { isTerminalDownloadState } from '@shared/downloads/model.js'
+import {
+  isActiveDownload,
+  isTerminalDownloadState,
+  type DownloadRecord
+} from '@shared/downloads/model.js'
 import type { DownloadItemLike, DownloadSession } from './DownloadManager.js'
 
 /**
@@ -216,4 +220,20 @@ export class ForeignDownloadItem implements DownloadItemLike {
 /** False only for a foreign transfer whose producer cannot pause. Chromium's items always can. */
 export function canPause(item: DownloadItemLike): boolean {
   return !(item instanceof ForeignDownloadItem) || item.canPause
+}
+
+/**
+ * `DownloadEntry.canPause` for a row: it has not ended, and its live transfer, if it still has one, can
+ * pause.
+ *
+ * The state is asked as well as the transfer, because the two part company for a moment. The manager
+ * announces an ending before it lets go of the transfer, so the push that says "cancelled" is read while
+ * the live entry is still there — and a private download keeps its live entry until its window closes.
+ * Either way the row has finished, and a finished row has nothing to pause.
+ *
+ * Here rather than in the manager so the manager's one use of it stays a single line — and because this
+ * file already owns the only reason the answer is ever "no" for a running row.
+ */
+export function rowCanPause(record: DownloadRecord, item: DownloadItemLike | undefined): boolean {
+  return isActiveDownload(record) && item !== undefined && canPause(item)
 }

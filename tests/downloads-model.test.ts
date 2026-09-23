@@ -50,7 +50,7 @@ function record(overrides: Partial<DownloadRecord> & { id: string }): DownloadRe
 }
 
 function entry(overrides: Partial<DownloadEntry> & { id: string }): DownloadEntry {
-  return { ...record(overrides), onDisk: false, ...overrides }
+  return { ...record(overrides), onDisk: false, canPause: false, ...overrides }
 }
 
 describe('states', () => {

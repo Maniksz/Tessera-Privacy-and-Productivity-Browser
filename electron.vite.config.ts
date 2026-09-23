@@ -155,6 +155,17 @@ export default defineConfig({
       // Off by default in library-ish builds; the number is what makes a size
       // regression visible in the build log rather than only in a test.
       reportCompressedSize: true,
+      /*
+        No preload helper for dynamic imports, and the saving is the reason rather than a side effect.
+
+        The overlay lazily loads two surfaces it rarely shows — the downloads panel and the master-password
+        prompt — and the first `import()` in a chunk makes Vite inject `__vitePreload` plus a dependency map
+        into it, well over a kilobyte in a chunk held to 20. What that helper buys is a `<link rel="modulepreload">`
+        per dependency so the network fetches them in parallel. Every chunk here is read from the app's own
+        files on the local disk, where there is no round trip to overlap, so the helper costs bytes on every
+        window and saves nothing measurable.
+      */
+      modulePreload: false,
       rollupOptions: {
         input: {
           index: resolve(projectRoot, 'src/renderer/index.html'),

@@ -28,6 +28,7 @@ function entry(overrides: Partial<DownloadEntry> & { state: DownloadState }): Do
     endedAt: null,
     interruptReason: '',
     onDisk: true,
+    canPause: false,
     ...overrides
   }
 }

@@ -124,6 +124,14 @@ export interface DownloadHandlerWindow {
    * time is gone with the window without anybody having to forget it.
    */
   readonly downloadsPanelPresentedAt: number | null
+  /**
+   * Re-presents the window's downloads panel with these rows, if the panel is its current surface.
+   *
+   * Handed every change, the window deciding whether anything is on screen to update — the rule is the
+   * window's (`BrowserWindowController.refreshDownloadsPanel`), and a window whose panel is closed does
+   * nothing with it.
+   */
+  refreshDownloadsPanel(entries: readonly DownloadEntry[]): void
 }
 
 /** The window registry, as far as this file needs one. */
@@ -325,12 +333,18 @@ export function registerDownloadHandlers(deps: DownloadHandlerDeps): void {
   */
   downloads.onChange(() => {
     for (const window of windows.downloadWindows) {
-      // One snapshot for both pushes, so the page and the button describe the same moment.
+      // One snapshot for all three, so the page, the panel and the button describe the same moment.
       const entries = downloads.snapshot(window.viewer)
       window.emitToInternalPages('downloads:changed', {
         downloads: entries,
         privateWindow: window.viewer.mode === 'private'
       })
+      /*
+        The panel before the button. A panel that is up and re-presented counts as looked at, which
+        sends the button its summary at once (`onDownloadsPanelPresented`); the de-duplicated publish
+        below then has nothing new to say, rather than sending a mark the panel has just cleared.
+      */
+      window.refreshDownloadsPanel(entries)
       publishSummary(window, entries, false)
     }
   })

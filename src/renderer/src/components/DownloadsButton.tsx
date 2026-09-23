@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DOWNLOAD_STATE_LABELS } from '@shared/downloads/presentation.js'
 import type { DownloadButtonSummary, DownloadMarker } from '@shared/downloads/summary.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
-import type { OverlayState } from '@shared/overlay/surface.js'
+import type { OverlayKind, OverlayState } from '@shared/overlay/surface.js'
 import type { Rect } from '@shared/ui/anchor.js'
 import { invoke, subscribe } from '../bridge.js'
 import { useI18n } from '../i18n.js'
@@ -32,30 +32,23 @@ import { useI18n } from '../i18n.js'
  * The overlay kind the panel is presented as.
  *
  * One name, exported, so the button, `App` and the surface agree on it by import rather than by
- * spelling. Not yet an `OverlayKind`: the kind joins the overlay tables and the `overlay:present`
- * contract together with the panel (U5), and until then nothing may present it.
+ * spelling — and checked against `OverlayKind`, so a rename in the overlay tables fails here.
  */
-export const DOWNLOADS_PANEL_KIND = 'downloads-panel'
+export const DOWNLOADS_PANEL_KIND = 'downloads-panel' satisfies OverlayKind
 
 /** Whether what the overlay layer shows is the downloads panel — what `open` is derived from. */
 export function isDownloadsPanel(overlay: OverlayState): boolean {
-  // Widened to a string because the kind is not in `OverlayKind` yet, and comparing a union with a
-  // name outside it does not compile. U5 drops the widening when it adds the kind.
-  const kind: string | undefined = overlay?.kind
-  return kind === DOWNLOADS_PANEL_KIND
+  return overlay?.kind === DOWNLOADS_PANEL_KIND
 }
 
 /**
  * Puts the downloads panel up, anchored to the button.
  *
- * Empty on purpose until the panel exists. `overlay:present` validates its request against the
- * overlay kinds, and the downloads kind is added to them — tables, schema, surface — as one change
- * with the panel (U5), which replaces this body with
- * `void invoke('overlay:present', { kind: DOWNLOADS_PANEL_KIND, anchor })`. Everything around the
- * call — measuring, dismissing, `aria-expanded`, the focus coming back — is already in place.
+ * Kind and anchor, and no rows: this renderer is never sent the list, and the core fills the panel
+ * from the window's own snapshot — `overlay:present` refuses a request that brings rows (KTD2).
  */
-export function presentDownloadsPanel(_anchor: Rect): void {
-  // Nothing to present until U5 adds the kind; see above.
+export function presentDownloadsPanel(anchor: Rect): void {
+  void invoke('overlay:present', { kind: DOWNLOADS_PANEL_KIND, anchor })
 }
 
 /** What the chrome UI draws before the core has said anything: no button. */

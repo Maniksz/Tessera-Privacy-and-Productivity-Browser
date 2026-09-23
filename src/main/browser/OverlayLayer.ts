@@ -4,6 +4,7 @@ import {
   capturesKeyboard,
   departureMatters,
   mayPresentOver,
+  movesFocus,
   overlayBounds,
   surfaceIdentity,
   takesFocus,
@@ -134,8 +135,15 @@ export class OverlayLayer {
       into it first (spec 7) — but only where that is what the user asked for. This renderer
       taking focus takes it away from the page, so a tile bar revealed by a passing pointer must
       leave the keyboard where it is; see `takesFocus`.
+
+      And an update is asked about separately, because not every update is somebody asking. The
+      downloads panel is re-presented on every coalesced download change, and each of those taking
+      the keyboard again would be the core moving focus four times a second; see
+      `OVERLAY_REFOCUSES_ON_UPDATE`, where every other kind keeps doing what it did.
     */
-    if (takesFocus(presentation) && !view.webContents.isDestroyed()) view.webContents.focus()
+    if (movesFocus(presentation, outgoing) && !view.webContents.isDestroyed()) {
+      view.webContents.focus()
+    }
     this.#send(presentation)
     this.options.onPresentationChanged(presentation)
     this.#vacated(outgoing, 'replaced', presentation)

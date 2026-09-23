@@ -323,3 +323,124 @@ body {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* --- downloads panel ------------------------------------------------------ */
+
+/*
+  The menu's box, positioned the menu's way — from `anchorSurface`, because the button is in another
+  renderer. Wider than a menu: a file name is the longest thing on it and the one worth reading whole.
+*/
+.downloads-panel {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 340px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 45%);
+  overflow-y: auto;
+}
+
+.downloads-panel__list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Name and actions on the first line, the state below, the bar under both. */
+.downloads-panel__row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.downloads-panel__row:hover {
+  background: var(--bg-input);
+}
+
+/*
+  The row is a stop of its own, so where the keyboard is has to be visible on it — the arrow keys walk
+  the rows, and a focus nobody can see is the panel losing the keyboard as far as the user can tell.
+*/
+.downloads-panel__row:focus-visible,
+.downloads-panel__action:focus-visible,
+.downloads-panel__all:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.downloads-panel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.downloads-panel__meta,
+.downloads-panel__missing {
+  grid-column: 1;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.downloads-panel__actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: 2px;
+}
+
+.downloads-panel__action {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+}
+
+.downloads-panel__action:hover {
+  background: var(--bg-input);
+  color: var(--fg);
+}
+
+.downloads-panel__progress {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 4px;
+  accent-color: var(--accent);
+}
+
+.downloads-panel__notice,
+.downloads-panel__empty {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--fg-dim);
+}
+
+.downloads-panel__all {
+  padding: 6px 8px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+}
+
+.downloads-panel__all:hover {
+  background: var(--bg-input);
+}

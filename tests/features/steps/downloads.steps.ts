@@ -17,6 +17,17 @@ import {
   type DownloadRecord,
   type DownloadRecorder
 } from '@shared/downloads/model.js'
+import type { IpcMainInvokeEvent } from 'electron'
+import {
+  registerDownloadHandlers,
+  type DownloadHandle,
+  type DownloadHandlerWindow
+} from '@main/ipc/download-handlers.js'
+import {
+  downloadsPanelPresentation,
+  downloadsPanelUpdate,
+  type OverlayState
+} from '@shared/overlay/surface.js'
 import { FakeItem, FakeSession } from '../../download-fakes.js'
 import { scope, tempFile } from './world.js'
 
@@ -99,9 +110,16 @@ function rowFor(state: unknown, fileName: string): DownloadRecord {
   return found
 }
 
-/** A row as the page sees it: the stored record plus the one thing that is never stored. */
+/**
+ * A row as the page sees it: the stored record plus the two things that are never stored. A stored row
+ * has no transfer behind it in this process, so it cannot pause.
+ */
 function entryFor(state: unknown, fileName: string): DownloadEntry {
-  return { ...rowFor(state, fileName), onDisk: scope(state).filesOnDisk.has(fileName) }
+  return {
+    ...rowFor(state, fileName),
+    onDisk: scope(state).filesOnDisk.has(fileName),
+    canPause: false
+  }
 }
 
 function nameFrom(state: unknown, sources: { url: string; contentDisposition?: string }): void {
@@ -142,7 +160,101 @@ function listedIn(state: unknown, viewer: DownloadViewer): string[] {
   return windowWorld(state).manager.snapshot(viewer).map((entry) => entry.fileName)
 }
 
+/**
+ * One window with its downloads page open and its panel on the overlay layer, for the scenario where an
+ * action in one view has to show in the other.
+ *
+ * The manager and the `downloads:*` handlers are the real ones, so the cancel travels the way a click
+ * does: a request from the overlay's web contents, checked against the window's list, handed to the
+ * manager, answered by Chromium through `done`, and pushed. The window is the part that needs Electron,
+ * so it is a plain object — and its panel follows the controller's own rule for re-presenting, which is
+ * `downloadsPanelUpdate`, rather than a copy of it.
+ */
+interface PanelWorld {
+  manager: DownloadManager
+  session: FakeSession
+  handlers: Map<string, (payload: never, event: IpcMainInvokeEvent) => unknown>
+  items: Map<string, FakeItem>
+  /** Every list the page in the tab was pushed, in order. */
+  pagePushes: DownloadEntry[][]
+  /** What the window's overlay layer shows. */
+  overlay: OverlayState
+}
+
+/** The window's web contents, by role: its chrome UI, its overlay layer, and the tab with the page. */
+const CHROME_ID = 1
+const OVERLAY_ID = 2
+const PAGE_TAB_ID = 11
+
+function panelWorld(state: unknown): PanelWorld {
+  const existing = scope(state).scratch['downloadPanel'] as PanelWorld | undefined
+  if (existing === undefined)
+    throw new Error('this scenario has no window with a panel; add a Given')
+  return existing
+}
+
 // --- given -------------------------------------------------------------------
+
+Given('a window with the downloads page open in one of its tabs', async (state: unknown) => {
+  await openList(state)
+  const session = new FakeSession()
+  const manager = new DownloadManager({
+    store: store(state),
+    getSettings: () => defaultSettings(),
+    defaultDirectory: () => '/downloads',
+    fileExists: () => false,
+    shell: { openPath: () => Promise.resolve(''), showItemInFolder: () => {} },
+    windowFor: (source) => (source === undefined ? undefined : 1),
+    now: () => NOW,
+    progressIntervalMs: 0
+  })
+  manager.attach(session, 'normal')
+
+  const world: PanelWorld = {
+    manager,
+    session,
+    handlers: new Map(),
+    items: new Map(),
+    pagePushes: [],
+    overlay: null
+  }
+  const window: DownloadHandlerWindow = {
+    viewer: { windowId: 1, mode: 'normal', session },
+    sends: (webContentsId) => [CHROME_ID, OVERLAY_ID, PAGE_TAB_ID].includes(webContentsId),
+    emitToInternalPages: (_channel, payload) => {
+      world.pagePushes.push(payload.downloads)
+    },
+    emit: () => {},
+    downloadsPanelPresentedAt: null,
+    refreshDownloadsPanel: (entries) => {
+      world.overlay = downloadsPanelUpdate(world.overlay, entries) ?? world.overlay
+    }
+  }
+  const handle: DownloadHandle = (channel, handler) => {
+    world.handlers.set(channel, handler)
+  }
+  registerDownloadHandlers({
+    handle,
+    downloads: manager,
+    windows: { downloadWindows: [window], onDownloadsPanelPresented: () => {} }
+  })
+  scope(state).scratch['downloadPanel'] = world
+})
+
+Given('{string} is downloading in that window', (state: unknown, url: string) => {
+  const world = panelWorld(state)
+  const item = world.session.download(new FakeItem(url), PAGE_TAB_ID)
+  world.items.set(downloadFileNameFor({ url }), item)
+})
+
+Given("the window's downloads panel is open", (state: unknown) => {
+  const world = panelWorld(state)
+  // As the controller builds it when the chrome UI asks: the window's list, freshly probed.
+  world.overlay = downloadsPanelPresentation(
+    { x: 1300, y: 44, width: 32, height: 28 },
+    world.manager.list({ windowId: 1, mode: 'normal', session: world.session })
+  )
+})
 
 Given('a normal window and two private windows', async (state: unknown) => {
   await openList(state)
@@ -293,6 +405,20 @@ When('I clear the download list', (state: unknown) => {
   refresh(state)
 })
 
+When('{string} is cancelled from the panel', async (state: unknown, fileName: string) => {
+  const world = panelWorld(state)
+  const cancel = world.handlers.get('downloads:cancel')
+  const row = world.overlay?.kind === 'downloads-panel' ? world.overlay.downloads : []
+  const id = row.find((entry) => entry.fileName === fileName)?.id
+  if (cancel === undefined || id === undefined) throw new Error(`the panel shows no "${fileName}"`)
+  // From the overlay's web contents, which is where the panel's button is.
+  const event = { sender: { id: OVERLAY_ID } } as unknown as IpcMainInvokeEvent
+  const request = { id }
+  expect(await cancel(request as never, event)).toEqual({ changed: true })
+  // And Chromium answers as it does: the state moves, then `done` fires.
+  world.items.get(fileName)?.end('cancelled')
+})
+
 // --- then: the name ----------------------------------------------------------
 
 Then('it is written as {string}', (state: unknown, name: string) => {
@@ -348,6 +474,22 @@ Then('the browser keeps nothing of it in memory', (state: unknown) => {
   const { manager } = windowWorld(state)
   expect(manager.liveCount).toBe(0)
   expect(manager.windowsWithDownloads).toBe(0)
+})
+
+// --- then: the panel and the page ----------------------------------------------
+
+Then('the downloads page shows {string} as cancelled', (state: unknown, fileName: string) => {
+  const latest = panelWorld(state).pagePushes.at(-1) ?? []
+  expect(latest.find((entry) => entry.fileName === fileName)?.state).toBe('cancelled')
+})
+
+Then('the panel shows {string} as cancelled', (state: unknown, fileName: string) => {
+  const overlay = panelWorld(state).overlay
+  if (overlay?.kind !== 'downloads-panel') throw new Error('the panel is not up any more')
+  const row = overlay.downloads.find((entry) => entry.fileName === fileName)
+  expect(row?.state).toBe('cancelled')
+  // Finished, so there is no transfer left to pause.
+  expect(row?.canPause).toBe(false)
 })
 
 // --- then: the list ----------------------------------------------------------

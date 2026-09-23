@@ -551,6 +551,39 @@ describe('DownloadManager, transfers that did not come from Chromium', () => {
     expect(calls).toEqual([])
   })
 
+  it('says on the row whether pausing could work, so a panel can leave the button out', async () => {
+    /*
+      Derived when the list is read, like `onDisk`, and never stored: a Chromium item can pause, a
+      foreign transfer only if its producer said so, and a row whose transfer is gone cannot at all.
+    */
+    const { manager, store } = await fixture()
+    const normal = windowOf(manager, 1, 'normal')
+    const chromium = normal.session.download(new FakeItem('https://files.example/a.zip'))
+    transferIn(manager, normal, { url: 'https://media.example/fixed' })
+    transferIn(manager, normal, {
+      url: 'https://media.example/pausable',
+      fileName: 'pausable.mp4',
+      pausing: { pause: () => {}, resume: () => {} }
+    })
+
+    const canPause = (url: string): boolean | undefined =>
+      manager.snapshot(normal).find((entry) => entry.url === url)?.canPause
+    expect(canPause('https://files.example/a.zip')).toBe(true)
+    expect(canPause('https://media.example/fixed')).toBe(false)
+    expect(canPause('https://media.example/pausable')).toBe(true)
+
+    chromium.end('completed')
+    expect(canPause('https://files.example/a.zip')).toBe(false)
+    // Finished is finished even where the live entry stays, as a private download's does.
+    const priv = windowOf(manager, 2, 'private')
+    const secret = priv.session.download(new FakeItem('https://files.example/secret.zip'))
+    secret.end('cancelled')
+    expect(manager.snapshot(priv).find((entry) => entry.url.endsWith('secret.zip'))?.canPause).toBe(
+      false
+    )
+    expect(Object.keys(store.list()[0] ?? {})).not.toContain('canPause')
+  })
+
   it('pauses and resumes a transfer that says it can', async () => {
     const { manager } = await fixture()
     const normal = windowOf(manager, 1, 'normal')

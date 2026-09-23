@@ -127,3 +127,15 @@ Feature: Downloads
       | address                     | file  | state  | on disk | received | total   |
       | https://files.example/h.iso | h.iso | paused | no      | 500000   | 4000000 |
     Then the row for "h.iso" can still be paused, resumed or cancelled
+
+  Scenario: Cancelling a download in the panel shows on the downloads page at once (AE4)
+    The panel and the page read one list, so an action in one is a change to that list,
+    and the change reaches every view of it in the same pass: the page in its tab, and
+    the panel that is still open over it.
+
+    Given a window with the downloads page open in one of its tabs
+    And "https://files.example/big.iso" is downloading in that window
+    And the window's downloads panel is open
+    When "big.iso" is cancelled from the panel
+    Then the downloads page shows "big.iso" as cancelled
+    And the panel shows "big.iso" as cancelled

@@ -1,26 +1,35 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DOWNLOADS_PANEL_ROWS,
   OVERLAY_AWAITS_ANSWER,
   OVERLAY_CAPTURES_KEYBOARD,
   OVERLAY_KINDS,
   OVERLAY_MARKS_THE_PAGE,
   OVERLAY_PRECEDENCE,
+  OVERLAY_REFOCUSES_ON_UPDATE,
   OVERLAY_REGION,
   awaitsAnswer,
+  downloadsPanelPresentation,
+  downloadsPanelUpdate,
   capturesKeyboard,
   departureMatters,
   marksThePage,
   mayPresentOver,
+  movesFocus,
   overlayBounds,
   overlayRegionRect,
   regionOf,
   surfaceIdentity,
   takesFocus,
+  type DownloadsPanelPresentation,
   type OverlayKind,
   type OverlayPresentation,
   type FindBarPresentation,
+  type PickerBarPresentation,
   type TileBarPresentation
 } from '@shared/overlay/surface.js'
+import type { DownloadEntry } from '@shared/downloads/model.js'
+import { invokeContract, eventContract } from '@shared/ipc/contract.js'
 import { TILE_BAR_HEIGHT } from '@shared/split/tile-bar.js'
 import { FIND_BAR_HEIGHT, FIND_BAR_WIDTH } from '@shared/find/bar.js'
 import { PICKER_BAR_HEIGHT, PICKER_BAR_WIDTH } from '@shared/overlay/picker-bar.js'
@@ -59,6 +68,42 @@ function findBarSample(overrides: Partial<FindBarPresentation> = {}): FindBarPre
   const sample = SAMPLES['find-bar']
   if (sample.kind !== 'find-bar') throw new Error('the find-bar sample is no longer a find bar')
   return { ...sample, ...overrides }
+}
+
+/** The same narrowing, for the downloads panel, whose rows are what its updates change. */
+function downloadsPanelSample(
+  overrides: Partial<DownloadsPanelPresentation> = {}
+): DownloadsPanelPresentation {
+  const sample = SAMPLES['downloads-panel']
+  if (sample.kind !== 'downloads-panel') throw new Error('the panel sample is no longer the panel')
+  return { ...sample, ...overrides }
+}
+
+function pickerBarSample(overrides: Partial<PickerBarPresentation> = {}): PickerBarPresentation {
+  const sample = SAMPLES['picker-bar']
+  if (sample.kind !== 'picker-bar')
+    throw new Error('the picker-bar sample is no longer a picker bar')
+  return { ...sample, ...overrides }
+}
+
+/** One row of the downloads list, as the core would put it in the panel. */
+function download(id: string, overrides: Partial<DownloadEntry> = {}): DownloadEntry {
+  return {
+    id,
+    url: `https://files.example/${id}.zip`,
+    fileName: `${id}.zip`,
+    savePath: `/downloads/${id}.zip`,
+    mimeType: 'application/zip',
+    totalBytes: 1000,
+    receivedBytes: 400,
+    state: 'progressing',
+    startedAt: 1_700_000_000_000,
+    endedAt: null,
+    interruptReason: '',
+    onDisk: false,
+    canPause: true,
+    ...overrides
+  }
 }
 
 const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
@@ -145,6 +190,11 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
     canNarrow: true,
     outcome: null,
     canUndo: false
+  },
+  'downloads-panel': {
+    kind: 'downloads-panel',
+    anchor: { x: 1300, y: 44, width: 32, height: 32 },
+    downloads: [download('a')]
   }
 }
 
@@ -543,5 +593,136 @@ describe('whose keystrokes the core takes out of the pipeline', () => {
       if (!OVERLAY_CAPTURES_KEYBOARD[kind]) continue
       expect(takesFocus(SAMPLES[kind]), kind).toBe(true)
     }
+  })
+})
+
+describe('the downloads panel', () => {
+  it('hangs from its button over the whole window, like the layout menu', () => {
+    expect(regionOf('downloads-panel')).toBe('window')
+    expect(overlayBounds(SAMPLES['downloads-panel'], WINDOW, CONTENT)).toEqual({
+      x: 0,
+      y: 0,
+      width: 1440,
+      height: 900
+    })
+  })
+
+  it('waits for nothing, marks nothing and leaves its keys to its renderer', () => {
+    // So a blur or a resize takes it down like a menu, and nothing has to be told when it goes.
+    expect(departureMatters(SAMPLES['downloads-panel'])).toBe(false)
+    expect(capturesKeyboard(SAMPLES['downloads-panel'])).toBe(false)
+    expect(takesFocus(SAMPLES['downloads-panel'])).toBe(true)
+  })
+
+  it('ranks with the menu: above the bars, below every prompt', () => {
+    expect(OVERLAY_PRECEDENCE['downloads-panel']).toBe(OVERLAY_PRECEDENCE['layout-menu'])
+    expect(mayPresentOver('tile-bar', SAMPLES['downloads-panel'])).toBe(false)
+    expect(mayPresentOver('downloads-panel', SAMPLES['permission-request'])).toBe(false)
+    expect(mayPresentOver('downloads-panel', SAMPLES['master-password'])).toBe(false)
+    expect(mayPresentOver('downloads-panel', SAMPLES['navigation-request'])).toBe(false)
+    expect(mayPresentOver('permission-request', SAMPLES['downloads-panel'])).toBe(true)
+  })
+
+  it('is one surface however its rows change', () => {
+    const later = downloadsPanelSample({
+      downloads: [download('b'), download('a', { state: 'completed', receivedBytes: 1000 })]
+    })
+    expect(surfaceIdentity(later)).toBe(surfaceIdentity(SAMPLES['downloads-panel']))
+  })
+})
+
+describe('whether an update takes the keyboard again', () => {
+  it('keeps what every existing kind did, and leaves the keyboard alone only for the panel', () => {
+    for (const kind of OVERLAY_KINDS) {
+      expect(OVERLAY_REFOCUSES_ON_UPDATE[kind], kind).toBe(kind !== 'downloads-panel')
+    }
+  })
+
+  it('focuses the panel when it is first presented', () => {
+    expect(movesFocus(SAMPLES['downloads-panel'], null)).toBe(true)
+  })
+
+  it('does not focus it again when the same panel is re-presented with fresh rows (KTD8)', () => {
+    const update = downloadsPanelSample({ downloads: [download('a', { receivedBytes: 900 })] })
+    expect(movesFocus(update, SAMPLES['downloads-panel'])).toBe(false)
+  })
+
+  it('focuses it when it replaces a different surface', () => {
+    expect(movesFocus(SAMPLES['downloads-panel'], SAMPLES['layout-menu'])).toBe(true)
+    expect(movesFocus(SAMPLES['downloads-panel'], SAMPLES['find-bar'])).toBe(true)
+  })
+
+  it('still pulls the keyboard back into a find bar or a picker bar on every update', () => {
+    // Both bars get the keyboard back after a click into the page this way; that must not change.
+    expect(movesFocus(findBarSample({ matches: 9 }), SAMPLES['find-bar'])).toBe(true)
+    expect(movesFocus(pickerBarSample({ matches: 9 }), SAMPLES['picker-bar'])).toBe(true)
+  })
+
+  it('never focuses what takes no focus, update or not', () => {
+    expect(movesFocus(SAMPLES['tile-bar'], null)).toBe(false)
+    expect(movesFocus(SAMPLES['tile-bar'], SAMPLES['tile-bar'])).toBe(false)
+  })
+})
+
+describe('the panel the core builds', () => {
+  const anchor = { x: 1300, y: 44, width: 32, height: 32 }
+  const many = ['g', 'f', 'e', 'd', 'c', 'b', 'a'].map((id) => download(id))
+
+  it('lists the newest few of the list it is given, in its order', () => {
+    const panel = downloadsPanelPresentation(anchor, many)
+    expect(DOWNLOADS_PANEL_ROWS).toBe(6)
+    expect(panel.kind).toBe('downloads-panel')
+    expect(panel.anchor).toEqual(anchor)
+    expect(panel.downloads.map((entry) => entry.id)).toEqual(['g', 'f', 'e', 'd', 'c', 'b'])
+  })
+
+  it('re-presents the panel that is up, at the anchor it was opened at', () => {
+    const update = downloadsPanelUpdate(SAMPLES['downloads-panel'], many)
+    expect(update?.anchor).toEqual(downloadsPanelSample().anchor)
+    expect(update?.downloads).toHaveLength(DOWNLOADS_PANEL_ROWS)
+  })
+
+  it('does not reopen a panel that is closed', () => {
+    expect(downloadsPanelUpdate(null, many)).toBeNull()
+  })
+
+  it('does not take the layer from whatever replaced the panel', () => {
+    // Equal ranks replace, so a tick that presented the panel over a menu or a find bar would take it down.
+    expect(downloadsPanelUpdate(SAMPLES['find-bar'], many)).toBeNull()
+    expect(downloadsPanelUpdate(SAMPLES['layout-menu'], many)).toBeNull()
+    expect(downloadsPanelUpdate(SAMPLES['permission-request'], many)).toBeNull()
+  })
+})
+
+describe('what the chrome UI may send, and what the layer is sent', () => {
+  const request = invokeContract['overlay:present'].request
+  const presented = eventContract['overlay:presented']
+  const anchor = { x: 1300, y: 44, width: 32, height: 32 }
+
+  it('accepts the panel asked for by kind and anchor alone', () => {
+    expect(request.safeParse({ kind: 'downloads-panel', anchor }).success).toBe(true)
+  })
+
+  it('refuses a request that brings its own rows (KTD2)', () => {
+    expect(
+      request.safeParse({ kind: 'downloads-panel', anchor, downloads: [download('a')] }).success
+    ).toBe(false)
+  })
+
+  it('still accepts every other surface as it was', () => {
+    for (const kind of OVERLAY_KINDS) {
+      if (kind === 'downloads-panel') continue
+      expect(request.safeParse(SAMPLES[kind]).success, kind).toBe(true)
+    }
+  })
+
+  it('carries the rows to the layer, and no more than the panel shows', () => {
+    expect(presented.safeParse({ presentation: SAMPLES['downloads-panel'] }).success).toBe(true)
+    const tooMany = downloadsPanelSample({
+      downloads: Array.from({ length: DOWNLOADS_PANEL_ROWS + 1 }, (_, index) =>
+        download(`${index}`)
+      )
+    })
+    expect(presented.safeParse({ presentation: tooMany }).success).toBe(false)
   })
 })

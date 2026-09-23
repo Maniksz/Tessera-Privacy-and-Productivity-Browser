@@ -138,6 +138,16 @@ export function emptyDownloadDocument(): DownloadDocument {
 export interface DownloadEntry extends DownloadRecord {
   /** Probed when the list was read. Never stored. */
   onDisk: boolean
+  /**
+   * Whether this download's transfer can be paused and resumed at all. Worked out when the list is
+   * read, like `onDisk`, and never stored.
+   *
+   * False for anything not running in this process — a stored row has no transfer left to pause — and
+   * for a transfer from outside Chromium whose producer cannot pause (`foreign-transfer.ts`). A state
+   * says whether pausing makes sense *now*; this says whether it could ever work, so a surface can
+   * leave out a Pause button that would only ever answer "nothing changed".
+   */
+  canPause: boolean
 }
 
 /** True when the row may offer "Open" and "Show in folder". */

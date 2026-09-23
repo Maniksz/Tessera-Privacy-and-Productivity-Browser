@@ -12,10 +12,15 @@ import { AutomaticNavigationPrompt } from './AutomaticNavigationPrompt.js'
 import { HOME_URL, resolveOmniboxInput } from '@shared/url/omnibox.js'
 import {
   TILE_BOUND_KINDS,
+  downloadsPanelPresentation,
+  downloadsPanelUpdate,
+  type DownloadsPanelPresentation,
   type OverlayKind,
   type OverlayPresentation,
+  type OverlayRequest,
   type OverlayState
 } from '@shared/overlay/surface.js'
+import type { DownloadEntry } from '@shared/downloads/model.js'
 import { Tab, adoptTabId, nextTabId, type TabWiring } from './Tab.js'
 // The seams' *types* only: what each one is, and what it may reach, both live in `window-seams.ts`.
 import { createWindowSeams, type WindowSeams } from './window-seams.js'
@@ -82,6 +87,14 @@ export interface WindowControllerOptions {
    * channels from the manager's list, neither of which a window holds.
    */
   onDownloadsPanelPresented(): void
+  /**
+   * This window's download list as its downloads page is shown it, freshly probed; newest first.
+   *
+   * What the panel is built from when the chrome UI asks for it (KTD7). Freshly probed because opening
+   * the panel is a click, the one moment a stat call per row is worth it — the re-presentations that
+   * follow reuse the pushed snapshot instead; see `refreshDownloadsPanel`.
+   */
+  downloadsPanelEntries(): readonly DownloadEntry[]
 }
 
 const DEFAULT_CHROME_INSETS: ChromeInsets = { top: 88, bottom: 0, left: 0, right: 0 }
@@ -747,6 +760,12 @@ export class BrowserWindowController {
       tiles that are about to move.
     */
     this.#overlay.dismissKind('layout-menu')
+    /*
+      The downloads panel as well, by name — nothing derives it. It hangs from a toolbar button that a
+      new layout can move, so it goes the way the layout menu does rather than staying up beside a
+      button that is no longer where it points.
+    */
+    this.#overlay.dismissKind('downloads-panel')
     this.#dismissTileBoundSurfaces()
     const changed = this.split.setLayout(layout)
     /*
@@ -911,9 +930,42 @@ export class BrowserWindowController {
 
   // --- overlay surface -----------------------------------------------------
 
-  presentOverlay(presentation: OverlayPresentation): void {
+  /**
+   * Puts a surface on the layer, as described — except the downloads panel, which is described by kind
+   * and anchor only and whose rows this window fills in (KTD2).
+   */
+  presentOverlay(request: OverlayRequest): void {
+    if (request.kind === 'downloads-panel') {
+      this.#presentDownloadsPanel(
+        downloadsPanelPresentation(request.anchor, this.options.downloadsPanelEntries())
+      )
+      return
+    }
+    this.#present(request)
+  }
+
+  /**
+   * The panel again, with the rows of a coalesced download change — if, and only if, it is up.
+   *
+   * Called for every change whether anybody is looking or not, with the same snapshot the downloads
+   * page and the button are sent, so the three views describe one moment (R9). A panel that is closed
+   * stays closed, and one that something else has replaced is not brought back over it; the rule is
+   * `downloadsPanelUpdate`'s. The layer treats what does go up as an update: same identity, no
+   * departure, and no second grab of the keyboard (KTD8).
+   */
+  refreshDownloadsPanel(entries: readonly DownloadEntry[]): void {
+    const update = downloadsPanelUpdate(this.#overlay.presentation, entries)
+    if (update !== null) this.#presentDownloadsPanel(update)
+  }
+
+  #presentDownloadsPanel(panel: DownloadsPanelPresentation): void {
+    // Only a presentation the layer took counts as the user having looked; a declined one showed nothing.
+    if (this.#present(panel)) this.downloadsPanelPresented()
+  }
+
+  #present(presentation: OverlayPresentation): boolean {
     const { width, height } = this.window.getContentBounds()
-    this.#overlay.present(presentation, { width, height }, this.#contentRect())
+    return this.#overlay.present(presentation, { width, height }, this.#contentRect())
   }
 
   /** The tab drag, which the IPC layer drives directly: the gesture spans two renderers. */
