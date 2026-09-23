@@ -64,6 +64,14 @@ describe('telemetry stage', () => {
     expect(outcome.action).toBe('continue')
   })
 
+  it('lets a page navigate to Google sign-in', () => {
+    // YouTube's "Sign in" is a top-level navigation here; blocking the host broke every Google login.
+    const outcome = evaluateStages(
+      context({ url: 'https://accounts.google.com/ServiceLogin?service=youtube', resourceType: 'mainFrame' })
+    )
+    expect(outcome.action).toBe('continue')
+  })
+
   it('respects the setting', () => {
     const outcome = evaluateStages(
       context({

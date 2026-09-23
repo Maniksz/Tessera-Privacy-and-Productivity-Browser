@@ -83,6 +83,10 @@ export interface FilterListEngine {
  * Telemetry and crash-reporting endpoints of the substrate itself, blocked at
  * the network layer as a second line of defence behind the command-line
  * switches (spec 4).
+ *
+ * `accounts.google.com` is deliberately absent. It is Chrome's sync sign-in host, but it is also where
+ * every Google login a page starts lands — YouTube, Gmail, "Sign in with Google" — and this list runs
+ * on page requests too. Blocking it cancelled those navigations with `ERR_BLOCKED_BY_CLIENT`.
  */
 const TELEMETRY_HOSTS: readonly string[] = [
   'update.googleapis.com',
@@ -91,7 +95,6 @@ const TELEMETRY_HOSTS: readonly string[] = [
   'clients4.google.com',
   'safebrowsing.googleapis.com',
   'safebrowsing.google.com',
-  'accounts.google.com',
   'optimizationguide-pa.googleapis.com',
   'content-autofill.googleapis.com',
   'translate.googleapis.com',

@@ -23,6 +23,33 @@ const CHROMIUM_TARGET = 'chrome150'
 const NODE_TARGET = 'node24'
 
 /**
+ * Vite's dynamic-import helper, replaced by the one line of it this app uses.
+ *
+ * `modulePreload: false` below was meant to keep `__vitePreload` out of the overlay, and it does not:
+ * Vite wraps every `import()` in a client build in the helper regardless and only empties the list of
+ * files to preload. So the overlay carried the whole helper — `<link rel="modulepreload">` injection,
+ * CSS-load promises, a `vite:preloadError` event nothing listens for — about 1.2 kB of a chunk held to
+ * 20, for two dependency lists that are always `[]`. Measured from the built chunk, where the calls read
+ * `R(()=>import("./DownloadsPanelSurface-….js"),[],import.meta.url)`; the budget in
+ * `tests/architecture.test.ts` found it once the permission surface grew past the margin.
+ *
+ * Answering Vite's own module id first is the narrowest way to remove it. The call sites stay exactly
+ * as Vite writes them, and a helper that simply runs the import is what the real one reduces to when
+ * there is nothing to preload. Should a future renderer chunk import CSS lazily, that CSS would no
+ * longer be fetched ahead of the module — it would arrive with it, which for files on the local disk
+ * is the same thing.
+ */
+function directDynamicImports(): Plugin {
+  const helperId = '\0vite/preload-helper.js'
+  return {
+    name: 'tessera:direct-dynamic-imports',
+    enforce: 'pre',
+    resolveId: (id) => (id === helperId ? id : null),
+    load: (id) => (id === helperId ? 'export const __vitePreload = (load) => load()' : null)
+  }
+}
+
+/**
  * How every preload entry is built, and why there is one pass per entry.
  *
  * `inlineDynamicImports` is what keeps an entry self-contained, and it is a hard requirement rather
@@ -138,7 +165,7 @@ export default defineConfig({
 
   renderer: {
     root: resolve(projectRoot, 'src/renderer'),
-    plugins: [react()],
+    plugins: [react(), directDynamicImports()],
     resolve: {
       alias: {
         '@shared': shared,
@@ -156,14 +183,12 @@ export default defineConfig({
       // regression visible in the build log rather than only in a test.
       reportCompressedSize: true,
       /*
-        No preload helper for dynamic imports, and the saving is the reason rather than a side effect.
+        No preloading for dynamic imports: every chunk is read from the app's own files on the local disk,
+        where there is no round trip to overlap.
 
         The overlay lazily loads two surfaces it rarely shows — the downloads panel and the master-password
-        prompt — and the first `import()` in a chunk makes Vite inject `__vitePreload` plus a dependency map
-        into it, well over a kilobyte in a chunk held to 20. What that helper buys is a `<link rel="modulepreload">`
-        per dependency so the network fetches them in parallel. Every chunk here is read from the app's own
-        files on the local disk, where there is no round trip to overlap, so the helper costs bytes on every
-        window and saves nothing measurable.
+        prompt. This empties the dependency list Vite would preload for them; it does *not* remove the helper
+        that would do the preloading, which is what `directDynamicImports` is for.
       */
       modulePreload: false,
       rollupOptions: {
