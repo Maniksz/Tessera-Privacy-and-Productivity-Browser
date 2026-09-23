@@ -61,41 +61,69 @@ import {
 const T0 = 1_700_000_000_000
 
 /**
- * The four sentences the passwords page has to be able to say, with the two facts each of them
+ * The six sentences the passwords page has to be able to say, with the two facts each of them
  * implies.
  *
- * A `Record` keyed by the union rather than a list, so a fifth `VaultKeyProtection` cannot be added
- * without this table failing to compile — which is the point of the union being four named values
- * instead of a pair of booleans.
+ * A `Record` keyed by the union rather than a list, so a seventh `VaultKeyProtection` cannot be added
+ * without this table failing to compile — which is the point of the union being named values instead
+ * of a set of booleans.
  */
 const PROTECTION_FACTS: Readonly<
   Record<VaultKeyProtection, { readonly masterPassword: boolean; readonly exposed: boolean }>
 > = {
   'keystore+master': { masterPassword: true, exposed: false },
+  'weak-keystore+master': { masterPassword: true, exposed: false },
   master: { masterPassword: true, exposed: false },
   keystore: { masterPassword: false, exposed: false },
+  // Basic text wraps with a key built into the browser, so this is `plain` with extra steps.
+  'weak-keystore': { masterPassword: false, exposed: true },
   plain: { masterPassword: false, exposed: true }
 }
 
 describe('how the vault key is protected on this machine', () => {
   it('reports both layers when both are present', () => {
-    expect(vaultKeyProtection({ keystore: true, masterPassword: true })).toBe('keystore+master')
+    expect(vaultKeyProtection({ keystore: true, weakKeystore: false, masterPassword: true })).toBe(
+      'keystore+master'
+    )
   })
 
   it('reports master-password-only, which is the keyring-less desktop and real protection', () => {
     // The case where a master password matters most: it is the only thing between a copied profile
     // directory and the vault, so it must not be collapsed into "not properly protected".
-    expect(vaultKeyProtection({ keystore: false, masterPassword: true })).toBe('master')
+    expect(vaultKeyProtection({ keystore: false, weakKeystore: false, masterPassword: true })).toBe(
+      'master'
+    )
   })
 
   it('reports keystore-only, which is today’s default and no re-authentication at all', () => {
-    expect(vaultKeyProtection({ keystore: true, masterPassword: false })).toBe('keystore')
+    expect(vaultKeyProtection({ keystore: true, weakKeystore: false, masterPassword: false })).toBe(
+      'keystore'
+    )
   })
 
   it('reports plain when neither layer is there', () => {
     // Still offered rather than refused — a browser that will not run on a keyring-less desktop is
     // not private, only unavailable — which is exactly why this value has to be nameable.
-    expect(vaultKeyProtection({ keystore: false, masterPassword: false })).toBe('plain')
+    expect(
+      vaultKeyProtection({ keystore: false, weakKeystore: false, masterPassword: false })
+    ).toBe('plain')
+  })
+
+  it('says a key store is weak only where it took part in the wrapping', () => {
+    // Linux's basic text: `isEncryptionAvailable()` is true, and what it wraps anyone can unwrap.
+    expect(vaultKeyProtection({ keystore: true, weakKeystore: true, masterPassword: true })).toBe(
+      'weak-keystore+master'
+    )
+    expect(vaultKeyProtection({ keystore: true, weakKeystore: true, masterPassword: false })).toBe(
+      'weak-keystore'
+    )
+    // A file no key store wrapped says the same thing whatever the key store is like today.
+    expect(vaultKeyProtection({ keystore: false, weakKeystore: true, masterPassword: true })).toBe(
+      'master'
+    )
+    expect(vaultKeyProtection({ keystore: false, weakKeystore: true, masterPassword: false })).toBe(
+      'plain'
+    )
   })
 
   it('answers whether a master password guards the key for every protection there is', () => {

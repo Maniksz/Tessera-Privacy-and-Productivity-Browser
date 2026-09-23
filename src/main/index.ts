@@ -283,10 +283,12 @@ async function main(): Promise<void> {
     up with an encrypted quick-links file next to a readable settings one.
 
     `safeStorage` is asked only after `whenReady`, which is the earliest it answers reliably on
-    Linux — the reason the two startup switches come from their own file instead.
+    Linux — the reason the two startup switches come from their own file instead. That includes
+    which backend Linux chose, the one question that tells a keyring from basic text.
   */
   const protection = await openLocalDataProtection({
     safeStorage,
+    platform: process.platform,
     keyFilePath: localDataKeyFile(),
     noticeFilePath: unencryptedDataNoticeFile()
   })
@@ -498,6 +500,8 @@ async function main(): Promise<void> {
     documentPath: passwordsFile(),
     safeStorage,
     previousCodec: protection.codec,
+    // What the key store is worth, as the decision above found it, so the page says the same thing.
+    keystoreStrength: protection.keystore,
     /*
       `passwords.lockAfterMinutes`, read at every idle check rather than captured here.
 

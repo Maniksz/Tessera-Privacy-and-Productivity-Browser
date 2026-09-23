@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { isSealedDocument } from '@main/crypto/envelope.js'
+import type { KeystoreStrength } from '@main/crypto/keystore-strength.js'
 import type { SafeStorageLike } from '@main/crypto/local-data-key.js'
 import {
   VAULT_SCRYPT_COST,
@@ -158,6 +159,7 @@ interface OpenOptions {
   readonly now?: () => number
   readonly idleTimeoutMs?: number
   readonly debounceMs?: number
+  readonly keystoreStrength?: KeystoreStrength
 }
 
 interface Fixture extends Profile {
@@ -193,6 +195,10 @@ async function openVault(options: OpenOptions = {}): Promise<Fixture> {
     ...(options.idleTimeoutMs === undefined
       ? {}
       : { idleTimeoutMs: (): number => options.idleTimeoutMs ?? 0 }),
+    // Absent unless a test is about Linux's basic text, so the other tests see the default.
+    ...(options.keystoreStrength === undefined
+      ? {}
+      : { keystoreStrength: options.keystoreStrength }),
     idleSweepMs: 0,
     generateId: () => {
       created += 1
@@ -1057,6 +1063,40 @@ describe('a vault document this version cannot write back', () => {
     vault.dispose()
   })
 
+  it('leaves a key file from a newer version alone and offers no way past it', async () => {
+    /*
+      A newer Tessera may have moved the key file to a format this one cannot read. That is not damage,
+      and it must not be answered like damage: the page offers a reset for an unreadable key, and a
+      reset here would delete a vault the newer version still opens. `newer` on a locked, unreadable
+      vault is what tells the page the difference.
+    */
+    const where = await profile()
+    const later = JSON.stringify({ version: 2, wrapping: 'argon2id-and-more' })
+    await writeFile(where.keyFilePath, later)
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { vault } = await openVault({ profile: where })
+
+      expect(vault.status()).toEqual({
+        protection: 'keystore',
+        unlocked: false,
+        unreadable: true,
+        newer: true,
+        idleTimeoutMs: VAULT_IDLE_TIMEOUT_MS
+      })
+      expect(await vault.unlock(MASTER)).toBe('unreadable')
+      expect(await readFile(where.keyFilePath, 'utf8')).toBe(later)
+      expect(warnings.mock.calls.join('\n')).toMatch(/newer version/)
+
+      // Deliberately deleting it is still the user's call, and afterwards nothing is newer any more.
+      expect(await vault.resetVault(RESET_VAULT_CONFIRMATION)).toBe(true)
+      expect(vault.status().newer).toBeUndefined()
+      vault.dispose()
+    } finally {
+      warnings.mockRestore()
+    }
+  })
+
   it('answers exactly the four fields for a document that loaded cleanly', async () => {
     const { vault } = await openVault()
     expect(Object.keys(vault.status()).sort()).toEqual(
@@ -1430,5 +1470,49 @@ describe('the migration onto the vault’s own key', () => {
     // And the next start needs no previous codec at all.
     const { vault: next } = await openVault({ profile: where, previousCodec: null })
     expect(next.secretOf('pw-seeded')).toBe(SECRET)
+  })
+})
+
+describe('a vault under a weak key store', () => {
+  /*
+    R14. Linux without a keyring falls back to basic text, which wraps with a key built into the
+    browser and still answers `isEncryptionAvailable()` with `true`. The key file keeps saying a key
+    store wrapped it — that is what happened — and it keeps opening; what changes is what the page is
+    told that wrapping is worth.
+  */
+  it('opens a key file a key store wrapped, and calls the key store weak', async () => {
+    const where = await profile()
+    const safeStorage = fakeKeystore()
+    const first = await openVault({ profile: where, safeStorage })
+    expect(first.vault.create({ url: SITE, username: 'alice', password: SECRET })).toBe('created')
+    await first.vault.flush()
+    first.vault.dispose()
+
+    const { vault } = await openVault({ profile: where, safeStorage, keystoreStrength: 'weak' })
+
+    expect(vault.status()).toMatchObject({ protection: 'weak-keystore', unlocked: true })
+    expect(vault.list().map((entry) => entry.username)).toEqual(['alice'])
+    expect((await readVaultKeyFile(where.keyFilePath))?.keystore).toBe(true)
+    vault.dispose()
+  })
+
+  it('says the master password is what protects it once one is set', async () => {
+    const { vault } = await openVault({ keystoreStrength: 'weak' })
+    expect(await vault.setMasterPassword({ current: null, next: MASTER })).toBe('set')
+    expect(vault.status().protection).toBe('weak-keystore+master')
+    vault.dispose()
+  })
+
+  it('calls the key store weak even with no readable key file', async () => {
+    const where = await profile()
+    await writeFile(where.keyFilePath, 'this is not a vault key file')
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { vault } = await openVault({ profile: where, keystoreStrength: 'weak' })
+      expect(vault.status()).toMatchObject({ protection: 'weak-keystore', unreadable: true })
+      vault.dispose()
+    } finally {
+      warnings.mockRestore()
+    }
   })
 })

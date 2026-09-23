@@ -2801,3 +2801,32 @@ describe('permission host', () => {
     )
   })
 })
+
+describe('key store strength', () => {
+  /*
+    R14. Linux's basic text answers "encryption available" and protects nothing, so what the key store
+    is worth is decided once, after `ready`, from the backend — and then carried rather than asked again.
+  */
+  it('asks for the Linux backend in one place only', async () => {
+    const callers = (await collect('src'))
+      .filter((file) => /\bgetSelectedStorageBackend\b/.test(codeOnly(file.text)))
+      .map((file) => file.relative.split(sep).join('/'))
+      .sort()
+    expect(callers).toEqual([
+      'src/main/crypto/keystore-strength.ts',
+      // The declaration on `SafeStorageLike`, which is not a call.
+      'src/main/crypto/local-data-key.ts'
+    ])
+  })
+
+  it('classifies after ready and hands the same answer to the vault', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    expect(entry).toMatch(
+      /openLocalDataProtection\(\{\s*safeStorage,\s*platform: process\.platform,/
+    )
+    expect(entry).toMatch(/PasswordVault\.open\(\{[^}]*keystoreStrength: protection\.keystore,/)
+    expect(entry.indexOf('openLocalDataProtection(')).toBeGreaterThan(
+      entry.indexOf('app.whenReady()')
+    )
+  })
+})

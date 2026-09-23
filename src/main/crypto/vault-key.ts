@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 import { vaultKeyProtection, type VaultKeyProtection } from '@shared/passwords/vault.js'
 import { removeTempFilesOf, writeFileAtomically } from '../data/atomic-write.js'
 import { DOCUMENT_KEY_BYTES, isSealedDocument, openDocument, sealDocument } from './envelope.js'
+import type { KeystoreStrength } from './keystore-strength.js'
 import type { SafeStorageLike } from './local-data-key.js'
 
 /**
@@ -123,6 +124,21 @@ export class VaultKeyUnreadableError extends Error {
   }
 }
 
+/**
+ * The key file was written by a newer Tessera, in a format this one does not know.
+ *
+ * A kind of unreadable, so every caller that only knows that much still leaves the vault locked and
+ * the file alone. What the subclass adds is the recovery: a damaged file is one the page offers to
+ * reset, and resetting this one would delete a vault the newer version still opens. So it is
+ * reported like a newer document (`VaultStatus.newer`), not like damage.
+ */
+export class VaultKeyNewerError extends VaultKeyUnreadableError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'VaultKeyNewerError'
+  }
+}
+
 /** The key file is behind a master password and none was supplied. */
 export class MasterPasswordRequiredError extends Error {
   constructor() {
@@ -159,9 +175,22 @@ export interface VaultKeyFile {
   readonly payload: string
 }
 
-/** What the page is told about this file. Derived, so it cannot disagree with the bytes. */
-export function vaultKeyProtectionOf(file: VaultKeyFile): VaultKeyProtection {
-  return vaultKeyProtection({ keystore: file.keystore, masterPassword: file.kdf !== null })
+/**
+ * What the page is told about this file. Derived, so it cannot disagree with the bytes.
+ *
+ * The one input that is not in the bytes is how much this run's key store is worth, and it is not
+ * there on purpose: `keystore` records that a key store wrapped the key, which stays true, while
+ * whether that key store protects anything is decided at startup by `classifyKeystore`.
+ */
+export function vaultKeyProtectionOf(
+  file: VaultKeyFile,
+  keystore: KeystoreStrength
+): VaultKeyProtection {
+  return vaultKeyProtection({
+    keystore: file.keystore,
+    weakKeystore: keystore === 'weak',
+    masterPassword: file.kdf !== null
+  })
 }
 
 /** Fresh key material for a new vault. */
@@ -177,6 +206,7 @@ export function newVaultKey(): Uint8Array {
  * first key sealed — which is what returning `null` for a damaged file would cause on the very next
  * line of the caller.
  *
+ * @throws VaultKeyNewerError      for a file from a later format, which is left as it is
  * @throws VaultKeyUnreadableError for a file that is not this format
  */
 export async function readVaultKeyFile(keyFilePath: string): Promise<VaultKeyFile | null> {
@@ -195,6 +225,12 @@ export async function readVaultKeyFile(keyFilePath: string): Promise<VaultKeyFil
     parsed = JSON.parse(bytes.toString('utf8')) as unknown
   } catch (error) {
     throw new VaultKeyUnreadableError(`${keyFilePath} is not readable as JSON: ${String(error)}`)
+  }
+  const newer = newerVersionOf(parsed)
+  if (newer !== null) {
+    throw new VaultKeyNewerError(
+      `${keyFilePath} was written by a newer version of Tessera (format ${newer})`
+    )
   }
   const file = asVaultKeyFile(parsed)
   if (file === null) {
@@ -224,6 +260,19 @@ function asVaultKeyFile(value: unknown): VaultKeyFile | null {
   const kdf = asVaultKdf(rawKdf)
   if (kdf === null) return null
   return { version: 1, keystore: record['keystore'], kdf, payload: record['payload'] }
+}
+
+/**
+ * The version of a file from a later format, or `null`.
+ *
+ * Only the version is looked at, because a later format may have changed every other field. It has to
+ * be a whole number above this build's own; anything else in that place was written by nobody and is
+ * damage, which `asVaultKeyFile` then refuses.
+ */
+function newerVersionOf(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null) return null
+  const version = (value as Record<string, unknown>)['version']
+  return isPositiveInteger(version) && version > 1 ? version : null
 }
 
 function asVaultKdf(value: unknown): VaultKdf | null {

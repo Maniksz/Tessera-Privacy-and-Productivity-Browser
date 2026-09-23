@@ -316,16 +316,20 @@ export const en = {
   /*
     One sentence per protection level rather than one sentence with a noun interpolated.
 
-    The four are not variations on a theme, so a template would have forced them into one grammar — and
+    The six are not variations on a theme, so a template would have forced them into one grammar — and
     interpolating a noun into a shared clause is how a translation ends up saying the opposite in German,
     where the surrounding words change with the noun.
   */
   'passwords.protection.keystoreMaster':
     'Protected twice: by a key your operating system keeps, and by your master password. Opening this vault needs both.',
+  'passwords.protection.weakKeystoreMaster':
+    'The key store on this system is weak (Linux without a keyring). Only your master password protects your credentials.',
   'passwords.protection.master':
     'Protected by your master password alone — this machine offered no key store. That password is the only thing between this folder and your credentials.',
   'passwords.protection.keystore':
     'Encrypted with a key your operating system keeps. Anyone already signed in as you can read these. Set a master password to change that.',
+  'passwords.protection.weakKeystore':
+    'No real protection. The key store on this system is weak (Linux without a keyring), and no master password is set, so anyone who can read this folder can read your passwords.',
   'passwords.protection.plain':
     'Not protected. There was no system key store, and no master password is set, so the key sits beside the file it protects.',
 
@@ -347,6 +351,9 @@ export const en = {
   /** No master password helps here, so the sentence must not suggest trying one. */
   'passwords.unreadableBody':
     'The key file is damaged, or the system key store that wrapped it is gone. No master password can open it. You can save a copy and start a new vault.',
+  /** Not damage, so the sentence must not suggest starting again: the newer version still opens it. */
+  'passwords.keyNewer':
+    'A newer version saved the key of this vault. This version cannot open it and leaves it unchanged.',
   'passwords.lockNow': 'Lock now',
   'passwords.idleNotice':
     'The vault locks itself after {minutes} minutes without use, when you lock it, and when the last window closes.',

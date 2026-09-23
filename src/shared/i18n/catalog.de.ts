@@ -251,10 +251,14 @@ export const de = {
   'passwords.title': 'Passwörter',
   'passwords.protection.keystoreMaster':
     'Doppelt geschützt: durch einen Schlüssel, den dein Betriebssystem aufbewahrt, und durch dein Master-Passwort. Zum Öffnen braucht es beides.',
+  'passwords.protection.weakKeystoreMaster':
+    'Der Schlüsselspeicher dieses Systems ist schwach (Linux ohne Schlüsselbund). Nur dein Master-Passwort schützt deine Zugangsdaten.',
   'passwords.protection.master':
     'Nur durch dein Master-Passwort geschützt — dieses Gerät hat keinen Schlüsselspeicher angeboten. Dieses Passwort ist das Einzige zwischen diesem Ordner und deinen Zugangsdaten.',
   'passwords.protection.keystore':
     'Mit einem Schlüssel verschlüsselt, den dein Betriebssystem aufbewahrt. Wer als du angemeldet ist, kann sie lesen. Setz ein Master-Passwort, wenn du das ändern willst.',
+  'passwords.protection.weakKeystore':
+    'Kein echter Schutz. Der Schlüsselspeicher dieses Systems ist schwach (Linux ohne Schlüsselbund), und es ist kein Master-Passwort gesetzt — wer diesen Ordner lesen kann, kann deine Passwörter lesen.',
   'passwords.protection.plain':
     'Nicht geschützt. Es gab keinen Schlüsselspeicher des Systems, und es ist kein Master-Passwort gesetzt — der Schlüssel liegt neben der Datei, die er schützt.',
 
@@ -267,6 +271,8 @@ export const de = {
   'passwords.unreadableTitle': 'Dieser Tresor lässt sich nicht öffnen',
   'passwords.unreadableBody':
     'Die Schlüsseldatei ist beschädigt, oder der Schlüsselspeicher des Systems, der sie umschlossen hat, ist weg. Kein Master-Passwort hilft hier. Du kannst eine Kopie sichern und neu anfangen.',
+  'passwords.keyNewer':
+    'Eine neuere Version hat den Schlüssel dieses Tresors gespeichert. Diese Version kann ihn nicht öffnen und lässt ihn unverändert.',
   'passwords.lockNow': 'Jetzt sperren',
   'passwords.idleNotice':
     'Der Tresor sperrt sich nach {minutes} Minuten ohne Nutzung, wenn du ihn sperrst, und wenn das letzte Fenster schließt.',

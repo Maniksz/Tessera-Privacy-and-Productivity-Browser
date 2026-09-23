@@ -32,6 +32,11 @@ export interface SafeStorageLike {
   isEncryptionAvailable(): boolean
   encryptString(plainText: string): Buffer
   decryptString(encrypted: Buffer): string
+  /**
+   * Which backend Chromium chose on Linux, and only meaningful there and after `ready`. Read by
+   * `keystore-strength.ts` alone. Optional so a fake key store for any other question need not name one.
+   */
+  getSelectedStorageBackend?(): string
 }
 
 /** No key store to protect a key with. The caller decides what that means. */

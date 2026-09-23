@@ -92,13 +92,23 @@ void _saveOutcomeMatchesApi
  * contents to anything that could ask. See `VaultStatus`.
  */
 export const vaultStatusSchema = z.object({
-  protection: z.enum(['keystore+master', 'master', 'keystore', 'plain']),
+  protection: z.enum([
+    'keystore+master',
+    'weak-keystore+master',
+    'master',
+    'keystore',
+    'weak-keystore',
+    'plain'
+  ]),
   unlocked: z.boolean(),
   /** The key file exists and cannot be opened at all — no master password will help. */
   unreadable: z.boolean(),
   /** Shown to the user, so a vault that locks itself is not read as a fault. */
   idleTimeoutMs: z.number(),
-  /** The following four only on an unlocked vault whose document did not load cleanly. */
+  /**
+   * The following four only on an unlocked vault whose document did not load cleanly — and `newer`
+   * also on a locked one whose key file a newer version wrote.
+   */
   newer: z.literal(true).exactOptional(),
   invalid: z.literal(true).exactOptional(),
   readOnly: z.literal(true).exactOptional(),

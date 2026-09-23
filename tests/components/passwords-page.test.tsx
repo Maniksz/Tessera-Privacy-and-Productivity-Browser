@@ -104,3 +104,53 @@ describe('a vault document this version cannot write back', () => {
     expect(screen.getByText(/nicht sichern/)).toBeTruthy()
   })
 })
+
+describe('a weak key store', () => {
+  /*
+    R14: Linux without a keyring. The page reads the protection the core derived for this run, so the
+    sentence changes although the key file does not.
+  */
+  it('calls the key store weak when a master password guards the vault', async () => {
+    await rendered({ protection: 'weak-keystore+master' })
+    const note = screen.getByRole('note')
+    expect(note.textContent).toMatch(/schwach/)
+    expect(note.textContent).toMatch(/Master-Passwort/)
+    expect(note.className).not.toMatch(/exposed/)
+  })
+
+  it('says plainly that a vault with no master password has no real protection', async () => {
+    await rendered({ protection: 'weak-keystore' })
+    const note = screen.getByRole('note')
+    expect(note.textContent).toMatch(/^Kein echter Schutz/)
+    // Set apart from the calm note every vault gets: this one is the key lying beside the file.
+    expect(note.className).toMatch(/passwords__protection--exposed/)
+  })
+
+  it('sets the plain vault apart the same way, and a protected one not', async () => {
+    await rendered({ protection: 'plain' })
+    expect(screen.getByRole('note').className).toMatch(/passwords__protection--exposed/)
+    cleanup()
+    await rendered({ protection: 'keystore' })
+    expect(screen.getByRole('note').className).not.toMatch(/exposed/)
+  })
+})
+
+describe('a key file this version cannot open', () => {
+  const RESET = 'Alle gespeicherten Passwörter löschen'
+
+  it('says a newer version wrote the key and offers no reset', async () => {
+    await rendered({ unlocked: false, unreadable: true, newer: true })
+    expect(screen.getByText(/neuere Version hat den Schlüssel/)).toBeTruthy()
+    // Not the damaged-file sentence, which suggests starting a new vault.
+    expect(screen.queryByText(/neu anfangen/)).toBeNull()
+    // Nor the document's own line, which is about an open vault.
+    expect(screen.queryByText(/lässt sich aber nicht ändern/)).toBeNull()
+    expect(screen.queryByRole('button', { name: RESET })).toBeNull()
+  })
+
+  it('still offers the reset for a damaged key file', async () => {
+    await rendered({ unlocked: false, unreadable: true })
+    expect(screen.getByText(/neu anfangen/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: RESET })).toBeTruthy()
+  })
+})
