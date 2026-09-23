@@ -245,7 +245,7 @@ export function lookupScriptlet(payload: string): ScriptletLookup {
  * moment an argument contained a tab.
  */
 export function scriptletSignature(call: ScriptletCall): string {
-  return [call.name, ...call.args].join(' ')
+  return [call.name, ...call.args].join('\u0000')
 }
 
 export interface ScriptletIndex {
