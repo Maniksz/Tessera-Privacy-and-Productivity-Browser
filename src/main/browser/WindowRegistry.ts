@@ -96,6 +96,8 @@ export interface WindowRegistryDeps {
 
 export class WindowRegistry {
   readonly #controllers = new Set<BrowserWindowController>()
+  /** The same windows, most recently focused first; see `byRecentFocus`. */
+  #focusOrder: BrowserWindowController[] = []
   readonly #preparedSessions = new WeakSet<Session>()
   #privateSessionCounter = 0
 
@@ -190,6 +192,18 @@ export class WindowRegistry {
     return this.#controllers.size
   }
 
+  /**
+   * Every open window, the one focused most recently first.
+   *
+   * `focused()` answers for this instant, and the instant a link arrives from another application is
+   * exactly the one where it has no answer: that application is in front, so no window of ours is. The
+   * old fallback, `controllers[0]`, was then the *oldest* window rather than the last one used. A new
+   * window counts as focused when it is created, before its first `focus` event arrives.
+   */
+  get byRecentFocus(): readonly BrowserWindowController[] {
+    return this.#focusOrder.filter((controller) => !controller.window.isDestroyed())
+  }
+
   createWindow(options: {
     privateMode: boolean
     /** Set only by session restore; see `WindowControllerOptions.initialSplit`. */
@@ -201,6 +215,9 @@ export class WindowRegistry {
     const mode: BrowsingMode = options.privateMode ? 'private' : 'normal'
     this.#prepareSession(session, mode)
 
+    const onFocus = (): void => {
+      this.#noteFocus(controller)
+    }
     const controller = new BrowserWindowController({
       session,
       privateMode: options.privateMode,
@@ -222,6 +239,8 @@ export class WindowRegistry {
       getSettings: () => this.#deps.settings.snapshot(),
       onClosed: (closed) => {
         this.#controllers.delete(closed)
+        this.#focusOrder = this.#focusOrder.filter((other) => other !== closed)
+        closed.window.removeListener('focus', onFocus)
         // A private session's data exists only for the life of its window
         // (spec 4): nothing may outlive it on disk or in memory.
         if (closed.privateMode) {
@@ -250,7 +269,13 @@ export class WindowRegistry {
     })
 
     this.#controllers.add(controller)
+    controller.window.on('focus', onFocus)
+    this.#noteFocus(controller)
     return controller
+  }
+
+  #noteFocus(controller: BrowserWindowController): void {
+    this.#focusOrder = [controller, ...this.#focusOrder.filter((other) => other !== controller)]
   }
 
   /**

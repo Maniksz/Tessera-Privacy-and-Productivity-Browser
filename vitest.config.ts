@@ -371,6 +371,22 @@ export default defineConfig({
           functions: 100,
           branches: 100,
           statements: 100
+        },
+        /*
+          What the entry point decides before anything is ready, carved out of `index.ts` so it could be
+          measured.
+
+          Which address from outside may be opened, and in which window, used to be two lines in the
+          excluded entry point, and both were wrong there with nothing to say so: a link that started the
+          browser was lost, and one arriving while a private window was in front opened in it. Every
+          branch here is a refusal or a choice of window, and a floor below all of it would leave room
+          for exactly that branch to go untested again.
+        */
+        'src/main/startup-flags.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
         }
       }
     }

@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  ExternalAddressInbox,
+  acceptExternalAddress,
+  externalAddressWindow,
+  firstExternalAddress,
   readCheckModule,
   readStartupFlags,
+  secondInstanceAddress,
   startupFlagsFrom,
   writeStartupFlags,
   type StartupFlags
@@ -209,4 +214,157 @@ describe('a file whose contents are not an object', () => {
       expect(readStartupFlags(file, defaults)).toEqual(defaults)
     })
   }
+})
+
+describe('addresses handed in from outside the browser', () => {
+  /*
+    The operating system, another application or a second launch of Tessera can each name an address
+    to open, and none of them is a user typing into the address bar. `build/installer.nsh` registers the
+    browser for web links with `"%1"`, so whatever follows the executable on that command line arrives
+    here — and a shortcut or a `.desktop` file can put anything there. Only a web page may come in this
+    way; an internal page opened from outside would inherit that page's channels, and a local file is a
+    document able to read its neighbours.
+  */
+  it('accepts a web address', () => {
+    expect(acceptExternalAddress('https://a.test/')).toBe('https://a.test/')
+    expect(acceptExternalAddress('http://a.test/path?q=1')).toBe('http://a.test/path?q=1')
+  })
+
+  it('accepts a scheme in capitals, as a shell may pass it', () => {
+    expect(acceptExternalAddress('HTTPS://A.test')).toBe('https://a.test/')
+  })
+
+  it('refuses everything that is not a web address', () => {
+    for (const refused of [
+      'file:///etc/passwd',
+      'javascript:alert(1)',
+      'tessera://settings',
+      'data:text/html,<p>hi</p>',
+      'ftp://a.test/',
+      'a.test',
+      '--flag',
+      ''
+    ]) {
+      expect(acceptExternalAddress(refused), refused).toBeNull()
+    }
+  })
+})
+
+describe('the address a first launch was started with', () => {
+  it('finds the address after the executable', () => {
+    // How Windows and Linux open a link while the browser is closed: `tessera.exe "%1"`.
+    expect(firstExternalAddress(['tessera.exe', 'https://a.test/'])).toBe('https://a.test/')
+  })
+
+  it('ignores switches and paths on the way to it', () => {
+    /*
+      Chromium adds switches of its own on Windows, and a development launch carries the entry script;
+      a Windows path such as `C:\Tessera\tessera.exe` even parses as an address with the scheme `c:`,
+      which is exactly why the scheme is checked rather than "does it parse".
+    */
+    expect(
+      firstExternalAddress([
+        'C:\\Program Files\\Tessera\\tessera.exe',
+        '--allow-file-access-from-files',
+        '/usr/lib/tessera/resources/app.asar',
+        'file:///etc/passwd',
+        'https://a.test/',
+        'https://b.test/'
+      ])
+    ).toBe('https://a.test/')
+  })
+
+  it('finds nothing on an ordinary launch', () => {
+    expect(firstExternalAddress(['tessera.exe', '--run-checks=/tmp/x.mjs'])).toBeNull()
+    expect(firstExternalAddress([])).toBeNull()
+  })
+})
+
+describe('the address a second launch hands over', () => {
+  /*
+    The second instance reads its own command line and sends the answer as `additionalData`, because the
+    `argv` the running instance receives is not the one that was typed: it carries switches Chromium added,
+    and is empty when the second launch runs as another user. The raw `argv` is still the fallback, for a
+    second instance that sent nothing — a build from before the lock carried any data.
+  */
+  it('takes the address the second instance sent', () => {
+    expect(
+      secondInstanceAddress({ url: 'https://a.test/' }, ['tessera.exe', 'https://b.test/'])
+    ).toBe('https://a.test/')
+  })
+
+  it('checks what was sent rather than trusting it', () => {
+    // Any process running as this user can take the lock's other end; what it sends is input.
+    expect(secondInstanceAddress({ url: 'file:///etc/passwd' }, ['tessera.exe'])).toBeNull()
+  })
+
+  it('falls back to the command line when nothing usable was sent', () => {
+    const argv = ['tessera.exe', '--flag', 'https://b.test/']
+    for (const data of [undefined, null, {}, { url: null }, { url: 5 }, 'https://c.test/']) {
+      expect(secondInstanceAddress(data, argv), JSON.stringify(data)).toBe('https://b.test/')
+    }
+  })
+
+  it('finds nothing when neither names an address', () => {
+    expect(secondInstanceAddress({ url: null }, ['tessera.exe'])).toBeNull()
+  })
+})
+
+describe('the window an address from outside opens in', () => {
+  const normal = (name: string) => ({ name, privateMode: false })
+  const secret = (name: string) => ({ name, privateMode: true })
+
+  it('is the normal window focused most recently, even with a private one in front', () => {
+    /*
+      A link clicked in a mail client says nothing about wanting privacy, and a private window's tabs
+      leave no history — so a link landing there would be a visit the user never gets to see again, in a
+      session they did not choose for it.
+    */
+    const windows = [secret('front'), normal('recent'), normal('older')]
+    expect(externalAddressWindow(windows)?.name).toBe('recent')
+  })
+
+  it('is a new normal window when only private windows are open', () => {
+    expect(externalAddressWindow([secret('a'), secret('b')])).toBeUndefined()
+  })
+
+  it('is a new normal window when no window is open', () => {
+    expect(externalAddressWindow([])).toBeUndefined()
+  })
+})
+
+describe('the inbox that holds addresses until there is a window for them', () => {
+  /*
+    A link that starts the browser arrives long before a window exists: on macOS as `open-url` before
+    `ready`, on Windows and Linux on the command line. The session is restored first, so the link opens
+    beside the restored windows rather than being lost to them — or, as before, lost outright, because the
+    handler that would have opened it was only attached after the restore.
+  */
+  it('holds what arrives before delivery starts, and hands it over in order', () => {
+    const inbox = new ExternalAddressInbox()
+    inbox.receive('https://a.test/')
+    inbox.receive('https://b.test/')
+    const opened: string[] = []
+    inbox.deliverTo((address) => opened.push(address))
+    expect(opened).toEqual(['https://a.test/', 'https://b.test/'])
+  })
+
+  it('hands over directly once delivery has started, and only once', () => {
+    const inbox = new ExternalAddressInbox()
+    inbox.receive('https://a.test/')
+    const opened: string[] = []
+    inbox.deliverTo((address) => opened.push(address))
+    inbox.receive('https://b.test/')
+    expect(opened).toEqual(['https://a.test/', 'https://b.test/'])
+  })
+
+  it('drops anything that is not a web address, and nothing at all', () => {
+    const inbox = new ExternalAddressInbox()
+    inbox.receive('tessera://settings')
+    inbox.receive(null)
+    const opened: string[] = []
+    inbox.deliverTo((address) => opened.push(address))
+    inbox.receive('javascript:alert(1)')
+    expect(opened).toEqual([])
+  })
 })

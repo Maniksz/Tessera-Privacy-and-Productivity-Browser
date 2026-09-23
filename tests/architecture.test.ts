@@ -1764,6 +1764,89 @@ describe('internal page scrolling', () => {
   })
 })
 
+describe('startup', () => {
+  /*
+    `index.ts` is excluded from coverage and cannot run under Node, so the order of its first statements
+    is asserted here. Every rule these tests guard was once broken in that file with nothing to show it:
+    a second instance called `app.quit()`, which returns, and went on to run `main()` against the
+    running instance's profile; and the listeners for addresses from outside were attached after the
+    session restore, so a link that started the browser was lost.
+  */
+  const ENTRY = 'src/main/index.ts'
+
+  it('ends a second instance at the lock, before anything else can run', () => {
+    const entry = codeOnly(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    const lock = entry.indexOf('requestSingleInstanceLock(')
+    expect(lock, 'nothing asks for the single-instance lock').toBeGreaterThan(-1)
+
+    // The first thing asked of `app` after the lock is to exit — not `quit`, which returns and lets the
+    // rest of the module run.
+    const next = /\bapp\.(\w+)\(/.exec(entry.slice(lock + 'requestSingleInstanceLock('.length))
+    expect(next?.[1], 'the second instance is not ended right after the lock').toBe('exit')
+  })
+
+  it('runs nothing at the top level of the entry point outside the lock branch', () => {
+    /*
+      `app.exit` ends the process, but the statements after it are still code, and "it never gets there"
+      is a claim about Electron that no test here can check. So every statement with an effect sits
+      inside a branch that holds the lock: a bare call at the top level — the flags, the scheme, a
+      listener, `main()` — is one a second instance would also run.
+
+      A top-level line is one that starts in the first column; a call there, other than a conditional,
+      is a statement of its own.
+    */
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    const bare = entry
+      .split('\n')
+      .filter((line) =>
+        /^(?!(?:if|for|while|switch)\b)(?:void\s+)?[A-Za-z_$][\w$.]*\s*\(/.test(line)
+      )
+    expect(bare, 'these run in a second instance as well').toEqual([])
+    expect(entry, 'main() is not started from the lock branch').toMatch(
+      /if \(primaryInstance\) \{[^}]*void main\(\)/
+    )
+  })
+
+  it('listens for addresses from outside before the first await', () => {
+    /*
+      macOS delivers the link that starts the browser as `open-url` before `ready`, and a second launch
+      can arrive while the stores are opening. A listener attached after an `await` — as both were, at
+      the end of `main()` — misses exactly those. Literals are kept for this check: the event names are
+      what is being located.
+    */
+    const entry = withoutComments(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    const firstAwait = entry.search(/\bawait\b/)
+    expect(firstAwait, 'the entry point no longer awaits anything').toBeGreaterThan(-1)
+    for (const event of ['open-url', 'second-instance']) {
+      const listener = entry.indexOf(`app.on('${event}'`)
+      expect(listener, `nothing listens for ${event}`).toBeGreaterThan(-1)
+      expect(listener, `${event} is attached after the first await`).toBeLessThan(firstAwait)
+    }
+  })
+
+  it('reads the first launch its own address and delivers what was held only after the restore', () => {
+    /*
+      Windows and Linux hand a cold-start link over on the command line (`build/installer.nsh`
+      registers `"%1"`), and nothing read it. And delivering before the restore would open the link in
+      a window the restored ones then cover — or, with no window yet, in one of its own beside them.
+    */
+    const entry = codeOnly(readFileSync(join(ROOT, ENTRY), 'utf8'))
+    expect(entry, 'the first instance ignores its own command line').toMatch(
+      /firstExternalAddress\(\s*process\.argv\s*\)/
+    )
+    expect(entry, 'the second instance sends nothing with the lock').toMatch(
+      /requestSingleInstanceLock\(\s*\{\s*url:\s*launchAddress\s*\}\s*\)/
+    )
+    const restore = entry.indexOf('applySessionRestore(')
+    const delivery = entry.indexOf('externalAddresses.deliverTo(')
+    expect(restore, 'the restore moved out of the entry point').toBeGreaterThan(-1)
+    expect(delivery, 'nothing ever opens the held addresses').toBeGreaterThan(restore)
+    expect(entry, 'the window is not chosen by the tested rule').toMatch(
+      /externalAddressWindow\(\s*\w+\.byRecentFocus\s*\)/
+    )
+  })
+})
+
 describe('privacy invariants', () => {
   it('flushes every store that can buffer a write before the process exits', async () => {
     /*

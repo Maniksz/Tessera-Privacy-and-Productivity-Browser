@@ -19,8 +19,12 @@ import { registerIpcHandlers } from './ipc/handlers.js'
 import { installApplicationMenu } from './menu/appMenu.js'
 import { applyRuntimeFlags } from './runtime-flags.js'
 import {
+  ExternalAddressInbox,
+  externalAddressWindow,
+  firstExternalAddress,
   readCheckModule,
   readStartupFlags,
+  secondInstanceAddress,
   startupFlagsFrom,
   writeStartupFlags
 } from './startup-flags.js'
@@ -87,10 +91,52 @@ import type { UpdateService } from './updates/UpdateService.js'
  * why it sits where it does.
  */
 
-// A second instance must hand its URL to the running one rather than opening a
-// separate browser with a separate session.
-if (!app.requestSingleInstanceLock()) {
-  app.quit()
+/*
+  One browser per profile, decided before anything else runs.
+
+  A second instance must hand its address to the running one rather than open a separate browser on
+  the same files. `app.quit()` used to stand here, and it stopped nothing: it asks for a quit and
+  returns, so every statement below still ran, `main()` included — and whether the quit beat `main()`
+  to opening the stores of a profile the running instance was writing to was down to timing. `app.exit`
+  ends the process without `before-quit`, and every other statement in this file with an effect runs
+  only where `primaryInstance` says the lock is held.
+
+  The address travels as `additionalData`, read here off this process's own command line, because the
+  `argv` the running instance is handed carries switches Chromium added on the way. See
+  `secondInstanceAddress`.
+*/
+const launchAddress = firstExternalAddress(process.argv)
+const primaryInstance = app.requestSingleInstanceLock({ url: launchAddress })
+if (!primaryInstance) app.exit(0)
+
+/*
+  Addresses from outside, listened for from the first moment and held until the session is back.
+
+  Both listeners used to be attached at the end of `main()`, after every store had opened and the
+  session had been restored. A link that *started* the browser therefore went nowhere: on macOS it is
+  delivered as `open-url` before `ready`, on Windows and Linux it is on this process's own command line,
+  which nothing read. They are attached here, before the first `await` anywhere in this file, and what
+  they receive waits in the inbox until `main()` opens it after the restore — so the link lands beside
+  the restored windows instead of in one the restore then buries.
+*/
+const externalAddresses = new ExternalAddressInbox()
+
+if (primaryInstance) {
+  externalAddresses.receive(launchAddress)
+
+  // macOS: links from other applications, whether the browser is running or being started by one.
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    externalAddresses.receive(url)
+  })
+
+  app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
+    const address = secondInstanceAddress(additionalData, argv)
+    // A second launch with no address is somebody reaching for the browser: bring the last window used
+    // forward. With one, the inbox opens it and brings its window forward itself.
+    if (address === null) windows?.byRecentFocus[0]?.window.focus()
+    else externalAddresses.receive(address)
+  })
 }
 
 /**
@@ -113,8 +159,11 @@ function bootstrapFlags(): void {
   applyRuntimeFlags(flags)
 }
 
-bootstrapFlags()
-registerInternalSchemePrivileges()
+if (primaryInstance) {
+  bootstrapFlags()
+  // Before `ready`, which is the only time Chromium accepts it.
+  registerInternalSchemePrivileges()
+}
 
 // Never started, and stated explicitly rather than by omission (spec 4).
 // crashReporter.start() is intentionally absent.
@@ -840,6 +889,24 @@ async function main(): Promise<void> {
   }
 
   /*
+    Addresses from outside, opened from here on: everything held since startup, then each as it comes.
+
+    After the restore, so a link lands beside the windows that came back rather than first in line for
+    them to cover. In the normal window used most recently and never in a private one — see
+    `externalAddressWindow` for why the old `focused() ?? controllers[0]` got both halves of that wrong.
+  */
+  const openWindows = windows
+  externalAddresses.deliverTo((url) => {
+    const target = externalAddressWindow(openWindows.byRecentFocus)
+    if (target === undefined) {
+      openWindows.createWindow({ privateMode: false }).createTab({ url })
+      return
+    }
+    target.window.focus()
+    target.createTab({ url })
+  })
+
+  /*
     The lists, compiled after the window rather than before it.
 
     This used to be awaited two hundred lines up, where it put the whole compile — six hundred to
@@ -867,22 +934,6 @@ async function main(): Promise<void> {
   */
   const checkModule = readCheckModule(process.argv, { packaged: app.isPackaged })
   if (checkModule !== null) void runOwnChecks(checkModule)
-
-  app.on('second-instance', (_event, argv) => {
-    const url = argv.find((arg) => /^https?:\/\//i.test(arg))
-    const target = windows?.focused() ?? windows?.controllers[0]
-    if (!target) return
-    target.window.focus()
-    if (url !== undefined) target.createTab({ url })
-  })
-
-  // macOS: links from other applications, and the Dock's "new window".
-  app.on('open-url', (event, url) => {
-    event.preventDefault()
-    const target = windows?.focused() ?? windows?.controllers[0]
-    if (target) target.createTab({ url })
-    else windows?.createWindow({ privateMode: false }).createTab({ url })
-  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -978,7 +1029,7 @@ function uiLocale(store: SettingsStore | null): Locale {
  */
 let shutdownComplete = false
 
-app.on('before-quit', (event) => {
+function onBeforeQuit(event: Electron.Event): void {
   const store = settings
   if (shutdownComplete || store === null) return
   event.preventDefault()
@@ -1015,7 +1066,7 @@ app.on('before-quit', (event) => {
       app.quit()
     }
   })()
-})
+}
 
 type StorageType = NonNullable<
   NonNullable<Parameters<Electron.Session['clearStorageData']>[0]>['storages']
@@ -1040,7 +1091,11 @@ async function clearDataOnExit(categories: readonly string[]): Promise<void> {
   await Promise.all(work)
 }
 
-void main().catch((error: unknown) => {
-  console.error('[startup] failed:', error)
-  app.exit(1)
-})
+// Only in the instance holding the lock: a second one exits above, and must open nothing.
+if (primaryInstance) {
+  app.on('before-quit', onBeforeQuit)
+  void main().catch((error: unknown) => {
+    console.error('[startup] failed:', error)
+    app.exit(1)
+  })
+}
