@@ -2384,6 +2384,28 @@ describe('continuous integration', () => {
     )
   })
 
+  it('lets no gate fail quietly except the format check until the reformat', () => {
+    /*
+      The test above finds each step's `run:` line and nothing more, so it would stay green if a step
+      beside it gained `continue-on-error: true`. That one line turns a gate into a log entry: the
+      coverage floors or the build would still run, fail, and let the pull request through.
+
+      The format check is the single exception, and a temporary one: it may fail until the one-off
+      reformat (U18 in the review-hardening plan) lands. When it does, this list becomes empty.
+    */
+    const allowed = ['pnpm run format:check']
+    // Each `continue-on-error` is attributed to the step it sits under — the `run:` command, or the
+    // whole first line of a step that does something else. One outside any step is the job's own.
+    const lenient: string[] = []
+    let step = 'the job itself'
+    for (const line of workflowCode('gates.yml').split('\n')) {
+      const start = /^\s*-\s+(\w[\w-]*):\s*(.*?)\s*$/.exec(line)
+      if (start) step = start[1] === 'run' ? start[2]! : `${start[1]}: ${start[2]}`
+      if (/^\s*(?:-\s+)?continue-on-error:/.test(line)) lenient.push(step)
+    }
+    expect(lenient, 'a gate is allowed to fail').toEqual(allowed)
+  })
+
   it('has the release take its gates from the same workflow as pull requests', () => {
     // A second copy of the gates would drift — the release's copy already had: no coverage, no format
     // check. Calling the one workflow is what keeps a release from being held to a lower bar than a PR.
