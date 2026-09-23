@@ -1,0 +1,12 @@
+{
+  "name": "tessera-spike-mux",
+  "private": true,
+  "type": "module",
+  "description": "Wegwerf-Spike für Q1 und Q3 aus docs/plans/2026-08-09-001-feat-media-recorder-plan.md. Kein Teil der Anwendung, keine Abhängigkeit des Hauptprojekts.",
+  "scripts": {
+    "spike": "node merge-spike.mjs"
+  },
+  "dependencies": {
+    "mediabunny": "^1.53.0"
+  }
+}
