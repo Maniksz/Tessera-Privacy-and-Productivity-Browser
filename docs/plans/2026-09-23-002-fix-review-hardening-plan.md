@@ -743,6 +743,7 @@ flowchart TB
 - **Approach:** nach KTD17. Vorher und nachher `pnpm metrics` messen und Veränderungen der Zeilenbudgets im Commit-Text nennen.
 - **Test expectation:** none — reine Formatierung ohne Verhaltensänderung; der volle Testlauf muss unverändert grün sein.
 - **Verification:** `pnpm format:check` ist grün; `git blame` mit `.git-blame-ignore-revs` zeigt die ursprünglichen Autorenzeilen.
+- **Umgesetzt, in anderer Reihenfolge als KTD17:** Die Umformatierung kam vor den Merges, in `45d8111` und `b8b611e`. Die zwei offenen Branches wurden danach gemergt (`96c6609`, `e42c1aa`) und ihre Dateien dabei formatiert. `.git-blame-ignore-revs` und das blockierende Gate folgen in der Roadmap (`docs/plans/2026-09-24-0756-feat-roadmap-aufraeumen-versprechen-neues-plan.md`, U3).
 
 ---
 

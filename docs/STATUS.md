@@ -1218,7 +1218,7 @@ einschalten würde; jedes unsignierte Build führt zur Release-Seite (U15, `46b0
 
 Plan: `docs/plans/2026-09-23-002-fix-review-hardening-plan.md`, Branch `fix/review-hardening`. Behoben sind
 die verifizierten Befunde des Projekt-Reviews vom selben Tag aus Main-Prozess, Build und CI; die
-Renderer-UX-Befunde des Reviews sind bewusst nicht dabei. 18 von 19 Einheiten sind gebaut, **U18 ist offen**.
+Renderer-UX-Befunde des Reviews sind bewusst nicht dabei. Alle 19 Einheiten sind gebaut; U18 in anderer Reihenfolge als geplant (Umformatierung vor den Merges).
 
 ✅ heißt in dieser Tabelle: gebaut, durch Tests und Architekturtests belegt. **In der laufenden App und im
 gepackten Build ist nichts davon belegt**; was dort zu prüfen ist, steht darunter und liegt beim Benutzer.
@@ -1243,7 +1243,7 @@ gepackten Build ist nichts davon belegt**; was dort zu prüfen ist, steht darunt
 | U15 | Windows und Linux installierten unsignierte Updates selbst. Jetzt führen alle drei Plattformen zur Release-Seite, siehe „macOS bleibt vorerst unsigniert" | ✅ | `46b0aa9` |
 | U16 | Ein Punkt am Hostende oder Benutzerangaben in der URL schoben den Host unter `\|\|domain^` weg. Jetzt wie uBlock Origin, dazu `@@…$document` und `@@…$important` | ✅ | `2e59ab1` |
 | U17 | Der Router war von der Coverage ausgeschlossen und ohne eigenen Test. Jetzt eigene Tests über ein gefälschtes `electron`, Floors für `ipc/router.ts` und den Passwort-Code | ✅ | `d37930e`, `832481a` |
-| U18 | Einmalige Prettier-Umformatierung samt `.git-blame-ignore-revs`; danach wird die Formatprüfung in `gates.yml` blockierend | ⬜ | läuft erst, wenn `feat/autofill-trigger`, `feat/autofill-trigger-model`, `fix/element-picker` und `fix/tab-group-ownership` gemergt sind |
+| U18 | Einmalige Prettier-Umformatierung samt `.git-blame-ignore-revs`; danach wird die Formatprüfung in `gates.yml` blockierend. Umformatiert wurde vor den Merges (`45d8111`, `b8b611e`); die offenen Branches kamen danach und wurden beim Mergen formatiert | ✅ | `45d8111`, `b8b611e`, Roadmap U3 |
 
 Nebenbei: die Filter- und Pipeline-Dateien auf ihre alten Floors gebracht, die nie als Gate liefen (`77cbd8f`,
 `5318bc1`); Duplikate der neuen Module zusammengelegt (`c01a94a`); ein Einstellungs-Test, der unter Last

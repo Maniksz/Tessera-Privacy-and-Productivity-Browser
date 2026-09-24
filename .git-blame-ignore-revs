@@ -1,0 +1,8 @@
+# Commits that only reformat code. Skip them in blame with
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (GitHub reads this file on its own.)
+
+# One-off Prettier reformat (U18 of the review-hardening plan)
+45d81110d3bbe2b2e2dd40a5b8c59f4c23fd7eca
+# Follow-up: one CSS declaration Prettier wraps differently
+b8b611ed52de7503e56c9cbe8910617194e415c9

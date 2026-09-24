@@ -2579,16 +2579,16 @@ describe('continuous integration', () => {
     )
   })
 
-  it('lets no gate fail quietly except the format check until the reformat', () => {
+  it('lets no gate fail quietly', () => {
     /*
       The test above finds each step's `run:` line and nothing more, so it would stay green if a step
       beside it gained `continue-on-error: true`. That one line turns a gate into a log entry: the
       coverage floors or the build would still run, fail, and let the pull request through.
 
-      The format check is the single exception, and a temporary one: it may fail until the one-off
-      reformat (U18 in the review-hardening plan) lands. When it does, this list becomes empty.
+      The format check was the one temporary exception until the one-off reformat (U18 in the
+      review-hardening plan) landed in 45d8111. Since then no gate may fail quietly.
     */
-    const allowed = ['pnpm run format:check']
+    const allowed: string[] = []
     // Each `continue-on-error` is attributed to the step it sits under — the `run:` command, or the
     // whole first line of a step that does something else. One outside any step is the job's own.
     const lenient: string[] = []

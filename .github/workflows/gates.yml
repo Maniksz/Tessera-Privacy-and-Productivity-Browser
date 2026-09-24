@@ -63,12 +63,7 @@ jobs:
 
       - run: pnpm run lint
 
-      # Allowed to fail until the one-off reformat (U18 in the review-hardening plan) lands: well over a
-      # hundred files predate the Prettier config, and failing every pull request on them would bury the
-      # gates that matter. It still runs, so the count is visible in every log. Once the reformat is merged,
-      # `continue-on-error` goes and this is a gate like the others.
       - run: pnpm run format:check
-        continue-on-error: true
 
       # `test:coverage` rather than `test`: the coverage run is what applies the floors in
       # `vitest.config.ts`. Without it a floor is a number in a file.
