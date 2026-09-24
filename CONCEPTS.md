@@ -48,6 +48,13 @@ Divider positions are stored as fractions of the Window rather than pixel offset
 Layout survives a resize. Shrinking a Layout never closes a Tab — Tabs that lose their
 Tile become unassigned and stay loaded, so switching back restores them.
 
+### Arrangement
+A set of Tabs tiled together in one Layout, kept as a unit whether or not the Window is
+showing it. The interface calls it a *Kachelansicht* (tiled view). A Tab belongs to at
+most one Arrangement, and putting an Arrangement away keeps its Layout and seats so it
+can be brought back.
+*Avoid:* split, recording
+
 ### Tab
 A loaded page belonging to a Window, listed in the tab strip. A Tab is not the same as
 a Tile: a Tab is what is loaded, a Tile is where it is shown.
