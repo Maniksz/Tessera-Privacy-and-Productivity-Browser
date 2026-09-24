@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { NavigationRequestPresentation } from '@shared/overlay/surface.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
@@ -19,8 +19,8 @@ import { useI18n } from '../i18n.js'
  *
  * `.surface--modal` and `.prompt` already carry three decisions this dialogue needs and would otherwise
  * have to re-make: the layer is dimmed *and opaque to clicks*, so the page asking cannot receive a click
- * over its own dialogue; the address wraps rather than being elided; and neither answer is styled as the
- * obvious one. A second set of classes would be a second place for those to drift.
+ * over its own dialogue; what is shown of the address wraps rather than being elided; and neither answer is
+ * styled as the obvious one. A second set of classes would be a second place for those to drift.
  *
  * ## What must be true of this component, and not merely look true
  *
@@ -32,10 +32,35 @@ import { useI18n } from '../i18n.js'
  *   That matters more here than for a permission prompt: this dialogue is up *because* a page acted
  *   without being asked, so the one thing it must not be is easy to agree to by accident.
  * - **The destination is shown before any button is offered.** The host leads, because it is the fact the
- *   answer turns on; the full address is below it, because a shortened one is how somebody is persuaded
- *   that `evil.test/paypal.com` is PayPal. Everything rendered comes from the presentation, so there is no
+ *   answer turns on; the address is below it, because a host alone is how somebody is persuaded that
+ *   `evil.test/paypal.com` is PayPal. Everything rendered comes from the presentation, so there is no
  *   state in which a button exists and the destination it agrees to does not.
+ * - **A long address is cut after its host, and never inside it.** See `shortAddress`.
  */
+
+/** An address longer than this is shown cut, with a button for the rest. */
+const ADDRESS_LIMIT = 120
+/** How much of a cut address stays on screen, unless its host alone is longer. */
+const ADDRESS_KEEP = 100
+
+/**
+ * The start of an address too long to show whole, or `null` for one that fits.
+ *
+ * Tracking parameters make addresses of a thousand characters an ordinary thing, and shown whole one of them
+ * pushed this dialogue's buttons off the bottom of the window — a question nobody could answer. So the
+ * dialogue shows the start and offers the rest behind a button.
+ *
+ * What is cut is only ever what comes after the host. Scheme, credentials, host and port are kept whole
+ * however long they are, because they are what the answer turns on, and an elided host is how
+ * `accounts.google.com.evil…` reads as Google. Everything after them is the part a page is free to make up,
+ * and it is one press away.
+ */
+export function shortAddress(url: string): string | null {
+  if (url.length <= ADDRESS_LIMIT) return null
+  const authority = /^[a-z][a-z\d+.-]*:\/\/[^/?#]*/i.exec(url)?.[0].length ?? 0
+  const keep = Math.max(ADDRESS_KEEP, authority)
+  return keep < url.length ? url.slice(0, keep) : null
+}
 export function NavigationRequestSurface({
   presentation
 }: {
@@ -45,6 +70,14 @@ export function NavigationRequestSurface({
   const refuseRef = useRef<HTMLButtonElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const isPopup = presentation.navigationKind === 'popup'
+  /*
+    Which question the whole address was asked for, rather than a flag: a second question replacing the first
+    inside this component starts cut again, without an effect to reset it.
+  */
+  const [expandedFor, setExpandedFor] = useState<string | null>(null)
+  const expanded = expandedFor === presentation.requestId
+  const short = shortAddress(presentation.url)
+  const shown = short === null ? presentation.url : `${short}…`
 
   const answer = useCallback(
     (permitted: boolean) => {
@@ -73,7 +106,7 @@ export function NavigationRequestSurface({
       }
       if (event.key !== 'Tab') return
       /*
-        A focus trap over the two buttons.
+        A focus trap over the dialogue's buttons.
 
         Spec 7 requires full keyboard operation, and for a dialogue it also decides where an accidental
         keystroke lands: without this, Tab walks out of the layer into a page the user cannot see, and the
@@ -106,17 +139,32 @@ export function NavigationRequestSurface({
       >
         <h2 className="prompt__title" id="navigation-title">
           {t(isPopup ? 'navigation.wantsToOpen' : 'navigation.wantsToLeave', {
-            // The host, or the whole address when there is no host to name — an address this browser
-            // could not parse is the one the user most needs to see, and "wants to open" with no subject
-            // is not a question anybody can answer.
-            host: presentation.host === '' ? presentation.url : presentation.host
+            // The host, or the address when there is no host to name — an address this browser could not
+            // parse is the one the user most needs to see, and "wants to open" with no subject is not a
+            // question anybody can answer. Cut as below, which leaves the whole of it one press away.
+            host: presentation.host === '' ? shown : presentation.host
           })}
         </h2>
 
-        {/* In one piece and never elided; see `.prompt__site` for why a truncated address is a lie. */}
-        <p className="prompt__site" id="navigation-url">
-          {presentation.url}
+        {/* Cut after the host at the most, never inside it; see `shortAddress`. */}
+        <p
+          className={expanded ? 'prompt__site prompt__site--full' : 'prompt__site'}
+          id="navigation-url"
+        >
+          {expanded ? presentation.url : shown}
         </p>
+        {/* A real button, so it is in the focus trap below; focus still starts on the refusing one. */}
+        {short !== null && (
+          <button
+            type="button"
+            className="prompt__more"
+            aria-expanded={expanded}
+            aria-controls="navigation-url"
+            onClick={() => setExpandedFor(expanded ? null : presentation.requestId)}
+          >
+            {t(expanded ? 'navigation.lessAddress' : 'navigation.fullAddress')}
+          </button>
+        )}
 
         <p className="prompt__request">{t('navigation.noGesture')}</p>
 

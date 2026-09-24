@@ -560,6 +560,9 @@ export const en = {
   'navigation.follow': 'Go there',
   'navigation.stay': 'Stay on this page',
   'navigation.keyboardHint': 'Escape stays where you are',
+  // The toggle under a long address, which the dialogue shows cut after its host.
+  'navigation.fullAddress': 'Show full address',
+  'navigation.lessAddress': 'Show less',
 
   // reader mode
   'reader.title': 'Reader',

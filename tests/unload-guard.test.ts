@@ -11,12 +11,14 @@ import {
   CloseContract,
   ShutdownSilence,
   UNLOAD_HANG_MS,
+  SITE_MAX,
   UnloadGuard,
   askToLeave,
   closesAtOnce,
   hostOf,
   preventDefaultOf,
   shutdownSilence,
+  siteOf,
   unloadDialog,
   type ClosedTab,
   type ClosingTab,
@@ -1148,6 +1150,29 @@ describe('the site a question names', () => {
 
     expect(window.prompts).toEqual([{ mode: 'close', site: 'file:///home/me/notes.html' }])
   })
+
+  it('cuts a long address without a host in the middle, keeping its start and its end', () => {
+    const long = `file:///home/me/${'deep/'.repeat(40)}notes.html?${'q=1&'.repeat(40)}end`
+    const site = siteOf(long)
+
+    expect(site).toHaveLength(SITE_MAX)
+    expect(site.startsWith('file:///home/me/deep/')).toBe(true)
+    expect(site.endsWith(long.slice(-24))).toBe(true)
+    expect(site).toContain('…')
+    // At the limit nothing is cut, and a host is never cut however long its address is.
+    expect(siteOf('file:///'.padEnd(SITE_MAX, 'x'))).toBe('file:///'.padEnd(SITE_MAX, 'x'))
+    expect(siteOf(`https://mail.example/?${'q=1&'.repeat(100)}`)).toBe('mail.example')
+  })
+
+  it('names the cut address in the question a closing tab puts', () => {
+    const long = `file:///home/me/notes.html?${'q=1&'.repeat(100)}`
+    const window = new WindowHarness([fakeTab('file', long, { objects: true })])
+
+    window.contract.closeTab('file')
+    window.tab('file').contents.answer()
+
+    expect(window.prompts).toEqual([{ mode: 'close', site: siteOf(long) }])
+  })
 })
 
 describe('preventDefaultOf', () => {
@@ -1177,6 +1202,14 @@ describe('the dialog', () => {
       message: 'Seite verlassen?',
       detail: 'Änderungen auf mail.example werden möglicherweise nicht gespeichert.'
     })
+  })
+
+  it('stays short enough for its buttons when the page has no host to name', () => {
+    const site = siteOf(`data:text/html,${'<p>x</p>'.repeat(500)}`)
+    const { detail } = unloadDialog({ mode: 'navigate', site }, 'en')
+
+    expect(detail).toBe(`Changes you made on ${site} may not be saved.`)
+    expect(detail?.length).toBeLessThan(SITE_MAX + 50)
   })
 
   it('is modal to the window and answers leave only for the first button', () => {

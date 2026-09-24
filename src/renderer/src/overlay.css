@@ -95,8 +95,15 @@ body {
   background: rgb(0 0 0 / 45%);
 }
 
+/*
+  The height is capped at the layer's for the reason the width is: a dialogue taller than the window has
+  buttons nobody can reach. Content that is too long has a smaller place to scroll in first (see
+  `.prompt__site--full`); this is what is left when the window is smaller still.
+*/
 .prompt {
   width: min(440px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -108,6 +115,8 @@ body {
 .prompt__title {
   margin: 0 0 4px;
   font-size: 15px;
+  /* A host has no spaces to wrap at, and one wider than the dialogue would run out of it. */
+  overflow-wrap: anywhere;
 }
 
 /*
@@ -115,7 +124,8 @@ body {
 
   `word-break` rather than an ellipsis: a truncated host is how a user is shown
   `accounts.google.com.evil…` and reads the part that reassures them. A long name wrapping is
-  ugly; a long name cut short is a lie.
+  ugly; a long name cut short is a lie. The popup-or-redirect dialogue does cut a long address, and
+  only after its host, which it keeps whole (`shortAddress`).
 */
 .prompt__site {
   margin: 0 0 12px;
@@ -123,6 +133,34 @@ body {
   font-size: 12px;
   color: var(--fg-dim);
   word-break: break-all;
+}
+
+/*
+  A whole address somebody asked to see, which can be thousands of characters of parameters. It scrolls in
+  its own box, so the buttons below it stay on screen however long it is.
+*/
+.prompt__site--full {
+  max-height: 30vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The button that shows or cuts it. Quiet, because it answers nothing. */
+.prompt__more {
+  display: block;
+  margin: -8px 0 12px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: default;
+}
+
+.prompt__more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .prompt__request {

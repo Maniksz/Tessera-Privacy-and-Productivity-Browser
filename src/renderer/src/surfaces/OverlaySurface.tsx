@@ -5,7 +5,6 @@ import { invoke, subscribe } from '../bridge.js'
 import { LayoutMenuSurface } from './LayoutMenuSurface.js'
 import { TabDropSurface } from './TabDropSurface.js'
 import { PermissionSurface } from './PermissionSurface.js'
-import { NavigationRequestSurface } from './NavigationRequestSurface.js'
 import { TileBarSurface } from '../../overlay/TileBarSurface.js'
 import { FindBarSurface } from '../../overlay/FindBarSurface.js'
 import { PickerBarSurface } from '../../overlay/PickerBarSurface.js'
@@ -42,6 +41,16 @@ const MasterPasswordSurface = lazy(() =>
 const AutofillSuggestSurface = lazy(() =>
   import('./AutofillSuggestSurface.js').then((module) => ({
     default: module.AutofillSuggestSurface
+  }))
+)
+/*
+  The popup-or-redirect prompt, behind the same boundary and for the same budget: cutting a long address and
+  offering the rest took the layer's bundle to its 20 kB, and the prompt is up only when a page acted on its
+  own. The core holds the question while the chunk arrives, so an answer given a frame later is the same one.
+*/
+const NavigationRequestSurface = lazy(() =>
+  import('./NavigationRequestSurface.js').then((module) => ({
+    default: module.NavigationRequestSurface
   }))
 )
 /*
@@ -193,7 +202,15 @@ export function OverlaySurface(): React.ReactNode {
     the browser answering on the user's behalf, and the surface answers Escape itself.
   */
   if (presentation.kind === 'navigation-request') {
-    return <NavigationRequestSurface presentation={presentation} />
+    /*
+      The dimmed layer while the chunk arrives, rather than nothing: it is what keeps a click meant for the
+      page from reaching the page that is asking, and that is true from the first frame or not at all.
+    */
+    return (
+      <Suspense fallback={<div className="surface surface--modal" />}>
+        <NavigationRequestSurface presentation={presentation} />
+      </Suspense>
+    )
   }
 
   /*

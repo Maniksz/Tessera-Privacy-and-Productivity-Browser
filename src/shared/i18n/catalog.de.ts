@@ -398,6 +398,8 @@ export const de = {
   'navigation.follow': 'Dorthin wechseln',
   'navigation.stay': 'Auf dieser Seite bleiben',
   'navigation.keyboardHint': 'Escape bleibt, wo du bist',
+  'navigation.fullAddress': 'Ganze Adresse zeigen',
+  'navigation.lessAddress': 'Weniger zeigen',
 
   'reader.title': 'Leseansicht',
   'reader.untitled': 'Ohne Titel',
