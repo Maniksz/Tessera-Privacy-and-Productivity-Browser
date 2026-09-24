@@ -42,6 +42,7 @@ function pageMenu(overrides: Partial<PageContextMenuDeps> = {}): PageContextMenu
     canGoBack: true,
     canGoForward: false,
     blockerEnabled: true,
+    canFillPassword: false,
     onBack: vi.fn(),
     onForward: vi.fn(),
     onReload: vi.fn(),
@@ -49,6 +50,7 @@ function pageMenu(overrides: Partial<PageContextMenuDeps> = {}): PageContextMenu
     onCopy: vi.fn(),
     onSearchFor: vi.fn(),
     onBlockElement: vi.fn(),
+    onFillPassword: vi.fn(),
     onInspect: vi.fn(),
     ...overrides
   }
@@ -77,6 +79,34 @@ function labels(
     .filter((item) => item.type !== 'separator')
     .map((item) => (typeof item.label === 'string' ? item.label : ''))
 }
+
+describe('offering to fill in a saved password', () => {
+  /*
+    Autofill U7: the right-click route to the same picker the toolbar key opens. Offered only where
+    the page's own report says a fillable password field has the caret — which a right-click on the
+    field has just put there — and absent everywhere else rather than greyed out.
+  */
+  it('is absent from a page without a fillable field under the caret', () => {
+    expect(labels(pageContextMenuTemplate(pageMenu()))).not.toContain('Fill In Saved Password')
+  })
+
+  it('comes first on a fillable field, and opens the picker', () => {
+    const onFillPassword = vi.fn()
+    const items = pageContextMenuTemplate(
+      pageMenu({ canFillPassword: true, target: target({ isEditable: true }), onFillPassword })
+    )
+
+    expect(labels(items)[0]).toBe('Fill In Saved Password')
+    click(items, 'Fill In Saved Password')
+    expect(onFillPassword).toHaveBeenCalledOnce()
+  })
+
+  it('is named in German from the same table as the menu bar’s item', () => {
+    const items = pageContextMenuTemplate(pageMenu({ locale: 'de', canFillPassword: true }))
+
+    expect(labels(items)[0]).toBe('Gespeichertes Passwort einsetzen')
+  })
+})
 
 describe('offering to block an element', () => {
   it('offers it on an ordinary page', () => {

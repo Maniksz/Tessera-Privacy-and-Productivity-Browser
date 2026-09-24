@@ -6,16 +6,21 @@ import {
   type FormDescriptor
 } from '@shared/passwords/fields.js'
 import {
+  AUTOFILL_BADGE_CHANNEL,
+  AUTOFILL_CLOSE_CHANNEL,
+  AUTOFILL_DESCRIBE_CHANNEL,
   AUTOFILL_FILLABLE_CHANNEL,
   AUTOFILL_FILL_CHANNEL,
-  AUTOFILL_OFFER_CHANNEL,
+  AUTOFILL_PRESS_CHANNEL,
   AUTOFILL_SAVE_ANSWER_CHANNEL,
   AUTOFILL_SAVE_PROMPT_CHANNEL,
   AUTOFILL_SUBMIT_CHANNEL,
+  AUTOFILL_SUGGEST_END_CHANNEL,
+  asBadgeChrome,
   asFillAnswer,
-  asFillOffer,
   asSaveBarChrome,
-  type FillOffer,
+  asFillToken,
+  type BadgeChrome,
   type SaveAnswer,
   type SaveBarChrome
 } from '@shared/passwords/wire.js'
@@ -36,12 +41,13 @@ import {
  * one: there is no function a page can call, no property it can read, and no event it can fire that
  * produces a credential. The three things that could look like a way in, and why they are not:
  *
- *   - **The suggestion list is a closed shadow root.** The page's scripts cannot read the usernames
- *     in it, and its own CSS cannot move or hide it. A site with `* { position: static !important }`
- *     would otherwise be able to place our list somewhere the user did not expect.
- *   - **A page can focus a field whenever it likes**, so a suggestion list appearing is not consent
- *     to anything. Nothing is filled until a trusted click lands on one of our own entries, and the
- *     core independently refuses a fill it did not see a real input event for — see
+ *   - **The badge is a button and nothing else.** There is no list of account names in this file any
+ *     more: the picker is drawn on the browser's overlay layer, which a page can neither read nor
+ *     imitate into (R5). What the page can see here is that a badge exists, which it could have
+ *     worked out from the shape of its own form.
+ *   - **A page can focus a field whenever it likes**, and it can call `.click()` on our badge —
+ *     neither is consent. The core answers a press only when the *browser process* saw a real input
+ *     event in this view, which never happens for input a renderer synthesised; see
  *     `shared/passwords/gesture.ts`. A hidden form therefore harvests nothing.
  *   - **The save bar carries no secret.** It is drawn from wording the core sent, and the answer
  *     that goes back is one of three verbs. The credential it is about never leaves the core.
@@ -57,8 +63,17 @@ import {
  */
 
 /** One element per document, replaced rather than appended. Same reasoning as the cosmetic sheet. */
-const SUGGESTION_HOST_ID = 'tessera-autofill'
+const BADGE_HOST_ID = 'tessera-autofill'
 const SAVE_HOST_ID = 'tessera-autofill-save'
+
+/** The badge's edge, in CSS pixels, and the gap it keeps from the field's own border. */
+const BADGE_SIZE = 18
+const BADGE_INSET = 3
+
+/** What both surfaces have to say about themselves before anything the page says. */
+const PINNED = 'position:fixed!important;z-index:2147483647!important'
+/** The badge's box, which never changes: only its corner moves. */
+const BADGE_BOX = `${PINNED};width:${BADGE_SIZE}px!important;height:${BADGE_SIZE}px!important`
 
 /** Below this, a control is decoration or a tracking pixel rather than something to type into. */
 const MIN_FIELD_SIZE_PX = 4
@@ -161,131 +176,247 @@ function describeForm(anchor: HTMLInputElement): {
 interface Surface {
   readonly root: ShadowRoot
   readonly host: HTMLElement
-  remove(): void
 }
 
 /**
- * A host element with a closed shadow root, positioned by inline declarations.
+ * A host element with a closed shadow root. The caller places it, in one write.
  *
- * Inline and `!important`, which is not superstition: the stylesheet the core sends sets
- * `all: initial` on `:host` to undo whatever the page inherits into it, and that includes
- * `position`. Inline important declarations outrank both, so the surface lands where it was put
- * however the page is styled.
+ * Every declaration a caller writes carries `!important`, which is not superstition: the stylesheet
+ * the core sends sets `all: initial` on `:host` to undo whatever the page inherits into it, and that
+ * includes `position`. Inline important declarations outrank both, so a surface lands where it was
+ * put however the page is styled.
  */
-function createSurface(id: string, styles: string): Surface | null {
-  const parent = earlyDocument.body ?? earlyDocument.documentElement
+function createSurface(id: string, styles: string, beside?: Element): Surface | null {
+  const parent = beside?.parentElement ?? earlyDocument.body ?? earlyDocument.documentElement
   if (parent === null) return null
   removeSurface(id)
 
   const host = document.createElement('div')
   host.id = id
-  host.style.setProperty('position', 'fixed', 'important')
-  host.style.setProperty('z-index', '2147483647', 'important')
-  // `closed`, so the page's scripts cannot read the usernames on offer — which would tell a site
-  // which accounts the person has with it before they had chosen to say.
+  // `closed`, so the page's scripts cannot reach whatever is inside — and cannot, for the badge,
+  // read the focus ring off it to tell when the user is about to ask for a credential.
   const root = host.attachShadow({ mode: 'closed' })
   const sheet = document.createElement('style')
   sheet.textContent = styles
   root.appendChild(sheet)
-  parent.appendChild(host)
+  /*
+    Next to the field when there is one, and that is the whole of the badge's keyboard story.
 
-  return { root, host, remove: () => host.remove() }
+    Tab order follows the document, so a host parked at the end of `<body>` would be reachable only
+    after every other control on the page — which for a sign-in form means after the submit button.
+    Inserted after the field, one Tab from the field lands on it (KTD12). `position: fixed` keeps it
+    out of flow, so nothing moves.
+  */
+  if (beside === undefined) parent.appendChild(host)
+  else parent.insertBefore(host, beside.nextSibling)
+
+  return { root, host }
 }
 
 function removeSurface(id: string): void {
   document.getElementById(id)?.remove()
 }
 
-function button(className: string, label: string): HTMLButtonElement {
-  const element = document.createElement('button')
-  element.type = 'button'
-  element.className = className
-  element.textContent = label
-  return element
+/**
+ * Tells the core something, and shrugs when nothing is listening.
+ *
+ * One place rather than a `try` at each call site, and the `catch` is the point: an old build, or a
+ * view created outside a hardened session, has no responder — and an exception escaping a preload
+ * takes the page down with it. Every message from this file is fire-and-forget, so there is never
+ * anything to do here but carry on.
+ */
+function send(channel: string, payload: unknown): void {
+  try {
+    ipcRenderer.send(channel, payload)
+  } catch {
+    // No responder. Nothing here can act on that; the core is the only side that decides anything.
+  }
 }
 
-// --- the suggestion list -----------------------------------------------------
+/** An element with a class and its text, which is every element the two surfaces are made of. */
+function element<K extends 'div' | 'button'>(
+  tag: K,
+  className: string,
+  text = ''
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  node.className = className
+  node.textContent = text
+  return node
+}
 
-/** What is on screen, so dismissing can undo exactly what was installed. */
-let suggestion: { surface: Surface; teardown: () => void } | null = null
+function button(className: string, label: string): HTMLButtonElement {
+  const control = element('button', className, label)
+  control.type = 'button'
+  return control
+}
 
-function hideSuggestion(): void {
-  if (suggestion === null) return
-  suggestion.teardown()
-  suggestion.surface.remove()
-  suggestion = null
+// --- the badge ---------------------------------------------------------------
+
+/**
+ * The badge on the field, and whether its list is open.
+ *
+ * `open` is the state R1 exists for. The picker is drawn by the browser, in a view of its own, so
+ * the moment it appears this document sees `focusout` on the field — and a badge bound to focus
+ * alone would vanish at exactly the moment it had worked. It is set when the badge is pressed and
+ * taken back when the core says the list has gone.
+ */
+let badge: {
+  readonly field: HTMLInputElement
+  readonly surface: Surface
+  /** The button inside the closed root, which a focus event names when nothing retargets it. */
+  readonly control: HTMLButtonElement
+  open: boolean
+} | null = null
+
+/** How the badge looks and what it is called, as the core sent it. No chrome, no badge. */
+let badgeChrome: BadgeChrome | null = null
+
+/**
+ * The field the last press was about, which is where a chosen credential goes.
+ *
+ * Not the badge's field: a fill asked for from browser chrome presses no badge, and there may be no
+ * badge at all — the caret can be in the address bar while the key in the toolbar is pressed.
+ */
+let pressed: HTMLInputElement | null = null
+
+function hideBadge(): void {
+  badge?.surface.host.remove()
+  badge = null
+}
+
+/** Whether an event target is the badge: its host, or the button a closed root retargets to it. */
+function isBadge(target: EventTarget | null): boolean {
+  return badge !== null && (target === badge.surface.host || target === badge.control)
 }
 
 /**
- * Puts the suggestion list under a field.
+ * The badge goes because the caret is no longer in its form, and the core stops listening.
  *
- * Anchored to the field's own rectangle rather than to the pointer, because the list is about that
- * field: a list floating at the cursor would leave the user guessing which of two password boxes it
- * would fill.
+ * The two travel together. A badge taken down while the core still hears every press in the tab
+ * leaves the listener behind for the life of the tab; a listener released under a badge still on
+ * screen would answer the next press on it with nothing.
  */
-function showSuggestion(
-  anchor: HTMLInputElement,
-  offer: FillOffer,
-  fill: (id: string) => void
-): void {
-  hideSuggestion()
-  const surface = createSurface(SUGGESTION_HOST_ID, offer.chrome.styles)
+function leaveForm(): void {
+  hideBadge()
+  reportFillable(false)
+}
+
+/** Whether the caret is still on the field or its badge, as this document sees it. */
+function focusIsOurs(): boolean {
+  return (
+    badge !== null && (document.activeElement === badge.field || isBadge(document.activeElement))
+  )
+}
+
+/**
+ * The field moved under the badge: a scroll, a resize, a pinch.
+ *
+ * Two jobs, because it is one event. The badge follows the field, so it does not float over the
+ * middle of the page — and the rectangle the *core* placed the list from is now wrong, so the list
+ * closes rather than standing where the field used to be (AE6, KTD9). Following the field and
+ * following the list are different problems: one is four numbers this side already has, the other
+ * is four factors only the core can put together.
+ */
+function onViewportChange(): void {
+  placeBadge()
+  closeSuggest()
+}
+
+/** A pointer press that missed both the field and the badge — the ordinary way out of a menu. */
+function onPointerDown(event: Event): void {
+  if (badge === null) return
+  const target = event.target
+  if (target === badge.field || isBadge(target)) return
+  closeSuggest()
+}
+
+/**
+ * Puts the badge back where the field is now, in one write.
+ *
+ * `cssText` rather than six `setProperty` calls, and `!important` on every one of them for the
+ * reason `createSurface` gives: the stylesheet the core sends resets `:host` to `all: initial`, and
+ * an inline important declaration is the only thing that outranks both that and the page.
+ */
+function placeBadge(): void {
+  if (badge === null) return
+  const rect = badge.field.getBoundingClientRect()
+  const left = Math.round(rect.right - BADGE_SIZE - BADGE_INSET)
+  const top = Math.round(rect.top + (rect.height - BADGE_SIZE) / 2)
+  badge.surface.host.style.cssText = `${BADGE_BOX};left:${left}px!important;top:${top}px!important`
+}
+
+/**
+ * Says the list should go, and takes the open state back.
+ *
+ * The core is what actually takes the surface down — its departure is what discards the fill
+ * request — so this reports rather than decides. Sent once: a scroll produces a great many events
+ * and the second of them is about a list that has already gone.
+ */
+function closeSuggest(): void {
+  if (badge?.open !== true) return
+  badge.open = false
+  send(AUTOFILL_CLOSE_CHANNEL, null)
+  if (!focusIsOurs()) leaveForm()
+}
+
+/**
+ * The badge was pressed, by pointer or by Return.
+ *
+ * Carries the shape of the form and the field's rectangle in CSS pixels, plus the visual viewport's
+ * scale and offset — the three things only a renderer can see. Everything else the placement needs
+ * is the core's (`shared/passwords/suggest-bounds.ts`). Nothing is asked for and nothing comes back
+ * here: the answer, if the browser process saw the press, is a surface it draws itself.
+ */
+function pressBadge(field: HTMLInputElement): void {
+  const described = describeForm(field)
+  if (described === null || chooseFillTargets(described.descriptor) === null) return
+  const rect = field.getBoundingClientRect()
+  const viewport = window.visualViewport
+  if (badge !== null) badge.open = true
+  pressed = field
+  send(AUTOFILL_PRESS_CHANNEL, {
+    form: described.descriptor,
+    field: {
+      rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+      // 1 and 0 unless the user has pinched, and absent altogether in an old environment. The core
+      // would rather place the list at the un-pinched position than not place it at all.
+      scale: viewport?.scale ?? 1,
+      offsetX: viewport?.offsetLeft ?? 0,
+      offsetY: viewport?.offsetTop ?? 0
+    }
+  })
+}
+
+/**
+ * Draws the badge in the field, or leaves it where it already is.
+ *
+ * A `<button>` rather than anything cleverer, because a button is what answers Return and Space
+ * without a keyboard handler of our own, and what a screen reader calls a button (KTD12). It has no
+ * text in it at all: the key is a background image in the stylesheet the core sent, so this file
+ * carries neither a glyph — which would inherit whatever font the page set — nor a word, which would
+ * have to be translated somewhere that cannot read a catalogue.
+ */
+function showBadge(field: HTMLInputElement): void {
+  if (badge?.field === field) {
+    placeBadge()
+    return
+  }
+  hideBadge()
+  const chrome = badgeChrome
+  if (chrome === null) return
+  const surface = createSurface(BADGE_HOST_ID, chrome.styles, field)
   if (surface === null) return
 
-  const rect = anchor.getBoundingClientRect()
-  surface.host.style.setProperty('left', `${String(Math.round(rect.left))}px`, 'important')
-  surface.host.style.setProperty('top', `${String(Math.round(rect.bottom + 4))}px`, 'important')
+  // The same helper the save bar's three buttons use, with no text: the key is a background image,
+  // and the name a screen reader reads is the label the core translated.
+  const control = button('badge', '')
+  control.ariaLabel = chrome.label
+  control.addEventListener('click', () => pressBadge(field))
+  surface.root.appendChild(control)
 
-  const panel = document.createElement('div')
-  panel.className = 'panel'
-  const title = document.createElement('div')
-  title.className = 'title'
-  title.textContent = offer.chrome.title
-  panel.appendChild(title)
-
-  for (const entry of offer.entries) {
-    const item = button(
-      'entry',
-      entry.username === '' ? offer.chrome.noUsernameLabel : entry.username
-    )
-    item.addEventListener('click', () => {
-      // Hidden before the fill, so a fill that throws cannot leave a list hanging over the page.
-      hideSuggestion()
-      fill(entry.id)
-    })
-    panel.appendChild(item)
-  }
-  /*
-    The press on an entry must not take focus from the field.
-
-    The entries are buttons, and a press on a button focuses it — which moves focus off the field,
-    and the field's `focusout` takes the list down before the click that was meant to pick from it
-    arrives. Cancelling the press's default keeps focus where it was, the way every autocomplete list
-    does. The press is still the one the core records as the gesture: that is taken from the browser
-    process before this handler runs, and cancelling the default does not take it back.
-  */
-  panel.addEventListener('mousedown', (event) => event.preventDefault())
-  surface.root.appendChild(panel)
-
-  const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') hideSuggestion()
-  }
-  // Dismissed on scroll and resize rather than repositioned: the anchor rectangle is read once, and
-  // a list that stayed put while the page moved underneath it would be pointing at nothing.
-  const onScroll = (): void => hideSuggestion()
-  const options = { capture: true } as const
-  window.addEventListener('keydown', onKeyDown, options)
-  window.addEventListener('scroll', onScroll, options)
-  window.addEventListener('resize', onScroll)
-
-  suggestion = {
-    surface,
-    teardown: () => {
-      window.removeEventListener('keydown', onKeyDown, options)
-      window.removeEventListener('scroll', onScroll, options)
-      window.removeEventListener('resize', onScroll)
-    }
-  }
+  badge = { field, surface, control, open: false }
+  placeBadge()
 }
 
 // --- filling -----------------------------------------------------------------
@@ -311,17 +442,13 @@ function setFieldValue(element: HTMLInputElement, value: string): void {
 let saveBar: Surface | null = null
 
 function hideSaveBar(): void {
-  saveBar?.remove()
+  saveBar?.host.remove()
   saveBar = null
 }
 
 function answerSave(answer: SaveAnswer): void {
   hideSaveBar()
-  try {
-    ipcRenderer.send(AUTOFILL_SAVE_ANSWER_CHANNEL, answer)
-  } catch {
-    // Only the core can store anything, so there is nothing to do here but let the bar go.
-  }
+  send(AUTOFILL_SAVE_ANSWER_CHANNEL, answer)
 }
 
 /**
@@ -336,32 +463,23 @@ function showSaveBar(chrome: SaveBarChrome): void {
   const surface = createSurface(SAVE_HOST_ID, chrome.styles)
   if (surface === null) return
   saveBar = surface
-  surface.host.style.setProperty('top', '16px', 'important')
-  surface.host.style.setProperty('right', '16px', 'important')
+  surface.host.style.cssText = `${PINNED};top:16px!important;right:16px!important`
 
-  const panel = document.createElement('div')
-  panel.className = 'panel'
-  const message = document.createElement('div')
-  message.className = 'message'
-  message.textContent = chrome.message
-  panel.appendChild(message)
+  const panel = element('div', 'panel')
+  panel.appendChild(element('div', 'message', chrome.message))
+  if (chrome.username !== '') panel.appendChild(element('div', 'who', chrome.username))
 
-  if (chrome.username !== '') {
-    const who = document.createElement('div')
-    who.className = 'who'
-    who.textContent = chrome.username
-    panel.appendChild(who)
+  const actions = element('div', 'actions')
+  const answers = [
+    ['action primary', chrome.saveLabel, 'save'],
+    ['action', chrome.neverLabel, 'never'],
+    ['action', chrome.dismissLabel, 'dismiss']
+  ] as const
+  for (const [className, label, answer] of answers) {
+    const control = button(className, label)
+    control.addEventListener('click', () => answerSave(answer))
+    actions.appendChild(control)
   }
-
-  const actions = document.createElement('div')
-  actions.className = 'actions'
-  const save = button('action primary', chrome.saveLabel)
-  save.addEventListener('click', () => answerSave('save'))
-  const never = button('action', chrome.neverLabel)
-  never.addEventListener('click', () => answerSave('never'))
-  const dismiss = button('action', chrome.dismissLabel)
-  dismiss.addEventListener('click', () => answerSave('dismiss'))
-  actions.append(save, never, dismiss)
   panel.appendChild(actions)
   surface.root.appendChild(panel)
 }
@@ -380,36 +498,21 @@ function showSaveBar(chrome: SaveBarChrome): void {
  * soon as the caret leaves the form rather than lasting the life of the tab.
  */
 function reportFillable(fillable: boolean): void {
-  try {
-    ipcRenderer.send(AUTOFILL_FILLABLE_CHANNEL, fillable)
-  } catch {
-    // No responder — an old build, or a view created outside a hardened session. Nothing is lost
-    // that this side could act on: the report is for the core's benefit, not this one's.
-  }
-}
-
-function requestOffer(descriptor: FormDescriptor): FillOffer | null {
-  try {
-    /*
-      Synchronous, like the cosmetic and picker channels, and for a plainer reason than theirs: this
-      runs when a field takes focus, so there is exactly one round trip per focus and the answer has
-      to be in hand before the list can be drawn at all. The core answers from an in-memory vault.
-    */
-    return asFillOffer(ipcRenderer.sendSync(AUTOFILL_OFFER_CHANNEL, descriptor))
-  } catch {
-    // No responder — an old build, or a view created outside a hardened session. Offering nothing
-    // is the only safe reading; there is nothing here to guess at.
-    return null
-  }
+  send(AUTOFILL_FILLABLE_CHANNEL, fillable)
 }
 
 /**
- * Asks for one credential and puts it in the fields.
+ * Redeems the token the core sent, and puts the credential in the fields.
  *
- * The form is described again rather than reused from the offer, so the core decides against the
- * document as it is at the moment of the click. The targets are chosen again for the same reason.
+ * The form is described again rather than reused from the press, so the core decides against the
+ * document as it is at this moment. The targets are chosen again for the same reason. The token is
+ * good for one attempt whatever comes of it (KTD8), so there is nothing here to retry with.
+ *
+ * The caret goes back into the field afterwards. The picker took the focus away in order to be
+ * walked by arrow key, and a sign-in form left with the focus nowhere is one the user has to click
+ * into again to press Return.
  */
-function performFill(anchor: HTMLInputElement, id: string): void {
+function performFill(anchor: HTMLInputElement, token: string): void {
   const described = describeForm(anchor)
   if (described === null) return
   const targets = chooseFillTargets(described.descriptor)
@@ -417,50 +520,56 @@ function performFill(anchor: HTMLInputElement, id: string): void {
 
   let answer: unknown
   try {
-    answer = ipcRenderer.sendSync(AUTOFILL_FILL_CHANNEL, { id, form: described.descriptor })
+    answer = ipcRenderer.sendSync(AUTOFILL_FILL_CHANNEL, { token, form: described.descriptor })
   } catch {
     return
   }
   const credential = asFillAnswer(answer)
   if (credential === null) return
 
-  const [password] = described.elements.slice(targets.password.index, targets.password.index + 1)
+  const password = described.elements[targets.password.index]
   if (password === undefined) return
   setFieldValue(password, credential.password)
 
   if (targets.username !== null && credential.username !== '') {
-    const [username] = described.elements.slice(targets.username.index, targets.username.index + 1)
+    const username = described.elements[targets.username.index]
     if (username !== undefined) setFieldValue(username, credential.username)
   }
+  anchor.focus()
 }
 
 /**
- * A field took focus. Offers what may be filled into it.
+ * A field took focus. Draws the badge on it, if a fill could ever write there.
  *
- * Only for a field the user could see and type into, and only for a form that has a password in it.
- * A page can cause focus at will, so this being reachable is not a privilege — the offer carries
- * usernames only, drawn where the page cannot read them, and nothing is filled without a real press
- * on one of our own entries, which the core checks for itself.
+ * A pure decision, and that is KTD7: `chooseFillTargets` is a function the preload already has, so
+ * the badge's visibility is the shape of the form in front of the user and nothing else. The vault
+ * is not asked, and cannot be, until the badge is pressed (R2, AE2).
+ *
+ * A page can cause focus at will, so this being reachable is not a privilege: what it produces is a
+ * button, and the core refuses a press it saw no real input event for.
  */
 function onFocusIn(event: FocusEvent): void {
   const target = event.target
-  hideSuggestion()
-  const focused = fillableFocus(target)
-  /*
-    Reported before anything is asked of the core, and reported on every focus change either way.
+  // Focus moving into the badge is not focus leaving the form. Its own host is the only element in
+  // this document that is ours, and a closed shadow root retargets everything inside it to the host.
+  if (isBadge(target)) return
 
-    This is the message the core attaches its input listener on, so it has to be sent for a focus
-    that qualifies *before* the offer is asked for — the press that authorises a fill is the one the
-    user is about to make on the list this focus draws, and a listener attached afterwards would
-    miss it. The press that caused this focus is already gone by now, which is why the offer is not
-    gated on one.
+  const focused = fillableFocus(target)
+  // A caret that has moved to another field is a list about the wrong one.
+  if (badge?.field !== focused?.field) closeSuggest()
+  /*
+    Reported on every focus change, including the ones that say "no".
+
+    This is the message the core attaches its input listener on, and the message it answers with the
+    badge's wording. Both matter for the press that follows: the listener is what records the gesture
+    the core will demand, and without the wording there is no badge to press.
   */
   reportFillable(focused !== null)
-  if (focused === null) return
-
-  const offer = requestOffer(focused.form.descriptor)
-  if (offer === null) return
-  showSuggestion(focused.field, offer, (id) => performFill(focused.field, id))
+  if (focused === null) {
+    if (badge?.open === false) hideBadge()
+    return
+  }
+  showBadge(focused.field)
 }
 
 /** The focused element, when it is a field a fill would write to, with its form. */
@@ -499,7 +608,7 @@ function fillableFocus(target: EventTarget | null): {
  * that is worth building on its own rather than smuggling in here.
  */
 function onSubmit(event: SubmitEvent): void {
-  hideSuggestion()
+  closeSuggest()
   const form = event.target
   if (!(form instanceof HTMLFormElement)) return
 
@@ -516,22 +625,15 @@ function onSubmit(event: SubmitEvent): void {
   const targets = chooseSaveTargets(descriptor)
   if (targets === null) return
 
-  const [password] = elements.slice(targets.password.index, targets.password.index + 1)
+  const password = elements[targets.password.index]
   if (password === undefined || password.value === '') return
-  const [usernameField] =
-    targets.username === null
-      ? []
-      : elements.slice(targets.username.index, targets.username.index + 1)
+  const usernameField = targets.username === null ? undefined : elements[targets.username.index]
 
-  try {
-    ipcRenderer.send(AUTOFILL_SUBMIT_CHANNEL, {
-      form: descriptor,
-      username: usernameField?.value ?? '',
-      password: password.value
-    })
-  } catch {
-    // Nothing to do: the core is the only thing that can store a credential.
-  }
+  send(AUTOFILL_SUBMIT_CHANNEL, {
+    form: descriptor,
+    username: usernameField?.value ?? '',
+    password: password.value
+  })
 }
 
 /**
@@ -546,30 +648,98 @@ function onSubmit(event: SubmitEvent): void {
  */
 export function installAutofill(): void {
   try {
-    const options = { capture: true } as const
-    window.addEventListener('focusin', onFocusIn, options)
-    window.addEventListener('submit', onSubmit, options)
     /*
-      A form the user has moved away from should not leave a list of their accounts on screen, and
-      the core should stop hearing this tab's input.
+      Capturing, so a page that stops propagation in its own handlers cannot take these events away
+      — a login form that swallowed `submit` would be one the manager never offered to remember.
 
-      Reported here as well as on the next focus, because there may be no next focus: a press on
-      blank page space, a field removed after a submit, or focus leaving the document entirely fires
-      this and nothing else. Moving to another field fires this and then `focusin`, which reports the
-      new field — so the listener goes and comes back between two events with no input in between.
+      Passive as well, and truthfully so: not one listener in this file calls `preventDefault`, and
+      declaring it is what stops Chromium waiting on our scroll handler before it scrolls.
+    */
+    const watching = { capture: true, passive: true } as const
+    window.addEventListener('focusin', onFocusIn, watching)
+    window.addEventListener('submit', onSubmit, watching)
+    /*
+      Registered for the life of the document rather than for the life of a badge.
+
+      Each begins with "is there a badge?" and leaves immediately when there is not, which is a
+      cheaper thing to run on every scroll than subscribing and unsubscribing is to keep correct: a
+      badge is created and destroyed on every focus change, and a removal that missed one would
+      leave a handler reading a field that no longer exists.
+    */
+    window.addEventListener('scroll', onViewportChange, watching)
+    window.addEventListener('resize', onViewportChange, watching)
+    window.addEventListener('pointerdown', onPointerDown, watching)
+    // The pinch, which changes neither `scroll` nor `resize` on the window.
+    const viewport = window.visualViewport
+    viewport?.addEventListener('resize', onViewportChange)
+    viewport?.addEventListener('scroll', onViewportChange)
+    /*
+      The caret left the field: the badge goes, and the core is told the form is gone.
+
+      Told here as well as on the next focus, because there may be no next focus: a press on blank
+      page space, a field removed after a submit, or focus leaving the document fires this and nothing
+      else. Moving to another field fires this and then `focusin`, which reports the new field.
+
+      Two exceptions, and the keyboard needs both (AE10). The badge's own list is open: it is drawn in
+      a view of the browser's, so putting it on screen takes the focus out of this document, and a
+      badge that went then would vanish the moment it had worked (R1). And focus is moving *into* the
+      badge — one Tab from the field — which `relatedTarget` names: the form is still the one in front
+      of the user, and releasing the listener would lose the Return that is about to press it.
     */
     window.addEventListener(
       'focusout',
-      () => {
-        hideSuggestion()
-        reportFillable(false)
+      (event: FocusEvent) => {
+        if (badge === null) return
+        if (badge.open || isBadge(event.relatedTarget)) return
+        leaveForm()
       },
-      options
+      watching
     )
     // Both surfaces belong to the document that asked for them. A new document gets new ones.
     window.addEventListener('pagehide', () => {
-      hideSuggestion()
+      closeSuggest()
+      hideBadge()
       hideSaveBar()
+      pressed = null
+    })
+
+    ipcRenderer.on(AUTOFILL_BADGE_CHANNEL, (_event, payload: unknown) => {
+      // No wording, no badge. A build mismatch must leave the page alone rather than draw a control
+      // nothing can name, and a build with autofill switched off never sends this at all.
+      badgeChrome = asBadgeChrome(payload) ?? badgeChrome
+    })
+
+    /*
+      The list has gone, and possibly with a choice in it.
+
+      Both endings take the badge's open state back, because both mean there is no list in front of
+      the field any more. Only one of them has a token, and redeeming it is the last step of the flow
+      the badge started.
+    */
+    ipcRenderer.on(AUTOFILL_SUGGEST_END_CHANNEL, (_event, payload: unknown) => {
+      const field = pressed
+      pressed = null
+      const token = asFillToken(payload)
+      if (token !== null && field !== null) performFill(field, token)
+      if (badge?.open !== true) return
+      badge.open = false
+      // The field — or the badge, when it was reached by Tab — usually still holds the caret as far
+      // as this document is concerned, even though the overlay had the keyboard. The badge stays
+      // until focus actually moves in the page; the `focusout` that did not count while the list was
+      // open is made good here otherwise.
+      if (!focusIsOurs()) leaveForm()
+    })
+
+    /*
+      Browser chrome asks where the form is (R11, R12): the toolbar key, the shortcut, the context
+      menu. Answered exactly as a badge press is, for the field with the caret or else the first one a
+      fill would write to — and answering is all this does. Whether the answer counts is the core's
+      to decide, from a question only browser chrome can have asked.
+    */
+    ipcRenderer.on(AUTOFILL_DESCRIBE_CHANNEL, () => {
+      let target = fillableFocus(document.activeElement)
+      for (const input of document.querySelectorAll('input')) target ??= fillableFocus(input)
+      if (target !== null) pressBadge(target.field)
     })
 
     ipcRenderer.on(AUTOFILL_SAVE_PROMPT_CHANNEL, (_event, payload: unknown) => {

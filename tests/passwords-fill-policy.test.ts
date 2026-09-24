@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { FILL_GESTURE_WINDOW_MS, type FillConsent } from '@shared/passwords/consent.js'
 import {
+  countPageMatches,
   decideFill,
-  decideOffer,
   decidePageFill,
   fillableSubjects,
-  offerableSubjects,
   originMayReceiveCredentials,
   type FillContext,
   type FillRefusal
@@ -483,29 +482,6 @@ describe('the offer list and the fill decision cannot disagree', () => {
   it('fills nothing at all when the situation itself is refused', () => {
     expect(fillableSubjects(goodContext({ consent: null }), [SUBJECT])).toEqual([])
   })
-
-  it('offers without a consent, and nothing a fill would refuse for any other reason', () => {
-    // The offer is `decideFill` without its first rule. With no press, the same subjects are offered
-    // and none of them is fillable; every other rule still narrows the list exactly as before.
-    const subjects = [
-      { origin: 'https://example.com' },
-      { origin: 'https://evil.example' },
-      { origin: 'https://example.com.evil.com' }
-    ]
-    const unconsented = goodContext({ consent: null })
-
-    expect(offerableSubjects(unconsented, subjects)).toEqual([{ origin: 'https://example.com' }])
-    expect(fillableSubjects(unconsented, subjects)).toEqual([])
-    expect(
-      offerableSubjects(goodContext({ consent: null, isTopLevelFrame: false }), subjects)
-    ).toEqual([])
-    expect(
-      decideOffer(goodContext({ consent: null, formAction: 'https://evil.example/x' }), SUBJECT)
-    ).toEqual({
-      allowed: false,
-      reason: 'cross-origin-form-action'
-    })
-  })
 })
 
 describe('what the toolbar may know before there is a form or a consent', () => {
@@ -569,5 +545,45 @@ describe('which origins could ever be filled', () => {
     expect(originMayReceiveCredentials('http://intranet.example')).toBe(false)
     expect(originMayReceiveCredentials('file:///tmp')).toBe(false)
     expect(originMayReceiveCredentials('nonsense')).toBe(false)
+  })
+})
+
+describe('how many saved entries the toolbar key may count for a page', () => {
+  /*
+    The key's number (R10): the consent-free page predicate plus a domain match, and nothing
+    situational. What matters is that it never counts what `decideFill` would refuse for a reason the
+    key *can* know — another site, a downgrade, a page that is not encrypted — because a key that says
+    "two saved here" on a page that can never be filled is a promise the fill then breaks.
+  */
+  const saved = [
+    { origin: 'https://example.com' },
+    { origin: 'http://example.com' },
+    { origin: 'https://example.com.evil.com' },
+    { origin: 'https://other.example' },
+    { origin: 'not an origin' }
+  ]
+
+  it('counts the entries of the page’s own site, subdomains included', () => {
+    expect(countPageMatches('https://accounts.example.com/login', saved)).toBe(2)
+  })
+
+  it('counts nothing on a page that cannot be filled at all', () => {
+    expect(countPageMatches('http://intranet.example/login', saved)).toBe(0)
+    expect(countPageMatches('tessera://passwords', saved)).toBe(0)
+  })
+
+  it('does not count an https entry on a loopback http page, which would be a downgrade', () => {
+    const local = [{ origin: 'https://localhost:8443' }, { origin: 'http://localhost:8080' }]
+    expect(countPageMatches('http://localhost:3000/login', local)).toBe(1)
+  })
+
+  it('agrees with the fill about every entry it counts', () => {
+    // The count is optimistic about the situation, never about the entry: each one it counts is one
+    // `decideFill` allows in the ordinary case of a top-level form posting to its own page.
+    const page = 'https://accounts.example.com/login'
+    const allowed = saved.filter(
+      (subject) => decideFill(goodContext({ frameUrl: page, topLevelUrl: page }), subject).allowed
+    )
+    expect(countPageMatches(page, saved)).toBe(allowed.length)
   })
 })

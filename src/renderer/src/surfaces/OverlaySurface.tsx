@@ -34,6 +34,16 @@ const DownloadsPanelSurface = lazy(() =>
 const MasterPasswordSurface = lazy(() =>
   import('./MasterPasswordSurface.js').then((module) => ({ default: module.MasterPasswordSurface }))
 )
+/*
+  The account picker, behind the same boundary and for the same bargain: drawn statically it took the
+  layer's bundle past its 20 kB budget, and it is shown only after a press on a badge or the key. The
+  core holds the request while the chunk arrives, so a list that appears a frame later loses nothing.
+*/
+const AutofillSuggestSurface = lazy(() =>
+  import('./AutofillSuggestSurface.js').then((module) => ({
+    default: module.AutofillSuggestSurface
+  }))
+)
 
 /**
  * Root of the window's topmost layer.
@@ -213,6 +223,36 @@ export function OverlaySurface(): React.ReactNode {
   */
   if (presentation.kind === 'picker-bar') {
     return <PickerBarSurface presentation={presentation} />
+  }
+
+  /*
+    Returned before the wrapper below for the find bar's reason exactly: the layer is cut to this
+    list's own rectangle, so the list *is* the layer and a press beside it lands in the page view,
+    never here. Inside the wrapper, every press on the list's own padding would be a miss and would
+    dismiss somebody's account picker as they reached for it.
+
+    The three answers travel from here rather than from the surface, so the surface can be rendered
+    by a test without a bridge. A dismissal is the ordinary `overlay:dismiss`: the picker's departure
+    is what discards the fill request and takes the badge's highlight off the page, and routing
+    Escape through a fourth verb would have been a second way to leave those two undone.
+  */
+  if (presentation.kind === 'autofill-suggest') {
+    return (
+      <Suspense fallback={null}>
+        <AutofillSuggestSurface
+          presentation={presentation}
+          onChoose={({ requestId, entryId }) => {
+            void invoke('passwords:answerSuggestion', { requestId, action: 'choose', entryId })
+          }}
+          onUnlock={({ requestId }) => {
+            void invoke('passwords:answerSuggestion', { requestId, action: 'unlock' })
+          }}
+          onDismiss={() => {
+            void invoke('overlay:dismiss')
+          }}
+        />
+      </Suspense>
+    )
   }
 
   return (

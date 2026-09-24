@@ -41,6 +41,8 @@ export interface PageContextMenuDeps {
   canGoForward: boolean
   /** False when the blocker is switched off entirely; the picker would write a rule nothing applies. */
   blockerEnabled: boolean
+  /** Whether the page last said a fillable password field has focus; see `hasFillableFocus`. */
+  canFillPassword: boolean
   onBack(): void
   onForward(): void
   onReload(): void
@@ -49,6 +51,8 @@ export interface PageContextMenuDeps {
   onSearchFor(text: string): void
   /** Enters picker mode: the next click on the page writes a hiding rule for what it lands on. */
   onBlockElement(): void
+  /** Opens the account picker for this page, on the consent a menu item carries (R11, R12). */
+  onFillPassword(): void
   onInspect(): void
 }
 
@@ -116,6 +120,18 @@ export function pageContextMenuTemplate(deps: PageContextMenuDeps): MenuItemCons
     // addresses, is a choice nobody can make correctly at a glance.
     items.push(
       { label: t('page.copyImageAddress'), click: () => deps.onCopy(target.srcUrl) },
+      { type: 'separator' }
+    )
+  }
+
+  /*
+    "Fill in saved password", on the field the user right-clicked — a press moves the caret there, so
+    the page's own report of a fillable field is about this one. Absent rather than disabled elsewhere,
+    for "Block element"'s reason below: an item greyed out on every page reads as broken.
+  */
+  if (deps.canFillPassword) {
+    items.push(
+      { label: t('menu.tools.fillPassword'), click: () => deps.onFillPassword() },
       { type: 'separator' }
     )
   }

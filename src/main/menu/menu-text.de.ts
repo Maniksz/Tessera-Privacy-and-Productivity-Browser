@@ -60,6 +60,7 @@ export const de = {
 
   'menu.tools': 'Werkzeuge',
   'menu.tools.passwords': 'Passwörter',
+  'menu.tools.fillPassword': 'Gespeichertes Passwort einsetzen',
   'menu.tools.extensionsTab': 'Erweiterungen im Tab',
   'menu.tools.clearData': 'Browserdaten löschen…',
   'menu.tools.panic': 'Alles löschen und beenden',

@@ -50,6 +50,8 @@ export const SHORTCUT_ACTIONS = [
   'settings',
   /** Arms the element picker for the active tile: the next click on the page writes a hiding rule. */
   'blockElement',
+  /** Fills the active tile's sign-in form from browser chrome: the toolbar key's picker (R12). */
+  'fillPassword',
   // split view
   'splitLayout1',
   'splitLayout2',
@@ -154,6 +156,7 @@ const windowsTable = {
   clearData: ['Control+Shift+Delete'],
   settings: ['Control+,'],
   blockElement: ['Control+Shift+E'],
+  fillPassword: ['Control+Shift+K'],
 
   splitLayout1: ['Control+Shift+1'],
   splitLayout2: ['Control+Shift+2'],
@@ -220,6 +223,7 @@ const macTable = {
   clearData: ['Command+Shift+Backspace'],
   settings: ['Command+,'],
   blockElement: ['Command+Shift+E'],
+  fillPassword: ['Command+Shift+K'],
 
   splitLayout1: ['Command+Shift+1'],
   splitLayout2: ['Command+Shift+2'],

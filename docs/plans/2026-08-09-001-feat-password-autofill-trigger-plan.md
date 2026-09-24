@@ -20,6 +20,7 @@ execution: code
 - **Abbruchbedingungen.** Anhalten und fragen, wenn eine Füllregel über die Zustimmungsquelle hinaus gelockert werden müsste, wenn eine Produktentscheidung des Product Contract im Weg steht, oder wenn das Preload über 35 kB wachsen würde.
 - **Product-Contract-Erhalt.** Product Contract in seinen Entscheidungen unverändert. Präzisiert wurden: R1 (Badge bleibt sichtbar, solange seine Liste offen ist), R2 (Vertrauensgrenze ist die Seitenansicht, nicht der Hauptprozess), R3 (Tastaturbedienung), R8 (zwei benannte Ausnahmen), Key Decision 2 (Belegkraft der Vorbilder). Alle aus dem Dokumenten-Review, keine Umfangsänderung.
 - **Abschluss.** Automatisierte Prüfung deckt alles außer dem Durchgang in der laufenden Anwendung ab; der bleibt beim Benutzer, weil in dieser Umgebung kein autonomer Anwendungsstart erfolgt. Der Durchgang ist im Verification Contract benannt.
+- **Umsetzungsstand (24.09.2026, Roadmap U14).** U1 bis U7 sind gebaut. U4 kam aus dem Entwurf `wip/autofill-u4` und hat `decideOffer`, `offerableSubjects`, `offerFor` und die Liste in der Seite aus `fe33648` wieder entfernt; `decideFill` ist die einzige Regel. Der Weg aus der Browser-Oberfläche (U6, U7) fragt die Seite über `AUTOFILL_DESCRIBE_CHANNEL` nach ihrem Formular; deren Antwort zählt nur als Herkunfts-Zustimmung, weil der Kern gefragt hat (einmalig, 2 s). Das Preload-Tor ist im Verification Contract neu gefasst. Offen ist allein der Durchgang in der laufenden Anwendung.
 
 ---
 
@@ -400,7 +401,7 @@ U1 → U2 → U3 → U4 sind **eine Auslieferung**; U1 und U2 sind voneinander u
 | Abdeckung | `pnpm run test:coverage` | U1, U4, U5 | Zeilen ≥ 90 %, Zweige ≥ 85 %, wie `scripts/metrics.mjs` sie prüft. |
 | Verhalten | `pnpm run test:bdd` | U5 | Das neue Szenario läuft. |
 | Lint | `pnpm run lint` | alle Einheiten | Keine Warnungen. |
-| Preload-Budget | `node scripts/metrics.mjs` | U4 | **Hartes Tor:** nicht über 35 kB. Vor U1 und nach U4 messen, Differenz notieren. |
+| Preload-Budget | `pnpm build`, Größe von `out/preload/index.cjs` | U4–U7 | **Hartes Tor, seit Roadmap U14 neu gefasst:** nicht größer als vor U14 gemessen (24.09.2026: 41 638 B) statt 35 kB — die Roadmap-Key-Decision „Bundle-Budgets dürfen mit notiertem Zuwachs wachsen“. Gemessen nach U4–U7: 41 448 B (−190 B), siehe `docs/STATUS.md`. |
 | Übrige Budgets | `node scripts/metrics.mjs` | U3, U6 | Keine **neue** fehlschlagende Prüfung. Renderer und Hauptprozess dürfen wachsen — U3 legt eine Fläche an, U6 einen Knopf —; der Zuwachs wird beziffert, nicht auf den heutigen Wert eingefroren. |
 | Durchgang in der Anwendung | vom Benutzer | Abschluss Stufe 1 | Siehe Checkliste unten. |
 

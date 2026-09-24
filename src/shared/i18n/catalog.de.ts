@@ -53,6 +53,9 @@ export const de = {
   'toolbar.zoomReset': 'Zoom zurücksetzen',
   'toolbar.downloadsStatus': 'Downloads: {status}',
   'toolbar.downloadsProgress': 'Downloads: {percent} %',
+  'toolbar.autofillLocked': 'Passwörter sind gesperrt – entsperren',
+  'toolbar.autofillMatches': 'Gespeichertes Passwort einsetzen ({count} für diese Seite)',
+  'toolbar.autofillNone': 'Kein Passwort für diese Seite gespeichert',
 
   'omnibox.placeholder': 'Suchen oder Adresse eingeben',
   'omnibox.searchWith': 'Mit {engine} suchen',
@@ -312,7 +315,7 @@ export const de = {
   'passwords.neverSavedTitle': 'Hier nie speichern',
   'passwords.neverSavedEmpty': 'Keine Seite steht auf dieser Liste.',
   'passwords.forgetNeverSaved': 'Für {site} wieder fragen',
-  'passwords.fillTitle': 'Gespeichert für {site}',
+  'passwords.fillBadge': 'Gespeichertes Passwort einsetzen',
   'passwords.savePrompt': 'Passwort für {site} speichern?',
   'passwords.saveUpdatePrompt': 'Gespeichertes Passwort für {site} aktualisieren?',
   'passwords.saveAction': 'Speichern',

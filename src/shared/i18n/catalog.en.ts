@@ -81,6 +81,10 @@ export const en = {
   // The download button's name while it has something to say; `{status}` is a `downloads.state.*`.
   'toolbar.downloadsStatus': 'Downloads: {status}',
   'toolbar.downloadsProgress': 'Downloads: {percent}%',
+  // The password key. A count, never a name: the key is drawn before anything was pressed.
+  'toolbar.autofillLocked': 'Passwords are locked — unlock',
+  'toolbar.autofillMatches': 'Fill in a saved password ({count} for this site)',
+  'toolbar.autofillNone': 'No password saved for this site',
 
   // address bar
   'omnibox.placeholder': 'Search or enter address',
@@ -437,8 +441,11 @@ export const en = {
 
     So a language change reaches the next sign-in form rather than the next restart — the preload
     has no catalogue of its own and must not grow one.
+
+    The badge's label is the only one of them a screen reader reads and nobody sees: the badge is a
+    key, drawn as a path, and this is its name.
   */
-  'passwords.fillTitle': 'Saved for {site}',
+  'passwords.fillBadge': 'Fill in a saved password',
   'passwords.savePrompt': 'Save the password for {site}?',
   'passwords.saveUpdatePrompt': 'Update the saved password for {site}?',
   'passwords.saveAction': 'Save',

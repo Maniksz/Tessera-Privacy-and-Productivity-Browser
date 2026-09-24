@@ -175,15 +175,6 @@ export function chooseSaveTargets(form: FormDescriptor): SaveTargets | null {
   const password = fresh ?? first
   if (password === undefined) return null
 
-  const [declared] = filled.filter(
-    (field) =>
-      !isPassword(field) && tokens(field.autocomplete).some((token) => USERNAME_TOKENS.has(token))
-  )
-  if (declared !== undefined) return { password, username: declared }
-
-  const before = filled.filter(
-    (field) => field.index < password.index && USERNAME_TYPES.has(field.type)
-  )
-  const [nearest] = before.slice(-1)
-  return { password, username: nearest ?? null }
+  // The same choice of username a fill makes, among the fields that were actually filled in.
+  return { password, username: chooseUsernameField(filled, password) }
 }

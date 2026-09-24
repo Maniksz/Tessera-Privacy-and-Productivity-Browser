@@ -490,6 +490,20 @@ body {
   fill: var(--fg-dim);
 }
 
+/*
+  The password key. Its three states differ in shape, not only in colour: a padlock while the vault is
+  locked, a filled dot while something is saved for this page, the bare key otherwise.
+*/
+.autofill-key [data-part='dot'] {
+  fill: var(--accent);
+  stroke: var(--bg);
+  stroke-width: 1;
+}
+
+.autofill-key[data-vault='locked'] {
+  color: var(--fg-dim);
+}
+
 /* --- address bar ----------------------------------------------------------- */
 
 .omnibox {

@@ -63,6 +63,7 @@ export const en = {
 
   'menu.tools': 'Tools',
   'menu.tools.passwords': 'Passwords',
+  'menu.tools.fillPassword': 'Fill In Saved Password',
   'menu.tools.extensionsTab': 'Extensions in a tab',
   'menu.tools.clearData': 'Clear Browsing Data…',
   'menu.tools.panic': 'Delete Everything and Quit',

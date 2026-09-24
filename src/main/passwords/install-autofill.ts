@@ -1,5 +1,11 @@
 import { app, type Event, type InputEvent, type IpcMainEvent, type WebContents } from 'electron'
-import type { AutofillFrame, AutofillService } from './AutofillService.js'
+import type { Locale } from '@shared/i18n/catalog.js'
+import type { AutofillKeyState } from '@shared/passwords/model.js'
+import type { Rect } from '@shared/ui/anchor.js'
+import type { BrowserWindowController } from '../browser/BrowserWindowController.js'
+import { AutofillService, type AutofillFrame, type AutofillVault } from './AutofillService.js'
+import { AutofillSuggest } from './AutofillSuggest.js'
+import type { MasterPasswordPrompt } from './MasterPasswordPrompt.js'
 import { wireAutofillView, type AutofillHost } from './autofill-wiring.js'
 
 /**
@@ -95,9 +101,107 @@ function hostFor(contents: WebContents): AutofillHost {
   }
 }
 
-/** Starts answering autofill messages. Installed once for the application, not once per session. */
-export function installAutofill(service: AutofillService): void {
-  app.on('web-contents-created', (_event, contents: WebContents) => {
-    wireAutofillView(service, hostFor(contents))
+/** The windows, as autofill asks about them. `WindowRegistry` satisfies it. */
+export interface AutofillWindows {
+  readonly controllers: readonly BrowserWindowController[]
+  controllerForWebContents(webContentsId: number): BrowserWindowController | undefined
+}
+
+/** What the rest of the core holds of autofill once it is running. */
+export interface AutofillParts {
+  readonly service: AutofillService
+  readonly suggest: AutofillSuggest
+  /** The toolbar key's state for a window's active tile (R10). */
+  keyStateFor(window: BrowserWindowController | undefined): AutofillKeyState
+  /**
+   * A fill asked for from browser chrome, for a window's active tile: the key, the shortcut (R11,
+   * R12). `anchor` is the key's rectangle, or `null` to hang the list from the field.
+   */
+  fillActiveTab(window: BrowserWindowController | undefined, anchor: Rect | null): void
+}
+
+/**
+ * Starts answering autofill messages, and returns what the rest of the core holds of it.
+ *
+ * Installed once for the application, not once per session. Everything Electron-shaped autofill
+ * needs is read here, from the thing that owns it, and never recomputed:
+ *
+ *   - `modeFor` is what makes a private window fill without recording that it did, and it answers
+ *     `null` for a view this browser cannot place — a devtools window, something being torn down —
+ *     because the default for anything unaccounted for has to be "no".
+ *   - `onLock` is what keeps a lock from being a half-truth: without it the key would be gone from the
+ *     vault while a password the user typed two minutes ago sat in the save bar state for the rest of
+ *     its two minutes (`AutofillService.dropPendingSaves`). It also tells every toolbar key.
+ *   - `targetFor` gives the picker the tile from the tab, the rectangle from the view the window
+ *     positioned, and the zoom from the tab's own ladder. A second opinion about where a tile is would
+ *     eventually disagree with the first, and the symptom would be a list of somebody's account names
+ *     floating over the wrong pane.
+ *   - `requestUnlock` is a closure rather than the prompt itself, and it is the reason R9 is a property
+ *     of the program rather than a comment: the picker can raise the master-password prompt and can do
+ *     nothing else with it.
+ *
+ * `AutofillService` and the old `installAutofill` were once complete, tested and called by nothing —
+ * which is why this returns the parts rather than leaving them for a caller to remember to build.
+ */
+export function installAutofill(deps: {
+  readonly vault: AutofillVault & { onLock(listener: () => void): () => void }
+  readonly prompt: Pick<MasterPasswordPrompt, 'requestUnlock'>
+  /** Read per call: the registry is built after autofill, and outlives nothing it is asked about. */
+  readonly windows: () => AutofillWindows | null
+  /** `passwords.autofill`, per call, so switching it off reaches the form already on screen. */
+  readonly enabled: () => boolean
+  readonly locale: () => Locale
+}): AutofillParts {
+  const { vault, windows } = deps
+  const service = new AutofillService({
+    vault,
+    enabled: deps.enabled,
+    modeFor: (viewId) => {
+      const controller = windows()?.controllerForWebContents(viewId)
+      if (controller === undefined) return null
+      return controller.privateMode ? 'private' : 'normal'
+    },
+    locale: deps.locale,
+    now: () => Date.now()
   })
+  const suggest = new AutofillSuggest({
+    service,
+    targetFor: (viewId) => {
+      const controller = windows()?.controllerForWebContents(viewId)
+      if (controller === undefined) return null
+      const tab = controller.tabForWebContents(viewId)
+      // A tab loaded but not on screen has no tile, and a list has to be drawn in one.
+      if (tab?.tileIndex == null) return null
+      return {
+        window: controller,
+        tileIndex: tab.tileIndex,
+        // A factor, not a percentage, so the arithmetic in `suggest-bounds.ts` is one step.
+        geometry: { bounds: tab.view.getBounds(), pageZoom: tab.zoomPercent / 100 }
+      }
+    },
+    requestUnlock: (window) => deps.prompt.requestUnlock(window)
+  })
+
+  const keyStateFor = (window: BrowserWindowController | undefined): AutofillKeyState =>
+    service.keyState(window?.activeTab()?.currentUrl ?? null)
+  vault.onLock(() => {
+    service.dropPendingSaves()
+    for (const window of windows()?.controllers ?? []) {
+      window.emit('passwords:autofillStateChanged', keyStateFor(window))
+    }
+  })
+
+  app.on('web-contents-created', (_event, contents: WebContents) => {
+    wireAutofillView(service, suggest, hostFor(contents))
+  })
+
+  return {
+    service,
+    suggest,
+    keyStateFor,
+    fillActiveTab: (window, anchor) => {
+      const tab = window?.activeTab()
+      if (tab !== undefined) suggest.requestFromChrome(tab.view.webContents, anchor)
+    }
+  }
 }

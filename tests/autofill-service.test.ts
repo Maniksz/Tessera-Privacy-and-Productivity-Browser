@@ -8,23 +8,17 @@ import {
 } from '@main/passwords/AutofillService.js'
 import { notifyOverlayKey, onOverlayKey } from '@main/passwords/overlay-keys.js'
 import type { Locale } from '@shared/i18n/catalog.js'
-import {
-  wireAutofillView,
-  type AutofillHost,
-  type SyncReply
-} from '@main/passwords/autofill-wiring.js'
 import type { MasterPasswordPresentation } from '@shared/overlay/surface.js'
 import { FILL_GESTURE_WINDOW_MS } from '@shared/passwords/consent.js'
+import type { FormDescriptor } from '@shared/passwords/fields.js'
 import type { BrowsingMode, PasswordSummary, SaveCredentialInput } from '@shared/passwords/model.js'
 import type { PromptKey } from '@shared/passwords/prompt.js'
 import type { StoredCredentialState } from '@shared/passwords/save-policy.js'
 import {
-  AUTOFILL_FILLABLE_CHANNEL,
-  AUTOFILL_FILL_CHANNEL,
-  AUTOFILL_OFFER_CHANNEL,
-  AUTOFILL_SAVE_ANSWER_CHANNEL,
+  AUTOFILL_BADGE_CHANNEL,
   AUTOFILL_SAVE_PROMPT_CHANNEL,
-  AUTOFILL_SUBMIT_CHANNEL,
+  asBadgeChrome,
+  asFormDescriptor,
   asSaveBarChrome,
   type SaveBarChrome
 } from '@shared/passwords/wire.js'
@@ -49,11 +43,10 @@ import {
  *     one, so the core opens a request and that request *is* the consent. It is one-shot and bound:
  *     spent by the fill it authorises, and dropped by five separate endings. Left open, it would be
  *     `no-user-gesture` switched off for that tab, which is the rule the whole file exists for.
- *   - The per-view wiring is driven here through its host, in the order Electron raises the events
- *     in, and this file never calls `noteInput` inside those tests. That is not a stylistic choice:
- *     the defect it replaces was a circle between two correct halves — the input listener attached
- *     only after an offer, and the offer refused for want of the input — and a test that supplies
- *     the gesture itself cannot see it.
+ *   - The per-view wiring is *not* driven here. It lives in `tests/autofill-wiring.test.ts`, which
+ *     never records a gesture by hand: the defect it guards against was a circle between two correct
+ *     halves — the input listener attached only after an offer, and the offer refused for want of
+ *     the input — and a test that supplies the gesture itself, as this file does, cannot see it.
  *   - A private window does not offer to save, and a fill in one is noted through a writer bound to
  *     that mode — so a private sign-in leaves no timestamp on disk.
  *   - `dropPendingSaves` is what makes a lock mean what it says. Autofill holds one submitted
@@ -63,8 +56,10 @@ import {
  *     a sign-in navigates, so the offer has to survive that navigation and be raised again on the
  *     page the user landed on. Get the second half wrong and the feature fails silently — the bar is
  *     drawn into a document that is already gone and the question is never asked.
- *   - `offerFor` and `fillFor` answer a value rather than throwing, because they are answered
- *     synchronously into a preload and a throw there takes the whole page down with it.
+ *   - `fillFor` answers a value rather than throwing, because it is answered synchronously into a
+ *     preload and a throw there takes the whole page down with it.
+ *   - A choice travels back to the page as a one-time token rather than as the entry's id, so the
+ *     association between the two lives only here, and only until the token is redeemed (KTD8).
  *
  * The second half of the file is `overlay-keys.ts`, the registry that carries master-password
  * keystrokes. Its security property is what its `catch` does *not* say.
@@ -253,8 +248,34 @@ function formPayload(overrides: Record<string, unknown> = {}): Record<string, un
   }
 }
 
-function fillPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return { id: STORED.id, form: formPayload(), ...overrides }
+/**
+ * The same form, parsed.
+ *
+ * `badgePressed` takes a descriptor rather than a message, because by the time it is called the
+ * message has already been through `asSuggestPress` — which is where a malformed one is refused, and
+ * where that refusal is tested. Built through the real guard so the fixture cannot drift from what
+ * a renderer is actually allowed to send.
+ */
+function form(overrides: Record<string, unknown> = {}): FormDescriptor {
+  const descriptor = asFormDescriptor(formPayload(overrides))
+  if (descriptor === null) throw new Error('the form fixture is not a form')
+  return descriptor
+}
+
+/**
+ * A fill request as the preload sends one: the token the core minted for a choice, and the form now.
+ *
+ * Minting is part of the fixture because it is part of the flow — the page never holds an entry id
+ * (KTD8), so there is no way to ask for a fill that does not begin with the core recording a choice.
+ */
+function chose(
+  service: AutofillService,
+  options: { id?: string; viewId?: number; form?: unknown } = {}
+): Record<string, unknown> {
+  return {
+    token: service.noteFillChoice(options.viewId ?? VIEW_ID, options.id ?? STORED.id),
+    form: options.form ?? formPayload()
+  }
 }
 
 function reportPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -279,133 +300,221 @@ function barMessages(view: FakeView): Array<string | undefined> {
   return barsOn(view).map((chrome) => chrome?.message)
 }
 
-describe('an offer is built from the frame the core read, not from the message', () => {
-  it('offers the usernames saved for the site, worded for the site the frame is on', () => {
+describe('what the badge answers, built from the frame the core read', () => {
+  it('lists the accounts saved for the site, and nothing else about them', () => {
     const { service, view } = harness()
     press(service)
 
-    const offer = service.offerFor(view, frame(), formPayload())
-
-    expect(offer?.entries).toEqual([{ id: STORED.id, username: STORED.username }])
-    // The registrable domain, not the frame's host or its path: the heading names the site the user
-    // thinks they are on, and it is assembled here because the preload has no translator.
-    expect(offer?.chrome.title).toBe('Saved for example.com')
+    expect(service.badgePressed(view, frame(), form())).toEqual({
+      state: 'entries',
+      entries: [{ id: STORED.id, username: STORED.username }]
+    })
   })
 
-  it('puts no password in the offer, which a page can make fire whenever it likes', () => {
-    // A focus event is the one message on these channels an attacker can trigger repeatedly, so it
-    // has to be worthless when it does. The type says so; this says so of the value that was built.
+  it('says nothing at all to a press the browser process did not see', () => {
+    /*
+      AE3, and the first of R8's two named exceptions. A page can focus a field and call `.click()`
+      on our badge whenever it likes; neither produces an `input-event`, which only the browser
+      process dispatches. An answer here would be an answer to the page, and it would let any
+      document put a surface on the overlay layer at will.
+    */
+    const { service, view, reads } = harness()
+
+    expect(service.badgePressed(view, frame(), form())).toBeNull()
+    expect(reads.lists, 'the vault was asked something for a press nobody made').toBe(0)
+  })
+
+  it('says nothing to a press whose gesture has gone stale', () => {
+    const { service, view, clock } = harness()
+    press(service)
+    clock.now += FILL_GESTURE_WINDOW_MS + 1
+
+    expect(service.badgePressed(view, frame(), form())).toBeNull()
+  })
+
+  it('is not satisfied by a chrome request left open from an earlier flow', () => {
+    /*
+      Deliberately a *page-input* consent rather than any consent. A request still open would
+      otherwise stand in for the press — so one genuine press would license every forged one after
+      it, for as long as the request stood, which is the standing permission the one-shot rule exists
+      to deny.
+    */
+    const { service, view } = harness()
+    service.noteChromeRequest(VIEW_ID, 'fill-request-1')
+
+    expect(service.badgePressed(view, frame(), form())).toBeNull()
+  })
+
+  it('keeps the record per view, so a press in one tab does not open a list in another', () => {
+    const { service, view } = harness()
+    press(service, OTHER_VIEW_ID)
+
+    expect(service.badgePressed(view, frame(), form())).toBeNull()
+  })
+
+  it('puts no password in the answer, whatever the state', () => {
+    // The surface is drawn by our own renderer, so it may see account names — and nothing more. The
+    // type says so; this says so of the value that was built.
     const { service, view } = harness()
     press(service)
 
-    expect(JSON.stringify(service.offerFor(view, frame(), formPayload()))).not.toContain(SECRET)
+    expect(JSON.stringify(service.badgePressed(view, frame(), form()))).not.toContain(SECRET)
   })
 
-  it('answers null rather than an empty offer when the site has nothing saved', () => {
-    // Not an empty suggestion list: drawing one would tell the page that the user has *no*
-    // credential for it, which is itself a small fact about the user.
+  it('says that nothing is saved rather than answering with an empty list', () => {
+    // AE2's second half. `empty` is a sentence the surface renders; a list of nothing would be a
+    // blank box, which is the "nothing happened" answer R8 abolishes.
     const { service, view } = harness({
       summaries: [{ ...STORED, origin: 'https://other.example' }]
     })
     press(service)
 
-    expect(service.offerFor(view, frame(), formPayload())).toBeNull()
+    expect(service.badgePressed(view, frame(), form())).toEqual({ state: 'empty' })
   })
 
-  it('answers a value rather than throwing when the description is not a form', () => {
-    // Answered synchronously into a preload, where a throw takes the whole page down with it.
-    const { service, view } = harness()
-    press(service)
-
-    expect(service.offerFor(view, frame(), 'not a form')).toBeNull()
-    expect(service.offerFor(view, frame(), { action: null, fields: 'lots' })).toBeNull()
-    expect(service.offerFor(view, frame(), undefined)).toBeNull()
-  })
-
-  it('offers nothing while the vault is locked, without asking it for a list at all', () => {
+  it('says the vault is locked, without asking it for a list at all', () => {
     /*
-      The busiest page-triggerable path in the feature, and the refusal comes before the form is even
-      looked at. A locked vault answers `[]` to `list()`, so a check derived from an empty list would
-      read as "a site with no credentials" — the service asks about the state instead.
+      AE1's first half, and the reason the answer is a *state* rather than an absence: a locked vault
+      answers `[]` to `list()`, so a check derived from an empty list would read as "a site with no
+      credentials" and the user would be told nothing is saved when plenty is.
     */
     const { service, view, reads } = harness({ unlocked: false })
     press(service)
 
-    expect(service.offerFor(view, frame(), formPayload())).toBeNull()
+    expect(service.badgePressed(view, frame(), form())).toEqual({ state: 'locked' })
     expect(reads.lists, 'a locked vault was asked for its summaries').toBe(0)
   })
 
-  it('offers without an input event, and a fill still refuses without one', () => {
-    // The press that focused the field is never heard (see the wiring suite), so the offer cannot
-    // wait for it. The gesture rule moves to where it protects something: the fill.
-    const { service, view, reads } = harness()
+  it('names the setting when autofill has been switched off under an open badge', () => {
+    /*
+      AE9. Reachable exactly when a badge is already on screen and the setting changes underneath it:
+      `noteFillableForm` refuses to subscribe to a view's input while the feature is off, so with it
+      off from the start there is no gesture, no badge wording, and therefore no badge to press.
+      Switching it off while a form is on screen is the case `enabled` is read per call for.
+    */
+    const { service, view, state } = harness()
+    press(service)
+    state.enabled = false
 
-    expect(service.offerFor(view, frame(), formPayload())?.entries).toEqual([
-      { id: STORED.id, username: STORED.username }
-    ])
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
-    expect(reads.secrets).toEqual([])
+    expect(service.badgePressed(view, frame(), form())).toEqual({ state: 'disabled' })
   })
 
-  it('offers nothing to a view this browser cannot place in a window', () => {
-    // A devtools window, or something being torn down. Anything unaccounted for has to mean no.
-    const { service, view } = harness({ mode: null })
+  it('names the reason a page was refused rather than saying nothing was found', () => {
+    // AE4, and KTD6. "This page is not encrypted" and "nothing is saved" are different sentences,
+    // and only one of them is something the user can act on.
+    const { service, view } = harness()
+    press(service)
+    const insecure = 'http://shop.example/login'
+
+    expect(
+      service.badgePressed(view, frame({ url: insecure, topLevelUrl: insecure }), form())
+    ).toEqual({ state: 'refused', reason: 'insecure-page' })
+  })
+
+  it('names a form with nothing to fill, rather than offering accounts for a search box', () => {
+    const { service, view } = harness()
     press(service)
 
-    expect(service.offerFor(view, frame(), formPayload())).toBeNull()
+    expect(
+      service.badgePressed(view, frame(), form({ fields: [fieldPayload({ type: 'text' })] }))
+    ).toEqual({ state: 'refused', reason: 'no-password-field' })
   })
 
-  it('offers nothing to a login page somebody else has framed', () => {
+  it('refuses a login page somebody else has framed, and names that as the reason', () => {
     /*
       The refusal itself is `fill-policy.ts`'s, and tested there. What is asserted here is that the
       service builds its context out of the frame facts it was handed — the message has no field with
-      which to claim otherwise — so a subframe gets nothing even though the same call from the top
+      which to claim otherwise — so a subframe is refused even though the same call from the top
       document is served.
     */
     const { service, view } = harness()
     press(service)
 
     expect(
-      service.offerFor(
+      service.badgePressed(
         view,
         frame({ isTopLevel: false, topLevelUrl: 'https://evil.example/' }),
-        formPayload()
+        form()
       )
-    ).toBeNull()
+    ).toEqual({ state: 'refused', reason: 'cross-origin-frame' })
     expect(
-      service.offerFor(view, frame(), formPayload()),
-      'the same form at the top was refused too'
-    ).not.toBeNull()
+      service.badgePressed(view, frame(), form()),
+      'the same form at the top was served'
+    ).toEqual({ state: 'entries', entries: [{ id: STORED.id, username: STORED.username }] })
   })
 
-  it('offers nothing when the frame claims the top while the document above it is another site', () => {
+  it('refuses when the frame claims the top while the document above it is another site', () => {
     const { service, view } = harness()
     press(service)
 
     expect(
-      service.offerFor(view, frame({ topLevelUrl: 'https://evil.example/' }), formPayload())
-    ).toBeNull()
+      service.badgePressed(view, frame({ topLevelUrl: 'https://evil.example/' }), form())
+    ).toEqual({ state: 'refused', reason: 'cross-origin-frame' })
   })
 
-  it('offers nothing when the frame tree could not be read', () => {
+  it('refuses when the frame tree could not be read', () => {
     // A frame torn down mid-message. "Unknown" has to mean no, not "probably the same".
     const { service, view } = harness()
     press(service)
 
-    expect(service.offerFor(view, frame({ topLevelUrl: null }), formPayload())).toBeNull()
+    expect(service.badgePressed(view, frame({ topLevelUrl: null }), form())).toEqual({
+      state: 'refused',
+      reason: 'cross-origin-frame'
+    })
   })
 
-  it('reads the language on every offer, so a change reaches the next form and not the next restart', () => {
-    const { service, view, state } = harness()
+  it('says nothing to a view this browser cannot place in a window', () => {
+    // A devtools window, or something being torn down. There is no tile to draw a list in, and
+    // anything unaccounted for has to mean no.
+    const { service, view } = harness({ mode: null })
     press(service)
 
-    expect(service.offerFor(view, frame(), formPayload())?.chrome.title).toBe(
-      'Saved for example.com'
-    )
+    expect(service.badgePressed(view, frame(), form())).toBeNull()
+  })
+})
+
+describe('the badge\u2019s own wording, which is all the page is told before it is pressed', () => {
+  it('is sent when a view reports a fillable form, and carries nothing about the vault', () => {
+    // AE2's first half. The page learns that a badge exists and what to call it; the vault is not
+    // asked anything until the badge has actually been pressed.
+    const { service, view, reads } = harness()
+
+    expect(service.noteFillableForm(view, true)).toBe(true)
+
+    const [message] = view.sent
+    expect(message?.channel).toBe(AUTOFILL_BADGE_CHANNEL)
+    expect(asBadgeChrome(message?.payload)?.label).toBe('Fill in a saved password')
+    expect(JSON.stringify(view.sent)).not.toContain(STORED.username)
+    expect(reads.lists).toBe(0)
+  })
+
+  it('is not sent while autofill is switched off, so no badge is drawn at all', () => {
+    // The honest answer to "the feature is off" is no affordance, rather than a control that would
+    // do nothing. It is also what keeps the input subscription off in those views.
+    const { service, view } = harness({ enabled: false })
+
+    expect(service.noteFillableForm(view, true)).toBe(false)
+    expect(view.sent).toEqual([])
+  })
+
+  it('is not sent for a focus that left the form', () => {
+    const { service, view } = harness()
+
+    expect(service.noteFillableForm(view, false)).toBe(false)
+    expect(view.sent).toEqual([])
+  })
+
+  it('reads the language on every report, so a change reaches the next form not the next restart', () => {
+    const { service, view, state } = harness()
+
+    service.noteFillableForm(view, true)
     state.locale = 'de'
-    expect(service.offerFor(view, frame(), formPayload())?.chrome.title).toBe(
-      'Gespeichert für example.com'
-    )
+    service.noteFillableForm(view, true)
+
+    expect(view.sent.map((message) => asBadgeChrome(message.payload)?.label)).toEqual([
+      'Fill in a saved password',
+      'Gespeichertes Passwort einsetzen'
+    ])
   })
 })
 
@@ -414,7 +523,7 @@ describe('a fill needs an input event the browser process itself saw', () => {
     const { service, view } = harness()
     press(service)
 
-    expect(service.fillFor(view, frame(), fillPayload())).toEqual({
+    expect(service.fillFor(view, frame(), chose(service))).toEqual({
       username: STORED.username,
       password: SECRET
     })
@@ -431,7 +540,7 @@ describe('a fill needs an input event the browser process itself saw', () => {
     */
     const { service, view, reads } = harness()
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
     expect(reads.secrets, 'a refused fill fetched the password anyway').toEqual([])
   })
 
@@ -441,7 +550,7 @@ describe('a fill needs an input event the browser process itself saw', () => {
     press(service)
     clock.now += FILL_GESTURE_WINDOW_MS + 1
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
   })
 
   it('does not take a pointer drifting across the page for a gesture', () => {
@@ -450,10 +559,10 @@ describe('a fill needs an input event the browser process itself saw', () => {
     const { service, view } = harness()
     service.noteInput(VIEW_ID, { type: 'mouseMove' })
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
 
     press(service)
-    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).not.toBeNull()
   })
 
   it('keeps the record per view, so a click in one tab does not authorise a fill in another', () => {
@@ -462,7 +571,7 @@ describe('a fill needs an input event the browser process itself saw', () => {
     const { service, view } = harness()
     press(service, OTHER_VIEW_ID)
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
   })
 })
 
@@ -470,7 +579,7 @@ describe('the fill answer, and the trace it leaves', () => {
   it('notes the use through the writer bound to the window the view belongs to', () => {
     const { service, view, writes } = harness()
     press(service)
-    service.fillFor(view, frame(), fillPayload())
+    service.fillFor(view, frame(), chose(service))
 
     expect(writes).toEqual([{ mode: 'normal', call: 'used', id: STORED.id }])
   })
@@ -485,43 +594,82 @@ describe('the fill answer, and the trace it leaves', () => {
     const { service, view, writes } = harness({ mode: 'private' })
     press(service)
 
-    expect(service.fillFor(view, frame(), fillPayload())?.password).toBe(SECRET)
+    expect(service.fillFor(view, frame(), chose(service))?.password).toBe(SECRET)
     expect(writes).toEqual([{ mode: 'private', call: 'used', id: STORED.id }])
   })
 
-  it('refuses an id the renderer was never offered', () => {
+  it('refuses a token nobody minted, however plausible it looks', () => {
     const { service, view, writes } = harness()
     press(service)
 
-    expect(service.fillFor(view, frame(), fillPayload({ id: 'pw-invented' }))).toBeNull()
+    expect(
+      service.fillFor(view, frame(), { token: 'tok-invented', form: formPayload() })
+    ).toBeNull()
     expect(writes).toEqual([])
   })
 
-  it('refuses a fill for a form whose action has been rewritten since the offer', () => {
+  it('refuses an entry id used as a token, which is what the page used to be handed', () => {
+    // KTD8's whole point: the page never holds a durable reference to a vault entry, so the id that
+    // *would* have worked before this change buys nothing now.
+    const { service, view, reads } = harness()
+    press(service)
+
+    expect(service.fillFor(view, frame(), { token: STORED.id, form: formPayload() })).toBeNull()
+    expect(reads.secrets).toEqual([])
+  })
+
+  it('burns the token, so the same choice cannot be redeemed twice', () => {
+    // The user chose once. A page chooses when it sends, and it can send the same message again the
+    // instant the first one lands.
+    const { service, view } = harness()
+    press(service)
+    const request = chose(service)
+
+    expect(service.fillFor(view, frame(), request)).not.toBeNull()
+    expect(service.fillFor(view, frame(), request)).toBeNull()
+  })
+
+  it('burns the token even when the rules refuse the attempt it was spent on', () => {
     /*
-      The offer is not a token that can be spent later. Between the suggestion being drawn and the
-      click on it, a script on the page can rewrite the form's action — so every rule is applied
-      again, against the form as it is *now*, and against the same id that was offered a moment ago.
+      The difference between a one-time proof and a retry counter. A token that survived its own
+      refusal would let a page try again — from a subframe, with a rewritten action, after a
+      navigation — until one attempt happened to pass.
     */
     const { service, view } = harness()
     press(service)
-    expect(
-      service.offerFor(view, frame(), formPayload()),
-      'nothing was offered to spend'
-    ).not.toBeNull()
+    const request = chose(service)
 
-    const moved = fillPayload({ form: formPayload({ action: 'https://evil.example/collect' }) })
+    expect(service.fillFor(view, frame({ isTopLevel: false }), request)).toBeNull()
+    expect(service.fillFor(view, frame(), request), 'the token outlived its refusal').toBeNull()
+  })
+
+  it('keeps the token per view, so one tab cannot redeem another tab’s choice', () => {
+    const { service, view } = harness()
+    press(service)
+
+    expect(service.fillFor(view, frame(), chose(service, { viewId: OTHER_VIEW_ID }))).toBeNull()
+  })
+
+  it('refuses a fill for a form whose action has been rewritten since the choice', () => {
+    /*
+      A choice is not a licence that can be spent later. Between the list being drawn and the click
+      on it, a script on the page can rewrite the form's action — so every rule is applied again,
+      against the form as it is *now*, and against the entry the token stands for.
+    */
+    const { service, view } = harness()
+    press(service)
+    const moved = chose(service, { form: formPayload({ action: 'https://evil.example/collect' }) })
+
     expect(service.fillFor(view, frame(), moved)).toBeNull()
   })
 
-  it('refuses a fill that arrives from a subframe after being offered at the top', () => {
-    // The other half of "not a token": a page that moved the form into a frame between the offer and
-    // the click gets a refusal, because the frame facts are read again on this side.
+  it('refuses a fill that arrives from a subframe after the list was drawn at the top', () => {
+    // The other half of "not a licence": a page that moved the form into a frame between the choice
+    // and the fill gets a refusal, because the frame facts are read again on this side.
     const { service, view } = harness()
     press(service)
-    service.offerFor(view, frame(), formPayload())
 
-    expect(service.fillFor(view, frame({ isTopLevel: false }), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame({ isTopLevel: false }), chose(service))).toBeNull()
   })
 
   it('answers a value rather than throwing when the request is not a request', () => {
@@ -529,37 +677,46 @@ describe('the fill answer, and the trace it leaves', () => {
     press(service)
 
     expect(service.fillFor(view, frame(), 'pw-1')).toBeNull()
-    expect(service.fillFor(view, frame(), fillPayload({ id: '' }))).toBeNull()
-    expect(service.fillFor(view, frame(), { id: STORED.id })).toBeNull()
+    expect(service.fillFor(view, frame(), { token: '', form: formPayload() })).toBeNull()
+    expect(service.fillFor(view, frame(), { token: STORED.id })).toBeNull()
   })
 
-  it('refuses a fill after the vault locked between the suggestion and the click', () => {
+  it('refuses a fill after the vault locked between the list and the click', () => {
     // An idle timeout is a clock, not an event the page waits for, so this is an ordinary race. The
     // secret must not be fetched on the way to the refusal.
     const { service, view, state, reads } = harness()
     press(service)
-    expect(service.offerFor(view, frame(), formPayload())).not.toBeNull()
+    const request = chose(service)
 
     state.unlocked = false
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), request)).toBeNull()
     expect(reads.secrets).toEqual([])
   })
 
   it('refuses when the entry disappeared between the decision and the fetch', () => {
-    // Deleted on the passwords page while the suggestion was on screen. Nothing is filled, and no
-    // use is recorded for a fill that did not happen.
+    // Deleted on the passwords page while the list was on screen. Nothing is filled, and no use is
+    // recorded for a fill that did not happen.
     const { service, view, writes } = harness({ secrets: {} })
     press(service)
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
     expect(writes).toEqual([])
+  })
+
+  it('refuses when the entry was deleted before its token was redeemed', () => {
+    // The summary itself is gone, not only the secret: nothing to decide about, nothing fetched.
+    const { service, view, reads } = harness({ summaries: [] })
+    press(service)
+
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
+    expect(reads.secrets).toEqual([])
   })
 
   it('refuses a fill into a view this browser cannot place in a window', () => {
     const { service, view } = harness({ mode: null })
     press(service)
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
   })
 })
 
@@ -1031,7 +1188,7 @@ describe('a lock means the same thing to a bar that is already up', () => {
 
     service.dropPendingSaves()
 
-    expect(service.fillFor(view, frame(), fillPayload())?.password).toBe(SECRET)
+    expect(service.fillFor(view, frame(), chose(service))?.password).toBe(SECRET)
   })
 })
 
@@ -1045,7 +1202,7 @@ describe('a destroyed view leaves nothing behind', () => {
 
     expect(service.hasPendingSave(VIEW_ID)).toBe(false)
     expect(
-      service.fillFor(view, frame(), fillPayload()),
+      service.fillFor(view, frame(), chose(service)),
       'the gesture outlived the view'
     ).toBeNull()
     service.answerSave(view, 'save')
@@ -1085,16 +1242,22 @@ describe('a fill the user asked for from browser chrome', () => {
     const { service, view } = harness()
     service.noteChromeRequest(VIEW_ID, REQUEST)
 
-    expect(service.fillFor(view, frame(), fillPayload())?.password).toBe(SECRET)
+    expect(service.fillFor(view, frame(), chose(service))?.password).toBe(SECRET)
   })
 
-  it('builds an offer with no input event either, so there is a list to choose from', () => {
+  it('builds a list with no input event either, so there is something to choose from', () => {
+    /*
+      The path the Unlock button takes back: by the time the person has typed a master password the
+      five-second gesture window is long gone, so the list has to be decidable from the chrome
+      request alone. `suggestFor` is the entry point that does not demand a press of its own.
+    */
     const { service, view } = harness()
     service.noteChromeRequest(VIEW_ID, REQUEST)
 
-    expect(service.offerFor(view, frame(), formPayload())?.entries).toEqual([
-      { id: STORED.id, username: STORED.username }
-    ])
+    expect(service.suggestFor(view, frame(), form())).toEqual({
+      state: 'entries',
+      entries: [{ id: STORED.id, username: STORED.username }]
+    })
   })
 
   it('does not spend the request on merely being asked what could be filled', () => {
@@ -1103,7 +1266,7 @@ describe('a fill the user asked for from browser chrome', () => {
     const { service, view } = harness()
     service.noteChromeRequest(VIEW_ID, REQUEST)
 
-    service.offerFor(view, frame(), formPayload())
+    service.suggestFor(view, frame(), form())
 
     expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
   })
@@ -1114,10 +1277,10 @@ describe('a fill the user asked for from browser chrome', () => {
     const { service, view } = harness()
     service.noteChromeRequest(VIEW_ID, REQUEST)
 
-    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).not.toBeNull()
 
     expect(service.hasChromeRequest(VIEW_ID)).toBe(false)
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
   })
 
   it('is spent even when the entry disappeared between the decision and the fetch', () => {
@@ -1126,7 +1289,7 @@ describe('a fill the user asked for from browser chrome', () => {
     const { service, view } = harness({ secrets: {} })
     service.noteChromeRequest(VIEW_ID, REQUEST)
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
     expect(service.hasChromeRequest(VIEW_ID)).toBe(false)
   })
 
@@ -1136,7 +1299,7 @@ describe('a fill the user asked for from browser chrome', () => {
     const { service, view } = harness()
     service.noteChromeRequest(VIEW_ID, REQUEST)
 
-    expect(service.fillFor(view, frame({ isTopLevel: false }), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame({ isTopLevel: false }), chose(service))).toBeNull()
     expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
   })
 
@@ -1147,7 +1310,7 @@ describe('a fill the user asked for from browser chrome', () => {
     press(service)
     service.noteChromeRequest(VIEW_ID, REQUEST)
 
-    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).not.toBeNull()
     expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
   })
 
@@ -1157,8 +1320,8 @@ describe('a fill the user asked for from browser chrome', () => {
     const { service, view } = harness()
     press(service)
 
-    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
-    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).not.toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).not.toBeNull()
   })
 
   it('belongs to the view it was opened for', () => {
@@ -1167,7 +1330,7 @@ describe('a fill the user asked for from browser chrome', () => {
     const { service, view } = harness()
     service.noteChromeRequest(OTHER_VIEW_ID, REQUEST)
 
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).toBeNull()
   })
 
   it('is opened by nothing that arrives from a page view', () => {
@@ -1178,13 +1341,14 @@ describe('a fill the user asked for from browser chrome', () => {
     */
     const { service, view } = harness()
 
-    service.offerFor(view, frame(), formPayload())
-    service.fillFor(view, frame(), fillPayload())
+    service.badgePressed(view, frame(), form())
+    press(service)
+    service.badgePressed(view, frame(), form())
+    service.fillFor(view, frame(), chose(service))
     service.reportSubmission(view, frame(), reportPayload())
     service.answerSave(view, 'save')
     service.documentReady(view, frame())
-    service.noteFillableForm(true)
-    press(service)
+    service.noteFillableForm(view, true)
 
     expect(service.hasChromeRequest(VIEW_ID)).toBe(false)
   })
@@ -1203,7 +1367,7 @@ describe('every ending of a chrome request, one at a time', () => {
     ending(service, view)
     return {
       open: service.hasChromeRequest(VIEW_ID),
-      filled: service.fillFor(view, frame(), fillPayload()) !== null
+      filled: service.fillFor(view, frame(), chose(service)) !== null
     }
   }
 
@@ -1251,7 +1415,7 @@ describe('every ending of a chrome request, one at a time', () => {
     service.dropChromeRequest(OTHER_VIEW_ID)
 
     expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
-    expect(service.fillFor(view, frame(), fillPayload())).not.toBeNull()
+    expect(service.fillFor(view, frame(), chose(service))).not.toBeNull()
   })
 
   it('has nothing to drop for a view that never asked', () => {
@@ -1274,28 +1438,28 @@ describe('every ending of a chrome request, one at a time', () => {
  */
 describe('whether the core wants to hear the input events of a view', () => {
   it('wants them once a view reports a fillable form', () => {
-    const { service } = harness()
+    const { service, view } = harness()
 
-    expect(service.noteFillableForm(true)).toBe(true)
+    expect(service.noteFillableForm(view, true)).toBe(true)
   })
 
   it('stops wanting them once the field is no longer there', () => {
-    const { service } = harness()
+    const { service, view } = harness()
 
-    expect(service.noteFillableForm(false)).toBe(false)
+    expect(service.noteFillableForm(view, false)).toBe(false)
   })
 
   it('never wants them while autofill is switched off', () => {
     // Somebody who switched this off must not have their presses in every tab reported to the main
     // process, which is the cost the subscription carries.
-    const { service } = harness({ enabled: false })
+    const { service, view } = harness({ enabled: false })
 
-    expect(service.noteFillableForm(true)).toBe(false)
+    expect(service.noteFillableForm(view, true)).toBe(false)
   })
 
   it('reads anything that is not exactly true as no', () => {
     // A renderer chooses what it sends. The report is one boolean and nothing else is a report.
-    const { service } = harness()
+    const { service, view } = harness()
 
     const reports: Array<{ readonly named: string; readonly reported: unknown }> = [
       { named: 'the string true', reported: 'true' },
@@ -1306,257 +1470,57 @@ describe('whether the core wants to hear the input events of a view', () => {
       { named: 'nothing at all', reported: undefined }
     ]
     for (const { named, reported } of reports) {
-      expect(service.noteFillableForm(reported), named).toBe(false)
+      expect(service.noteFillableForm(view, reported), named).toBe(false)
     }
   })
 })
 
-/**
- * The per-view wiring, driven in the order Electron raises the events in.
- *
- * Not one test below calls `noteInput`. That is the property that would have caught the defect: the
- * gesture has to arrive the way it does in a browser — an input event dispatched into a view that
- * the core decided to listen to — and a test that hands the service a gesture directly proves only
- * that the service can hold one.
- */
-describe('the chain from a focused form to an authorised fill', () => {
-  interface FakeHost extends AutofillHost {
-    /** A synchronous message from the preload. `null` back means the channel was not autofill's. */
-    ask(channel: string, payload: unknown, from?: AutofillFrame): SyncReply
-    tell(channel: string, payload: unknown, from?: AutofillFrame): void
-    /** An input event, as Electron dispatches one into the view. Delivered only if anybody listens. */
-    press(input?: unknown): void
-    navigate(url: string): void
-    loaded(url: string): void
-    destroy(): void
-    /** Whether the core is currently subscribed to this view's input. */
-    readonly listening: boolean
-    /** How many subscriptions have ever been made, so a repeated report cannot stack them. */
-    readonly subscriptions: number
-  }
+describe('what the toolbar key and the context menu may know', () => {
+  it('shows a locked vault as locked, and counts nothing while it is', () => {
+    const { service, reads } = harness({ unlocked: false })
 
-  function fakeHost(view: AutofillView): FakeHost {
-    let sync: ((channel: string, frame: AutofillFrame, payload: unknown) => SyncReply) | null = null
-    let message: ((channel: string, frame: AutofillFrame, payload: unknown) => void) | null = null
-    let navigated: ((url: string) => void) | null = null
-    let ready: ((url: string) => void) | null = null
-    let destroyed: (() => void) | null = null
-    let input: ((value: unknown) => void) | null = null
-    let subscriptions = 0
-
-    return {
-      view,
-      onSyncMessage: (listener) => {
-        sync = listener
-      },
-      onMessage: (listener) => {
-        message = listener
-      },
-      onInput: (listener) => {
-        subscriptions += 1
-        input = listener
-        return () => {
-          input = null
-        }
-      },
-      onMainFrameNavigation: (listener) => {
-        navigated = listener
-      },
-      onDocumentReady: (listener) => {
-        ready = listener
-      },
-      onDestroyed: (listener) => {
-        destroyed = listener
-      },
-      ask: (channel, payload, from = frame()) => sync?.(channel, from, payload) ?? null,
-      tell: (channel, payload, from = frame()) => message?.(channel, from, payload),
-      press: (value = { type: 'mouseDown', button: 'left' }) => input?.(value),
-      navigate: (url) => navigated?.(url),
-      loaded: (url) => ready?.(url),
-      destroy: () => destroyed?.(),
-      get listening() {
-        return input !== null
-      },
-      get subscriptions() {
-        return subscriptions
-      }
-    }
-  }
-
-  function wired(options: HarnessOptions = {}): Harness & { host: FakeHost } {
-    const built = harness(options)
-    const host = fakeHost(built.view)
-    wireAutofillView(built.service, host)
-    return { ...built, host }
-  }
-
-  it('turns a first focus, a press on the list and a pick into a filled credential', () => {
-    /*
-      AE7, in the order the preload really sends things. The press that moves focus into the field
-      reaches the core *before* the preload's focus handler reports the field — Electron emits
-      `input-event` before the renderer dispatches the event — so nobody is listening for it. The
-      handler then reports the field and asks for the offer at once, with nothing in between. The
-      offer has to be there all the same, or the first focus of every field draws nothing and there
-      is no list to press on.
-    */
-    const { host } = wired()
-
-    host.press()
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-    expect(
-      host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer,
-      'the first focus of a field drew no list'
-    ).not.toBeNull()
-
-    // The press on one of our entries, which the listener attached above does hear.
-    host.press()
-    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toEqual({
-      username: STORED.username,
-      password: SECRET
-    })
+    expect(service.keyState(LOGIN_URL)).toEqual({ vault: 'locked', matches: 0 })
+    expect(reads.lists, 'a sealed vault was asked for its summaries').toBe(0)
   })
 
-  it('fills nothing from an offer nobody pressed on', () => {
-    // The list may be drawn on a focus the page caused, which is why it carries no password. What it
-    // cannot be is spent without a press the core saw: a page that clicks the entry itself dispatches
-    // nothing Electron reports.
-    const { host } = wired()
+  it('counts the entries saved for the page, and none for another site', () => {
+    const { service } = harness()
 
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).not.toBeNull()
-
-    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toBeNull()
+    expect(service.keyState(LOGIN_URL)).toEqual({ vault: 'open', matches: 1 })
+    expect(service.keyState('https://other.example/')).toEqual({ vault: 'open', matches: 0 })
+    expect(service.keyState(null)).toEqual({ vault: 'open', matches: 0 })
   })
 
-  it('hears nothing at all until a view reports a fillable form', () => {
-    // The press happens in a view nobody is listening to, which is the ordinary case: most tabs
-    // never focus a password field, and their input must not cross into the main process.
-    const { host } = wired()
+  it('is off while autofill is switched off, whatever the vault holds', () => {
+    const { service } = harness({ enabled: false })
 
-    host.press()
-
-    expect(host.listening).toBe(false)
-    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toBeNull()
+    expect(service.keyState(LOGIN_URL)).toEqual({ vault: 'off', matches: 0 })
   })
 
-  it('stops listening once the field is gone, and a press afterwards buys nothing', () => {
-    const { host } = wired()
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, false)
+  it('knows a fillable field has focus only from the page’s last report, and forgets it', () => {
+    const { service, view, state } = harness()
+    expect(service.hasFillableFocus(VIEW_ID)).toBe(false)
 
-    host.press()
+    service.noteFillableForm(view, true)
+    expect(service.hasFillableFocus(VIEW_ID)).toBe(true)
+    state.enabled = false
+    expect(service.hasFillableFocus(VIEW_ID), 'offered with autofill switched off').toBe(false)
+    state.enabled = true
 
-    expect(host.listening).toBe(false)
-    expect(host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer).toBeNull()
+    service.noteFillableForm(view, false)
+    expect(service.hasFillableFocus(VIEW_ID)).toBe(false)
+    service.noteFillableForm(view, true)
+    service.forget(VIEW_ID)
+    expect(service.hasFillableFocus(VIEW_ID)).toBe(false)
   })
 
-  it('never listens while autofill is switched off', () => {
-    const { host } = wired({ enabled: false })
+  it('does not take a report made while switched off as a fillable field', () => {
+    const { service, view, state } = harness({ enabled: false })
 
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
+    service.noteFillableForm(view, true)
+    state.enabled = true
 
-    expect(host.listening).toBe(false)
-    expect(host.subscriptions).toBe(0)
-  })
-
-  it('subscribes once however often the page repeats the report', () => {
-    // A page can refocus a field as often as it likes. Stacked subscriptions would report every
-    // press several times over and leave listeners behind when the field went.
-    const { host } = wired()
-
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-
-    expect(host.subscriptions).toBe(1)
-  })
-
-  it('leaves the synchronous channel of another feature unanswered', () => {
-    /*
-      Several features listen for their own synchronous channels on the same view. A wiring that
-      answered every message it saw would set `undefined` as the reply to theirs — a preload waiting
-      on `sendSync` would get nothing back and the feature would fail somewhere else entirely.
-    */
-    const { host } = wired()
-
-    expect(host.ask('tessera:cosmetic-rules', {})).toBeNull()
-  })
-
-  it('does nothing at all with a message on a channel that belongs to another feature', () => {
-    // Every `ipc-message` from the view arrives here, most of them for other features. An unknown
-    // channel is not a submission, not an answer and not a report, and must move nothing.
-    const { host, view, service } = wired()
-
-    host.tell('tessera:cosmetic-hit', reportPayload())
-
-    expect(view.sent).toEqual([])
-    expect(service.hasPendingSave(VIEW_ID)).toBe(false)
-    expect(host.listening).toBe(false)
-  })
-
-  it('decides on the frame the core read, not on anything the message claimed', () => {
-    // The frame travels beside the payload rather than inside it, so a subframe cannot describe
-    // itself as the top document.
-    const { host } = wired()
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-    host.press()
-
-    expect(
-      host.ask(AUTOFILL_OFFER_CHANNEL, formPayload(), frame({ isTopLevel: false }))?.answer
-    ).toBeNull()
-    expect(host.ask(AUTOFILL_OFFER_CHANNEL, formPayload())?.answer).not.toBeNull()
-  })
-
-  it('carries a submission to the save bar and the answer back to the vault', () => {
-    const { host, view, writes } = wired()
-
-    host.tell(AUTOFILL_SUBMIT_CHANNEL, reportPayload())
-    expect(barMessages(view)).toEqual(['Save the password for example.com?'])
-
-    host.tell(AUTOFILL_SAVE_ANSWER_CHANNEL, 'save')
-    expect(writes).toEqual([
-      {
-        mode: 'normal',
-        call: 'save',
-        input: { url: LOGIN_URL, username: STORED.username, password: SUBMITTED }
-      }
-    ])
-  })
-
-  it('raises the bar again on the page the sign-in landed on', () => {
-    // The half of the save path that only the wiring can get wrong: `dom-ready` reports the view's
-    // own address, and the bar has to be re-raised into the document that just loaded.
-    const { host, view } = wired()
-    host.tell(AUTOFILL_SUBMIT_CHANNEL, reportPayload())
-
-    host.navigate(`${LOGIN_ORIGIN}/welcome`)
-    host.loaded(`${LOGIN_ORIGIN}/welcome`)
-
-    expect(view.sent).toHaveLength(2)
-  })
-
-  it('drops a pending save once the view has left the site', () => {
-    const { host, service } = wired()
-    host.tell(AUTOFILL_SUBMIT_CHANNEL, reportPayload())
-
-    host.navigate('https://other.example/')
-
-    expect(service.hasPendingSave(VIEW_ID)).toBe(false)
-  })
-
-  it('stops listening and releases the view when it is destroyed', () => {
-    const { host, service } = wired()
-    host.tell(AUTOFILL_FILLABLE_CHANNEL, true)
-    host.press()
-
-    host.destroy()
-
-    expect(host.listening, 'the input subscription outlived the view').toBe(false)
-    expect(service.hasPendingSave(VIEW_ID)).toBe(false)
-    expect(
-      host.ask(AUTOFILL_FILL_CHANNEL, fillPayload())?.answer,
-      'the gesture outlived the view'
-    ).toBeNull()
+    expect(service.hasFillableFocus(VIEW_ID)).toBe(false)
   })
 })
 
@@ -1711,32 +1675,32 @@ describe('the keystrokes taken out of the input pipeline', () => {
  * that knows nothing about settings.
  *
  * What is asserted here is that each of the three refuses on its own. A test that only covered the
- * offer would leave "off" meaning "no list, but still fills and still asks to save", which is the
+ * badge would leave "off" meaning "no list, but still fills and still asks to save", which is the
  * shape a partial gate always takes.
  */
 describe('autofill switched off', () => {
-  it('offers nothing, and does not ask the vault for a list either', () => {
+  it('names the setting rather than building a list, and does not ask the vault for one', () => {
     // The same standard the locked vault is held to: the busiest page-triggerable path must not even
     // reach the summaries, because reaching them is how a list of the user's accounts gets built.
     const { service, view, reads } = harness({ enabled: false })
     press(service)
 
-    expect(service.offerFor(view, frame(), formPayload())).toBeNull()
+    expect(service.badgePressed(view, frame(), form())).toEqual({ state: 'disabled' })
     expect(reads.lists, 'a switched-off feature asked the vault for its summaries').toBe(0)
   })
 
-  it('fills nothing, even for an id that was offered before it was switched off', () => {
+  it('fills nothing, even for a choice made before it was switched off', () => {
     /*
-      The offer is never a token that can be spent later. Somebody switching this off usually does it
-      *because* of the form in front of them, so the suggestion list they are looking at was drawn
-      while it was still on — and a click on it must not go through.
+      A choice is never a licence that can be spent later. Somebody switching this off usually does
+      it *because* of the form in front of them, so the list they are looking at was drawn while it
+      was still on — and a click on it must not go through.
     */
     const { service, view, state, reads } = harness()
     press(service)
-    expect(service.offerFor(view, frame(), formPayload())).not.toBeNull()
+    const request = chose(service)
 
     state.enabled = false
-    expect(service.fillFor(view, frame(), fillPayload())).toBeNull()
+    expect(service.fillFor(view, frame(), request)).toBeNull()
     expect(reads.secrets, 'a secret was fetched for a fill that was refused').toEqual([])
   })
 
@@ -1759,9 +1723,12 @@ describe('autofill switched off', () => {
     // this a setting that applies to the next document rather than to this one.
     const { service, view, state } = harness({ enabled: false })
     press(service)
-    expect(service.offerFor(view, frame(), formPayload())).toBeNull()
+    expect(service.badgePressed(view, frame(), form())).toEqual({ state: 'disabled' })
 
     state.enabled = true
-    expect(service.offerFor(view, frame(), formPayload())).not.toBeNull()
+    expect(service.badgePressed(view, frame(), form())).toEqual({
+      state: 'entries',
+      entries: [{ id: STORED.id, username: STORED.username }]
+    })
   })
 })

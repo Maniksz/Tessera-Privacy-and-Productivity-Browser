@@ -103,7 +103,6 @@ import { MediaSessions } from './media/MediaSessions.js'
 import { DownloadManager } from './downloads/DownloadManager.js'
 import { PasswordApi } from './passwords/PasswordApi.js'
 import { PasswordVault } from './passwords/PasswordVault.js'
-import { AutofillService } from './passwords/AutofillService.js'
 import { installAutofill } from './passwords/install-autofill.js'
 import { MasterPasswordPrompt } from './passwords/MasterPasswordPrompt.js'
 import { internalUrl } from '@shared/product.js'
@@ -569,37 +568,16 @@ async function main(): Promise<void> {
     readClipboard: () => clipboard.readText()
   })
 
-  /*
-    Autofill, and the wiring it had been waiting for.
-
-    `AutofillService` and `installAutofill` were both complete, tested and *called by nothing*, which is
-    the most expensive state this project keeps finding itself in: a feature that exists, passes its
-    tests, and does not run. Three lines were missing, and every one of them is load-bearing.
-
-    `modeFor` is what makes a private window fill without recording that it did, and it answers `null`
-    for a view this browser cannot place — a devtools window, something being torn down — because the
-    default for anything unaccounted for has to be "no".
-
-    `onLock` is the third: without it a lock would be a half-truth. The key would be gone from the vault
-    while a password the user typed two minutes ago sat in the save bar state for the rest of its two
-    minutes. See `AutofillService.dropPendingSaves`.
-  */
-  const autofill = new AutofillService({
+  // Autofill: the service, the account picker and the toolbar key's feed. See `installAutofill`.
+  const autofill = installAutofill({
     vault: passwordVault,
-    // `passwords.autofill`, per call. Switching it off has to reach the form on screen, because that
-    // form is usually why somebody is switching it off.
+    prompt: masterPasswordPrompt,
+    windows: () => windows,
+    // `passwords.autofill`, per call: switching it off has to reach the form already on screen.
     enabled: () => settings?.get('passwords.autofill') ?? true,
-    modeFor: (viewId) => {
-      const controller = windows?.controllerForWebContents(viewId)
-      if (controller === undefined) return null
-      return controller.privateMode ? 'private' : 'normal'
-    },
     // Read per call, so a language change reaches the next sign-in form rather than the next restart.
-    locale: () => uiLocale(settings),
-    now: () => Date.now()
+    locale: () => uiLocale(settings)
   })
-  passwordVault.onLock(() => autofill.dropPendingSaves())
-  installAutofill(autofill)
 
   /*
     What the passwords page is allowed to do, and the two Electron-shaped things it needs.
@@ -989,6 +967,8 @@ async function main(): Promise<void> {
         canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
         canGoForward: tab.view.webContents.navigationHistory.canGoForward(),
         blockerEnabled: snapshot['privacy.blockerEnabled'],
+        canFillPassword: autofill.service.hasFillableFocus(tab.view.webContents.id),
+        onFillPassword: () => autofill.suggest.requestFromChrome(tab.view.webContents, null),
         onBack: () => tab.view.webContents.navigationHistory.goBack(),
         onForward: () => tab.view.webContents.navigationHistory.goForward(),
         onReload: () => tab.view.webContents.reload(),
@@ -1042,6 +1022,7 @@ async function main(): Promise<void> {
     discardDownloadCopies: () => downloads?.discardCopies() ?? Promise.resolve(),
     passwords: passwordApi,
     prompt: masterPasswordPrompt,
+    autofill,
     permissions: permissionArbiter,
     media: mediaSessions,
     picker: elementPicker,
@@ -1085,7 +1066,7 @@ async function main(): Promise<void> {
     path: inventoryPath
   })
   flushOnExit.push(() => actions.whenIdle(), 'panic')
-  const menu = { windows, settings, actions, checkForUpdates: () => updates.checkNow() }
+  const menu = { windows, settings, actions, autofill, checkForUpdates: () => updates.checkNow() }
   const installMenu = (): void =>
     installApplicationMenu({ ...menu, locale: uiLocale(settings), platform: currentPlatform() })
   installMenu()

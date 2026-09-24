@@ -308,7 +308,7 @@ export const INVOKE_CHANNELS = [
   /*
     Saved passwords.
 
-    Thirteen channels, and the interesting number is how many of them carry a password: one, in one
+    Seventeen channels, and the interesting number is how many of them carry a password: one, in one
     direction. `passwords:reveal` answers with a single secret for a single id the user asked about.
     Nothing else in this group carries one in either direction, and nothing anywhere on this boundary
     answers with more than one. That absence is what makes the bound on an open passwords tab real —
@@ -352,6 +352,24 @@ export const INVOKE_CHANNELS = [
    * the person in front of the machine had already typed.
    */
   'passwords:answerPrompt',
+  /**
+   * Which account the user picked in the autofill list, or "unlock the vault first".
+   *
+   * Chrome-only, and on no internal page allowlist, for `passwords:answerPrompt`'s reason and one
+   * more of its own: the request id it carries is the consent that authorises a fill
+   * (`shared/passwords/consent.ts`), so this is the narrowest channel in the group by consequence
+   * even though it looks like one of the mildest. No password and no username crosses it in either
+   * direction — the core replies to a choice by sending the *page* a one-time token, on autofill's
+   * own channels.
+   */
+  'passwords:answerSuggestion',
+  /**
+   * The toolbar key: its state for the active tile, and a fill asked for from it. Chrome-only, on no
+   * internal page allowlist — the second is a consent (R11), and a page that could send it would be
+   * granting itself one. The state is a count and three words, never a username.
+   */
+  'passwords:autofillState',
+  'passwords:fillFromToolbar',
   /**
    * "Take me to my passwords." No payload, one fixed destination.
    *
@@ -542,13 +560,14 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'downloads:cancel'
   ],
   /*
-    Twelve, and one deliberate omission: `passwords:answerPrompt`.
+    Twelve, and two deliberate omissions: `passwords:answerPrompt` and `passwords:answerSuggestion`.
 
     Every operation the page offers is here, including the ones that can destroy the vault — because the
     page is where a person manages their own credentials, and a manager whose reset button is somewhere
-    else is a manager people cannot recover from. What is not here is the answer to the *prompt*: that
-    surface belongs to the chrome, a mis-aimed submit on it would spend whatever the person had typed,
-    and the page has no business reaching it. The page asks a question and waits for the outcome.
+    else is a manager people cannot recover from. What is not here is either answer to a *surface on the
+    overlay layer*: both belong to the chrome, a mis-aimed submit on the first would spend whatever the
+    person had typed, and the second carries the consent that authorises a fill into somebody's page.
+    The page asks a question and waits for the outcome.
   */
   passwords: [
     'i18n:getCatalog',
@@ -698,6 +717,8 @@ export const EVENT_CHANNELS = [
    * states only. Pushed per window, to that window's chrome UI, like `window:stateChanged`.
    */
   'downloads:summaryChanged',
+  /** The toolbar key's state, pushed when the vault locks; see `passwords:autofillState`. */
+  'passwords:autofillStateChanged',
   'tabgroups:changed',
   /**
    * Sent to both the overlay surface, which renders it, and the chrome UI, whose button

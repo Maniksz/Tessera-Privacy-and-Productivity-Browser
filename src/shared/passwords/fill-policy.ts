@@ -302,32 +302,7 @@ export function decideFill(context: FillContext, subject: FillSubject): FillDeci
     dispatched, the other is a request the core opened from its own chrome and still holds.
   */
   if (!consentHolds(context.consent, context)) return refuse('no-user-gesture')
-  return decideOffer(context, subject)
-}
 
-/**
- * What an offer needs to know: the fill's situation without its consent.
- *
- * The consent fields are left out of the type rather than ignored at runtime, so nothing can build
- * an offer from a context that looks as if it carried one.
- */
-export type OfferContext = Omit<FillContext, 'consent' | 'openRequestId' | 'now'>
-
-/**
- * Whether a saved credential may be *offered* here: every rule of `decideFill` except the gesture.
- *
- * Not a second opinion. `decideFill` is this function with the consent check in front of it, so an
- * offer can never name a credential a fill would then refuse for any reason other than the missing
- * press. Its own reason for existing is that press: the list is what the user presses *on*, so
- * gating the list on a press that has to have happened already refused the first focus of every
- * field. The press that moved focus there reaches the core before the page has said a fillable
- * field has focus, which is when the core starts listening.
- *
- * What makes an offer without consent safe to give is what it carries: usernames, never a password,
- * drawn in a closed shadow root the page cannot read. The fill is still decided by `decideFill`,
- * against a press on our own entry.
- */
-export function decideOffer(context: OfferContext, subject: FillSubject): FillDecision {
   /*
     RULE no-password-field — do not put a username into a search box.
 
@@ -429,7 +404,12 @@ export function decideOffer(context: OfferContext, subject: FillSubject): FillDe
   return ALLOWED
 }
 
-/** The subjects that may be filled here, in the order they were given. */
+/**
+ * The subjects that may be filled here, in the order they were given.
+ *
+ * The offer list is built from exactly this, so it can never be wider than what
+ * `decideFill` would authorise a moment later.
+ */
 export function fillableSubjects<T extends FillSubject>(
   context: FillContext,
   subjects: readonly T[]
@@ -438,14 +418,21 @@ export function fillableSubjects<T extends FillSubject>(
 }
 
 /**
- * The subjects that may be offered here, in the order they were given.
+ * How many of these credentials the toolbar key may call "saved for this page" (R10, KTD11).
  *
- * The offer list is built from exactly this, so it can never be wider than what `decideFill` would
- * authorise a moment later, once the user has pressed one of its entries.
+ * `decidePageFill` for the page, and then the two rules that compare a *stored* origin with it: the
+ * same site, and no downgrade from `https:` to `http:`. Nothing situational — there is no consent,
+ * form or frame yet when the key is drawn — so the count is optimistic by construction, exactly as
+ * `decidePageFill` is. It is a number for a button in browser chrome, never a list, and `decideFill`
+ * remains the only thing that lets a credential into a page.
  */
-export function offerableSubjects<T extends FillSubject>(
-  context: OfferContext,
-  subjects: readonly T[]
-): T[] {
-  return subjects.filter((subject) => decideOffer(context, subject).allowed)
+export function countPageMatches(frameUrl: string, subjects: readonly FillSubject[]): number {
+  const page = examinePage(frameUrl)
+  if (!page.allowed) return 0
+  const pageSite = registrableDomainOfUrl(frameUrl)
+  return subjects.filter((subject) => {
+    const stored = schemeAndHostOf(subject.origin)
+    if (stored === null || !schemesAreCompatible(stored.scheme, page.scheme)) return false
+    return pageSite !== null && registrableDomainOfUrl(subject.origin) === pageSite
+  }).length
 }

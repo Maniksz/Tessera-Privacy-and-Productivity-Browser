@@ -12,7 +12,7 @@ import {
   type PasswordCredential
 } from '@shared/passwords/model.js'
 import { RESET_VAULT_CONFIRMATION } from '@shared/passwords/vault.js'
-import { asFillAnswer, asFillOffer, asFormDescriptor } from '@shared/passwords/wire.js'
+import { asFillAnswer, asFormDescriptor } from '@shared/passwords/wire.js'
 
 /**
  * The branches the password floors in `vitest.config.ts` demanded and no other suite reached.
@@ -249,7 +249,6 @@ const FIELD = {
   editable: true,
   hasValue: false
 }
-const CHROME = { styles: '', title: 'Sign in to example.com', noUsernameLabel: 'No username' }
 
 describe('a renderer that sends something other than the shape', () => {
   it('drops a form report in which one control is not an object', () => {
@@ -257,15 +256,6 @@ describe('a renderer that sends something other than the shape', () => {
     // a form with a hole in it is a form whose shape the core would be guessing at.
     expect(asFormDescriptor({ action: null, fields: [FIELD] })).not.toBeNull()
     expect(asFormDescriptor({ action: null, fields: [FIELD, null] })).toBeNull()
-  })
-
-  it('drops a fill offer whose chrome is missing a word, or whose entry is not an object', () => {
-    const entries = [{ id: 'pw-1', username: 'alice' }]
-    expect(asFillOffer({ chrome: CHROME, entries })).toEqual({ chrome: CHROME, entries })
-    expect(asFillOffer({ chrome: { ...CHROME, styles: 1 }, entries })).toBeNull()
-    expect(asFillOffer({ chrome: { ...CHROME, title: null }, entries })).toBeNull()
-    expect(asFillOffer({ chrome: { ...CHROME, noUsernameLabel: undefined }, entries })).toBeNull()
-    expect(asFillOffer({ chrome: CHROME, entries: ['pw-1'] })).toBeNull()
   })
 
   it('drops a fill answer that is not an object, or whose username or password is not text', () => {

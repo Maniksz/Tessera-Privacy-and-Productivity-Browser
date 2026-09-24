@@ -205,21 +205,41 @@ export function autofillSuggestBounds(input: {
   readonly view: SuggestViewGeometry
   readonly content: AutofillSuggestContent
 }): Rect | null {
-  const { view } = input
-  const anchor = fieldRectInWindow(input.field, view)
+  const anchor = fieldRectInWindow(input.field, input.view)
   if (anchor === null) return null
+  // Lined up with the field's left edge, the way a menu under a text field reads. `end` would hang
+  // the list off the right edge of a field that is wider than it is.
+  return placeInTile(anchor, input.view, input.content, 'start')
+}
 
+/**
+ * The list's rectangle when it was asked for from browser chrome: under the toolbar key.
+ *
+ * The key sits above every tile, so the anchor is clamped to the tile's top edge by `anchorSurface`
+ * and the list opens at the top of the page it would fill, right-aligned under the key the way the
+ * toolbar's other menus hang. Still clamped *to the tile*, for `autofillSuggestBounds`' reason: the
+ * list is about one pane and must not grow across its neighbour.
+ */
+export function autofillSuggestBoundsAt(input: {
+  readonly anchor: Rect
+  readonly view: SuggestViewGeometry
+  readonly content: AutofillSuggestContent
+}): Rect | null {
+  return placeInTile(input.anchor, input.view, input.content, 'end')
+}
+
+/** Both placements: anchored in tile-local coordinates, clamped there, translated back. */
+function placeInTile(
+  anchor: Rect,
+  view: SuggestViewGeometry,
+  content: AutofillSuggestContent,
+  align: 'start' | 'end'
+): Rect | null {
   const placed = anchorSurface(
     { ...anchor, x: anchor.x - view.bounds.x, y: anchor.y - view.bounds.y },
-    { width: AUTOFILL_SUGGEST_WIDTH, height: autofillSuggestHeight(input.content) },
+    { width: AUTOFILL_SUGGEST_WIDTH, height: autofillSuggestHeight(content) },
     { width: view.bounds.width, height: view.bounds.height },
-    {
-      gap: AUTOFILL_SUGGEST_GAP,
-      margin: AUTOFILL_SUGGEST_INSET,
-      // Lined up with the field's left edge, the way a menu under a text field reads. `end` would hang
-      // the list off the right edge of a field that is wider than it is.
-      align: 'start'
-    }
+    { gap: AUTOFILL_SUGGEST_GAP, margin: AUTOFILL_SUGGEST_INSET, align }
   )
 
   if (placed.rect.width <= 0 || placed.rect.height < AUTOFILL_SUGGEST_MIN_HEIGHT) return null

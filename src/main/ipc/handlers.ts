@@ -39,6 +39,7 @@ import type { BookmarkStore } from '../data/BookmarkStore.js'
 import type { DownloadManager } from '../downloads/DownloadManager.js'
 import type { PasswordApi } from '../passwords/PasswordApi.js'
 import type { MasterPasswordPrompt } from '../passwords/MasterPasswordPrompt.js'
+import type { AutofillParts } from '../passwords/install-autofill.js'
 
 /**
  * Wires every contract channel to the core.
@@ -63,6 +64,8 @@ export function registerIpcHandlers(deps: {
   passwords: PasswordApi
   /** Raises the master-password prompt and holds the pending question; see `MasterPasswordPrompt`. */
   prompt: MasterPasswordPrompt
+  /** Autofill's service and account picker, for the picker's answers and the toolbar key. */
+  autofill: AutofillParts
   /** Decides and queues permission prompts; see `PermissionArbiter`. */
   permissions: PermissionArbiter
   /** One media service per browsing session; see `MediaSessions`. */
@@ -271,12 +274,8 @@ export function registerIpcHandlers(deps: {
     windows,
     discardCopies: deps.discardDownloadCopies
   })
-  /*
-    The vault, in its own module for the reason permissions are: the thirteen channels and the two
-    subscriptions the master-password prompt needs are one mechanism, and a build that registered the
-    channels and forgot a subscription would show a prompt that swallows every keystroke.
-  */
-  registerPasswordHandlers({ passwords, prompt: deps.prompt, windows })
+  // The vault's channels and the overlay subscriptions they need are one mechanism; see the module.
+  registerPasswordHandlers({ passwords, prompt: deps.prompt, autofill: deps.autofill, windows })
 
   // --- element picker and the user's own rules ------------------------------
   /*

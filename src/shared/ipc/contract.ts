@@ -63,22 +63,16 @@ import {
 */
 import { FILL_REFUSALS } from '../passwords/fill-policy.js'
 /*
-  Every password wire shape, from that feature's own `schema.ts`.
+  Every password wire shape, and the vault's channels themselves, from that feature's own `schema.ts`.
 
   The `model.ts` / `schema.ts` split `quicklinks`, `media` and `reader` already use, applied here for a
-  second reason as well: these fourteen schemas took this file past 1200 lines, which is where the
-  largest-file metric stops meaning what it was set to mean. The two-way assertions that keep each of them
-  in step with the interface the passwords page renders travel with them.
+  second reason as well: the schemas and then the channels took this file past its line bar, which is
+  where the largest-file metric stops meaning what it was set to mean. The two-way assertions that keep
+  each of them in step with the interface the passwords page renders travel with them.
 */
 import {
-  PASSWORD_SAVE_OUTCOMES,
-  passwordImportResponseSchema,
-  passwordListResponseSchema,
-  passwordMasterPasswordRequestSchema,
-  passwordMasterPasswordResponseSchema,
-  passwordPromptAnswerSchema,
-  passwordResetVaultResponseSchema,
-  passwordUnlockResponseSchema,
+  autofillKeyStateSchema,
+  passwordInvokeContract,
   vaultStateResponseSchema
 } from '../passwords/schema.js'
 
@@ -1241,112 +1235,12 @@ export const invokeContract = {
    */
   'downloads:summary': { request: nothing, response: downloadButtonSummarySchema },
 
-  // --- saved passwords -----------------------------------------------------
-  /** Origins, usernames and timestamps. No password reaches the page through this channel. */
-  'passwords:list': { request: nothing, response: passwordListResponseSchema },
-  /**
-   * Adds an entry the user typed.
-   *
-   * `rejected` is a value rather than a rejection on purpose: the causes are all things the user
-   * typed — an address with no host, an empty password — and an error built from a rejected promise
-   * would be a sentence about a password field.
-   */
-  'passwords:create': {
-    request: z.object({ url: z.string(), username: z.string(), password: z.string() }),
-    response: z.object({ outcome: z.enum(PASSWORD_SAVE_OUTCOMES) })
-  },
-  /** An absent field means "leave this alone"; it cannot move an entry to another origin. */
-  'passwords:update': {
-    request: z.object({
-      id: z.string(),
-      username: z.string().optional(),
-      password: z.string().optional()
-    }),
-    response: ok
-  },
-  'passwords:remove': {
-    request: z.object({ id: z.string() }),
-    response: z.object({ removed: z.boolean() })
-  },
-  /**
-   * One password, for one id.
-   *
-   * The only response on this whole boundary that carries a secret, and it carries exactly one.
-   * `null` for an unknown id rather than a rejection: the id came from a list the page was already
-   * holding, and an entry can be removed in another window between the row being drawn and the
-   * button being pressed. That is a race, not a fault.
-   */
-  'passwords:reveal': {
-    request: z.object({ id: z.string() }),
-    response: z.object({ password: z.string().nullable() })
-  },
-  /** Undoes a "never here", so a site the user changed their mind about can be offered again. */
-  'passwords:forgetNeverSaved': { request: z.object({ origin: z.string() }), response: ok },
-
-  // --- the lock -------------------------------------------------------------
   /*
-    Six channels for the lock, the master password, the reset and the import — and not one of them has a
-    request field that carries a secret.
-
-    That is the whole shape of this group and it is worth stating where the schemas are, because a
-    schema is where such a field would have to appear to be accepted. `passwords:requestUnlock` and
-    `passwords:beginSetMasterPassword` send nothing and an intent respectively; the candidate is typed
-    into a prompt on the overlay layer whose keystrokes the core takes out of the input pipeline before
-    any renderer sees them. See `shared/passwords/api.ts` for what this replaced.
+    Saved passwords: twenty channels, declared beside their schemas in `shared/passwords/schema.ts`
+    so this file stays under the largest-file bar. Spread in here, so the exhaustiveness check below
+    covers them exactly as it covers everything else.
   */
-  'passwords:vaultStatus': { request: nothing, response: vaultStateResponseSchema },
-  /**
-   * Raises the prompt and resolves with one of four words.
-   *
-   * Pending for as long as somebody is being asked, which is minutes if they walk away — the same
-   * representation `media:download` uses for a long operation, and the correct one for a question put to a
-   * person. Every way the prompt can leave the screen settles it, `cancelled` being the safe reading.
-   */
-  'passwords:requestUnlock': { request: nothing, response: passwordUnlockResponseSchema },
-  'passwords:lock': { request: nothing, response: vaultStateResponseSchema },
-  /**
-   * Starts the set, change or remove sequence.
-   *
-   * The intent, not the sequence. The core derives which questions to ask from the vault as it actually
-   * is, and always towards more proof: `set` on a vault that already has a master password asks for the
-   * existing one first, because a caller able to choose otherwise would have found the one way to
-   * replace the lock without opening it.
-   */
-  'passwords:beginSetMasterPassword': {
-    request: passwordMasterPasswordRequestSchema,
-    response: passwordMasterPasswordResponseSchema
-  },
-  /**
-   * Destroys the vault, after offering to put the sealed copy somewhere the user chooses.
-   *
-   * The token is checked in the core and is not user-visible text; it is here so that an empty or
-   * mistaken invoke cannot delete anything. The sentence the user reads is translated and on the page.
-   */
-  'passwords:resetVault': {
-    request: z.object({ confirmation: z.string() }),
-    response: passwordResetVaultResponseSchema
-  },
-  /** No payload: the core opens the chooser and reads the file, so no export crosses this boundary. */
-  'passwords:import': { request: nothing, response: passwordImportResponseSchema },
-  /**
-   * Continue or Cancel on the prompt. Chrome-only.
-   *
-   * The mouse route, and the only thing this channel can do is spend or abandon what the person at the
-   * keyboard has already typed — there is nothing in the payload that could substitute for it.
-   */
-  'passwords:answerPrompt': {
-    request: passwordPromptAnswerSchema,
-    response: ok
-  },
-  /**
-   * Opens `tessera://passwords` in the sending window.
-   *
-   * `nothing` in, and that is the whole security argument rather than a simplification: with no
-   * address in the request there is no address to forge, so the channel's reach is a constant in the
-   * handler. `ok` out, because a tab is not state this caller tracks — the settings page has no list
-   * of tabs and would have nothing to do with an id.
-   */
-  'passwords:openManager': { request: nothing, response: ok }
+  ...passwordInvokeContract
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract
@@ -1414,6 +1308,8 @@ export const eventContract = {
    * drop its mark then rather than at the next download event.
    */
   'downloads:summaryChanged': downloadButtonSummarySchema,
+  /** The toolbar key's state, pushed to each window's chrome UI when the vault locks. No names. */
+  'passwords:autofillStateChanged': autofillKeyStateSchema,
   /** `null` means nothing is presented — an explicit state, not an absent message. */
   'overlay:presented': z.object({ presentation: overlayPresentationSchema.nullable() })
 } satisfies Record<EventChannel, z.ZodType>

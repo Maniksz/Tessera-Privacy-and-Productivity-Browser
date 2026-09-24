@@ -119,6 +119,32 @@ describe('IPC contract', () => {
     ).toBe(false)
   })
 
+  it('carries the password key as a state and a count, and refuses a username (autofill U6)', () => {
+    const push = eventContract['passwords:autofillStateChanged']
+    const pull = invokeContract['passwords:autofillState']
+    expect(pull.response).toBe(push)
+    expect(push.safeParse({ vault: 'open', matches: 2 }).success).toBe(true)
+    expect(push.safeParse({ vault: 'locked', matches: 0 }).success).toBe(true)
+    expect(push.safeParse({ vault: 'open', matches: 1, username: 'alice' }).success).toBe(false)
+    expect(push.safeParse({ vault: 'open', matches: -1 }).success).toBe(false)
+    expect(push.safeParse({ vault: 'maybe', matches: 0 }).success).toBe(false)
+  })
+
+  it('keeps both of the key’s channels, and the picker’s answer, away from every internal page', () => {
+    // A fill from the toolbar is a consent (R11); a page that could send it would grant itself one.
+    const granted = new Set<string>(Object.values(INTERNAL_PAGE_INVOKE_CHANNELS).flat())
+    for (const channel of [
+      'passwords:autofillState',
+      'passwords:fillFromToolbar',
+      'passwords:answerSuggestion'
+    ] as const) {
+      expect(granted.has(channel), channel).toBe(false)
+    }
+    const fill = invokeContract['passwords:fillFromToolbar'].request
+    expect(fill.safeParse({ anchor: { x: 1, y: 2, width: 3, height: 4 } }).success).toBe(true)
+    expect(fill.safeParse({}).success).toBe(false)
+  })
+
   it('lets the bookmarks status leave out what a clean load has nothing to say about (R4)', () => {
     const response = invokeContract['bookmarks:status'].response
     // What a handler from before R4 answers, and what a clean load still answers.

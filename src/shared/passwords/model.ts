@@ -558,3 +558,20 @@ export function repairNeverSaved(neverSaved: readonly string[]): string[] {
   }
   return kept.slice(0, MAX_NEVER_SAVED_ORIGINS)
 }
+
+/** Whether autofill is on, and when it is, whether the vault is open. See `AutofillKeyState`. */
+export const AUTOFILL_KEY_VAULTS = ['off', 'locked', 'open'] as const
+
+/**
+ * What the toolbar key shows (R10): the vault's state, and how many saved entries belong to the page
+ * in the active tile.
+ *
+ * A state and a number, never a name. It goes to browser chrome, which a page can neither read nor
+ * draw — so R2 does not forbid the count — and it is pushed to every window on every lock, which is
+ * reason enough for it to carry nothing a window does not need.
+ */
+export interface AutofillKeyState {
+  readonly vault: (typeof AUTOFILL_KEY_VAULTS)[number]
+  /** Zero unless `open`: a sealed vault has no summaries to count. */
+  readonly matches: number
+}

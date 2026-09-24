@@ -1,3 +1,4 @@
+import type { AutofillParts } from '../passwords/install-autofill.js'
 import type { MasterPasswordHost, MasterPasswordPrompt } from '../passwords/MasterPasswordPrompt.js'
 import type { PasswordApi } from '../passwords/PasswordApi.js'
 import { onOverlayKey } from '../passwords/overlay-keys.js'
@@ -17,7 +18,9 @@ import { handle, OK } from './router.js'
  *   - no `onOverlayKey` — the prompt appears and typing does nothing at all, for ever;
  *   - no `onOverlayVacancy` — a prompt taken down by a window resize leaves `passwords:requestUnlock`
  *     pending, so the passwords page waits on a promise that will never settle;
- *   - no `passwords:answerPrompt` — the prompt works by keyboard and its two buttons are dead.
+ *   - no `passwords:answerPrompt` — the prompt works by keyboard and its two buttons are dead;
+ *   - no `passwords:answerSuggestion` — the account picker draws, walks and reads out perfectly and
+ *     nothing is ever filled, which is the shape this project already shipped once.
  *
  * Nothing here decides anything. `PasswordApi` and `MasterPasswordPrompt` do, and both are free of
  * Electron so that the sequence, the refusals and the reset ordering are tests rather than claims.
@@ -26,9 +29,12 @@ import { handle, OK } from './router.js'
 export function registerPasswordHandlers(deps: {
   passwords: PasswordApi
   prompt: MasterPasswordPrompt
+  /** Autofill's service and account picker; see `installAutofill`. */
+  autofill: AutofillParts
   windows: WindowRegistry
 }): void {
-  const { passwords, prompt, windows } = deps
+  const { passwords, prompt, autofill, windows } = deps
+  const { suggest } = autofill
 
   /*
     The window the prompt appears in, resolved from the *sender* and never from "the focused window".
@@ -98,6 +104,42 @@ export function registerPasswordHandlers(deps: {
   })
 
   /*
+    The account picker's two answers, and neither of them returns anything.
+
+    A choice is answered by handing the *page* a one-time token on autofill's own channel, not by
+    replying here — so the credential never travels back along the path the click came from, and the
+    rules are applied again against the document as it is when the token is redeemed.
+
+    Unlock does not raise the master-password prompt from here either. It goes to `AutofillSuggest`,
+    which is what makes "the prompt is never raised directly by a message from a page view" (R9) true
+    of the whole program rather than of this line: the press that arrives here happened on a surface
+    in browser chrome, and the picker checks that the request it names is the one on screen.
+  */
+  handle('passwords:answerSuggestion', (answer) => {
+    if (answer.action === 'unlock') suggest.unlock(answer.requestId)
+    else suggest.choose(answer.requestId, answer.entryId)
+    return OK
+  })
+
+  /*
+    The toolbar key: what it shows, and a fill asked for from it (R10, R11, R13).
+
+    Both resolve the window from the sender and the page from that window's active tile, so neither
+    request names a tab, a frame or a page — there is nothing in either for a caller to widen. The
+    state is a count and three words. The fill is a question to the page about where its form is,
+    which the core then answers with the picker hanging from the key: the press on the key *is* the
+    consent (R11), and it is spent by the first fill it authorises. A locked vault never gets here —
+    the key asks for `passwords:requestUnlock` instead.
+  */
+  handle('passwords:autofillState', (_payload, event) =>
+    autofill.keyStateFor(windows.controllerForWebContents(event.sender.id))
+  )
+  handle('passwords:fillFromToolbar', ({ anchor }, event) => {
+    autofill.fillActiveTab(windows.controllerForWebContents(event.sender.id), anchor)
+    return OK
+  })
+
+  /*
     The settings page's way to the passwords page, and the reason it needs one.
 
     An `<a href="tessera://passwords">` there is not merely unfashionable — `navigation-policy.ts`
@@ -124,5 +166,13 @@ export function registerPasswordHandlers(deps: {
   })
   onOverlayVacancy((presentation, reason) => {
     prompt.overlayVacated(presentation, reason)
+    /*
+      The picker's departure, on the same subscription.
+
+      Its consequences are the ones `OVERLAY_MARKS_THE_PAGE` names: a badge left lit over a field with
+      no list in front of it, and — the half that is not cosmetic — a fill request left open, which is
+      `no-user-gesture` switched off for that tab.
+    */
+    suggest.overlayVacated(presentation)
   })
 }

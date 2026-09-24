@@ -1,12 +1,20 @@
+import { randomUUID } from 'node:crypto'
 import type { Locale } from '@shared/i18n/catalog.js'
+import type { AutofillSuggestContent } from '@shared/overlay/surface.js'
 import { registrableDomainOfUrl } from '@shared/url/domain.js'
 import { consentFor } from '@shared/passwords/consent.js'
 import { chooseFillTargets, type FormDescriptor } from '@shared/passwords/fields.js'
-import { decideFill, offerableSubjects, type FillContext } from '@shared/passwords/fill-policy.js'
+import {
+  countPageMatches,
+  decideFill,
+  fillableSubjects,
+  type FillContext
+} from '@shared/passwords/fill-policy.js'
 import { isFillGestureInput } from '@shared/passwords/gesture.js'
 import {
   passwordOriginOf,
   resolveSubmittedUsername,
+  type AutofillKeyState,
   type BrowsingMode,
   type PasswordSummary,
   type PasswordWriter,
@@ -14,15 +22,14 @@ import {
 } from '@shared/passwords/model.js'
 import { decideSaveOffer, type StoredCredentialState } from '@shared/passwords/save-policy.js'
 import {
+  AUTOFILL_BADGE_CHANNEL,
   AUTOFILL_SAVE_PROMPT_CHANNEL,
   asFillRequest,
-  asFormDescriptor,
   asSaveAnswer,
   asSubmissionReport,
-  type FillAnswer,
-  type FillOffer
+  type FillAnswer
 } from '@shared/passwords/wire.js'
-import { fillChromeFor, saveBarChromeFor } from './chrome.js'
+import { badgeChromeFor, saveBarChromeFor } from './chrome.js'
 
 /**
  * Autofill's core half: what may be offered, what may be filled, and what may be saved.
@@ -53,28 +60,26 @@ import { fillChromeFor, saveBarChromeFor } from './chrome.js'
  * discovered; the second is the one weakness of this design that cannot be removed without
  * removing the save prompt.
  *
- * ## What happens while the vault is locked, and why nothing is drawn in the page
+ * ## What happens while the vault is locked, and where the answer is drawn
  *
- * Everything below refuses: no suggestion list, no fill, no save bar. `null` rather than a list with
- * an "unlock to fill" row in it, and that is the decision worth defending, because the row is the
- * obvious design and it is wrong twice over.
+ * Nothing is filled and nothing is offered to save. What the user gets instead is a sentence — "the
+ * vault is locked" — and a button, and the whole decision is *where those are drawn*.
  *
- * A page can focus a field whenever it likes, so an unlock affordance drawn on focus is *a prompt on
- * page load* wearing different clothes — the exact thing that must not happen, since a prompt that
- * appears unbidden is a prompt people dismiss without reading. Worse, it would be an unlock prompt
- * inside the page's own document, and a user cannot tell our closed shadow root from a `<div>` the site
- * drew to look like it. That makes the master password — the one secret whose loss costs every other
- * one — phishable by any page that can guess what our panel looks like.
+ * Not in the page. A page can focus a field whenever it likes, so an unlock affordance drawn on
+ * focus is a prompt on page load wearing different clothes; and a user cannot tell our closed shadow
+ * root from a `<div>` the site drew to look like it, which would make the master password — the one
+ * secret whose loss costs every other one — phishable by any page that can guess what our panel
+ * looks like.
  *
- * So the master password is never typed into anything inside a page. The way back is browser chrome a
- * page cannot draw: `tessera://passwords`, whose address bar the page does not control, and a
- * chrome-side prompt raised by a menu item or a keyboard shortcut. `shared/passwords/reveal.ts`
- * predicted that "autofill asks for the master password on the first fill after a lock"; the intent is
- * kept and the *asker* is moved out of the page, which is a deliberate departure from that sentence.
+ * So it is drawn on the overlay layer, which no page can read or imitate into, and it appears only
+ * after a press on the badge that the browser process itself saw. Even then it is not the
+ * master-password prompt: it is a notice with an Unlock button, and pressing *that* — an action in
+ * browser chrome — is what raises the prompt (R9). Without that step the highest-ranked surface in
+ * the program would be raisable by a message from a page view.
  *
- * The cost, stated: while locked, autofill is silent, and a user who has forgotten they set a master
- * password will think the feature is broken. That is why `PasswordVault` never idle-locks a vault with
- * no master password, so the silence only ever follows a choice the user made.
+ * `shared/passwords/reveal.ts` predicted that "autofill asks for the master password on the first
+ * fill after a lock"; the intent is kept and the *asker* is moved two steps out of the page, which is
+ * a deliberate departure from that sentence.
  */
 
 /** The frame a message came from, as the core reads it. Never as the renderer describes it. */
@@ -98,8 +103,8 @@ export interface AutofillView {
  * Written out rather than importing the class, for the reason `SafeStorageLike` exists: a test
  * supplies a fake vault and exercises the real decision paths. It also documents the surface — and
  * the absence in it is the point. There is no method here that returns the collection *with*
- * passwords, so the offer path is structurally unable to hold one while it is still deciding
- * whether it is allowed to.
+ * passwords, so the path that builds the account picker is structurally unable to hold one while it
+ * is still deciding whether it is allowed to.
  */
 export interface AutofillVault {
   /**
@@ -132,7 +137,8 @@ export interface AutofillServiceOptions {
    * spec 5's promise, and here it is the one that matters most: somebody turning this off is usually
    * turning it off *because* of the page in front of them.
    *
-   * Checked at the three ways in — offer, fill, submission — rather than at one central point,
+   * Checked at the four ways in — the badge's report, the picker, the fill and a submission —
+   * rather than at one central point,
    * because there is no central point: the three arrive on their own channels from a preload that
    * knows nothing about settings. Gating them all is what makes "off" mean off rather than "off
    * unless the page asks a different way".
@@ -208,7 +214,25 @@ export class AutofillService {
    * anything that leaves it behind turns the rule off for that tab for good.
    */
   readonly #openRequest = new Map<number, string>()
+  /**
+   * The one-time proof of a choice, per view, and the entry it stands for.
+   *
+   * The page never learns an entry's id. It is handed a token instead, and this map is the only
+   * place the two are ever associated — so the whole of what a captured token buys is the one
+   * credential the user chose, once, on the document that was in front of them. It is burned on
+   * redemption and dropped by every ending that drops a chrome request, because a token that
+   * outlived its document would be spendable on whatever the next one contains.
+   */
+  readonly #fillToken = new Map<number, { readonly token: string; readonly entryId: string }>()
   readonly #pending = new Map<number, PendingSave>()
+  /**
+   * The views whose last report said a fillable password field has focus.
+   *
+   * Only ever a reason to *offer* a way in from browser chrome — the page context menu's item — never
+   * a reason to fill: a page can make this true whenever it likes, and what it buys is a menu item
+   * that opens the same picker, under the same rules, as the toolbar key.
+   */
+  readonly #fillable = new Set<number>()
 
   constructor(options: AutofillServiceOptions) {
     this.#options = options
@@ -236,11 +260,27 @@ export class AutofillService {
    * `noteInput` is still the only thing that records one, and it is still fed only by the browser
    * process. A page that lies here buys itself an input listener and nothing else.
    */
-  noteFillableForm(reported: unknown): boolean {
+  noteFillableForm(view: AutofillView, reported: unknown): boolean {
     // Before anything else: somebody who switched autofill off must not have their input events
     // reported to the main process at all, which is the cost this subscription carries.
+    this.#fillable.delete(view.id)
     if (!this.#options.enabled()) return false
-    return reported === true
+    if (reported !== true) return false
+    this.#fillable.add(view.id)
+    /*
+      The badge's wording, in the same breath.
+
+      This is the whole of what the page is told before the badge is pressed: a stylesheet and one
+      translated label. It asks the vault nothing (AE2) and says nothing about it, which is what
+      makes it safe to answer a message a page can cause at will.
+
+      It is also the reason a badge is not drawn where the feature is switched off: the answer never
+      arrives, so there is no control offering something that would not happen. The one press that
+      *can* be answered with "switched off" is a badge already on screen when the setting changed —
+      see `badgePressed`, and `enabled` above for why that case exists at all.
+    */
+    view.send(AUTOFILL_BADGE_CHANNEL, badgeChromeFor(this.#options.locale()))
+    return true
   }
 
   /**
@@ -270,69 +310,135 @@ export class AutofillService {
     this.#openRequest.delete(viewId)
   }
 
+  /** Whether this view's page last said a fillable password field has focus, with autofill on. */
+  hasFillableFocus(viewId: number): boolean {
+    return this.#fillable.has(viewId) && this.#options.enabled()
+  }
+
+  /**
+   * What the toolbar key shows for the page at `pageUrl` (R10).
+   *
+   * The consent-free predicate and a domain match, never `decideFill` with a consent nobody gave
+   * (KTD11): the key is drawn before there is a press, a form or a frame to decide about. So it is
+   * optimistic, and it may be — the fill it leads to is decided in full when it happens.
+   */
+  keyState(pageUrl: string | null): AutofillKeyState {
+    if (!this.#options.enabled()) return { vault: 'off', matches: 0 }
+    if (!this.#options.vault.isUnlocked()) return { vault: 'locked', matches: 0 }
+    const matches = pageUrl === null ? 0 : countPageMatches(pageUrl, this.#options.vault.list())
+    return { vault: 'open', matches }
+  }
+
   /** Whether a chrome-side fill request is open on this view. For tests and diagnostics. */
   hasChromeRequest(viewId: number): boolean {
     return this.#openRequest.has(viewId)
   }
 
   /**
-   * What could be filled into this form, or `null`.
+   * The user pressed the badge. What the account picker should say, or `null` for "say nothing".
    *
-   * `null` rather than an empty offer, so the preload has one thing to check and cannot draw an
-   * empty suggestion list — which would tell a page that the user has *no* credential for it,
-   * which is itself a small fact about the user.
+   * `null` is the first of R8's two named exceptions and the only silent answer this method has: the
+   * browser process saw no real input event in this view, so the press was not a person's. Answering
+   * it would be an answer to the *page*, which is both a small leak and a way for any document to
+   * put a surface on the overlay layer whenever it liked. A page that calls `.click()` on our badge
+   * gets nothing at all (AE3).
    *
-   * The offer carries usernames and no passwords. That is not an optimisation: a focus event is
-   * something a page can cause at will, so this is the one message on these channels that an
-   * attacker can make fire repeatedly, and it has to be worthless when it does.
-   *
-   * It is decided without the gesture, by `offerableSubjects`, and that is what makes the first focus
-   * of a field work at all. The press that moved focus into the field reached the core before the
-   * page reported the field, so it was never recorded; demanding it here refused the list the user
-   * was about to press on. The gesture is demanded where it protects something — by `fillFor`, for
-   * the press on one of our entries.
+   * Deliberately a *page-input* consent and not any consent. A chrome request left open from an
+   * earlier flow would otherwise satisfy this, and then one genuine press would license every forged
+   * one after it for as long as the request stood.
    */
-  offerFor(view: AutofillView, frame: AutofillFrame, reported: unknown): FillOffer | null {
-    // Before the vault is even asked. A user who switched autofill off must not have a suggestion
-    // list appear on focus, and this is the path a page can make fire at will.
-    if (!this.#options.enabled()) return null
-    // First, and before the form is even looked at. A locked vault has no summaries to offer — they
-    // are inside the sealed document — so this is a statement of fact rather than a policy, and it
-    // means the busiest page-triggerable path in the feature does nothing at all while locked.
-    if (!this.#options.vault.isUnlocked()) return null
-    const mode = this.#options.modeFor(view.id)
-    if (mode === null) return null
-    const form = asFormDescriptor(reported)
-    if (form === null) return null
+  badgePressed(
+    view: AutofillView,
+    frame: AutofillFrame,
+    form: FormDescriptor
+  ): AutofillSuggestContent | null {
+    const seen = consentFor(
+      // `openRequestId: null` on purpose: the only thing that may open this surface from a page view
+      // is an input event the browser process dispatched into it.
+      { lastGestureAt: this.#lastGestureAt.get(view.id) ?? null, openRequestId: null },
+      this.#options.now()
+    )
+    if (seen === null) return null
+    return this.suggestFor(view, frame, form)
+  }
+
+  /**
+   * What the account picker should say for this view and this form.
+   *
+   * Reached from the badge once the press has been verified, and again after the user has unlocked
+   * the vault — which is why the gesture check is *not* here: by then the consent is the chrome
+   * request the Unlock button opened, and the person has spent half a minute typing a master
+   * password, which no five-second window would have survived (KTD4).
+   *
+   * Every branch says something, because "nothing happened" is the answer a user cannot tell from a
+   * broken browser (R8). The order is the product's, not the code's convenience: the setting first,
+   * because switching it off should not produce a lecture about the page; then the page's own rules,
+   * so an unencrypted page is named as such whatever the vault holds; then the vault.
+   */
+  suggestFor(
+    view: AutofillView,
+    frame: AutofillFrame,
+    form: FormDescriptor
+  ): AutofillSuggestContent | null {
+    if (!this.#options.enabled()) return { state: 'disabled' }
+    // A view this browser cannot place is not a tab of ours, and there is no tile to draw a list in.
+    if (this.#options.modeFor(view.id) === null) return null
 
     const context = this.#fillContext(view.id, frame, form)
-    const fillable = offerableSubjects(context, this.#options.vault.list())
-    const [first] = fillable
-    if (first === undefined) return null
+    /*
+      The page as its own subject, which is one predicate rather than two.
 
-    const site = registrableDomainOfUrl(frame.url)
-    // Reached only when a fill was authorised, and a fill needs a site — so `site` cannot be null
-    // here. Guarded rather than asserted because the alternative is a heading reading "undefined".
-    if (site === null) return null
+      `decideFill` weighs two kinds of rule: those about the page in front of the user — a gesture, a
+      password field, the scheme, the frame, the form's action — and those that compare a *stored*
+      origin against it. Handing it the page's own address makes the second kind compare the page
+      with itself, so what survives is exactly the first kind, with its reason intact (KTD6). The
+      alternative was a second list of the same rules written out here, and `fill-policy.ts` says at
+      length what happens to two predicates over time.
+    */
+    const page = decideFill(context, { origin: frame.url })
+    if (!page.allowed) return { state: 'refused', reason: page.reason }
 
+    // Asked after the page rules, and before the list: a locked vault has no summaries at all — they
+    // are inside the sealed document — so an empty list here would read as "nothing saved for you".
+    if (!this.#options.vault.isUnlocked()) return { state: 'locked' }
+
+    const fillable = fillableSubjects(context, this.#options.vault.list())
+    if (fillable.length === 0) return { state: 'empty' }
     return {
-      entries: fillable.map((summary) => ({ id: summary.id, username: summary.username })),
-      chrome: fillChromeFor(this.#options.locale(), site)
+      state: 'entries',
+      entries: fillable.map((summary) => ({ id: summary.id, username: summary.username }))
     }
+  }
+
+  /**
+   * The user chose an entry. Mints the one-time proof the page redeems for it (KTD8).
+   *
+   * The entry's own id is deliberately not what travels: it is a durable reference, so a renderer
+   * that kept one could ask for that credential again on a later document. A token is minted for one
+   * choice, remembered here beside the id it stands for, and burned by the first redemption —
+   * successful or not.
+   *
+   * One per view, replaced rather than accumulated. Two live tokens would mean two choices from one
+   * list, and the list only ever asks once.
+   */
+  noteFillChoice(viewId: number, entryId: string): string {
+    const token = randomUUID()
+    this.#fillToken.set(viewId, { token, entryId })
+    return token
   }
 
   /**
    * The credential the user picked, or `null`.
    *
-   * Every rule is applied again here, against the form as it is *now*. The offer is not a token
+   * Every rule is applied again here, against the form as it is *now*. The choice is not a licence
    * that can be spent later: a page that moved the form into a frame, changed its action, or
-   * navigated between the suggestion appearing and the click gets a refusal, and so does a
-   * renderer that invented an id it was never offered.
+   * navigated between the list appearing and the click gets a refusal, and so does a renderer that
+   * invented a token nobody minted.
    */
   fillFor(view: AutofillView, frame: AutofillFrame, reported: unknown): FillAnswer | null {
-    // Both checked again here rather than trusted from the offer. The setting can be switched off and
-    // the vault can lock between a suggestion being drawn and a click on it — an idle timeout is a
-    // clock, not an event the page waits for — and the offer is never a token that can be spent later.
+    // Both checked again here rather than trusted from the choice. The setting can be switched off
+    // and the vault can lock between a list being drawn and a click on it — an idle timeout is a
+    // clock, not an event the page waits for.
     if (!this.#options.enabled()) return null
     if (!this.#options.vault.isUnlocked()) return null
     const mode = this.#options.modeFor(view.id)
@@ -340,7 +446,19 @@ export class AutofillService {
     const request = asFillRequest(reported)
     if (request === null) return null
 
-    const summary = this.#options.vault.summaryOf(request.id)
+    /*
+      Redeemed and burned in the same breath, before any rule is applied.
+
+      Burned even when what follows refuses, and that is the difference between a one-time proof and
+      a retry counter: a token that survived its own refusal would let a page ask again — from a
+      subframe, with a rewritten action, after a navigation — until one of the attempts happened to
+      pass. The user chose once, so there is one attempt.
+    */
+    const held = this.#fillToken.get(view.id)
+    if (held?.token !== request.token) return null
+    this.#fillToken.delete(view.id)
+
+    const summary = this.#options.vault.summaryOf(held.entryId)
     if (summary === null) return null
 
     const context = this.#fillContext(view.id, frame, request.form)
@@ -357,11 +475,11 @@ export class AutofillService {
     */
     if (context.consent?.source === 'chrome-action') this.#openRequest.delete(view.id)
 
-    const password = this.#options.vault.secretOf(request.id)
+    const password = this.#options.vault.secretOf(held.entryId)
     if (password === null) return null
 
     // Through the mode-bound writer, so a private window fills without recording that it did.
-    this.#options.vault.writerFor(mode).noteUsed(request.id)
+    this.#options.vault.writerFor(mode).noteUsed(held.entryId)
     return { username: summary.username, password }
   }
 
@@ -458,9 +576,10 @@ export class AutofillService {
       sign-in causes, because the question is about the page the user came from. A consent is about
       the document in front of the user right now: the form it was granted for is gone, and a
       consent that outlived its document would be spent on whatever the next one contains — which
-      a page can choose.
+      a page can choose. The unredeemed choice token goes in the same line and for the same reason.
     */
     this.#openRequest.delete(viewId)
+    this.#fillToken.delete(viewId)
     const pending = this.#pending.get(viewId)
     if (pending === undefined) return
     if (passwordOriginOf(url) !== pending.origin) this.#pending.delete(viewId)
@@ -513,19 +632,24 @@ export class AutofillService {
 
   /** Drops everything held for a view. Called when it is destroyed. */
   forget(viewId: number): void {
+    this.#fillable.delete(viewId)
     this.#lastGestureAt.delete(viewId)
     this.#openRequest.delete(viewId)
+    this.#fillToken.delete(viewId)
     this.#pending.delete(viewId)
   }
 
   /**
    * What a lock means to the state held here. Wired to `PasswordVault.onLock`.
    *
-   * Two things go. Every submitted credential waiting for an answer, because otherwise a lock would
+   * Three things go. Every submitted credential waiting for an answer, because otherwise a lock would
    * be a half-truth: the key would be gone from the vault while a password the user typed two
    * minutes ago sat in this map for the rest of its two minutes. And every open chrome request,
    * because the fill it was granted for cannot be served from a sealed vault — leaving it would
-   * carry consent across the unlock and let it be spent on a form the user never came back to.
+   * carry consent across the unlock and let it be spent on a form the user never came back to. And
+   * every unredeemed choice token, which is the same argument one step further along: the credential
+   * it stands for cannot be read out of a sealed vault, so keeping it would only preserve a way to
+   * ask again later.
    *
    * The gesture timestamps are deliberately left alone — they are a record of input, not a secret,
    * and clearing them would make the next legitimate fill refuse for `no-user-gesture` right after
@@ -533,6 +657,7 @@ export class AutofillService {
    */
   dropPendingSaves(): void {
     this.#openRequest.clear()
+    this.#fillToken.clear()
     this.#pending.clear()
   }
 

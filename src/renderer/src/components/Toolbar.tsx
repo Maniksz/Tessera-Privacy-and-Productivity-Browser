@@ -1,4 +1,5 @@
 import type { DownloadButtonSummary } from '@shared/downloads/summary.js'
+import type { AutofillKeyState } from '@shared/passwords/model.js'
 import type { SplitState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { ShortcutTitle } from '@shared/shortcuts/format.js'
@@ -6,6 +7,7 @@ import { HOME_URL } from '@shared/url/omnibox.js'
 import { effectiveZoomPercent } from '@shared/zoom/model.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
+import { AutofillKey } from './AutofillKey.js'
 import { DownloadsButton } from './DownloadsButton.js'
 import { LayoutMenu } from './LayoutMenu.js'
 import { Omnibox } from './Omnibox.js'
@@ -34,6 +36,8 @@ interface ToolbarProps {
   downloads?: DownloadButtonSummary
   /** Whether the downloads panel is currently up on the overlay layer. */
   downloadsPanelOpen?: boolean
+  /** The password key's state, from `useAutofillKeyState`. Absent, like `downloads`, means no key. */
+  autofillKey?: AutofillKeyState
   onOpenSettings: () => void
   onOpenExtensions: () => void
   /** Bumped when the user asks for the address bar; passed straight to `Omnibox`. */
@@ -50,6 +54,7 @@ export function Toolbar({
   layoutMenuOpen,
   downloads,
   downloadsPanelOpen = false,
+  autofillKey,
   onOpenSettings,
   onOpenExtensions,
   focusRequest,
@@ -210,6 +215,10 @@ export function Toolbar({
               {maximized ? <path d="M4 8h5V3M16 12h-5v5" /> : <path d="M4 4h12v12H4z" />}
             </svg>
           </button>
+        )}
+
+        {autofillKey !== undefined && (
+          <AutofillKey state={autofillKey} titleWithShortcut={titleWithShortcut} />
         )}
 
         {downloads !== undefined && (

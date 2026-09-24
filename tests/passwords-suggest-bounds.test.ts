@@ -7,6 +7,7 @@ import {
   AUTOFILL_SUGGEST_ROW_HEIGHT,
   AUTOFILL_SUGGEST_WIDTH,
   autofillSuggestBounds,
+  autofillSuggestBoundsAt,
   autofillSuggestHeight,
   fieldRectInWindow,
   type ReportedFieldRect,
@@ -317,5 +318,42 @@ describe('where the list lands', () => {
         content: TWO_ENTRIES
       })
     ).toBe(null)
+  })
+})
+
+describe('where the list lands when the toolbar key asked for it', () => {
+  // The key sits in the toolbar, above the tile: window coordinates, y inside the 88px chrome.
+  const KEY = { x: 1300, y: 44, width: 32, height: 32 }
+
+  it('opens at the top of the tile, right-aligned under the key', () => {
+    const bounds = autofillSuggestBoundsAt({ anchor: KEY, view: TILE, content: TWO_ENTRIES })
+
+    expect(bounds).toEqual({
+      x: KEY.x + KEY.width - AUTOFILL_SUGGEST_WIDTH,
+      y: TILE.bounds.y + 4,
+      width: AUTOFILL_SUGGEST_WIDTH,
+      height: TWO_ROW_HEIGHT
+    })
+  })
+
+  it('stays inside the tile it is about, not the one the key happens to be above', () => {
+    // The left of two tiles, with the key above the right one: the list is clamped back into its own.
+    const left: SuggestViewGeometry = {
+      bounds: { x: 0, y: 88, width: 700, height: 812 },
+      pageZoom: 1
+    }
+
+    const bounds = autofillSuggestBoundsAt({ anchor: KEY, view: left, content: TWO_ENTRIES })
+
+    expect(bounds?.x).toBe(700 - 8 - AUTOFILL_SUGGEST_WIDTH)
+  })
+
+  it('has no rectangle in a tile too short for one row', () => {
+    const short: SuggestViewGeometry = {
+      bounds: { x: 0, y: 88, width: 1440, height: 40 },
+      pageZoom: 1
+    }
+
+    expect(autofillSuggestBoundsAt({ anchor: KEY, view: short, content: TWO_ENTRIES })).toBeNull()
   })
 })

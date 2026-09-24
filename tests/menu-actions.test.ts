@@ -474,6 +474,36 @@ describe('the application menu', () => {
       expect(called, platform).toEqual(['addBookmark', 'clearData', 'panic'])
     }
   })
+
+  it('fills from browser chrome with its own key on every platform (autofill U7)', () => {
+    const keys: Record<Platform, string> = {
+      darwin: 'Command+Shift+K',
+      linux: 'Control+Shift+K',
+      win32: 'Control+Shift+K'
+    }
+    for (const platform of ['darwin', 'linux', 'win32'] as Platform[]) {
+      const window = { id: 'focused window' }
+      const fills: unknown[] = []
+      const deps = {
+        windows: { focused: () => window, controllers: [window] },
+        settings: { get: () => ({}) },
+        locale: 'en',
+        platform,
+        checkForUpdates: () => undefined,
+        actions: {},
+        autofill: {
+          fillActiveTab: (target: unknown, anchor: unknown) => fills.push([target, anchor])
+        }
+      } as unknown as MenuDeps
+      const items = itemsOf(buildApplicationMenu(deps) as unknown as MenuItemConstructorOptions[])
+      const item = items.find((entry) => entry.label === 'Fill In Saved Password')
+
+      expect(item?.accelerator, platform).toBe(keys[platform])
+      ;(item?.click as (() => void) | undefined)?.()
+      // The focused window, and no anchor: the list hangs from the field, as a badge's would.
+      expect(fills, platform).toEqual([[window, null]])
+    }
+  })
 })
 
 describe('installMenuActions', () => {

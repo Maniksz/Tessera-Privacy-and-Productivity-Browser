@@ -11,6 +11,7 @@ import { useI18n } from './i18n.js'
 import { TabBar } from './components/TabBar.js'
 import { Toolbar } from './components/Toolbar.js'
 import { isDownloadsPanel, useDownloadSummary } from './components/DownloadsButton.js'
+import { useAutofillKeyState } from './components/AutofillKey.js'
 import { SplitDividers } from './components/SplitDividers.js'
 import { ExtensionsPanel } from './components/ExtensionsPanel.js'
 import { TileFailures } from './components/TabFailure.js'
@@ -51,6 +52,15 @@ export function App(): React.ReactNode {
 
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
   const privateMode = state.window?.privateMode ?? false
+  /** The password key, asked again whenever the tile, its page, the layer or the setting moves. */
+  const autofillKey = useAutofillKeyState(
+    [
+      activeTab?.id,
+      activeTab?.url,
+      overlay?.kind,
+      String(state.settings?.['passwords.autofill'])
+    ].join(' ')
+  )
   /**
    * Where the content area begins *as the core sees it*, which is not always where the chrome ends.
    *
@@ -287,6 +297,7 @@ export function App(): React.ReactNode {
           layoutMenuOpen={overlay?.kind === 'layout-menu'}
           downloads={downloads}
           downloadsPanelOpen={isDownloadsPanel(overlay)}
+          autofillKey={autofillKey}
           focusRequest={focusRequest}
           onOpenSettings={openSettingsTab}
           onOpenExtensions={() => setPanel('extensions')}

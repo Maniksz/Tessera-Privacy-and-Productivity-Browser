@@ -1307,6 +1307,7 @@ belegt**; kein Agent startet die App. Was dort zu prüfen ist, steht in der Tabe
 | U11 | Dateninventar; „Beim Beenden löschen" nimmt Verlauf und Downloads mit und holt nach einem Absturz nach | ✅ | `fb991bc` |
 | U5 | README, STATUS, TESTING und die Beschreibung von `appearance.theme` auf dem echten Stand | ✅ | dieser Stand |
 | U7, U8 | About-Seite und HTTPS-only-Zwischenseite | ⬜ | in Arbeit |
+| U14 | Autofill U4 bis U7: Badge im Feld statt Liste in der Seite, Füllen per Einmal-Beleg, Wächter über die echte Verdrahtung (`tests/autofill-wiring.test.ts`, `passwords.feature`), Schlüssel in der Toolbar, `Strg+Shift+K` mit Menüeintrag und Eintrag im Seiten-Kontextmenü. `decideOffer` und die Liste in der Seite aus `fe33648` sind entfernt | ✅ | dieser Stand |
 
 ### Bündel nach R40
 
@@ -1324,11 +1325,20 @@ Größen dezimal (Bytes ÷ 1000), wie im Build-Log.
 | U9 | Fehler- und Absturzanzeige in der Kachel | in den +13,4 kB unten | +0,4 kB | 1469 → 1462 |
 | U11 | Dateninventar, Löschen beim Beenden | in den +13,4 kB unten | — | — (`src/main/index.ts` 1462 → 1404) |
 | **Stand nach `fb991bc`** | | **527,45 kB** (U9 bis U11 zusammen ≈ +13,4 kB) | **45,12 kB** von 48 | 1462 |
+| U14 | Autofill: Badge, Auswahl auf der Overlay-Schicht, Toolbar-Schlüssel, Kürzel, Kontextmenü | 546,42 → 555,61 kB (+9,2 kB) | 46,51 → 46,94 kB | — (1457, unverändert) |
 
 Der Main-Prozess liegt damit weiter über seinem Budget von 320 kB, und das ist nach der Key Decision
 „Bundle-Budgets dürfen mit notiertem Zuwachs wachsen" zulässig, solange der Zuwachs hier steht. Den Anteil von
 U9, U10 und U11 einzeln misst niemand nach, weil zwischen den Einheiten kein Build lief; die Summe ist gemessen.
-Der Preload der Tabs steht bei 41,6 kB; das ist die Messlatte für Roadmap U14 (R25), nicht 35 kB.
+Der Preload der Tabs stand vor U14 bei 41,6 kB; das ist die Messlatte für Roadmap U14 (R25), nicht 35 kB.
+
+**Preload-Tor U14, gemessen mit `pnpm build`:** vor U14 **41 638 B**, nach U14 **41 448 B** (−190 B). Das Badge,
+die Tastaturbedienung und die Antwort auf die Frage des Kerns nach dem Formular kosten mehr als die entfernte
+Liste in der Seite; bezahlt ist das innerhalb des Autofill-Codes selbst — eine Prüfschleife statt drei in
+`wire.ts`, die Namenswahl beim Speichern über dieselbe Funktion wie beim Füllen in `fields.ts`, kompakterer
+Aufbau der Speicherleiste. Der Chrome-Preload wächst um die drei neuen Kanalnamen (3 357 → 3 473 B, Budget
+5 kB). Die Auswahlfläche liegt in einem eigenen, nachgeladenen Chunk (2,68 kB), sonst wäre der Overlay-Chunk
+über seine 20 kB gegangen (18,73 → 19,19 kB). Renderer-Hauptchunk 24,71 → 26,11 kB (Schlüssel in der Toolbar).
 
 ### Was nur der Benutzer prüfen kann
 
@@ -1349,7 +1359,11 @@ Laufende App (`pnpm dev`). Kein Agent startet die App. Jede Zeile ist offen, bis
 | U9 | „Trotzdem öffnen" | Die Seite lädt |
 | U11 | `docs/QA.md` 7.12 bis 7.15 | Wie dort beschrieben |
 | U2 | Gruppe einklappen, kacheln, mit Tab-Gruppen neu starten | Die Gruppen und ihre Anordnung kommen wieder |
-| U1 | Autofill-Vorschlagsliste auf der Overlay-Schicht | Die Liste erscheint am Feld und füllt aus. Autofill U4 steht noch aus |
+| U1, U14 | Autofill-Durchgang aus dem Verification Contract des Autofill-Plans: gesperrter Tresor → Badge → Auskunft mit Entsperren → Liste; entsperrt ohne Eintrag → „nichts gespeichert“; `http://` außerhalb Loopback → Grund; Eintrag wählen → Name und Passwort im Formular, Schreibmarke im Feld; Seitenzoom 150 % → Liste am Feld, Scrollen schließt sie; Tastatur: Feld, Tab aufs Badge, Enter, Pfeile, Enter | Wie beschrieben |
+| U14 | Toolbar-Schlüssel: gesperrt, offen mit Treffer (Punkt), offen ohne Treffer; Klick bei gesperrtem Tresor | Drei unterscheidbare Zustände; der Klick öffnet die Master-Passwort-Abfrage |
+| U14 | Toolbar-Schlüssel und `Strg+Shift+K` (macOS `Cmd+Shift+K`) auf einer Anmeldeseite, ohne vorher in die Seite zu klicken | Die Liste erscheint unter dem Schlüssel (beim Kürzel am Feld), die Wahl füllt aus |
+| U14 | Rechtsklick in ein Passwortfeld, dann „Gespeichertes Passwort einsetzen“; Rechtsklick anderswo | Der Eintrag steht nur im Passwortfeld und öffnet dieselbe Liste |
+| U14 | Tresor sperrt sich nach 15 Minuten, während die Seite offen ist | Der Schlüssel wechselt ohne Tabwechsel auf „gesperrt“ |
 
 ## Bekannte Risiken
 

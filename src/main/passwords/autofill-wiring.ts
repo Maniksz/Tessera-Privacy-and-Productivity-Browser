@@ -1,7 +1,8 @@
 import {
+  AUTOFILL_CLOSE_CHANNEL,
   AUTOFILL_FILLABLE_CHANNEL,
   AUTOFILL_FILL_CHANNEL,
-  AUTOFILL_OFFER_CHANNEL,
+  AUTOFILL_PRESS_CHANNEL,
   AUTOFILL_SAVE_ANSWER_CHANNEL,
   AUTOFILL_SUBMIT_CHANNEL
 } from '@shared/passwords/wire.js'
@@ -21,7 +22,8 @@ import type { AutofillFrame, AutofillService, AutofillView } from './AutofillSer
  * order, because asserting it meant starting Electron.
  *
  * With the subscriptions arriving through a host, the whole chain — a form reported, an input event
- * dispatched, an offer asked for, a fill authorised — is an object literal and a sequence of calls.
+ * dispatched, the badge pressed, a fill authorised — is an object literal and a sequence of calls
+ * (`tests/autofill-wiring.test.ts`).
  * Same shape, and the same reason, as `window-events.ts`.
  *
  * ## What stayed in `install-autofill.ts`
@@ -40,6 +42,18 @@ import type { AutofillFrame, AutofillService, AutofillView } from './AutofillSer
  * theirs with nothing.
  */
 export type SyncReply = { readonly answer: unknown } | null
+
+/**
+ * What puts the account picker on screen, as this file needs it. `AutofillSuggest` satisfies it.
+ *
+ * Named as an interface rather than imported as the class, so the two messages a page can send about
+ * the picker are wired against something a test can write down — and so this file, which is the one
+ * place the *order* of autofill's events is visible, does not acquire an opinion about overlays.
+ */
+export interface AutofillPresenter {
+  press(view: AutofillView, frame: AutofillFrame, payload: unknown): void
+  close(view: AutofillView): void
+}
 
 /**
  * A view, as narrowly as autofill's wiring sees one.
@@ -80,12 +94,16 @@ export interface AutofillHost {
  * `AUTOFILL_FILLABLE_CHANNEL` — the page reporting that a fillable password field has focus — and
  * that report is answered by the service, which refuses it outright when the feature is switched off.
  *
- * It has to be that report and not the offer. The offer used to be decided by `decideFill`, whose
- * first rule demands the gesture this listener exists to record, so gating the listener on it was a
- * circle with no way in. What gates it now is a fact the page can state before any rule has been
- * applied, and stating it falsely buys a listener and nothing else.
+ * It has to be that report and not an answer from the vault. The offer it used to be gated on was
+ * decided by `decideFill`, whose first rule demands the gesture this listener exists to record, so
+ * gating the listener on it was a circle with no way in. What gates it now is a fact the page can state before any rule has been applied, and
+ * stating it falsely buys a listener and nothing else.
  */
-export function wireAutofillView(service: AutofillService, host: AutofillHost): void {
+export function wireAutofillView(
+  service: AutofillService,
+  presenter: AutofillPresenter,
+  host: AutofillHost
+): void {
   const view = host.view
   /**
    * The way to stop listening to input, or `null` while nothing is being listened to.
@@ -107,15 +125,26 @@ export function wireAutofillView(service: AutofillService, host: AutofillHost): 
   }
 
   host.onSyncMessage((channel, frame, payload) => {
-    if (channel === AUTOFILL_OFFER_CHANNEL)
-      return { answer: service.offerFor(view, frame, payload) }
     if (channel === AUTOFILL_FILL_CHANNEL) return { answer: service.fillFor(view, frame, payload) }
     return null
   })
 
   host.onMessage((channel, frame, payload) => {
     if (channel === AUTOFILL_FILLABLE_CHANNEL) {
-      trackGestures(service.noteFillableForm(payload))
+      trackGestures(service.noteFillableForm(view, payload))
+      return
+    }
+    /*
+      The press comes before the picker exists and the close comes after it has served its purpose,
+      and both are one line here because neither is a decision: whether a press is answered at all is
+      `AutofillService.badgePressed`, and where the answer is drawn is `AutofillSuggest`.
+    */
+    if (channel === AUTOFILL_PRESS_CHANNEL) {
+      presenter.press(view, frame, payload)
+      return
+    }
+    if (channel === AUTOFILL_CLOSE_CHANNEL) {
+      presenter.close(view)
       return
     }
     if (channel === AUTOFILL_SUBMIT_CHANNEL) {
@@ -139,6 +168,8 @@ export function wireAutofillView(service: AutofillService, host: AutofillHost): 
   host.onDestroyed(() => {
     // Before `forget`, so the subscription goes even in a host that outlives the view it describes.
     trackGestures(false)
+    // Before the service forgets the view, so the picker can still find the request it is closing.
+    presenter.close(view)
     service.forget(view.id)
   })
 }

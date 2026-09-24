@@ -10,7 +10,7 @@ import type {
   PasswordVaultStateResponse
 } from './api.js'
 import { CSV_REFUSALS, ROW_REFUSALS, type ChromeImportResult } from './chrome-import.js'
-import type { PasswordSummary } from './model.js'
+import { AUTOFILL_KEY_VAULTS, type AutofillKeyState, type PasswordSummary } from './model.js'
 import {
   MASTER_PASSWORD_INTENTS,
   MASTER_PASSWORD_REQUEST_OUTCOMES,
@@ -265,3 +265,193 @@ export const passwordPromptAnswerSchema = z.object({
   requestId: z.string().min(1),
   action: z.enum(PROMPT_ACTIONS)
 })
+
+/**
+ * The account picker's answer: which entry, or "unlock first".
+ *
+ * Two opaque ids and a verb, and the absence of a username is the property worth naming — the
+ * surface exists to keep account names out of the page, and an answer carrying one would put one
+ * back on the wire for no purpose, since the core resolves the entry from the id it minted.
+ *
+ * A discriminated union rather than an optional `entryId`, so an unlock that arrived carrying an
+ * entry id is a parse failure rather than a choice nobody made.
+ *
+ * The request id is checked against the picker actually on screen, exactly as the master-password
+ * prompt's is — and here it is stronger, because that id *is* the consent that authorises the fill
+ * (`shared/passwords/consent.ts`). A stale one authorises nothing at all.
+ */
+export const passwordSuggestAnswerSchema = z.discriminatedUnion('action', [
+  z.object({
+    requestId: z.string().min(1),
+    action: z.literal('choose'),
+    entryId: z.string().min(1)
+  }),
+  z.object({ requestId: z.string().min(1), action: z.literal('unlock') })
+])
+
+const nothing = z.void()
+const ok = z.object({ ok: z.literal(true) })
+/** A rectangle in window coordinates, as the chrome renderer measures its own buttons. */
+const anchorRectSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number()
+})
+
+/**
+ * What the toolbar key shows: a state and a count, never a name. See `AutofillKeyState`.
+ *
+ * Strict, so a field added in the core that named an account would be refused here rather than
+ * quietly reaching every window's chrome on the next lock.
+ */
+export const autofillKeyStateSchema = z.strictObject({
+  vault: z.enum(AUTOFILL_KEY_VAULTS),
+  matches: z.number().int().min(0)
+})
+
+const _autofillKeyWireMatchesModel: SameShape<
+  z.output<typeof autofillKeyStateSchema>,
+  AutofillKeyState
+> = true
+void _autofillKeyWireMatchesModel
+
+/**
+ * The vault's channels, spread into `invokeContract` (`shared/ipc/contract.ts`).
+ *
+ * Here rather than there so the contract file stays under the largest-file bar, and so each channel
+ * sits beside the schemas it is made of. Nothing about their checking changes: the exhaustiveness
+ * assertion over `InvokeChannel` is on the object they are spread into.
+ */
+export const passwordInvokeContract = {
+  /** Origins, usernames and timestamps. No password reaches the page through this channel. */
+  'passwords:list': { request: nothing, response: passwordListResponseSchema },
+  /**
+   * Adds an entry the user typed.
+   *
+   * `rejected` is a value rather than a rejection on purpose: the causes are all things the user
+   * typed — an address with no host, an empty password — and an error built from a rejected promise
+   * would be a sentence about a password field.
+   */
+  'passwords:create': {
+    request: z.object({ url: z.string(), username: z.string(), password: z.string() }),
+    response: z.object({ outcome: z.enum(PASSWORD_SAVE_OUTCOMES) })
+  },
+  /** An absent field means "leave this alone"; it cannot move an entry to another origin. */
+  'passwords:update': {
+    request: z.object({
+      id: z.string(),
+      username: z.string().optional(),
+      password: z.string().optional()
+    }),
+    response: ok
+  },
+  'passwords:remove': {
+    request: z.object({ id: z.string() }),
+    response: z.object({ removed: z.boolean() })
+  },
+  /**
+   * One password, for one id.
+   *
+   * The only response on this whole boundary that carries a secret, and it carries exactly one.
+   * `null` for an unknown id rather than a rejection: the id came from a list the page was already
+   * holding, and an entry can be removed in another window between the row being drawn and the
+   * button being pressed. That is a race, not a fault.
+   */
+  'passwords:reveal': {
+    request: z.object({ id: z.string() }),
+    response: z.object({ password: z.string().nullable() })
+  },
+  /** Undoes a "never here", so a site the user changed their mind about can be offered again. */
+  'passwords:forgetNeverSaved': { request: z.object({ origin: z.string() }), response: ok },
+
+  // --- the lock -------------------------------------------------------------
+  /*
+    Six channels for the lock, the master password, the reset and the import — and not one of them has a
+    request field that carries a secret.
+
+    That is the whole shape of this group and it is worth stating where the schemas are, because a
+    schema is where such a field would have to appear to be accepted. `passwords:requestUnlock` and
+    `passwords:beginSetMasterPassword` send nothing and an intent respectively; the candidate is typed
+    into a prompt on the overlay layer whose keystrokes the core takes out of the input pipeline before
+    any renderer sees them. See `shared/passwords/api.ts` for what this replaced.
+  */
+  'passwords:vaultStatus': { request: nothing, response: vaultStateResponseSchema },
+  /**
+   * Raises the prompt and resolves with one of four words.
+   *
+   * Pending for as long as somebody is being asked, which is minutes if they walk away — the same
+   * representation `media:download` uses for a long operation, and the correct one for a question put to a
+   * person. Every way the prompt can leave the screen settles it, `cancelled` being the safe reading.
+   */
+  'passwords:requestUnlock': { request: nothing, response: passwordUnlockResponseSchema },
+  'passwords:lock': { request: nothing, response: vaultStateResponseSchema },
+  /**
+   * Starts the set, change or remove sequence.
+   *
+   * The intent, not the sequence. The core derives which questions to ask from the vault as it actually
+   * is, and always towards more proof: `set` on a vault that already has a master password asks for the
+   * existing one first, because a caller able to choose otherwise would have found the one way to
+   * replace the lock without opening it.
+   */
+  'passwords:beginSetMasterPassword': {
+    request: passwordMasterPasswordRequestSchema,
+    response: passwordMasterPasswordResponseSchema
+  },
+  /**
+   * Destroys the vault, after offering to put the sealed copy somewhere the user chooses.
+   *
+   * The token is checked in the core and is not user-visible text; it is here so that an empty or
+   * mistaken invoke cannot delete anything. The sentence the user reads is translated and on the page.
+   */
+  'passwords:resetVault': {
+    request: z.object({ confirmation: z.string() }),
+    response: passwordResetVaultResponseSchema
+  },
+  /** No payload: the core opens the chooser and reads the file, so no export crosses this boundary. */
+  'passwords:import': { request: nothing, response: passwordImportResponseSchema },
+  /**
+   * Continue or Cancel on the prompt. Chrome-only.
+   *
+   * The mouse route, and the only thing this channel can do is spend or abandon what the person at the
+   * keyboard has already typed — there is nothing in the payload that could substitute for it.
+   */
+  'passwords:answerPrompt': {
+    request: passwordPromptAnswerSchema,
+    response: ok
+  },
+  /**
+   * The account picker's answer: an entry chosen, or Unlock pressed. Chrome-only.
+   *
+   * Nothing comes back but `ok`, and that is the shape rather than a simplification: the credential
+   * does not travel this way. The core answers a choice by handing the *page* a one-time token, which
+   * the page redeems on autofill's own channel with the form as it is at that moment — so the surface
+   * that made the choice never holds anything, and the rules are applied again against a document
+   * this reply could not have influenced.
+   */
+  'passwords:answerSuggestion': {
+    request: passwordSuggestAnswerSchema,
+    response: ok
+  },
+  /**
+   * Opens `tessera://passwords` in the sending window.
+   *
+   * `nothing` in, and that is the whole security argument rather than a simplification: with no
+   * address in the request there is no address to forge, so the channel's reach is a constant in the
+   * handler. `ok` out, because a tab is not state this caller tracks — the settings page has no list
+   * of tabs and would have nothing to do with an id.
+   */
+  'passwords:openManager': { request: nothing, response: ok },
+
+  // --- the toolbar key (R10–R13) -------------------------------------------
+  /** The key's state for the sending window's active tile, the pull that goes with the push. */
+  'passwords:autofillState': { request: nothing, response: autofillKeyStateSchema },
+  /**
+   * The key was pressed with the vault open: fill the active tile's page from browser chrome.
+   *
+   * Chrome-only, and the anchor is the whole request: which page is the core's to read from the
+   * sender's window, and the press itself is the consent (R11), so there is nothing a caller could
+   * name that would widen it. `ok` out, because the answer is a surface on the overlay layer.
+   */
+  'passwords:fillFromToolbar': { request: z.object({ anchor: anchorRectSchema }), response: ok }
+}

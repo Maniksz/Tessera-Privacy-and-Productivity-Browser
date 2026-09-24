@@ -11,6 +11,7 @@ import type { WindowRegistry } from '../browser/WindowRegistry.js'
 import type { BrowserWindowController } from '../browser/BrowserWindowController.js'
 import type { SettingsStore } from '../settings/SettingsStore.js'
 import type { CoreMenuActions } from './menu-actions.js'
+import type { AutofillParts } from '../passwords/install-autofill.js'
 import { internalUrl } from '@shared/product.js'
 import { LAYOUT_IDS } from '@shared/split/layout.js'
 import { nextZoomPercent } from '@shared/gestures/zoom.js'
@@ -44,6 +45,8 @@ export interface MenuDeps {
   checkForUpdates: () => void
   /** Strg+D, clearing now and panic: run in the core, and with no window focused as well (KTD6). */
   actions: CoreMenuActions
+  /** A fill asked for from browser chrome (R12): the same picker the toolbar key opens. */
+  autofill: Pick<AutofillParts, 'fillActiveTab'>
 }
 
 export function buildApplicationMenu(deps: MenuDeps): Menu {
@@ -364,6 +367,16 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       {
         label: t('menu.tools.passwords'),
         click: () => focused()?.createTab({ url: internalUrl('passwords') })
+      },
+      /*
+        The shortcut's item, and the route for somebody who uses neither the badge nor the key. It asks
+        the active tile's page where its form is and opens the picker there, on the chrome consent a menu
+        item carries (R11) — the same one-time request the toolbar key opens.
+      */
+      {
+        label: t('menu.tools.fillPassword'),
+        accelerator: accel('fillPassword'),
+        click: () => deps.autofill.fillActiveTab(focused(), null)
       },
       { type: 'separator' },
       /*
