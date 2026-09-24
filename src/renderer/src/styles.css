@@ -105,6 +105,17 @@ body {
   opacity: 0.55;
 }
 
+/* Unloaded to save memory (U15): the icon greyed and the title quieter, so it reads as asleep, not gone. */
+.tab--unloaded .tab__favicon {
+  filter: grayscale(1);
+  opacity: 0.6;
+}
+
+.tab--unloaded .tab__title {
+  font-style: italic;
+  opacity: 0.8;
+}
+
 .tab--dragging {
   opacity: 0.4;
 }

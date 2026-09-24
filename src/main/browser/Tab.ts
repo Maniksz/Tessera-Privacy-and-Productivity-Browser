@@ -1,14 +1,10 @@
-import { WebContentsView, type Session } from 'electron'
+import type { Session, WebContents, WebContentsView } from 'electron'
 import type { SecurityState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Rect } from '@shared/split/layout.js'
 import { isHomeUrl } from '@shared/url/omnibox.js'
-import type { HistoryRecorder } from '@shared/history/model.js'
-import { type FaviconCache, faviconDomainOf, faviconUrl } from '@shared/favicons/model.js'
-import type { ThumbnailCapturer } from '@shared/thumbnails/model.js'
-import type { PageContextTarget } from '../menu/page-context-items.js'
+import { faviconDomainOf, faviconUrl } from '@shared/favicons/model.js'
 import { mouseMoveY } from '@shared/gestures/pointer.js'
-import type { ZoomDirection } from '@shared/gestures/zoom.js'
 import {
   PINCH_GRACE_MS,
   ZOOM_GESTURE_CHANNEL,
@@ -23,10 +19,11 @@ import {
   type PaneZoom
 } from '@shared/zoom/model.js'
 import { sequenceOfTabId, tabIdForSequence } from '@shared/session/tab-ids.js'
+import { UNSAVED_INPUT_CHANNEL } from '@shared/session/unload-policy.js'
 import { INTERNAL_SCHEME } from '@shared/product.js'
-import { applyWebRtcPolicy } from '../session/hardening.js'
-import { preloadFile, preloadRoleArgument } from '../paths.js'
-import { pageKeystrokeOf, type PageKeystroke } from './page-keys.js'
+import { createTabView } from './tab-view.js'
+import type { DiscardedPage } from './tab-unloader.js'
+import { pageKeystrokeOf } from './page-keys.js'
 import {
   decideTabNavigation,
   pendingNavigationOf,
@@ -45,127 +42,8 @@ import { followInterstitial } from '../privacy/https-exemptions.js'
  * process, own navigation history, own devtools, own audio state.
  */
 
-export interface TabCallbacks {
-  onStateChanged(tab: Tab): void
-  /** Its failure came or went, and with it whether the view is shown; see `view-visibility.ts`. */
-  onFailureChanged(tab: Tab): void
-  /**
-   * The user put the caret or the pointer into this tab's view.
-   *
-   * The only signal the core gets that someone clicked *into* a tile: the click lands on
-   * a native view, so the chrome UI never sees it and cannot report it. Without this, the
-   * active tile only ever changes through a keyboard shortcut or a new tab — which means
-   * the toolbar's back button keeps acting on whatever tile was activated last, not the
-   * one being looked at.
-   */
-  onFocused(tab: Tab): void
-  /**
-   * A page asked for a new tab or window — `window.open`, `target=_blank`, a middle-click.
-   *
-   * `userGesture` is the part that was missing. Every one of these used to become a tab
-   * unconditionally, so a popup on a timer and a link the user middle-clicked were the same event as
-   * far as the core could tell. The flag is `true` only when the *core* saw a real input event in this
-   * view moments before — see `automatic-navigation.ts` for why a renderer's own claim about a gesture
-   * is worth nothing.
-   *
-   * Reported upwards rather than decided here, because the decision needs the settings and, for `ask`,
-   * a dialogue on the window's overlay layer. A tab has neither.
-   *
-   * Returns whether the gesture was **spent** — whether it is what let this popup through. The record it
-   * would be spent from belongs to this view, but only the window knows which rule answered, so the fact
-   * comes back rather than being guessed at here. See `AutomaticNavigationDecision.spendsGesture` for
-   * what one click is and is not allowed to vouch for.
-   */
-  onOpenNewTab(url: string, options: { background: boolean; userGesture: boolean }): boolean
-  /**
-   * The page is about to send *itself* somewhere else, and nothing the user did explains it.
-   *
-   * Called only for the main frame, only across sites, and only when the settings say to gate it — see
-   * `decideAutomaticNavigation`, which holds every one of those conditions and the reasoning for each.
-   * The navigation has already been stopped by the time this runs: answering `true` re-issues it as a
-   * load the core owns, and answering `false` leaves the page where it is.
-   *
-   * A callback rather than a return value because the answer may need a person: with the setting on
-   * `ask` the window puts a prompt on the overlay layer and this resolves when it is answered.
-   */
-  onAutomaticNavigation(tab: Tab, url: string, allow: (permitted: boolean) => void): void
-  onEnterHtmlFullscreen(tab: Tab): void
-  onLeaveHtmlFullscreen(tab: Tab): void
-  onCloseRequested(tab: Tab): void
-  /**
-   * The user right-clicked the page.
-   *
-   * Reported upwards rather than handled here, because the menu's items need things a tab does not have:
-   * the current language, whether the blocker is on, and the ability to open a new tab beside this one.
-   */
-  onContextMenu(tab: Tab, target: PageContextTarget): void
-  /**
-   * The pointer moved inside this tab's view, `y` pixels below its top edge.
-   *
-   * The only source there is for revealing a tile's navigation bar, and it took a wrong comment in
-   * `channels.ts` to notice: a tile is a native view stacked above the chrome renderer, so the chrome's DOM
-   * never sees a pointer over a page — and the overlay layer is hidden until it already has something to show,
-   * so it can report the bar's *departure* and nothing else. Neither renderer can report the approach, ever.
-   */
-  onPointerMoved(tab: Tab, y: number): void
-  /**
-   * A `Ctrl`-wheel, reported by *this* tab's page — and a pinch, which is now dropped.
-   *
-   * The tab it arrives on is the one under the pointer, because that is the view Chromium routes
-   * wheel input to, and for a mouse wheel that is also the tab that zooms.
-   *
-   * A trackpad pinch arrives here too, because Chromium delivers one to the page as a `Ctrl`-wheel —
-   * and it must not be applied, because the engine has already magnified the view itself. The window
-   * decides through `decideZoomTarget`, using `isPinching` to tell the two apart; that function holds
-   * the whole argument.
-   *
-   * Reported rather than applied here for that reason and one more: the step belongs to the ladder in
-   * `gestures/zoom.ts`, which both this and the menu's zoom go through so the two cannot disagree.
-   */
-  onZoomGesture(tab: Tab, direction: ZoomDirection): void
-  /**
-   * A keystroke on its way into this tab's page, reported before the page has it.
-   *
-   * Only two keys are anybody's business up there — `Escape` and, on macOS, `Command+.` — and this is
-   * the only route they have: as menu accelerators they would be claimed globally and taken from every
-   * text field on every page. The window decides what to do with them, because both answers are the
-   * window's (cancel this tab's load, or step down the escalation ladder) and neither is a tab's.
-   *
-   * Reported rather than acted on, and reported *without* the means to consume the key: the handler
-   * that could call `preventDefault` stays in this file and deliberately never does. See
-   * `page-keys.ts` for why the page always keeps the keystroke.
-   */
-  onPageKeystroke(tab: Tab, keystroke: PageKeystroke): void
-}
-
-/**
- * Everything a tab writes into, already bound to one browsing mode.
- *
- * Grouped because they share the property that matters and are never passed apart: each is the write
- * side of a persistent store, resolved *once* per window from that window's mode, and each has a
- * discarding variant a private window gets instead. So "a private window leaves no trace" is a fact
- * about the objects a tab holds rather than a check at every call site — there is no flag in here to
- * forget, and no path from this object to a file on disk.
- *
- * A tab records its own visits, icons and pictures rather than reporting upwards: it is the thing
- * that knows its address, its title and its view, and a round trip through the window would add a hop
- * without adding a decision.
- */
-export interface TabWiring {
-  /** See `HistoryStore.recorderFor`. */
-  history: HistoryRecorder
-  /** See `FaviconStore.cacheFor`. A private window's holds no fetcher, so it makes no request. */
-  favicons: FaviconCache
-  /** See `ThumbnailStore.capturerFor`. A private window's `shouldCapture` is always false. */
-  thumbnails: ThumbnailCapturer
-  /**
-   * How long a page must stay put before it is photographed.
-   *
-   * Read from the store rather than from the constant, so a test that shortens it shortens it
-   * everywhere instead of leaving the wiring on the production value.
-   */
-  thumbnailSettleDelayMs: number
-}
+import type { TabCallbacks, TabWiring } from './tab-contract.js'
+export type { TabCallbacks, TabWiring } from './tab-contract.js'
 
 export interface TabOptions {
   id: string
@@ -216,7 +94,9 @@ export function adoptTabId(id: string): string {
 
 export class Tab {
   readonly id: string
-  readonly view: WebContentsView
+  /** Replaced when a discarded tab comes back (U15); read it fresh rather than keeping it. */
+  #view: WebContentsView
+  readonly #session: Session
 
   #pinned = false
   #ephemeral: boolean
@@ -255,17 +135,30 @@ export class Tab {
   #favicon: { site: string; url: string } | null = null
 
   /**
-   * The address and title of a tab session restore brought back discarded.
+   * The address and title of a tab with nothing loaded, and which of the two ways it got there (KTD9).
    *
-   * Held as one field because they are only ever valid as a pair — the same reason `#favicon` is. Non-null
+   * Held as one field because they are only ever valid together — the same reason `#favicon` is. Non-null
    * means "in the strip, nothing fetched": `toState` reports the saved address and title so the strip is not a
    * row of blanks, and `unloaded: true` so the interface can mark it.
    *
-   * The point is what a restore costs. A window of twenty saved tabs that loaded them all would make twenty
-   * requests nobody asked for, on a connection that may be metered — so only the tabs a *tile* shows load, and
-   * the rest wait until they are activated. See `loadTimingFor`.
+   * `deferred` is session restore's: a window of twenty saved tabs that loaded them all would make twenty
+   * requests nobody asked for, so only the tabs a *tile* shows load and the rest keep an empty view until they
+   * are activated (`loadTimingFor`). `discarded` is tab unloading's: the view is gone, and `revive` builds a new
+   * one whose history `TabDiscards` restores. `muted` is what the new view is put back to.
    */
-  #deferred: { url: string; title: string } | null = null
+  #unloaded: (DiscardedPage & { kind: 'deferred' | 'discarded' }) | null = null
+
+  /** The facts tab unloading reads (U15), each kept by the events below; see `unload-policy.ts`. */
+  #lastActiveAt = Date.now()
+  /** A page's media started since the last commit, playing or paused (AE7). */
+  #media = false
+  /** The preload saw typing that no submit or navigation has taken away. */
+  #unsavedInput = false
+  #htmlFullscreen = false
+  /** The page refused the last discard; it is not asked again until it navigates. */
+  #objected = false
+  /** A discard is in flight: its `close` is not the page asking, its renderer going is no crash. */
+  #unloading = false
 
   /**
    * The pending screenshot, if one is waiting for the page to settle.
@@ -312,74 +205,42 @@ export class Tab {
 
   constructor(options: TabOptions) {
     this.id = options.id
+    this.#session = options.session
     this.getSettings = options.getSettings
     this.callbacks = options.callbacks
     this.#ephemeral = options.ephemeral ?? false
     this.#zoomPercent = options.zoomPercent ?? null
     this.wiring = options.wiring
-
-    const settings = options.getSettings()
-
-    this.view = new WebContentsView({
-      webPreferences: {
-        session: options.session,
-        /*
-          The content bundle, which is the one that has no chrome bridge in it at all.
-
-          A visited page gets no bridge (spec 6); a `tessera://` page gets a narrow allowlist, decided
-          from its own address. Both live in this one file because both are shown in *this* view — a
-          tab starts on the start page and goes wherever the user types, and a preload is fixed when
-          the view is created.
-
-          The role argument is the cross-check rather than the switch: it lets the bundle notice it was
-          handed to a view the core created for the chrome UI. See `preloadFile` in `paths.ts`.
-        */
-        preload: preloadFile('content'),
-        additionalArguments: [preloadRoleArgument('content')],
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        nodeIntegrationInSubFrames: false,
-        webSecurity: true,
-        allowRunningInsecureContent: false,
-        experimentalFeatures: false,
-        /**
-         * The single most important option for split view.
-         *
-         * Chromium throttles timers and rendering in content it considers
-         * backgrounded. In a 2x2 grid, three of four tiles look backgrounded to
-         * Chromium, and their videos would stutter or stall — the exact failure
-         * spec 2 rules out. This turns it off per view; the command-line
-         * switches in `runtime-flags.ts` cover the process-level equivalent.
-         */
-        backgroundThrottling: settings['splitView.throttleInactiveTiles'],
-        /**
-         * The zoom, ahead of the first paint — the only apply point there is before a document has
-         * committed, because `setZoomFactor` acts on the origin a view is on and a view that has
-         * loaded nothing has none. Without it, a session restored at 200 % and every pane on a
-         * profile whose `appearance.defaultZoom` is not 100 would paint wrong and snap, on every
-         * launch. A default only: Chromium's per-origin level wins once one exists, which is why
-         * `did-navigate` re-asserts.
-         */
-        zoomFactor:
-          effectiveZoomPercent(this.#zoomPercent, settings['appearance.defaultZoom']) / 100,
-        spellcheck: settings['advanced.spellcheck'],
-        autoplayPolicy:
-          settings['splitView.autoplayInTiles'] === 'allow'
-            ? 'no-user-gesture-required'
-            : 'user-gesture-required'
-      }
-    })
-
-    applyWebRtcPolicy(this.view.webContents, settings)
-
+    this.#view = this.#createView()
     // The pinch, before the first page. Re-asserted at every commit; see `applyVisualZoomLimits`.
     this.applyVisualZoomLimits()
-    this.#wireEvents()
   }
 
-  #wireEvents(): void {
-    const wc = this.view.webContents
+  get view(): WebContentsView {
+    return this.#view
+  }
+
+  /** The view's contents while it is there; `null` once closed or discarded, so a command does nothing. */
+  get #live(): WebContents | null {
+    const wc = this.#view.webContents
+    return wc.isDestroyed() ? null : wc
+  }
+
+  /**
+   * A view with the whole wiring (KTD9): the one this tab starts with, and the one a discarded tab comes back in.
+   * Built by `createTabView`, so preferences, zoom, spellcheck and the WebRTC policy are those of the first.
+   */
+  #createView(): WebContentsView {
+    const view = createTabView({
+      session: this.#session,
+      settings: this.getSettings(),
+      zoomPercent: this.#zoomPercent
+    })
+    this.#wireEvents(view.webContents)
+    return view
+  }
+
+  #wireEvents(wc: WebContents): void {
     const notify = (): void => this.callbacks.onStateChanged(this)
 
     /**
@@ -403,7 +264,14 @@ export class Tab {
       })
     }
 
-    on('focus', () => this.callbacks.onFocused(this))
+    on('focus', () => {
+      this.#lastActiveAt = Date.now()
+      this.callbacks.onFocused(this)
+    })
+    // Typing nobody has sent yet, as the preload reports it (U15); a tab holding it is not unloaded.
+    on('ipc-message', (...args: unknown[]) => {
+      if (args[1] === UNSAVED_INPUT_CHANNEL) this.#unsavedInput = args[2] === true
+    })
 
     /*
       Zoom by pinch or by `Ctrl`-wheel, as the page's own preload read it.
@@ -555,6 +423,9 @@ export class Tab {
         on the page around it.
       */
       this.#lastGestureAt = null
+      // A new document: nothing typed, nothing played, no refusal — and the tab was in use (U15).
+      this.#lastActiveAt = Date.now()
+      this.#unsavedInput = this.#media = this.#objected = false
       // Read once and kept. Three of the lines below want it, and the blocker wants it once per
       // refused request until the next commit — see `#currentUrl`.
       this.#currentUrl = wc.getURL()
@@ -649,18 +520,32 @@ export class Tab {
       })
     })
     on('audio-state-changed', notify)
-    on('media-started-playing', notify)
-    on('media-paused', notify)
-    this.#failure = watchTabFailure({ webContentsId: wc.id, on, url: () => wc.getURL() }, () => {
+    // Paused counts as much as playing: a paused video that is unloaded starts over (AE7).
+    const noteMedia = (): void => {
+      this.#media = true
       notify()
-      this.callbacks.onFailureChanged(this)
-    })
+    }
+    on('media-started-playing', noteMedia)
+    on('media-paused', noteMedia)
+    this.#failure = watchTabFailure(
+      { webContentsId: wc.id, on, url: () => wc.getURL(), unloading: () => this.#unloading },
+      () => {
+        notify()
+        this.callbacks.onFailureChanged(this)
+      }
+    )
     on('destroyed', notify)
 
     // Fullscreen requests from the page. The window-level suppression that
     // keeps this inside the tile lives in `BrowserWindowController`.
-    on('enter-html-full-screen', () => this.callbacks.onEnterHtmlFullscreen(this))
-    on('leave-html-full-screen', () => this.callbacks.onLeaveHtmlFullscreen(this))
+    on('enter-html-full-screen', () => {
+      this.#htmlFullscreen = true
+      this.callbacks.onEnterHtmlFullscreen(this)
+    })
+    on('leave-html-full-screen', () => {
+      this.#htmlFullscreen = false
+      this.callbacks.onLeaveHtmlFullscreen(this)
+    })
 
     /*
       Navigation to an internal address that this browser did not start. The decision is in
@@ -770,9 +655,11 @@ export class Tab {
       return { action: 'deny' }
     })
 
-    // A page calling window.close() should close its tab, not silently do
-    // nothing.
-    on('close', () => this.callbacks.onCloseRequested(this))
+    // A page calling window.close() should close its tab, not silently do nothing. A discard closes the
+    // page too, and Electron reports that the same way — which must not close the tab (U15).
+    on('close', () => {
+      if (!this.#unloading) this.callbacks.onCloseRequested(this)
+    })
   }
 
   // --- geometry ------------------------------------------------------------
@@ -801,29 +688,29 @@ export class Tab {
 
   loadUrl(url: string): void {
     this.#pendingInput = url
-    void this.view.webContents.loadURL(url).catch(() => {
+    void this.#live?.loadURL(url).catch(() => {
       // Load failures surface through `did-fail-load` and the error page; a
       // rejected promise here is not additionally interesting.
     })
   }
 
   goBack(): void {
-    const history = this.view.webContents.navigationHistory
-    if (history.canGoBack()) history.goBack()
+    const history = this.#live?.navigationHistory
+    if (history?.canGoBack() === true) history.goBack()
   }
 
   goForward(): void {
-    const history = this.view.webContents.navigationHistory
-    if (history.canGoForward()) history.goForward()
+    const history = this.#live?.navigationHistory
+    if (history?.canGoForward() === true) history.goForward()
   }
 
   reload(ignoreCache: boolean): void {
-    if (ignoreCache) this.view.webContents.reloadIgnoringCache()
-    else this.view.webContents.reload()
+    if (ignoreCache) this.#live?.reloadIgnoringCache()
+    else this.#live?.reload()
   }
 
   stop(): void {
-    this.view.webContents.stop()
+    this.#live?.stop()
   }
 
   /**
@@ -834,8 +721,7 @@ export class Tab {
    * — that is the whole question `stop` turns on.
    */
   get loading(): boolean {
-    const wc = this.view.webContents
-    return !wc.isDestroyed() && wc.isLoading()
+    return this.#live?.isLoading() === true
   }
 
   /**
@@ -850,20 +736,20 @@ export class Tab {
   }
 
   toggleDevTools(): void {
-    const wc = this.view.webContents
-    if (wc.isDevToolsOpened()) wc.closeDevTools()
-    else wc.openDevTools({ mode: 'bottom' })
+    const wc = this.#live
+    if (wc?.isDevToolsOpened() === true) wc.closeDevTools()
+    else wc?.openDevTools({ mode: 'bottom' })
   }
 
   // --- audio ---------------------------------------------------------------
 
   setMuted(muted: boolean): void {
-    this.view.webContents.setAudioMuted(muted)
+    this.#live?.setAudioMuted(muted)
     this.callbacks.onStateChanged(this)
   }
 
   get muted(): boolean {
-    return this.view.webContents.isAudioMuted()
+    return this.#live?.isAudioMuted() === true
   }
 
   // --- zoom ----------------------------------------------------------------
@@ -965,6 +851,8 @@ export class Tab {
 
   setTileIndex(index: number | null): void {
     this.#tileIndex = index
+    // Joining or leaving a tile is being looked at, so an idle tab's clock starts when it leaves one.
+    this.#lastActiveAt = Date.now()
     this.callbacks.onStateChanged(this)
   }
 
@@ -1010,18 +898,77 @@ export class Tab {
 
   /** Brings a tab back in the strip without fetching anything. Session restore only. */
   deferLoad(deferred: { url: string; title: string }): void {
-    this.#deferred = deferred
+    this.#unloaded = { kind: 'deferred', ...deferred, muted: false }
     this.callbacks.onStateChanged(this)
   }
 
-  /** Loads a discarded tab, once. A no-op for a tab that already has content. */
+  /** Loads a tab restored deferred, once, into the view it has. A no-op for any other tab. */
   loadIfDeferred(): void {
-    const deferred = this.#deferred
-    if (deferred === null) return
+    const deferred = this.#unloaded
+    if (deferred?.kind !== 'deferred') return
     // Cleared first: `loadUrl` triggers state changes, and a `toState` during them must already report the
     // real address rather than the saved one.
-    this.#deferred = null
+    this.#unloaded = null
     this.loadUrl(deferred.url)
+  }
+
+  // --- unloading (U15) -----------------------------------------------------
+
+  get lastActiveAt(): number {
+    return this.#lastActiveAt
+  }
+
+  get hasMedia(): boolean {
+    return this.#media
+  }
+
+  get unsavedInput(): boolean {
+    return this.#unsavedInput
+  }
+
+  get htmlFullscreen(): boolean {
+    return this.#htmlFullscreen
+  }
+
+  get objected(): boolean {
+    return this.#objected
+  }
+
+  /** Nothing loaded, either way; the view rule hides the view (KTD22). */
+  get unloaded(): boolean {
+    return this.#unloaded !== null
+  }
+
+  markActive(): void {
+    this.#lastActiveAt = Date.now()
+  }
+
+  beginDiscard(): void {
+    this.#unloading = true
+  }
+
+  /** The discard settled: the view went and `page` is what the strip keeps, or the page kept it (`null`). */
+  endDiscard(page: DiscardedPage | null): void {
+    this.#unloading = false
+    if (page === null) {
+      this.#objected = true
+      return
+    }
+    this.#release()
+    this.#unloaded = { kind: 'discarded', ...page }
+    this.callbacks.onStateChanged(this)
+  }
+
+  /** A discarded tab's new view, wired as the first was; `TabDiscards` attaches it and restores the history. */
+  revive(): void {
+    const discarded = this.#unloaded
+    this.#unloaded = null
+    this.#view = this.#createView()
+    this.applyVisualZoomLimits()
+    if (discarded?.muted === true) this.#view.webContents.setAudioMuted(true)
+    // The address bar shows where the tab is going while the history comes back.
+    this.#pendingInput = discarded?.url ?? null
+    this.callbacks.onStateChanged(this)
   }
 
   /** Milliseconds since the core last saw real input in this view, or `null` if it never has. */
@@ -1096,9 +1043,9 @@ export class Tab {
 
     return {
       id: this.id,
-      url: this.#deferred?.url ?? (destroyed ? '' : wc.getURL()),
+      url: this.#unloaded?.url ?? (destroyed ? '' : wc.getURL()),
       pendingInput: this.#pendingInput,
-      title: this.#deferred?.title ?? (destroyed ? '' : wc.getTitle()),
+      title: this.#unloaded?.title ?? (destroyed ? '' : wc.getTitle()),
       faviconUrl: this.#favicon?.url ?? null,
       loading: this.loading,
       canGoBack: history?.canGoBack() ?? false,
@@ -1113,18 +1060,21 @@ export class Tab {
       // off Chromium, so a destroyed view no longer comes into it. See `PaneZoom`.
       zoomPercent: this.#zoomPercent,
       tileIndex: this.#tileIndex,
-      unloaded: this.#deferred !== null,
+      unloaded: this.#unloaded !== null,
       failure: this.failure
     }
   }
 
   destroy(): void {
+    this.#release()
+    this.#live?.close()
+  }
+
+  /** Lets go of the view: a closed tab's, or a discarded one's. */
+  #release(): void {
     // Before the disposers, because a timer that survives a closed tab fires into a destroyed view.
     this.#cancelCapture()
     for (const dispose of this.#disposers) dispose()
     this.#disposers = []
-    if (!this.view.webContents.isDestroyed()) {
-      this.view.webContents.close()
-    }
   }
 }

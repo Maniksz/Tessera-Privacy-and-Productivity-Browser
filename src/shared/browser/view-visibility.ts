@@ -5,7 +5,7 @@ import type { TabFailure } from './tab-failure.js'
  * Whether a tab's view is shown, and where (KTD22).
  *
  * One rule, because `relayout` sets every view's visibility again on every layout change: a view hidden
- * anywhere else — for a failure today, for an unloaded tab and a tile header later (U15, U20) — would
+ * anywhere else — for a failure, for an unloaded tab, and for a tile header later (U20) — would
  * come back at the next resize. `relayout` asks this and nothing else, and the chrome UI asks the same
  * function where to draw what replaces the view, so the two cannot disagree about the rectangle.
  *
@@ -14,6 +14,8 @@ import type { TabFailure } from './tab-failure.js'
 
 export interface ViewSubject {
   readonly failure?: TabFailure | undefined
+  /** Nothing loaded (U15): a discarded tab's view is gone, and a deferred one's is empty. */
+  readonly unloaded?: boolean
 }
 
 export interface ViewPlacement {
@@ -29,7 +31,7 @@ export function placeView(
 ): ViewPlacement & { showsFailure: boolean } {
   if (rect === null) return { visible: false, rect: null, showsFailure: false }
   const failed = subject.failure !== undefined
-  return { visible: !failed, rect, showsFailure: failed }
+  return { visible: !failed && subject.unloaded !== true, rect, showsFailure: failed }
 }
 
 /**

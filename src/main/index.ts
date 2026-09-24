@@ -24,6 +24,7 @@ import { WindowRegistry } from './browser/WindowRegistry.js'
 import { registerIpcHandlers } from './ipc/handlers.js'
 import { installApplicationMenu } from './menu/appMenu.js'
 import { installMenuActions } from './menu/menu-actions.js'
+import { installTabUnloading } from './browser/tab-unloader.js'
 import { applyRuntimeFlags } from './runtime-flags.js'
 import {
   ExternalAddressInbox,
@@ -847,14 +848,9 @@ async function main(): Promise<void> {
     */
     hostFor: (webContentsId) => {
       const controller = windows?.controllerForWebContents(webContentsId)
-      if (controller === undefined) return null
-      const tab = controller.tabs.find(
-        (candidate) =>
-          !candidate.view.webContents.isDestroyed() &&
-          candidate.view.webContents.id === webContentsId
-      )
+      const tab = controller?.tabForWebContents(webContentsId)
       const tileIndex = tab?.tileIndex
-      if (tab === undefined || tileIndex === null || tileIndex === undefined) return null
+      if (controller === undefined || tab === undefined || tileIndex == null) return null
       return {
         windowId: controller.window.id,
         tabId: tab.id,
@@ -1066,6 +1062,9 @@ async function main(): Promise<void> {
     path: inventoryPath
   })
   flushOnExit.push(() => actions.whenIdle(), 'panic')
+  // One timer for the program unloads idle tabs (U15); which tab may go is `unload-policy.ts`'s to say.
+  const waiting = [autofill.service, permissionArbiter, elementPicker]
+  installTabUnloading({ windows: () => windows?.controllers ?? [], settings, waiting, quitting })
   const menu = { windows, settings, actions, autofill, checkForUpdates: () => updates.checkNow() }
   const installMenu = (): void =>
     installApplicationMenu({ ...menu, locale: uiLocale(settings), platform: currentPlatform() })

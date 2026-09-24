@@ -666,6 +666,11 @@ export class AutofillService {
     return this.#pending.has(viewId)
   }
 
+  /** A save bar or a chrome fill request is waiting on this view. Tab unloading keeps such a tab (U15). */
+  waitsOn(viewId: number): boolean {
+    return this.#pending.has(viewId) || this.#openRequest.has(viewId)
+  }
+
   #prompt(view: AutofillView): void {
     const pending = this.#pending.get(view.id)
     if (pending === undefined || pending.promptsLeft <= 0) return

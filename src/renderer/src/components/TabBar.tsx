@@ -227,12 +227,19 @@ export function TabBar({
               role="tab"
               tabIndex={isActive ? 0 : -1}
               aria-selected={isActive}
-              title={`${tab.title || t('tab.untitled')}\n${tileLabel}`}
+              title={[
+                tab.title || t('tab.untitled'),
+                tileLabel,
+                tab.unloaded ? t('tab.unloaded') : ''
+              ]
+                .filter(Boolean)
+                .join('\n')}
               className={[
                 'tab',
                 isActive ? 'tab--active' : '',
                 tab.pinned ? 'tab--pinned' : '',
                 tab.tileIndex === null ? 'tab--unassigned' : '',
+                tab.unloaded ? 'tab--unloaded' : '',
                 drag.draggingId === tab.id ? 'tab--dragging' : '',
                 drag.draggingId !== null && drag.reorderIndex === index ? 'tab--dropbefore' : '',
                 item.group === null ? '' : 'tab--grouped',

@@ -38,7 +38,8 @@ function built(name: string): string | null {
 }
 
 const CALL_SITES = [
-  { file: 'src/main/browser/Tab.ts', role: 'content' },
+  // Every tab's view, the first and a discarded tab's new one alike, is built in `tab-view.ts` (U15).
+  { file: 'src/main/browser/tab-view.ts', role: 'content' },
   { file: 'src/main/browser/OverlayLayer.ts', role: 'chrome' },
   { file: 'src/main/browser/BrowserWindowController.ts', role: 'chrome' }
 ] as const

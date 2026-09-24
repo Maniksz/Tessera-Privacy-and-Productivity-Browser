@@ -121,6 +121,7 @@ export const en = {
   'tab.openInTile': 'Open in tile {index}',
   'tab.inTile': 'In tile {index}',
   'tab.unassigned': 'Not shown in any tile',
+  'tab.unloaded': 'Unloaded to save memory; loads again when opened',
 
   // tab groups
   /** What an unnamed group is called when it needs a name — in a label, never on screen. */

@@ -252,3 +252,26 @@ describe("a tab's icon", () => {
     expect(icon?.getAttribute('draggable')).toBe('false')
   })
 })
+
+describe('an unloaded tab in the strip (U15)', () => {
+  it('is drawn dimmed and says why, a loaded one is not', () => {
+    installBridge()
+    renderBar([tab('t1'), tab('t2', { unloaded: true })], [])
+    const loaded = document.querySelector('[data-tab-id="t1"]')
+    const unloaded = document.querySelector('[data-tab-id="t2"]')
+    expect(loaded?.className).not.toContain('tab--unloaded')
+    expect(unloaded?.className).toContain('tab--unloaded')
+    expect(unloaded?.getAttribute('title')).toMatch(/Unloaded/)
+    expect(loaded?.getAttribute('title')).not.toMatch(/Unloaded/)
+  })
+
+  it('keeps an unloaded member of a folded group counted on its chip', () => {
+    installBridge()
+    renderBar(
+      [tab('t1'), tab('t2', { unloaded: true })],
+      [group({ id: 'g1', tabIds: ['t2'], name: 'Later', collapsed: true })]
+    )
+    expect(document.querySelector('[data-tab-id="t2"]')).toBeNull()
+    expect(screen.getByRole('button', { name: /Expand group Later/i }).textContent).toContain('1')
+  })
+})

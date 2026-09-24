@@ -433,12 +433,9 @@ export const de: SettingTextTable = {
     unloadInactiveTabs: {
       label: 'Ungenutzte Tabs entladen',
       description:
-        'Würde den Speicher eines ruhenden Tabs freigeben und ihn bei der Rückkehr neu laden. Nicht umgesetzt: Kein Tab wird je nach Zeit entladen.'
+        'Gibt den Speicher eines Tabs frei, der die Zeit darunter unbenutzt war; beim Öffnen kommt er mit seinem Verlauf zurück. Tabs in einer Kachel, angeheftete, solche mit Ton oder pausiertem Video und solche mit ungesendeten Eingaben bleiben geladen.'
     },
-    unloadAfterMinutes: {
-      label: 'Entladen nach (Minuten)',
-      description: 'Der Zeitgeber für die Einstellung darüber, den nichts ausführt.'
-    },
+    unloadAfterMinutes: { label: 'Entladen nach (Minuten)' },
     customShortcuts: {
       label: 'Eigene Tastenkürzel',
       description:

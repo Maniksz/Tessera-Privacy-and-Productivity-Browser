@@ -50,6 +50,8 @@ import { planViews } from '@shared/browser/view-visibility.js'
 import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
 import { CloseTabFallback, pageKeyAction, type PageKeystroke } from './page-keys.js'
 import { CloseContract, askToLeave, hostOf, preventDefaultOf } from './unload-guard.js'
+import { TabDiscards } from './tab-unloader.js'
+import { PermissionTabs } from './permission-tabs.js'
 import { loadAfterProxyRule } from '../session/proxy.js'
 
 /**
@@ -159,6 +161,8 @@ export class BrowserWindowController implements PermissionHost {
   readonly #navigationPrompt: AutomaticNavigationPrompt
   /** What closing a tab or this window asks first, and what it never asks (KTD5); see `unload-guard.ts`. */
   readonly #close: CloseContract
+  /** This window's unloaded tabs: the discard, and the new view on activation (U15); see `tab-unloader.ts`. */
+  readonly #discards: TabDiscards<Tab>
   /**
    * The second route to `closeTab`, for the state in which the menu accelerator stops arriving.
    *
@@ -177,21 +181,8 @@ export class BrowserWindowController implements PermissionHost {
   #disposers: Array<() => void> = []
   /** See `downloadsPanelPresentedAt`. */
   #downloadsPanelPresentedAt: number | null = null
-  /**
-   * Whoever waits on this window's tabs to answer a permission question: the arbiter, while it has
-   * something queued here. See `onPermissionTabChange`.
-   */
-  readonly #permissionListeners = new Set<(change: PermissionTabChange) => void>()
-  /**
-   * What the permission listeners were last told about each tab.
-   *
-   * The `webContents` id is read once, when the tab is made, because it is needed again when the tab
-   * closes — and a view that is being torn down is the one thing whose id may no longer be readable.
-   * A `WeakMap`, so a closed tab takes its entry with it.
-   */
-  readonly #permissionTabs = new WeakMap<Tab, { readonly webContentsId: number; url: string }>()
-  /** The tab in front as the permission listeners last heard it; see `#reportActiveTab`. */
-  #reportedActiveWebContentsId: number | null = null
+  /** What the permission listeners were last told about each tab, and the telling; see `permission-tabs.ts`. */
+  readonly #permissionTabs = new PermissionTabs<Tab>()
 
   private readonly getSettings: () => SettingsSnapshot
   private readonly options: WindowControllerOptions
@@ -299,6 +290,18 @@ export class BrowserWindowController implements PermissionHost {
         askToLeave(this.window, prompt, this.getSettings()['appearance.uiLanguage']),
       finish: (tabId, closed) => this.#finishClose(tabId, closed),
       closeWindow: () => this.window.close()
+    })
+    this.#discards = new TabDiscards<Tab>({
+      tab: (tabId) => this.#tabs.get(tabId),
+      contract: this.#close,
+      contentView: this.window.contentView,
+      groups: this.#seams.groups,
+      // A restored view asks for permissions under its new id, and the dialogue has to know it (KTD9). Laid
+      // out at once: a tab activated while its discard was still settling comes back outside any relayout.
+      onViewReplaced: (tab, _oldId, newId) => {
+        this.#permissionTabs.replaced(tab, newId)
+        this.relayout()
+      }
     })
 
     /*
@@ -461,8 +464,7 @@ export class BrowserWindowController implements PermissionHost {
         only the prompt it shows, so without this a question waiting in a background tab would be left
         pending on a window that no longer exists.
       */
-      this.#tellPermissionListeners({ kind: 'gone' })
-      this.#permissionListeners.clear()
+      this.#permissionTabs.gone()
       for (const dispose of this.#disposers) dispose()
       this.#disposers = []
       // A timer outliving the window it would act on is the same class of leak the disposers above
@@ -536,7 +538,7 @@ export class BrowserWindowController implements PermissionHost {
       ...(options.zoomPercent === undefined ? {} : { zoomPercent: options.zoomPercent }),
       callbacks: {
         onStateChanged: (source) => {
-          this.#reportNavigation(source)
+          this.#permissionTabs.navigated(source, source.currentUrl)
           this.#scheduleBroadcast()
         },
         /*
@@ -628,7 +630,7 @@ export class BrowserWindowController implements PermissionHost {
     })
 
     this.#tabs.set(tab.id, tab)
-    this.#permissionTabs.set(tab, { webContentsId: tab.view.webContents.id, url: tab.currentUrl })
+    this.#permissionTabs.add(tab, tab.view.webContents.id, tab.currentUrl)
     this.#close.track(tab.id)
     this.#tabOrder.push(tab.id)
     // Index 0: the bottom of the child stack, so the overlay stays above every tab whenever it was
@@ -692,11 +694,9 @@ export class BrowserWindowController implements PermissionHost {
     this.#tabs.delete(tabId)
     this.window.contentView.removeChildView(tab.view)
     tab.destroy()
+    this.#discards.forget(tabId)
     // After the tab has left `#tabs` and the split, so the arbiter, reacting, cannot find it in front.
-    const permissionTab = this.#permissionTabs.get(tab)
-    if (permissionTab !== undefined) {
-      this.#tellPermissionListeners({ kind: 'closed', webContentsId: permissionTab.webContentsId })
-    }
+    this.#permissionTabs.closed(tab)
 
     this.#seams.occupancy.afterTabClosed(vacatedTile)
 
@@ -730,8 +730,8 @@ export class BrowserWindowController implements PermissionHost {
 
   activateTab(tabId: string): void {
     if (!this.#tabs.has(tabId)) return
-    // Activating a discarded tab is what finally fetches it; see `Tab.#deferred`.
-    this.#tabs.get(tabId)?.loadIfDeferred()
+    // Activating an unloaded tab is what brings it back, out of a folded group too (U15, `TabDiscards.wake`).
+    this.#discards.wake(tabId)
     const tile = this.split.tileOfTab(tabId)
     if (tile !== null) {
       this.split.setActiveTile(tile)
@@ -789,6 +789,11 @@ export class BrowserWindowController implements PermissionHost {
     return this.#tabs.get(tabId)
   }
 
+  /** Unloads a tab the one timer picked (U15). Nothing happens if its page objects. */
+  discardTab(tabId: string): void {
+    this.#discards.discard(tabId)
+  }
+
   /**
    * Every tab this window holds, in no particular order.
    *
@@ -834,9 +839,7 @@ export class BrowserWindowController implements PermissionHost {
    * that one active — so a question from a visible tile comes up the moment the user turns to it.
    */
   activeTabWebContentsId(): number | null {
-    const tab = this.activeTab()
-    if (tab === undefined) return null
-    return this.#permissionTabs.get(tab)?.webContentsId ?? null
+    return this.#permissionTabs.idOf(this.activeTab())
   }
 
   /**
@@ -848,57 +851,7 @@ export class BrowserWindowController implements PermissionHost {
    * ever grows. The window's own teardown clears the set as well, in `#wireLifecycle`.
    */
   onPermissionTabChange(listener: (change: PermissionTabChange) => void): () => void {
-    this.#permissionListeners.add(listener)
-    return () => {
-      this.#permissionListeners.delete(listener)
-    }
-  }
-
-  /**
-   * Guarded per listener, as `notifyOverlayVacancy` is: this runs inside `closeTab` and the window's
-   * teardown, and a listener that threw must not leave a tab half closed.
-   */
-  #tellPermissionListeners(change: PermissionTabChange): void {
-    for (const listener of [...this.#permissionListeners]) {
-      try {
-        listener(change)
-      } catch (error) {
-        console.error('[permissions] a tab listener threw:', error)
-      }
-    }
-  }
-
-  /**
-   * A tab's committed address, reported when it changes and not otherwise.
-   *
-   * `onStateChanged` fires for a title, a favicon or a load starting as well, and `currentUrl` moves
-   * only on a commit — so comparing with what was last reported turns the one callback into a
-   * navigation event without reaching into `Tab`'s own subscriptions.
-   */
-  #reportNavigation(tab: Tab): void {
-    const reported = this.#permissionTabs.get(tab)
-    if (reported === undefined || reported.url === tab.currentUrl) return
-    reported.url = tab.currentUrl
-    this.#tellPermissionListeners({
-      kind: 'navigated',
-      webContentsId: reported.webContentsId,
-      url: tab.currentUrl
-    })
-  }
-
-  /**
-   * Tells the listeners the tab in front changed, once per change.
-   *
-   * From the broadcast round rather than from every place that moves the active tile — tab
-   * activation, tile focus, layouts, closing, groups folding — because that round is where every one
-   * of them already arrives, for the same reason the tab strip is told there: the list of causes has
-   * grown before and hooking each is how one gets missed.
-   */
-  #reportActiveTab(): void {
-    const active = this.activeTabWebContentsId()
-    if (active === this.#reportedActiveWebContentsId) return
-    this.#reportedActiveWebContentsId = active
-    this.#tellPermissionListeners({ kind: 'activated' })
+    return this.#permissionTabs.subscribe(listener)
   }
 
   // --- navigation ----------------------------------------------------------
@@ -1026,8 +979,8 @@ export class BrowserWindowController implements PermissionHost {
     }
     this.split.assignTab(tabId, tileIndex)
     this.#tabs.get(tabId)?.setTileIndex(tileIndex)
-    // A tile must show something, so a discarded tab dragged into one loads now.
-    if (tileIndex !== null) this.#tabs.get(tabId)?.loadIfDeferred()
+    // A tile must show something, so an unloaded tab dragged into one comes back now.
+    if (tileIndex !== null) this.#discards.wake(tabId)
     this.relayout()
     this.#scheduleBroadcast()
   }
@@ -1424,7 +1377,7 @@ export class BrowserWindowController implements PermissionHost {
         .map((tab) => tab.toState())
       this.emit('tabs:changed', { tabs, activeTabId: this.split.activeTabId() })
       // The same tick the strip learns which tab is active, a waiting permission question does too.
-      this.#reportActiveTab()
+      this.#permissionTabs.activated(this.activeTabWebContentsId())
       /*
         An open tile bar reads the tab again, from the same tick the strip does.
 

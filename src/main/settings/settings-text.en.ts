@@ -460,12 +460,9 @@ export const en = {
     unloadInactiveTabs: {
       label: 'Unload tabs you have not used',
       description:
-        'Would free a sleeping tab’s memory and reload it when you return to it. Not implemented: no tab is ever unloaded on a timer.'
+        'Frees the memory of a tab left alone for the time below; it comes back with its history when you open it. Tabs in a tile, pinned tabs, tabs with sound or a paused video and tabs with unsent typing stay loaded.'
     },
-    unloadAfterMinutes: {
-      label: 'Unload after (minutes)',
-      description: 'The timer for the setting above, which nothing runs yet.'
-    },
+    unloadAfterMinutes: { label: 'Unload after (minutes)' },
     customShortcuts: {
       label: 'Custom keyboard shortcuts',
       description:

@@ -238,6 +238,21 @@ describe('view visibility (KTD22)', () => {
     })
   })
 
+  it('hides an unloaded tab, whose view is gone until it comes back (U15)', () => {
+    expect(placeView(rect, { unloaded: true })).toEqual({
+      visible: false,
+      rect,
+      showsFailure: false
+    })
+    const plan = planViews([{ tabId: 'a', rect }], new Map([['a', { unloaded: true }]]))
+    expect(plan.get('a')).toEqual({ visible: false, rect })
+    expect(placeView(rect, { unloaded: false })).toEqual({
+      visible: true,
+      rect,
+      showsFailure: false
+    })
+  })
+
   it('shows nothing for a tab without a tile', () => {
     expect(placeView(null, { failure: crashed })).toEqual({
       visible: false,

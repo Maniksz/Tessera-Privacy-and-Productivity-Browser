@@ -684,6 +684,11 @@ export class ElementPicker {
 
   // --- plumbing --------------------------------------------------------------
 
+  /** A picking session runs in this view. Tab unloading keeps such a tab (U15). */
+  waitsOn(webContentsId: number): boolean {
+    return this.#liveIn(webContentsId) !== null
+  }
+
   /** The session, if there is a live one and it is this view's. The whole of the privilege check. */
   #liveIn(webContentsId: number): PickerSession | null {
     const session = this.#session

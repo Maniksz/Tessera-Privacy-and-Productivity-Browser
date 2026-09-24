@@ -319,6 +319,14 @@ export class PermissionArbiter {
     return this.#queues.get(host)?.prompts.length ?? 0
   }
 
+  /** Whether a question from this tab is waiting or on screen. Tab unloading keeps such a tab (U15). */
+  waitsOn(webContentsId: number): boolean {
+    for (const queue of this.#queues.values()) {
+      if (queue.prompts.some((prompt) => prompt.webContentsId === webContentsId)) return true
+    }
+    return false
+  }
+
   // --- internals -----------------------------------------------------------
 
   #enqueue(

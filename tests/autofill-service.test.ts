@@ -731,6 +731,14 @@ describe('a submitted credential, and whether the browser offers to remember it'
     expect(service.hasPendingSave(VIEW_ID)).toBe(true)
   })
 
+  it('keeps a view with a save bar waiting from being unloaded, and no other (U15)', () => {
+    const { service, view } = harness()
+    expect(service.waitsOn(VIEW_ID)).toBe(false)
+    service.reportSubmission(view, frame(), reportPayload())
+    expect(service.waitsOn(VIEW_ID)).toBe(true)
+    expect(service.waitsOn(VIEW_ID + 1)).toBe(false)
+  })
+
   it('names the account on the bar and puts the password nowhere in it', () => {
     // The bar has to say whose password it is about; it must not carry the password itself, because
     // the payload crosses into the page's own document to be drawn there.

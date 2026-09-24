@@ -26,6 +26,7 @@ import { installElementPicker } from './picker.js'
 import { installAutofill } from './autofill.js'
 import { installZoomGesture } from './zoom.js'
 import { installSwipeNavigation } from './swipe.js'
+import { installUnsavedInput } from './unsaved-input.js'
 
 /**
  * The preload for tab views: everything a *document* gets, and nothing the browser's own interface
@@ -274,6 +275,8 @@ if (role === 'content' && internalPage === null) {
     rule and the attack each one prevents.
   */
   installAutofill()
+  // Typing nobody has sent yet keeps the tab loaded (U15). One listener, one message when it starts.
+  installUnsavedInput()
 }
 
 export {}

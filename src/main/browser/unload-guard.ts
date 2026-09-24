@@ -4,6 +4,7 @@ import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { menuLabel } from '../menu/menu-text.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
 import type { After } from '../shutdown.js'
+import { unfoldGroupOf } from './tab-unloader.js'
 
 /**
  * The close contract (KTD5): which ways out of a page ask the page first, and what follows either answer.
@@ -342,9 +343,7 @@ export class CloseContract {
 
   /** Brings the asking tab to the front before the question, unfolding its group if it is folded away. */
   #reveal(tabId: string): void {
-    const groups = this.#host.groups
-    const folded = groups.groups().find((group) => group.collapsed && group.tabIds.includes(tabId))
-    if (folded !== undefined) groups.setCollapsed(folded.id, false)
+    unfoldGroupOf(this.#host.groups, tabId)
     this.#host.activateTab(tabId)
   }
 

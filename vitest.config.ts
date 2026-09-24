@@ -426,6 +426,24 @@ export default defineConfig({
           statements: 100
         },
         /*
+          Tab unloading carried out (U15, KTD9): the one timer, the discard and the way back, and the book
+          through which a restored view's new id still reaches its permission dialogue. The rule itself is
+          `shared/session/unload-policy.ts`, held by `session/**` above. A branch missed here is a tab that
+          loses its page, or one that comes back blank.
+        */
+        'src/main/browser/tab-unloader.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/browser/permission-tabs.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           Which window an IPC call acts for, carved out of `WindowRegistry.ts` so it could be measured.
 
           The registry is excluded as Electron-bound, and this decision in it was wrong for as long as

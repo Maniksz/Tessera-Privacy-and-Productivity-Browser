@@ -81,6 +81,7 @@ export const de = {
   'tab.openInTile': 'In Kachel {index} öffnen',
   'tab.inTile': 'In Kachel {index}',
   'tab.unassigned': 'In keiner Kachel sichtbar',
+  'tab.unloaded': 'Entladen, um Speicher zu sparen; lädt beim Öffnen neu',
 
   'tabgroup.unnamed': 'Unbenannte Gruppe',
   'tabgroup.collapse': 'Gruppe {name} einklappen',

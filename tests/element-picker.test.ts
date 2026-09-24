@@ -379,6 +379,9 @@ describe('starting, and refusing to', () => {
     expect(start.hint).toBe('hint')
     expect(start.sessionId).not.toBe('')
     expect(harness.window.bar()?.mode).toBe('showing')
+    // A view somebody is picking in is not unloaded under them (U15); another view is not held.
+    expect(harness.picker.waitsOn(harness.view.id)).toBe(true)
+    expect(harness.picker.waitsOn(harness.view.id + 1)).toBe(false)
   })
 
   it('starts nothing on a file: document and says so on the bar', () => {

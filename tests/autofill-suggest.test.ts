@@ -294,6 +294,8 @@ describe('pressing the badge puts the picker on the overlay layer', () => {
 
     expect(service.hasChromeRequest(VIEW_ID)).toBe(true)
     expect(suggest.requestFor(VIEW_ID)).toBe('suggest-1')
+    // A fill request open on a view keeps its tab loaded (U15).
+    expect(service.waitsOn(VIEW_ID)).toBe(true)
   })
 
   it('opens no request behind a notice, because a notice has nothing to choose', () => {

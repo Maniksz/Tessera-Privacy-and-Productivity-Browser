@@ -1308,6 +1308,7 @@ belegt**; kein Agent startet die App. Was dort zu prüfen ist, steht in der Tabe
 | U5 | README, STATUS, TESTING und die Beschreibung von `appearance.theme` auf dem echten Stand | ✅ | dieser Stand |
 | U7, U8 | About-Seite und HTTPS-only-Zwischenseite | ⬜ | in Arbeit |
 | U14 | Autofill U4 bis U7: Badge im Feld statt Liste in der Seite, Füllen per Einmal-Beleg, Wächter über die echte Verdrahtung (`tests/autofill-wiring.test.ts`, `passwords.feature`), Schlüssel in der Toolbar, `Strg+Shift+K` mit Menüeintrag und Eintrag im Seiten-Kontextmenü. `decideOffer` und die Liste in der Seite aus `fe33648` sind entfernt | ✅ | dieser Stand |
+| U15 | Tab-Entladen: ein Timer für die ganze App (einmal pro Minute) entlädt Tabs, die `advanced.unloadAfterMinutes` lang unbenutzt waren (Standard an, 30 Minuten). Die Regel ist pur (`shared/session/unload-policy.ts`, Floor 100 %): Kachel, Ton, laufende oder pausierte Medien, angeheftet, lädt, DevTools, Vollbild, wartende Frage (Picker, Berechtigung, Popup/Umleitung, Speicherleiste, Ausfüllanfrage), ungesendete Eingabe (neuer Preload-Kanal `tessera:unsaved-input`), interne Seite, Fehlerzustand und eine Seite, die zuletzt widersprach, halten den Tab. Entladen geht über den Schließ-Vertrag im Modus `discard` (nie ein Dialog, nie `finish`); der Verlauf liegt nur im Speicher (`TabDiscards`), nie in `TabState` oder der Sitzung. Beim Aktivieren oder Ziehen in eine Kachel: neue View an Index 0 mit derselben Verdrahtung, `navigationHistory.restore()` am alten Index, eingeklappte Gruppe klappt auf, `onViewReplaced` meldet die neue ID an die Berechtigungen. Der Tab-Streifen zeigt entladene Tabs gedimmt. `tab-view.ts`, `tab-contract.ts` und `permission-tabs.ts` gleichen das Wachstum von `Tab.ts` und `BrowserWindowController.ts` aus | ✅ | dieser Stand |
 
 ### Bündel nach R40
 
@@ -1326,6 +1327,7 @@ Größen dezimal (Bytes ÷ 1000), wie im Build-Log.
 | U11 | Dateninventar, Löschen beim Beenden | in den +13,4 kB unten | — | — (`src/main/index.ts` 1462 → 1404) |
 | **Stand nach `fb991bc`** | | **527,45 kB** (U9 bis U11 zusammen ≈ +13,4 kB) | **45,12 kB** von 48 | 1462 |
 | U14 | Autofill: Badge, Auswahl auf der Overlay-Schicht, Toolbar-Schlüssel, Kürzel, Kontextmenü | 546,42 → 555,61 kB (+9,2 kB) | 46,51 → 46,94 kB | — (1457, unverändert) |
+| U15 | Tab-Entladen: Timer, Verwerfen, neue View mit `restore()`, gedimmter Tab | 555,61 → 560,05 kB (+4,4 kB) | 46,94 → 47,08 kB (+0,14 kB, ein Tooltip-Satz je Sprache) | 1457 → 1410 (`Tab.ts` 1130 → 1080, `src/main/index.ts` 1381 → 1380, `WindowRegistry.ts` 697 unverändert) |
 
 Der Main-Prozess liegt damit weiter über seinem Budget von 320 kB, und das ist nach der Key Decision
 „Bundle-Budgets dürfen mit notiertem Zuwachs wachsen" zulässig, solange der Zuwachs hier steht. Den Anteil von
@@ -1337,7 +1339,10 @@ die Tastaturbedienung und die Antwort auf die Frage des Kerns nach dem Formular 
 Liste in der Seite; bezahlt ist das innerhalb des Autofill-Codes selbst — eine Prüfschleife statt drei in
 `wire.ts`, die Namenswahl beim Speichern über dieselbe Funktion wie beim Füllen in `fields.ts`, kompakterer
 Aufbau der Speicherleiste. Der Chrome-Preload wächst um die drei neuen Kanalnamen (3 357 → 3 473 B, Budget
-5 kB). Die Auswahlfläche liegt in einem eigenen, nachgeladenen Chunk (2,68 kB), sonst wäre der Overlay-Chunk
+5 kB).
+
+**Preload U15, gemessen mit `pnpm build`:** vor U15 **41 448 B**, nach U15 **41 707 B** (+259 B): ein
+`input`- und ein `submit`-Listener und der Kanal `tessera:unsaved-input`. Chrome-Preload unverändert (3 473 B). Die Auswahlfläche liegt in einem eigenen, nachgeladenen Chunk (2,68 kB), sonst wäre der Overlay-Chunk
 über seine 20 kB gegangen (18,73 → 19,19 kB). Renderer-Hauptchunk 24,71 → 26,11 kB (Schlüssel in der Toolbar).
 
 ### Was nur der Benutzer prüfen kann
@@ -1364,6 +1369,12 @@ Laufende App (`pnpm dev`). Kein Agent startet die App. Jede Zeile ist offen, bis
 | U14 | Toolbar-Schlüssel und `Strg+Shift+K` (macOS `Cmd+Shift+K`) auf einer Anmeldeseite, ohne vorher in die Seite zu klicken | Die Liste erscheint unter dem Schlüssel (beim Kürzel am Feld), die Wahl füllt aus |
 | U14 | Rechtsklick in ein Passwortfeld, dann „Gespeichertes Passwort einsetzen“; Rechtsklick anderswo | Der Eintrag steht nur im Passwortfeld und öffnet dieselbe Liste |
 | U14 | Tresor sperrt sich nach 15 Minuten, während die Seite offen ist | Der Schlüssel wechselt ohne Tabwechsel auf „gesperrt“ |
+| U15 | `advanced.unloadAfterMinutes` auf 1, eine Seite mit Verlauf (zwei Klicks tief, heruntergescrollt) in einem Tab ohne Kachel liegen lassen, zwei Minuten warten | Der Tab steht gedimmt im Streifen; `app.getAppMetrics()` zeigt seinen Renderer nicht mehr, der Speicher sinkt |
+| U15 | Denselben Tab aktivieren | Kurz eine leere Kachel, dann die Seite an derselben Stelle mit Zurück und Vor; Stummschaltung und Zoom wie vorher |
+| U15 | Ausnahmen in der echten App: pausiertes Video, Textfeld mit Text ohne Fokus, angehefteter Tab, offene DevTools, wartende Berechtigungsfrage, Popup-Frage | Keiner davon wird entladen |
+| U15 | Seite mit `beforeunload` im Hintergrund liegen lassen | Sie bleibt geladen, es erscheint kein Dialog, und sie wird bis zur nächsten Navigation nicht wieder gefragt |
+| U15 | Annahmen über Electron 43: `webContents.close({ waitForBeforeUnload: true })` meldet bei einer `WebContentsView` erst `close`, dann `destroyed`; `navigationHistory.restore()` bringt die Scroll-Position zurück; `removeChildView` auf eine schon entfernte View ist harmlos | Kein Tab schließt sich beim Entladen, die Scroll-Position kommt zurück, Schließen eines entladenen Tabs wirft nichts |
+| U15 | Dasselbe im privaten Fenster | Entladen und Zurückkommen wie oben, danach nichts auf der Platte |
 
 ## Bekannte Risiken
 

@@ -714,7 +714,8 @@ describe('bundle weight', () => {
 
 describe('sandbox rules', () => {
   it('creates every web view sandboxed, with context isolation and no Node', () => {
-    const tab = readFileSync(join(ROOT, 'src/main/browser/Tab.ts'), 'utf8')
+    // Built in one place, for a new tab and for a discarded one coming back (U15).
+    const tab = readFileSync(join(ROOT, 'src/main/browser/tab-view.ts'), 'utf8')
     expect(tab).toMatch(/sandbox:\s*true/)
     expect(tab).toMatch(/contextIsolation:\s*true/)
     expect(tab).toMatch(/nodeIntegration:\s*false/)
@@ -821,7 +822,7 @@ describe('sandbox rules', () => {
   it('never turns background throttling on for a tab view', () => {
     // Spec 2: unfocused tiles must keep playing. The value is read from settings,
     // so the literal `true` would be a regression.
-    const tab = readFileSync(join(ROOT, 'src/main/browser/Tab.ts'), 'utf8')
+    const tab = readFileSync(join(ROOT, 'src/main/browser/tab-view.ts'), 'utf8')
     expect(tab).not.toMatch(/backgroundThrottling:\s*true/)
     expect(tab).toMatch(/backgroundThrottling:\s*settings\[/)
   })
@@ -1263,8 +1264,6 @@ describe('IPC discipline', () => {
     const notYetRead = new Map([
       ['privacy.malwareProtection', 'no reputation check exists'],
       ['advanced.spellcheckLanguages', 'the session’s spellchecker is never told'],
-      ['advanced.unloadInactiveTabs', 'no tab is ever unloaded on a timer'],
-      ['advanced.unloadAfterMinutes', 'same timer, same absence'],
       ['search.suggestFromOpenTabs', 'the omnibox never consults open tabs'],
       /*
         Six more, found by this test rather than by review.
@@ -3303,10 +3302,15 @@ describe('permission host', () => {
       readFileSync(join(ROOT, 'src/main/browser/WindowRegistry.ts'), 'utf8')
     )
     expect(controller).toMatch(/export class BrowserWindowController implements PermissionHost\b/)
-    expect(controller).toMatch(/this\.#tellPermissionListeners\(\{ kind: '' \}\)/)
-    expect(controller).toMatch(/this\.#tellPermissionListeners\(\{ kind: '',/)
-    expect(controller).toMatch(/this\.#reportNavigation\(source\)/)
-    expect(controller).toMatch(/this\.#reportActiveTab\(\)/)
+    // The telling moved to `permission-tabs.ts`; the controller still reports each change to it (U15).
+    expect(controller).toMatch(/this\.#permissionTabs\.gone\(\)/)
+    expect(controller).toMatch(/this\.#permissionTabs\.closed\(tab\)/)
+    expect(controller).toMatch(/this\.#permissionTabs\.navigated\(source, source\.currentUrl\)/)
+    expect(controller).toMatch(
+      /this\.#permissionTabs\.activated\(this\.activeTabWebContentsId\(\)\)/
+    )
+    // A discarded tab's new view has a new id, and a question from it must still find its dialogue.
+    expect(controller).toMatch(/this\.#permissionTabs\.replaced\(tab, newId\)/)
     expect(registry).toMatch(
       /this\.#deps\.permissions\.ask\(\s*request,\s*this\.controllerForWebContents\(webContents\.id\) \?\? null,\s*webContents\.id\s*\)/
     )

@@ -148,6 +148,9 @@
     "src/shared/privacy/https-token.ts",
     "src/main/privacy/https-exemptions.ts",
     "src/shared/network/proxy-rules.ts",
+    "src/shared/session/unload-policy.ts",
+    "src/main/browser/tab-unloader.ts",
+    "src/main/browser/permission-tabs.ts",
     "!**/*.d.ts"
   ],
   "checkers": ["typescript"],
