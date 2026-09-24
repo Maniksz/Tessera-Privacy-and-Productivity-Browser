@@ -18,6 +18,8 @@ import { defaultSettings } from '@shared/settings/definitions.js'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
 import { dropZonesFor } from '@shared/split/dropzones.js'
 import { windowCloseForgetsArrangements } from '@shared/arrangements/screen.js'
+import { HOME_URL } from '@shared/url/omnibox.js'
+import type { LayoutChangeOptions } from '@main/browser/TileOccupancyController.js'
 
 /**
  * What a window's own seams do to each other — and, the point of this file, what they no longer do.
@@ -55,8 +57,15 @@ interface Harness {
   /** The `tile === null` branch of `BrowserWindowController.activateTab`. */
   activate: (tabId: string) => void
   addTab: (tabId: string) => void
-  /** A start page the browser opened as a filler: in the strip, ephemeral, a member like any tab. */
+  /**
+   * A start page the browser opened as a filler: in the strip, ephemeral, a member like any tab, and
+   * showing the start page with nothing on its way in — what `isStartPageTile` closes on a change.
+   */
   addStartPage: (tabId: string) => void
+  /** Every tab the seams asked the window to close, in order. */
+  closed: () => string[]
+  /** Every layout change the seams asked the window for, with the options they gave (KTD8). */
+  layoutChanges: () => Array<{ layout: LayoutId; options: LayoutChangeOptions }>
   /** A new tab, the way `BrowserWindowController.createTab` places one: it gets the whole window. */
   newTab: (tabId: string) => void
   /** Switches layout the way nothing but this test does — no filling, no pulling in — and seats. */
@@ -149,6 +158,9 @@ async function harness(options: {
     because the seams ask about tabs by id and a test adds them as it goes.
   */
   const ephemeral = new Set<string>()
+  const startPages = new Set<string>()
+  const closed: string[] = []
+  const layoutChanges: Array<{ layout: LayoutId; options: LayoutChangeOptions }> = []
   const fullscreenExits: string[] = []
   const mutedTabs = new Map<string, boolean>()
   let broadcasts = 0
@@ -158,7 +170,13 @@ async function harness(options: {
       ephemeral: ephemeral.has(tabId),
       setTileIndex: () => {},
       setMuted: (muted: boolean) => mutedTabs.set(tabId, muted),
-      toState: () => ({ id: tabId, title: tabId, url: `https://example.test/${tabId}` }),
+      toState: () => ({
+        id: tabId,
+        title: tabId,
+        url: startPages.has(tabId) ? HOME_URL : `https://example.test/${tabId}`,
+        loading: false,
+        pendingInput: null
+      }),
       view: {
         webContents: {
           isDestroyed: () => false,
@@ -204,9 +222,14 @@ async function harness(options: {
       if (tileIndex === null) split.assignTab(tabId, null)
       else split.assignTab(tabId, tileIndex)
     },
+    // What `BrowserWindowController.#finishClose` does for a tab nothing on the page holds open.
     closeTab: (tabId) => {
-      order = order.filter((id) => id !== tabId)
+      closed.push(tabId)
+      const vacated = split.tileOfTab(tabId)
       split.forgetTab(tabId)
+      order = order.filter((id) => id !== tabId)
+      seams.arrangements.tabClosed(tabId)
+      seams.occupancy.afterTabClosed(vacated)
     },
     activateTab: (tabId) => {
       const tile = split.tileOfTab(tabId)
@@ -226,6 +249,7 @@ async function harness(options: {
       split.assignTab(id, tileIndex)
     },
     applyLayout: (layout, changeOptions) => {
+      layoutChanges.push({ layout, options: changeOptions })
       seams.occupancy.afterLayoutChange(split.setLayout(layout), changeOptions)
     },
     presentOverlay: () => {},
@@ -261,7 +285,10 @@ async function harness(options: {
     addStartPage: (tabId) => {
       order.push(tabId)
       ephemeral.add(tabId)
+      startPages.add(tabId)
     },
+    closed: () => closed,
+    layoutChanges: () => layoutChanges,
     newTab: (tabId) => {
       order.push(tabId)
       split.assignTab(tabId, seams.occupancy.claimTileForNewTab())
@@ -884,6 +911,105 @@ describe('the automatic paths (U3, R3, R16)', () => {
     h.round()
 
     expect(seatsOf(h, id)).toEqual(['t2', 't1'])
+  })
+})
+
+/**
+ * Changing and ending a tiled view, which close its start pages, and everything else, which does not
+ * (U4, R8, KTD8). Through the real stores, so "under the same id" and "no entry left" are the book's
+ * answers rather than a stub's.
+ */
+describe('changing and ending a tiled view (U4, R8)', () => {
+  /** The ids and seats the book holds, in order. */
+  const held = (h: Harness): Array<[string, Array<string | null>]> =>
+    h.book.list().map((arrangement) => [arrangement.id, arrangement.seats])
+
+  it('closes both start pages of a 2x2 and keeps the two pages side by side under its id (AE2)', async () => {
+    const h = await harness({ tabs: ['youtube', 'twitch'], layout: '2x2' })
+    h.addStartPage('start-1')
+    h.addStartPage('start-2')
+    h.show('2x2', ['start-1', 'youtube', 'start-2', 'twitch'])
+    h.round()
+    const id = h.seams.arrangements.liveId
+
+    h.seams.occupancy.chooseLayout('1x2')
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['youtube', 'twitch'])
+    expect([...h.closed()].sort()).toEqual(['start-1', 'start-2'])
+    expect(held(h)).toEqual([[id, ['youtube', 'twitch']]])
+    expect(h.order()).toEqual(['youtube', 'twitch'])
+  })
+
+  it('ends a 1x3: the start page closes, the pages stand where the entry stood (AE3)', async () => {
+    const h = await harness({ tabs: ['mail', 'youtube', 'twitch'], layout: '1x3' })
+    h.addStartPage('start')
+    h.show('1x3', ['youtube', 'start', 'twitch'])
+    h.split.setActiveTile(2)
+    h.round()
+
+    h.seams.occupancy.chooseLayout('1x1')
+    h.round()
+
+    expect(h.closed()).toEqual(['start'])
+    expect(h.book.list()).toEqual([])
+    expect(h.seams.arrangements.summaries()).toEqual([])
+    expect(h.split.toState().tileTabIds).toEqual(['twitch'])
+    expect(h.order()).toEqual(['mail', 'youtube', 'twitch'])
+  })
+
+  it('ends a put-away view off screen, leaving the screen and its active tab alone (KTD12)', async () => {
+    const h = await harness({ tabs: ['mail', 'twitch', 'news', 'youtube'], layout: '1x3' })
+    h.addStartPage('start')
+    h.show('1x3', ['youtube', 'start', 'twitch'])
+    h.round()
+    const id = h.seams.arrangements.liveId ?? ''
+    h.activate('mail')
+    h.round()
+    const changes = h.layoutChanges().length
+
+    h.seams.arrangements.endArrangement(id)
+    h.round()
+
+    expect(h.closed()).toEqual(['start'])
+    expect(h.book.list()).toEqual([])
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.activeTabId()).toBe('mail')
+    expect(h.layoutChanges()).toHaveLength(changes)
+    expect(h.order()).toEqual(['mail', 'youtube', 'twitch', 'news'])
+  })
+
+  it('closes nothing when the view is put away, its start page stays a member (AE4)', async () => {
+    const h = await harness({ tabs: ['youtube', 'mail'], layout: '1x2' })
+    h.addStartPage('start')
+    h.show('1x2', ['youtube', 'start'])
+    h.round()
+
+    h.activate('mail')
+    h.round()
+
+    expect(h.closed()).toEqual([])
+    expect(held(h).map(([, seats]) => seats)).toEqual([['youtube', 'start']])
+    expect(h.layoutChanges().every((change) => !change.options.closeStartPages)).toBe(true)
+  })
+
+  it('closes nothing when a fold puts the view away or one of its tabs closes (R8)', async () => {
+    const h = await harness({ tabs: ['a', 'b', 'mail'], layout: '1x3' })
+    h.addStartPage('start')
+    h.show('1x3', ['a', 'start', 'b'])
+    h.round()
+    h.close('a')
+    h.round()
+    expect(h.split.toState().tileTabIds).toEqual(['start', 'b'])
+
+    const group = h.seams.groups.create({ tabIds: ['start', 'b'] })
+    h.seams.groups.setCollapsed(group.id, true)
+    h.round()
+
+    expect(h.closed()).toEqual([])
+    expect(h.order()).toContain('start')
+    expect(h.layoutChanges().length).toBeGreaterThan(0)
+    expect(h.layoutChanges().every((change) => !change.options.closeStartPages)).toBe(true)
   })
 })
 

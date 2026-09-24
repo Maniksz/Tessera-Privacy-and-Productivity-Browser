@@ -51,6 +51,11 @@ interface Harness {
   views: () => Array<Omit<ArrangementView, 'activeTile'>>
   /** `stow` and `apply` in the order they reached the window, for "put the other one away first". */
   events: () => string[]
+  /**
+   * The seats of every put-away view the controller ended, with the ids the book still held at that
+   * moment — which is how "forgotten before any tab moves" is asserted (KTD12).
+   */
+  dissolved: () => Array<{ seats: Array<string | null>; heldAtTheTime: string[] }>
   /** The view the window reports: active tile, dividers, tile sounds. Defaults to the layout's own. */
   setView: (view: ArrangementView) => void
   /**
@@ -98,6 +103,7 @@ async function harness(options: {
   const applied: Applied[] = []
   const views: Array<Omit<ArrangementView, 'activeTile'>> = []
   const events: string[] = []
+  const dissolved: Array<{ seats: Array<string | null>; heldAtTheTime: string[] }> = []
   let view: ArrangementView | null = null
   let writes = 0
   store.onChange(() => {
@@ -124,6 +130,13 @@ async function harness(options: {
       layout = '1x1'
       tiles = [null]
       view = null
+    },
+    dissolveOffScreen: (seats) => {
+      events.push('dissolve')
+      dissolved.push({
+        seats: [...seats],
+        heldAtTheTime: store.list().map((arrangement) => arrangement.id)
+      })
     }
   }
 
@@ -133,6 +146,7 @@ async function harness(options: {
     applied: () => applied,
     views: () => views,
     events: () => events,
+    dissolved: () => dissolved,
     setView: (next) => {
       view = next
     },
@@ -171,6 +185,7 @@ describe('the seam this controller was built for', () => {
       'book',
       'currentLayout',
       'currentView',
+      'dissolveOffScreen',
       'hiddenTabIds',
       'liveTabIds',
       'stowTiling',
@@ -939,6 +954,58 @@ describe('ending the tiling lets go of the id', () => {
     h.controller.endTiling()
 
     expect(h.controller.liveId).toBeNull()
+
+    await h.cleanup()
+  })
+})
+
+describe('ending a put-away arrangement (KTD12, R8)', () => {
+  /** `a1` = t1 | t2 put away, `a2` = t3 | t4 on screen. */
+  async function withOneOnScreen(): Promise<Harness> {
+    const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x2', ['t3', 't4'])
+    h.controller.keep()
+    return h
+  }
+
+  it('forgets it first and then hands its seats over to become ordinary tabs', async () => {
+    const h = await withOneOnScreen()
+    const before = h.events().length
+
+    h.controller.endArrangement('a1')
+
+    expect(h.dissolved()).toEqual([{ seats: ['t1', 't2'], heldAtTheTime: ['a2'] }])
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a2'])
+    // Nothing on screen moves: no stow, no apply, and the visible one is still the visible one.
+    expect(h.events().slice(before)).toEqual(['dissolve'])
+    expect(h.controller.liveId).toBe('a2')
+
+    await h.cleanup()
+  })
+
+  it('ends one whose group is folded, because ending it puts nothing on screen', async () => {
+    const h = await withOneOnScreen()
+    h.setHidden(['t1', 't2'])
+
+    h.controller.endArrangement('a1')
+
+    expect(h.dissolved().map((call) => call.seats)).toEqual([['t1', 't2']])
+
+    await h.cleanup()
+  })
+
+  it('leaves the visible one, an unknown id and another window’s alone', async () => {
+    const h = await withOneOnScreen()
+
+    h.controller.endArrangement('a2')
+    h.controller.endArrangement('nope')
+    h.setLiveTabs(['t2', 't3', 't4'])
+    h.controller.endArrangement('a1')
+
+    expect(h.dissolved()).toEqual([])
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a1', 'a2'])
 
     await h.cleanup()
   })

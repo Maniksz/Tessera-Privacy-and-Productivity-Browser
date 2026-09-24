@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { HOME_URL, isHomeUrl, omniboxDisplayValue } from '@shared/url/omnibox.js'
 import { interstitialUrl, withoutToken } from '@shared/privacy/https-token.js'
+import { isStartPageTile } from '@shared/split/tile-fill.js'
 
 /**
  * The home address and what the address bar shows for it.
@@ -75,4 +76,22 @@ describe('omniboxDisplayValue', () => {
     const forged = interstitialUrl('javascript:alert(1)', null, 'en')
     expect(omniboxDisplayValue(forged)).toBe(forged)
   })
+})
+
+describe('the start-page tile agrees with isHomeUrl (KTD8)', () => {
+  /*
+    Changing or ending a tiled view closes the tiles showing the start page (R8). Which address is
+    "the start page" is this file's rule, so the tile predicate may not keep a second list: a tile the
+    address bar shows as empty is one the layout change may close, once nothing is on its way in.
+  */
+  it.each([HOME_URL, 'tessera://start/', '', 'about:blank'])('closes a settled %s', (url) => {
+    expect(isStartPageTile({ committedUrl: url, loading: false, pendingInput: null })).toBe(true)
+  })
+
+  it.each(['tessera://history', 'https://example.com', 'tessera://start/assets/x.js'])(
+    'keeps %s',
+    (url) => {
+      expect(isStartPageTile({ committedUrl: url, loading: false, pendingInput: null })).toBe(false)
+    }
+  )
 })

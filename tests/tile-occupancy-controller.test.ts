@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { SplitController } from '@main/browser/SplitController.js'
 import {
   TileOccupancyController,
+  type LayoutChangeOptions,
   type TileOccupancyHost
 } from '@main/browser/TileOccupancyController.js'
 import { dropZonesFor } from '@shared/split/dropzones.js'
@@ -58,6 +59,10 @@ interface Harness {
    */
   forget: (tabId: string) => void
   routeClose: ((tabId: string) => void) | null
+  /** Tabs showing the start page and nothing on its way in (`isStartPageTile`, KTD8). */
+  startPages: Set<string>
+  /** Every layout change this controller asked the window for, with the options it gave. */
+  layoutChanges: Array<{ layout: LayoutId; options: LayoutChangeOptions }>
 }
 
 function harness(layout: LayoutId, tabs: string[] = []): Harness {
@@ -76,7 +81,9 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     restoredFirst: 0,
     kept: [],
     ended: [],
-    routeClose: null
+    routeClose: null,
+    startPages: new Set<string>(),
+    layoutChanges: []
   }
   state.forget = (tabId) => {
     state.closed!.push(tabId)
@@ -91,7 +98,11 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     split,
     adaptEnabled: () => state.adapt!,
     tabOrder: () => state.order!,
+    setTabOrder: (order) => {
+      state.order = [...order]
+    },
     isEphemeral: (tabId) => state.ephemeral!.has(tabId),
+    isStartPage: (tabId) => state.startPages!.has(tabId),
     isHiddenByCollapse: (tabId) => state.collapsed!.has(tabId),
     isArrangementMember: (tabId) => state.members!.has(tabId),
     restoreFirstArrangement: () => {
@@ -118,6 +129,7 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     },
     // The window re-enters through the same door, so the controller's own rules apply again.
     applyLayout: (next, options) => {
+      state.layoutChanges!.push({ layout: next, options })
       state.occupancy!.afterLayoutChange(split.setLayout(next), options)
     },
     /*
@@ -132,7 +144,10 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
         state.unassigned!.push(tabId)
         split.assignTab(tabId, null)
       }
-      state.occupancy!.afterLayoutChange(split.setLayout('1x1'), { fill: false })
+      state.occupancy!.afterLayoutChange(split.setLayout('1x1'), {
+        fill: false,
+        closeStartPages: false
+      })
     },
     endTiling: () => {
       state.ended!.push({ id: split.layout, tiles: split.toState().tileTabIds })
@@ -230,7 +245,7 @@ describe('a layout the user chose', () => {
   })
 
   it('ends nothing when the choice is another split', () => {
-    // The settle after it records the new tiling, which supersedes the old one on its own.
+    // The settle after it writes the smaller tiling into the same entry, under its id (KTD2).
     const h = harness('2x2', ['a', 'b', 'c', 'd'])
     seed(h, ['a', 'b', 'c', 'd'])
 
@@ -241,11 +256,243 @@ describe('a layout the user chose', () => {
   })
 })
 
+/**
+ * What `BrowserWindowController.#finishClose` does once a tab has gone, as far as this controller
+ * sees it: the tile it leaves is settled, and a window left with no tab at all gets a fresh start
+ * page through the new-tab path (`keepOneTab`).
+ */
+function closeLikeTheWindow(h: Harness): void {
+  h.routeClose = (tabId) => {
+    const vacated = h.split.tileOfTab(tabId)
+    h.forget(tabId)
+    h.occupancy.afterTabClosed(vacated)
+    if (h.order.length === 0) {
+      h.order.push('fresh')
+      h.split.assignTab('fresh', h.occupancy.claimTileForNewTab())
+    }
+  }
+}
+
+describe('changing a tiled view to fewer tiles (U4, R8)', () => {
+  it('closes both start pages of a 2x2 and seats the two pages side by side (AE2)', () => {
+    const h = harness('2x2', ['start-1', 'youtube', 'start-2', 'twitch'])
+    seed(h, ['start-1', 'youtube', 'start-2', 'twitch'])
+    h.startPages.add('start-1').add('start-2')
+
+    h.occupancy.chooseLayout('1x2')
+
+    expect(h.split.layout).toBe('1x2')
+    expect(h.split.toState().tileTabIds).toEqual(['youtube', 'twitch'])
+    expect([...h.closed].sort()).toEqual(['start-1', 'start-2'])
+    // Nothing became an ordinary tab: both pages are still seated, and the view was not ended.
+    expect(h.unassigned).not.toContain('youtube')
+    expect(h.unassigned).not.toContain('twitch')
+    expect(h.ended).toEqual([])
+    expect(h.layoutChanges).toEqual([
+      { layout: '1x2', options: { fill: true, closeStartPages: true } }
+    ])
+  })
+
+  it('makes a page that finds no tile an ordinary tab right behind the entry', () => {
+    const h = harness('1x3', ['a', 'mail', 'b', 'c', 'news'])
+    seed(h, ['a', 'b', 'c'])
+    h.split.setActiveTile(1)
+
+    h.occupancy.chooseLayout('1x2')
+
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'b'])
+    expect(h.split.tileOfTab('c')).toBeNull()
+    expect(h.closed).toEqual([])
+    expect(h.order).toEqual(['a', 'b', 'c', 'mail', 'news'])
+    expect(h.split.activeTabId()).toBe('b')
+  })
+
+  it('moves a page up past an empty pane instead of dropping it off the end', () => {
+    const h = harness('1x3', ['a', 'c'])
+    h.split.assignTab('a', 0)
+    h.split.assignTab('c', 2)
+
+    h.occupancy.chooseLayout('1x2')
+
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'c'])
+  })
+
+  it('takes the smallest layout that fits once the start pages are gone', () => {
+    const h = harness('2x2', ['youtube', 'start-1', 'start-2', 'twitch'])
+    seed(h, ['youtube', 'start-1', 'start-2', 'twitch'])
+    h.startPages.add('start-1').add('start-2')
+
+    h.occupancy.chooseLayout('1+2')
+
+    expect(h.split.layout).toBe('1x2')
+    expect(h.split.toState().tileTabIds).toEqual(['youtube', 'twitch'])
+    // No start page is opened into the pane a start page has just left.
+    expect(h.fillers).toEqual([])
+  })
+
+  it('keeps the active page active in its new tile, and the first one when it was a start page', () => {
+    const h = harness('2x2', ['start', 'a', 'b', 'c'])
+    seed(h, ['start', 'a', 'b', 'c'])
+    h.startPages.add('start')
+    h.split.setActiveTile(3)
+
+    h.occupancy.chooseLayout('1+2')
+
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'b', 'c'])
+    expect(h.split.activeTabId()).toBe('c')
+
+    const other = harness('2x2', ['start', 'a', 'b', 'c'])
+    seed(other, ['start', 'a', 'b', 'c'])
+    other.startPages.add('start')
+    other.occupancy.chooseLayout('1+2')
+    expect(other.split.activeTabId()).toBe('a')
+  })
+
+  it('dissolves into a single page when fewer than two pages are left', () => {
+    const h = harness('1x3', ['start-1', 'youtube', 'start-2'])
+    seed(h, ['start-1', 'youtube', 'start-2'])
+    h.startPages.add('start-1').add('start-2')
+
+    h.occupancy.chooseLayout('1x2')
+
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['youtube'])
+    expect(h.ended).toEqual([{ id: '1x3', tiles: ['start-1', 'youtube', 'start-2'] }])
+    expect([...h.closed].sort()).toEqual(['start-1', 'start-2'])
+  })
+
+  it('closes no start page when the choice has as many tiles or more', () => {
+    const grown = harness('1x2', ['start', 'a'])
+    seed(grown, ['start', 'a'])
+    grown.startPages.add('start')
+    grown.occupancy.chooseLayout('2x2')
+    expect(grown.closed).toEqual([])
+    expect(grown.split.toState().tileTabIds.slice(0, 2)).toEqual(['start', 'a'])
+
+    const reshaped = harness('1x4', ['a', 'start', 'b', 'c'])
+    seed(reshaped, ['a', 'start', 'b', 'c'])
+    reshaped.startPages.add('start')
+    reshaped.occupancy.chooseLayout('2x2')
+    expect(reshaped.closed).toEqual([])
+    expect(reshaped.split.toState().tileTabIds).toEqual(['a', 'start', 'b', 'c'])
+  })
+})
+
+describe('ending a tiled view (U4, R8)', () => {
+  it('closes the start page and stands the pages where the entry stood, the active one active (AE3)', () => {
+    const h = harness('1x3', ['mail', 'youtube', 'start', 'twitch', 'news'])
+    seed(h, ['youtube', 'start', 'twitch'])
+    h.startPages.add('start')
+    h.split.setActiveTile(2)
+
+    h.occupancy.chooseLayout('1x1')
+
+    expect(h.ended).toEqual([{ id: '1x3', tiles: ['youtube', 'start', 'twitch'] }])
+    expect(h.closed).toEqual(['start'])
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['twitch'])
+    expect(h.split.tileOfTab('youtube')).toBeNull()
+    expect(h.order).toEqual(['mail', 'youtube', 'twitch', 'news'])
+  })
+
+  it('shows the first remaining page when the active tile held a start page', () => {
+    const h = harness('1x3', ['youtube', 'start', 'twitch'])
+    seed(h, ['youtube', 'start', 'twitch'])
+    h.startPages.add('start')
+    h.split.setActiveTile(1)
+
+    h.occupancy.chooseLayout('1x1')
+
+    expect(h.split.toState().tileTabIds).toEqual(['youtube'])
+    expect(h.split.activeTabId()).toBe('youtube')
+  })
+
+  it('leaves a fresh start tab when every tile was a start page and the window had nothing else', () => {
+    const h = harness('1x2', ['start-1', 'start-2'])
+    seed(h, ['start-1', 'start-2'])
+    h.startPages.add('start-1').add('start-2')
+    closeLikeTheWindow(h)
+
+    h.occupancy.chooseLayout('1x1')
+
+    expect([...h.closed].sort()).toEqual(['start-1', 'start-2'])
+    expect(h.order).toEqual(['fresh'])
+    expect(h.split.toState().tileTabIds).toEqual(['fresh'])
+  })
+
+  it('shows the next ordinary tab when every tile was a start page', () => {
+    const h = harness('1x2', ['mail', 'start-1', 'start-2'])
+    seed(h, ['start-1', 'start-2'])
+    h.startPages.add('start-1').add('start-2')
+    closeLikeTheWindow(h)
+
+    h.occupancy.chooseLayout('1x1')
+
+    expect(h.order).toEqual(['mail'])
+    expect(h.split.toState().tileTabIds).toEqual(['mail'])
+  })
+
+  it('closes nothing when a single page is chosen again', () => {
+    const h = harness('1x1', ['start'])
+    seed(h, ['start'])
+    h.startPages.add('start')
+
+    h.occupancy.chooseLayout('1x1')
+
+    expect(h.closed).toEqual([])
+    expect(h.split.toState().tileTabIds).toEqual(['start'])
+  })
+})
+
+describe('ending a tiled view that is put away (KTD12)', () => {
+  it('closes its start pages and stands the rest in tile order where its entry stood', () => {
+    const h = harness('1x1', ['mail', 'twitch', 'start', 'youtube', 'news'])
+    seed(h, ['mail'])
+    h.startPages.add('start')
+
+    h.occupancy.dissolveOffScreen(['youtube', 'start', null, 'twitch'])
+
+    expect(h.closed).toEqual(['start'])
+    expect(h.order).toEqual(['mail', 'youtube', 'twitch', 'news'])
+    // The screen and its active tab are not touched.
+    expect(h.split.toState().tileTabIds).toEqual(['mail'])
+    expect(h.layoutChanges).toEqual([])
+    expect(h.activated).toEqual([])
+  })
+})
+
+describe('what never closes a start page (R8)', () => {
+  it('closes ranks after a single tab closes without asking for start pages to close', () => {
+    const h = harness('1x3', ['a', 'start', 'c'])
+    h.split.assignTab('start', 1)
+    h.split.assignTab('c', 2)
+    h.startPages.add('start')
+
+    h.occupancy.afterTabClosed(0)
+
+    expect(h.closed).toEqual([])
+    expect(h.split.toState().tileTabIds).toEqual(['start', 'c'])
+    expect(h.layoutChanges.every((change) => !change.options.closeStartPages)).toBe(true)
+  })
+
+  it('closes an orphaned start page only for a change that asks for it', () => {
+    const kept = harness('2x2', ['a', 'start'])
+    kept.startPages.add('start')
+    kept.occupancy.afterLayoutChange(['start'], { fill: false, closeStartPages: false })
+    expect(kept.closed).toEqual([])
+
+    const closed = harness('2x2', ['a', 'start'])
+    closed.startPages.add('start')
+    closed.occupancy.afterLayoutChange(['start'], { fill: false, closeStartPages: true })
+    expect(closed.closed).toEqual(['start'])
+  })
+})
+
 describe('after the layout changed', () => {
   it('unassigns the tabs that lost their tile rather than closing them', () => {
     const h = harness('2x2', ['tab-1', 'tab-2', 'tab-3', 'tab-4'])
     seed(h, ['tab-1', 'tab-2', 'tab-3', 'tab-4'])
-    h.occupancy.afterLayoutChange(['tab-3', 'tab-4'], { fill: false })
+    h.occupancy.afterLayoutChange(['tab-3', 'tab-4'], { fill: false, closeStartPages: false })
     expect(h.unassigned).toEqual(['tab-3', 'tab-4'])
     expect(h.closed).toEqual([])
   })
@@ -253,13 +500,13 @@ describe('after the layout changed', () => {
   it('closes an untouched filler that lost its tile', () => {
     const h = harness('2x2', ['tab-1', 'filler-x'])
     h.ephemeral.add('filler-x')
-    h.occupancy.afterLayoutChange(['filler-x'], { fill: false })
+    h.occupancy.afterLayoutChange(['filler-x'], { fill: false, closeStartPages: false })
     expect(h.closed).toEqual(['filler-x'])
   })
 
   it('keeps a filler the user navigated, because it left the set', () => {
     const h = harness('2x2', ['tab-1', 'was-a-filler'])
-    h.occupancy.afterLayoutChange(['was-a-filler'], { fill: false })
+    h.occupancy.afterLayoutChange(['was-a-filler'], { fill: false, closeStartPages: false })
     expect(h.closed).toEqual([])
     expect(h.unassigned).toEqual(['was-a-filler'])
   })
@@ -267,7 +514,7 @@ describe('after the layout changed', () => {
   it('moves no loaded tab into a tile that has nothing in it (KTD10)', () => {
     const h = harness('1x2', ['tab-1', 'tab-hidden'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: false })
+    h.occupancy.afterLayoutChange([], { fill: false, closeStartPages: false })
     expect(h.split.tabIdAt(1)).toBeNull()
   })
 
@@ -282,7 +529,7 @@ describe('after the layout changed', () => {
     const h = harness('1x2', ['tab-1', 'tab-folded'])
     h.split.assignTab('tab-1', 0)
     h.collapsed.add('tab-folded')
-    h.occupancy.afterLayoutChange([], { fill: true })
+    h.occupancy.afterLayoutChange([], { fill: true, closeStartPages: false })
     expect(h.split.tileOfTab('tab-folded')).toBeNull()
     expect(h.fillers).toEqual([1])
   })
@@ -295,7 +542,7 @@ describe('after the layout changed', () => {
     */
     const h = harness('1x2', ['tab-1', 'tab-hidden'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: true })
+    h.occupancy.afterLayoutChange([], { fill: true, closeStartPages: false })
     expect(h.fillers).toEqual([1])
     expect(h.split.tileOfTab('tab-hidden')).toBeNull()
   })
@@ -303,14 +550,14 @@ describe('after the layout changed', () => {
   it('fills every empty tile with a start page', () => {
     const h = harness('2x2', ['tab-1', 'tab-hidden'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: true })
+    h.occupancy.afterLayoutChange([], { fill: true, closeStartPages: false })
     expect(h.fillers).toEqual([1, 2, 3])
   })
 
   it('leaves tiles empty when asked not to fill', () => {
     const h = harness('2x2', ['tab-1'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: false })
+    h.occupancy.afterLayoutChange([], { fill: false, closeStartPages: false })
     expect(h.fillers).toEqual([])
     expect(h.split.tabIdAt(1)).toBeNull()
   })
@@ -326,7 +573,7 @@ describe('after the layout changed', () => {
     h.split.assignTab('tab-1', 0)
     h.adapt = false
 
-    h.occupancy.afterLayoutChange([], { fill: true })
+    h.occupancy.afterLayoutChange([], { fill: true, closeStartPages: false })
 
     expect(h.split.toState().tileTabIds).toEqual(['tab-1', null, null, null])
     expect(h.fillers).toEqual([])
@@ -340,7 +587,7 @@ describe('after the layout changed', () => {
     seed(h, ['tab-1', 'tab-2'])
     h.adapt = false
 
-    h.occupancy.afterLayoutChange(['tab-2'], { fill: true })
+    h.occupancy.afterLayoutChange(['tab-2'], { fill: true, closeStartPages: false })
 
     expect(h.unassigned).toEqual(['tab-2'])
   })
@@ -1116,7 +1363,7 @@ describe('fillers closing through the close contract', () => {
     })
     h.routeClose = (tabId) => contract.closeTab(tabId)
 
-    h.occupancy.afterLayoutChange(h.split.setLayout('1x2'), { fill: false })
+    h.occupancy.afterLayoutChange(h.split.setLayout('1x2'), { fill: false, closeStartPages: false })
 
     expect(h.closed).toEqual(['filler-b'])
     expect(pages.get('filler-b')?.closes ?? 0).toBe(0)

@@ -1,4 +1,11 @@
-import { emptyTiles, shrunkLayout, tabsToCloseOnShrink } from '@shared/split/tile-fill.js'
+import {
+  emptyTiles,
+  layoutFitting,
+  orderWithRunAtEntry,
+  planShrink,
+  tabsToCloseOnShrink,
+  type ShrinkPlan
+} from '@shared/split/tile-fill.js'
 import type { DropZone } from '@shared/split/dropzones.js'
 import { TILE_COUNT, type LayoutId } from '@shared/split/layout.js'
 import type { SplitController } from './SplitController.js'
@@ -48,7 +55,7 @@ import type { SplitController } from './SplitController.js'
  */
 
 /**
- * Why the layout is changing, as the one consequence that follows from it.
+ * Why the layout is changing, as the consequences that follow from it.
  *
  * `fill` answers *did the user ask for this arrangement?*, and it exists because the answer is no for
  * every change the browser makes on its own — it came from a shrink that conjured a replacement for
@@ -56,14 +63,26 @@ import type { SplitController } from './SplitController.js'
  * rather than inherit. Whether the user wants filling at all is `adaptEnabled`, checked in
  * `fillEmptyTiles`.
  *
- * There used to be a second flag, `rehome`, for moving loaded tabs into the empty tiles. It went with
- * the act it switched (U3, KTD10): with nothing left to switch, a flag every caller must still set
- * would be a decision with no consequence, and the next reader would look for the one.
+ * `closeStartPages` answers *is the user changing or ending this tiled view?* (R8, KTD8). Then a start
+ * page that loses its tile closes, whoever opened it; every other change leaves it standing, because
+ * putting a view away, folding its group or closing one of its tabs is not a decision about its
+ * panes, and a start page in it is a member like any page (AE4). True only from `chooseLayout` —
+ * and, through it, from the entry's menu — which also arranges for every start page to be among the
+ * tabs the change takes off the grid. Required for the same reason `fill` is.
+ *
+ * There used to be a flag, `rehome`, for moving loaded tabs into the empty tiles. It went with the
+ * act it switched (U3, KTD10): with nothing left to switch, a flag every caller must still set would
+ * be a decision with no consequence, and the next reader would look for the one.
  */
 export interface LayoutChangeOptions {
   /** Give a tile that is still empty a start page of its own. */
   fill: boolean
+  /** Close a tab showing the start page when it loses its tile (`isStartPageTile`). */
+  closeStartPages: boolean
 }
+
+/** What every layout the browser changes on its way to something else asks for: nothing more. */
+const INCIDENTAL: LayoutChangeOptions = { fill: false, closeStartPages: false }
 
 export interface TileOccupancyHost {
   split: SplitController
@@ -74,8 +93,20 @@ export interface TileOccupancyHost {
   adaptEnabled(): boolean
   /** Tab-bar order, which is independent of tile assignment. */
   tabOrder(): readonly string[]
+  /**
+   * Rewrites the strip order, for the pages of a tiled view that changed or ended: they stand where
+   * its entry stood, in tile order (R8). The only reorder this controller makes.
+   */
+  setTabOrder(order: readonly string[]): void
   /** True for a tab the browser opened to fill a tile and the user never navigated. */
   isEphemeral(tabId: string): boolean
+  /**
+   * True for a tab showing the start page with nothing on its way in (`isStartPageTile`, KTD8).
+   *
+   * Beside `isEphemeral` and wider than it: that one is the browser's own untouched filler, this one
+   * is any start page, whoever opened it. Changing or ending a tiled view closes these (R8).
+   */
+  isStartPage(tabId: string): boolean
   /**
    * True for a tab whose group is folded away, and therefore not one to put back into a tile.
    *
@@ -104,7 +135,7 @@ export interface TileOccupancyHost {
   restoreFirstArrangement(): void
   /** Take a tab out of the grid without closing it (spec 2). */
   unassign(tabId: string): void
-  assignTabToTile(tabId: string, tileIndex: number): void
+  assignTabToTile(tabId: string, tileIndex: number | null): void
   closeTab(tabId: string): void
   /** Make a tile active, with the focus, audio and reposition work that goes with it. */
   setActiveTile(tileIndex: number): void
@@ -141,6 +172,9 @@ export interface TileOccupancyHost {
   endTiling(): void
 }
 
+/** What the user's own choice of layout asks for: its empty tiles filled, its start pages closed. */
+const CHOSEN: LayoutChangeOptions = { fill: true, closeStartPages: true }
+
 export class TileOccupancyController {
   private readonly host: TileOccupancyHost
 
@@ -149,14 +183,27 @@ export class TileOccupancyController {
   }
 
   /**
-   * The layout the user picked, from the layout menu or its accelerator.
+   * The layout the user picked, from the layout menu, its accelerator or the entry's menu.
    *
    * The one explicit layout change there is, and therefore the only one that fills — a layout the user
    * picked gets its empty tiles filled with start pages, and only with them: a loaded tab moving in
-   * would be a tab leaving its place in the strip, or its tiled view, unasked (KTD10). Every other route to `applyLayout` is the browser changing the layout on its way to
-   * something else: a shrink after a close, a drop, a new tab taking the window. Filling those would
-   * conjure a replacement for the very tab that was just closed, or open pages nobody asked for
-   * alongside a page somebody did.
+   * would be a tab leaving its place in the strip, or its tiled view, unasked (KTD10). Every other
+   * route to `applyLayout` is the browser changing the layout on its way to something else: a shrink
+   * after a close, a drop, a new tab taking the window. Filling those would conjure a replacement for
+   * the very tab that was just closed, or open pages nobody asked for alongside a page somebody did.
+   *
+   * ## Fewer tiles: start pages go first (R8, KTD8)
+   *
+   * A choice with fewer tiles than the window has is a change to the tiled view on screen, and one
+   * with a single tile ends it. Either way `planShrink` says what happens, in its order: every start
+   * page closes, the other pages move up in tile order, and the layout is the smallest that fits them
+   * — so a 2x2 of two start pages and two pages becomes those two pages side by side (AE2). A page that
+   * finds no tile is an ordinary tab right behind the entry, and fewer than two pages left is no
+   * tiled view at all. It used to be index arithmetic: whatever sat past the new tile count left the
+   * grid, a page after an empty pane among them, and a start page with it stayed a member.
+   *
+   * A choice with as many tiles or more closes nothing. It is a reshaping or a growth, and the start
+   * pages in it are panes the user still has.
    *
    * ## Choosing the single layout ends the tiling
    *
@@ -164,19 +211,37 @@ export class TileOccupancyController {
    * beside the one left on screen brings the panes back (R7). Choosing "single" is the user saying the
    * panes are done, and keeping the way back would undo that at the next click. So the tiling on screen
    * is forgotten first — see `ArrangementController.endTiling` for what goes and what is spared — and
-   * then the layout changes. No tab closes and no tab group changes: a group the user made is theirs
-   * and outlives this like any other layout change (R2), and the tabs that lose their pane stay loaded
-   * in the strip (spec 2).
+   * then the layout changes, the same as for a smaller split that is left with one page. No tab group
+   * changes: a group the user made is theirs and outlives this like any other layout change (R2).
    *
-   * Only for `1x1`. A smaller split needs no such step: the settle after it records the new tiling,
-   * and that recording supersedes the old one because they share tabs. One pane records nothing
-   * (`MIN_ARRANGED_TILES`), so without this the old tiling would be the only one left standing.
-   * Re-choosing `1x1` in a window already showing one page ends nothing — its seating shares no tab
-   * with a tiling put away earlier, which keeps its way back.
+   * A smaller split needs no such step: it is the same tiled view with fewer tiles, and the settle
+   * after it writes the new seating into the same entry, under its id (KTD2). Re-choosing `1x1` in a
+   * window already showing one page closes nothing and ends nothing — its seating shares no tab with
+   * a tiling put away earlier, which keeps its way back.
    */
   chooseLayout(layout: LayoutId): void {
+    if (TILE_COUNT[layout] < this.host.split.tileCount) {
+      this.#shrinkChosen(layout)
+      return
+    }
     if (layout === '1x1') this.host.endTiling()
-    this.host.applyLayout(layout, { fill: true })
+    this.host.applyLayout(layout, CHOSEN)
+  }
+
+  /**
+   * Ends a tiled view that is not on screen: its start pages close, and the rest become ordinary tabs
+   * where its entry stood, in tile order (KTD12).
+   *
+   * The half of "Kachelansicht beenden" on a put-away entry that is about tabs. The other half — the
+   * entry forgotten, before any tab moves — is `ArrangementController.endArrangement`, which calls
+   * this with the seats it held. The same plan as ending the view on screen, over the stored seats
+   * and without a screen: nothing is seated, so the visible view and the active tab are what they
+   * were, and a start page closing leaves no pane behind for `afterTabClosed` to settle.
+   */
+  dissolveOffScreen(seats: ReadonlyArray<string | null>): void {
+    const plan = planShrink(seats, (tabId) => this.host.isStartPage(tabId), '1x1')
+    this.#standAtEntry(plan)
+    for (const tabId of plan.close) this.host.closeTab(tabId)
   }
 
   /**
@@ -189,14 +254,21 @@ export class TileOccupancyController {
     for (const tabId of orphaned) this.host.unassign(tabId)
 
     /**
-     * The exception, and the only one.
+     * The exceptions, and the only ones.
      *
      * A filler the browser opened by itself and the user never navigated was never a tab they
      * asked for. Keeping it would leave an unused start page behind after every trip through a
      * wide layout, one renderer process each. Spec 2's protection stays in full force for every
      * tab the user actually touched.
+     *
+     * The second is the user's own decision about the panes: a change that closes start pages
+     * (`closeStartPages`, R8) closes every one it takes off the grid, whoever opened it.
      */
-    for (const tabId of tabsToCloseOnShrink(orphaned, this.#ephemeral())) {
+    const disposable = this.#ephemeral()
+    if (options.closeStartPages) {
+      for (const tabId of orphaned) if (this.host.isStartPage(tabId)) disposable.add(tabId)
+    }
+    for (const tabId of tabsToCloseOnShrink(orphaned, disposable)) {
       this.host.closeTab(tabId)
     }
 
@@ -372,7 +444,7 @@ export class TileOccupancyController {
     if (seats.some((tabId) => tabId !== null && this.host.isHiddenByCollapse(tabId))) return
 
     if (layoutId !== this.host.split.layout) {
-      this.host.applyLayout(layoutId, { fill: false })
+      this.host.applyLayout(layoutId, INCIDENTAL)
     }
 
     let active = this.host.split.activeTile
@@ -398,7 +470,7 @@ export class TileOccupancyController {
         after the drop, when which tile is free is known — the half of the middle-tile fix that is
         not geometry, which used to be a second flag against pulling a loaded tab in here as well.
       */
-      this.host.applyLayout(zone.layout, { fill: false })
+      this.host.applyLayout(zone.layout, INCIDENTAL)
     }
 
     // Both read before the assignment moves either of them.
@@ -473,11 +545,61 @@ export class TileOccupancyController {
     }
   }
 
+  /**
+   * Carries out `planShrink` for the view on screen, for a choice of fewer tiles (R8).
+   *
+   * The plan's order is the logical one — start pages close, pages move up, the layout shrinks — and
+   * the order here is the one that keeps every step from costing something else:
+   *
+   *  1. **The view is ended first**, when the plan ends it, while the seating still names every pane:
+   *     afterwards it names one page, and the entry would outlive the tiling (`endTiling`).
+   *  2. **The pages stand where the entry stood** in the strip, in tile order, before any of them
+   *     moves (`orderWithRunAtEntry`).
+   *  3. **Every page moves to its tile, and everything else behind them**: the pages that stay in the
+   *     leading tiles, then the pages that find none, then the start pages. The layout change then
+   *     takes exactly those off the grid, and `closeStartPages` closes the start pages among them —
+   *     unassigned before they close, so no close leaves a pane behind for `afterTabClosed` to settle.
+   *  4. **The one start page a single pane cannot take off the grid** is the one left in tile 0 when
+   *     no page survives. It closes last, as the tab in that pane, and the window's own rules decide
+   *     what the pane shows next: the next ordinary tab, another tiled view, or — for a window with
+   *     nothing else — a fresh start tab (`afterTabClosed`, `keepOneTab`).
+   *  5. **The active page is made active** in its new tile, by the window's own method.
+   */
+  #shrinkChosen(target: LayoutId): void {
+    const { split } = this.host
+    const plan = planShrink(
+      split.toState().tileTabIds,
+      (tabId) => this.host.isStartPage(tabId),
+      target,
+      split.activeTabId()
+    )
+    if (plan.layout === '1x1') this.host.endTiling()
+    this.#standAtEntry(plan)
+
+    const placement = [...plan.seats, ...plan.freed, ...plan.close]
+    for (const [index, tabId] of placement.entries()) {
+      if (split.tileOfTab(tabId) !== index) this.host.assignTabToTile(tabId, index)
+    }
+    this.host.applyLayout(plan.layout, CHOSEN)
+
+    for (const tabId of plan.close) {
+      if (split.tileOfTab(tabId) !== null) this.host.closeTab(tabId)
+    }
+    const tile = plan.active === null ? null : split.tileOfTab(plan.active)
+    if (tile !== null) this.host.setActiveTile(tile)
+  }
+
+  /** The pages a plan keeps, where the view's entry stood in the strip, in tile order (R8). */
+  #standAtEntry(plan: ShrinkPlan): void {
+    const members = [...plan.close, ...plan.remaining]
+    this.host.setTabOrder(orderWithRunAtEntry(this.host.tabOrder(), members, plan.remaining))
+  }
+
   #anyTileOccupied(): boolean {
     return emptyTiles(this.host.split.toState().tileTabIds).length < this.host.split.tileCount
   }
 
-  #ephemeral(): ReadonlySet<string> {
+  #ephemeral(): Set<string> {
     const ids = new Set<string>()
     for (const tabId of this.host.tabOrder()) {
       if (this.host.isEphemeral(tabId)) ids.add(tabId)
@@ -495,7 +617,8 @@ export class TileOccupancyController {
    * is swept up by a close that was about another tab (R8). It is also the only way the survivors keep
    * a tile at all: a `1x3` losing its first page would otherwise drop the third off the end of the grid.
    *
-   * `fill: false` because a replacement for the page that just closed is exactly what must not appear.
+   * `fill: false` because a replacement for the page that just closed is exactly what must not appear,
+   * and `closeStartPages: false` because closing one tab is not a decision about the others (R8).
    *
    * The active tile follows the tab that was in it, because compacting moves tabs between tiles and
    * the active *tile* index would otherwise land on whoever shifted into it. When the closed tab was
@@ -516,7 +639,7 @@ export class TileOccupancyController {
     }
 
     const target = layoutFitting(this.host.split.layout, occupants.length)
-    if (target !== this.host.split.layout) this.host.applyLayout(target, { fill: false })
+    if (target !== this.host.split.layout) this.host.applyLayout(target, INCIDENTAL)
 
     if (stayActive === null) return
     const tile = this.host.split.tileOfTab(stayActive)
@@ -546,26 +669,5 @@ export class TileOccupancyController {
           !this.host.isHiddenByCollapse(id) &&
           !this.host.isArrangementMember(id)
       )
-  }
-}
-
-/**
- * The smallest arrangement down the shrink chain that still has room for `occupants`.
- *
- * Written as "how few panes will do" rather than "one step per closed tab", although the two agree
- * whenever the view had no empty pane before the close. The difference is one that had: a seat whose
- * tab closed while the view was put away comes back empty, and counting steps would leave it standing
- * beside the pane the close emptied, with nothing ever to fill it now that no loaded tab is pulled in
- * (KTD10). `1x1` is the floor, so a window with nothing left in a tile still has one to put something
- * back into.
- *
- * Every step of the chain removes exactly one tile, so this terminates on any layout.
- */
-function layoutFitting(layout: LayoutId, occupants: number): LayoutId {
-  let current = layout
-  for (;;) {
-    const smaller = shrunkLayout(current)
-    if (smaller === null || TILE_COUNT[smaller] < Math.max(occupants, 1)) return current
-    current = smaller
   }
 }

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { emptyTiles, shrunkLayout, tabsToCloseOnShrink } from '@shared/split/tile-fill.js'
+import {
+  emptyTiles,
+  isStartPageTile,
+  layoutFitting,
+  orderWithRunAtEntry,
+  planShrink,
+  shrunkLayout,
+  tabsToCloseOnShrink
+} from '@shared/split/tile-fill.js'
 import { LAYOUT_IDS, TILE_COUNT, type LayoutId } from '@shared/split/layout.js'
+import { HOME_URL } from '@shared/url/omnibox.js'
 
 /**
  * Filling a fresh layout, and cleaning up after it.
@@ -125,5 +134,162 @@ describe('shrunkLayout', () => {
     for (const layout of LAYOUT_IDS) {
       expect(shrunkLayout(layout), layout).not.toBe(layout)
     }
+  })
+})
+
+describe('isStartPageTile (KTD8)', () => {
+  const settled = { loading: false, pendingInput: null }
+
+  it('counts a settled start page', () => {
+    expect(isStartPageTile({ committedUrl: HOME_URL, ...settled })).toBe(true)
+    expect(isStartPageTile({ committedUrl: 'tessera://start/', ...settled })).toBe(true)
+  })
+
+  it('counts about:blank that is not loading', () => {
+    expect(isStartPageTile({ committedUrl: 'about:blank', ...settled })).toBe(true)
+  })
+
+  it('does not count an empty address whose first navigation is still running', () => {
+    // A tile the user has just sent somewhere shows nothing yet, and closing it would lose the page
+    // on its way in.
+    expect(isStartPageTile({ committedUrl: '', loading: true, pendingInput: null })).toBe(false)
+  })
+
+  it('does not count a start page with an address waiting to be loaded', () => {
+    expect(
+      isStartPageTile({ committedUrl: HOME_URL, loading: false, pendingInput: 'https://a.example' })
+    ).toBe(false)
+  })
+
+  it('does not count a web page, or another internal page', () => {
+    expect(isStartPageTile({ committedUrl: 'https://youtube.com/', ...settled })).toBe(false)
+    expect(isStartPageTile({ committedUrl: 'tessera://history', ...settled })).toBe(false)
+  })
+})
+
+describe('layoutFitting', () => {
+  it('walks down the shrink chain to the fewest panes that still hold every page', () => {
+    expect(layoutFitting('2x2', 2)).toBe('1x2')
+    expect(layoutFitting('1x4', 3)).toBe('1x3')
+    expect(layoutFitting('1x3', 2)).toBe('1x2')
+  })
+
+  it('never grows and stays put when the pages fill it', () => {
+    expect(layoutFitting('1x2', 3)).toBe('1x2')
+    expect(layoutFitting('2x2', 4)).toBe('2x2')
+  })
+
+  it('stops at a single pane, even for none', () => {
+    expect(layoutFitting('2x2', 1)).toBe('1x1')
+    expect(layoutFitting('1x3', 0)).toBe('1x1')
+  })
+})
+
+describe('planShrink (R8, KTD8)', () => {
+  const startPages = (...ids: string[]) => {
+    const set = new Set(ids)
+    return (tabId: string): boolean => set.has(tabId)
+  }
+
+  it('closes both start pages of a 2x2 and seats the two pages side by side (AE2)', () => {
+    const plan = planShrink(['s1', 'youtube', 's2', 'twitch'], startPages('s1', 's2'), '1x2')
+    expect(plan).toEqual({
+      close: ['s1', 's2'],
+      remaining: ['youtube', 'twitch'],
+      seats: ['youtube', 'twitch'],
+      freed: [],
+      layout: '1x2',
+      active: 'youtube'
+    })
+  })
+
+  it('makes the page that finds no pane an ordinary tab, in tile order', () => {
+    const plan = planShrink(['a', 'b', 'c'], startPages(), '1x2', 'b')
+    expect(plan.close).toEqual([])
+    expect(plan.seats).toEqual(['a', 'b'])
+    expect(plan.freed).toEqual(['c'])
+    expect(plan.remaining).toEqual(['a', 'b', 'c'])
+    expect(plan.layout).toBe('1x2')
+    expect(plan.active).toBe('b')
+  })
+
+  it('moves pages up past empty panes rather than dropping one off the end', () => {
+    const plan = planShrink(['a', null, 'c'], startPages(), '1x2')
+    expect(plan.seats).toEqual(['a', 'c'])
+    expect(plan.freed).toEqual([])
+  })
+
+  it('settles on the smallest layout that fits what is left of the one chosen', () => {
+    const plan = planShrink(['youtube', 's1', 's2', 'twitch'], startPages('s1', 's2'), '1+2')
+    expect(plan.layout).toBe('1x2')
+    expect(plan.seats).toEqual(['youtube', 'twitch'])
+  })
+
+  it('dissolves into one pane when fewer than two pages are left', () => {
+    const plan = planShrink(['s1', 'youtube', 's2'], startPages('s1', 's2'), '1x2')
+    expect(plan.layout).toBe('1x1')
+    expect(plan.seats).toEqual(['youtube'])
+    expect(plan.freed).toEqual([])
+    expect(plan.active).toBe('youtube')
+  })
+
+  it('ends with the active page in the single pane and the rest freed in tile order (AE3)', () => {
+    const plan = planShrink(['youtube', 'start', 'twitch'], startPages('start'), '1x1', 'twitch')
+    expect(plan).toEqual({
+      close: ['start'],
+      remaining: ['youtube', 'twitch'],
+      seats: ['twitch'],
+      freed: ['youtube'],
+      layout: '1x1',
+      active: 'twitch'
+    })
+  })
+
+  it('makes the first remaining page active when the active tile held a start page', () => {
+    const plan = planShrink(['youtube', 'start', 'twitch'], startPages('start'), '1x1', 'start')
+    expect(plan.seats).toEqual(['youtube'])
+    expect(plan.active).toBe('youtube')
+    const shrunk = planShrink(['s', 'a', 'b', 'c'], startPages('s'), '1x2', 's')
+    expect(shrunk.active).toBe('a')
+  })
+
+  it('leaves nothing to seat when every tile is a start page', () => {
+    const plan = planShrink(['s1', 's2', null], startPages('s1', 's2'), '1x1')
+    expect(plan).toEqual({
+      close: ['s1', 's2'],
+      remaining: [],
+      seats: [],
+      freed: [],
+      layout: '1x1',
+      active: null
+    })
+  })
+})
+
+describe('orderWithRunAtEntry', () => {
+  it('stands the run where the first member stood, in the order given', () => {
+    const order = ['mail', 'twitch', 'news', 'start', 'youtube', 'docs']
+    expect(
+      orderWithRunAtEntry(order, ['youtube', 'start', 'twitch'], ['youtube', 'twitch'])
+    ).toEqual(['mail', 'youtube', 'twitch', 'news', 'start', 'docs'])
+  })
+
+  it('keeps the place of the entry when its first member is a start page about to close', () => {
+    const order = ['mail', 'start', 'news', 'a', 'b']
+    expect(orderWithRunAtEntry(order, ['start', 'a', 'b'], ['b', 'a'])).toEqual([
+      'mail',
+      'b',
+      'a',
+      'start',
+      'news'
+    ])
+  })
+
+  it('leaves the order alone when no member is in it', () => {
+    expect(orderWithRunAtEntry(['a', 'b'], ['x'], ['x'])).toEqual(['a', 'b'])
+  })
+
+  it('never adds a tab the strip does not hold', () => {
+    expect(orderWithRunAtEntry(['a', 'b'], ['b', 'gone'], ['gone', 'b'])).toEqual(['a', 'b'])
   })
 })

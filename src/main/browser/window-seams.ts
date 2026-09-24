@@ -4,6 +4,7 @@ import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { effectiveZoomPercent } from '@shared/zoom/model.js'
 import { isTabHidden } from '@shared/tabgroups/model.js'
 import { defaultArrangementView } from '@shared/arrangements/model.js'
+import { isStartPageTile } from '@shared/split/tile-fill.js'
 import type { ArrangementBook } from '../data/ArrangementStore.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SplitController } from './SplitController.js'
@@ -251,14 +252,22 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
       internals.relayout()
       internals.broadcast()
     },
-    stowTiling: () => stowTiling(internals, audio)
+    stowTiling: () => stowTiling(internals, audio),
+    /*
+      Through `occupancy`, read lazily for the reason `applyArrangement` is: the plan for a view that
+      ends is the one the occupancy controller carries out on screen, and ending one off screen is
+      the same plan without the screen (KTD12).
+    */
+    dissolveOffScreen: (seats) => occupancy?.dissolveOffScreen(seats)
   })
 
   occupancy = new TileOccupancyController({
     split: internals.split,
     adaptEnabled: () => internals.getSettings()['splitView.adaptLayoutToTabs'],
     tabOrder: () => internals.tabOrder(),
+    setTabOrder: (order) => internals.setTabOrder(order),
     isEphemeral: (tabId) => internals.tab(tabId)?.ephemeral === true,
+    isStartPage: (tabId) => isStartPage(internals, tabId),
     isHiddenByCollapse: (tabId) => groups.isHidden(tabId),
     /*
       Answered from the book alone, so the question carries nothing about groups to the occupancy
@@ -325,6 +334,24 @@ function tabInTile(internals: WindowInternals, tileIndex: number): Tab | undefin
 }
 
 /**
+ * Whether a tab shows the start page with nothing on its way in (KTD8), read off the tab's state.
+ *
+ * `url` rather than `Tab.currentUrl`, because a tab restored or discarded without a live page has
+ * committed nothing and reports the address it will load: a restored start page is a start page
+ * (R15), and a restored web page is not, although its committed address is still empty. A tab that
+ * is gone is no start page to close.
+ */
+function isStartPage(internals: WindowInternals, tabId: string): boolean {
+  const state = internals.tab(tabId)?.toState()
+  if (state === undefined) return false
+  return isStartPageTile({
+    committedUrl: state.url,
+    loading: state.loading,
+    pendingInput: state.pendingInput
+  })
+}
+
+/**
  * Asks a page to leave its own fullscreen.
  *
  * Asked rather than forced, and the failure swallowed on purpose. Leaving fullscreen is the page's own
@@ -371,7 +398,7 @@ function stowTiling(internals: WindowInternals, audio: TileAudioController): voi
   }
   if (split.layout === '1x1') return
 
-  internals.applyLayout('1x1', { fill: false })
+  internals.applyLayout('1x1', { fill: false, closeStartPages: false })
   split.restoreView(defaultArrangementView('1x1'), internals.contentRect())
   audio.apply()
 }

@@ -79,6 +79,10 @@ import type { ArrangementBook } from '../data/ArrangementStore.js'
  * `applyView()` carry the dividers, the active tile and the tile sounds to and from the window
  * (KTD11), and `stowTiling()` takes the panes off screen when a view is put away. None of them
  * reaches anything but this window's split.
+ *
+ * U4 adds `dissolveOffScreen()`, for ending a view that is put away (KTD12). It is about tabs rather
+ * than panes — its start pages close, the rest stand in the strip where its entry stood — and it
+ * reaches no more than the seats it is handed.
  */
 export interface ArrangementHost {
   /**
@@ -148,6 +152,14 @@ export interface ArrangementHost {
    * (KTD11). The one tile left is empty: whoever put the view away is about to fill it.
    */
   stowTiling(): void
+  /**
+   * Turn the tabs of a put-away view that has just ended into ordinary tabs: its start pages close,
+   * and the rest stand where its entry stood in the strip, in tile order (R8, KTD12).
+   *
+   * Called after the arrangement is forgotten, so a start page closing finds no entry to empty a seat
+   * in, and nothing is seated: the view on screen and the active tab stay as they are.
+   */
+  dissolveOffScreen(seats: ReadonlyArray<string | null>): void
 }
 
 export class ArrangementController {
@@ -353,7 +365,8 @@ export class ArrangementController {
    * Which arrangements go is `arrangementsEndedBy`: every one this seating owns, and none a
    * collapsed group is holding on to. Nothing here closes, moves or regroups a tab, and nothing
    * touches a tab group — there is no group to reach (KTD1). Tiling again later starts from
-   * nothing, and the next settle creates a new entry for it. U4 makes this the "beenden" it is.
+   * nothing, and the next settle creates a new entry for it. Which of its tabs close and where the
+   * rest go is `TileOccupancyController.chooseLayout`'s, which calls this first (R8).
    */
   endTiling(): void {
     const ended = arrangementsEndedBy(
@@ -363,6 +376,30 @@ export class ArrangementController {
     )
     for (const arrangement of ended) this.#host.book.forget(arrangement.id)
     this.#liveId = null
+  }
+
+  /**
+   * Ends a put-away arrangement by its id — "Kachelansicht beenden" on an entry that is not on screen
+   * (KTD12, R8).
+   *
+   * Off screen, which is the point: a layout can only change on screen, but ending needs no screen.
+   * The arrangement is forgotten first, while every one of its tabs is still where it was, and then
+   * `dissolveOffScreen` closes its start pages and stands the rest where its entry stood — the same
+   * plan the view on screen gets when the single layout is chosen, over the seats stored here.
+   *
+   * Nothing for the arrangement on screen: ending that one is choosing the single layout
+   * (`TileOccupancyController.chooseLayout('1x1')`), which also decides what the one pane shows.
+   * Nothing for an id this window does not hold whole — a tab of another window is not this
+   * window's to close or move (R16). A tab that a fold keeps out of the strip is no obstacle, unlike
+   * for `restore`: ending puts nothing on screen, so there is no hidden page to show.
+   */
+  endArrangement(id: string): void {
+    if (id === this.#liveId) return
+    const window: WindowTabs = { liveTabIds: this.#host.liveTabIds(), hiddenTabIds: [] }
+    const arrangement = restorableArrangement(this.#host.book.list(), id, window)
+    if (arrangement === undefined) return
+    this.#host.book.forget(id)
+    this.#host.dissolveOffScreen(arrangement.seats)
   }
 
   /**
