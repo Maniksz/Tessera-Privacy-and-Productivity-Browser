@@ -22,7 +22,11 @@ interface Call {
   payload: unknown
 }
 
-function installBridge(): { calls: Call[]; emit: (channel: string, payload: unknown) => void } {
+function installBridge(): {
+  calls: Call[]
+  emit: (channel: string, payload: unknown) => void
+  listenerCount: (channel: string) => number
+} {
   const calls: Call[] = []
   const listeners = new Map<string, Array<(payload: unknown) => void>>()
 
@@ -50,7 +54,10 @@ function installBridge(): { calls: Call[]; emit: (channel: string, payload: unkn
       const existing = listeners.get(channel) ?? []
       listeners.set(channel, [...existing, listener])
       return () => {
-        listeners.set(channel, (listeners.get(channel) ?? []).filter((entry) => entry !== listener))
+        listeners.set(
+          channel,
+          (listeners.get(channel) ?? []).filter((entry) => entry !== listener)
+        )
       }
     },
     channels: { invoke: [], event: [] }
@@ -62,7 +69,8 @@ function installBridge(): { calls: Call[]; emit: (channel: string, payload: unkn
     calls,
     emit: (channel, payload) => {
       for (const listener of listeners.get(channel) ?? []) listener(payload)
-    }
+    },
+    listenerCount: (channel) => (listeners.get(channel) ?? []).length
   }
 }
 
@@ -158,5 +166,71 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a collapsed group in the strip', () => 
     })
 
     expect(bridge.calls).toContainEqual({ channel: 'tabs:activate', payload: { tabId: 't2' } })
+  })
+})
+
+/*
+  A tiled view is one entry, so Ctrl+Tab steps over it once (U7, R13). Counting tabs instead would
+  land on its second member as if that were its own entry — and, since the strip has no tab for it,
+  put a page on screen the user cannot find in the strip.
+*/
+describe('Ctrl+Tab / Ctrl+Shift+Tab with a tiled view in the strip', () => {
+  const tabs = [tab('X'), tab('A1'), tab('A2'), tab('Y')]
+  const view = {
+    id: 'A',
+    layoutId: '1x2',
+    tabIds: ['A1', 'A2'],
+    activeTile: 1,
+    activeTabId: 'A2',
+    visible: false
+  }
+
+  function showing(bridge: ReturnType<typeof installBridge>, activeTabId: string): void {
+    act(() => {
+      bridge.emit('tabs:changed', { tabs, activeTabId })
+      bridge.emit('arrangements:changed', { arrangements: [view] })
+    })
+  }
+
+  function press(bridge: ReturnType<typeof installBridge>, action: string): unknown {
+    bridge.calls.length = 0
+    act(() => {
+      bridge.emit('shortcut:triggered', { action })
+    })
+    return bridge.calls.find((call) => call.channel === 'tabs:activate')?.payload
+  }
+
+  it('goes round X, the entry and Y in three steps', () => {
+    const bridge = installBridge()
+    render(<App />)
+
+    showing(bridge, 'X')
+    // The entry is landed on through its active tile's tab, which brings the view back focused there.
+    expect(press(bridge, 'nextTab')).toEqual({ tabId: 'A2' })
+    showing(bridge, 'A2')
+    expect(press(bridge, 'nextTab')).toEqual({ tabId: 'Y' })
+    showing(bridge, 'Y')
+    expect(press(bridge, 'nextTab')).toEqual({ tabId: 'X' })
+  })
+
+  it('steps off the entry from whichever member has focus, and back onto it', () => {
+    const bridge = installBridge()
+    render(<App />)
+
+    // A1 is a member too: the entry is where the strip is, whichever tile is focused.
+    showing(bridge, 'A1')
+    expect(press(bridge, 'nextTab')).toEqual({ tabId: 'Y' })
+    showing(bridge, 'Y')
+    expect(press(bridge, 'previousTab')).toEqual({ tabId: 'A2' })
+  })
+
+  it('stops listening to the tiled views once the window is gone', () => {
+    const bridge = installBridge()
+    const { unmount } = render(<App />)
+    showing(bridge, 'X')
+    unmount()
+    // Emitting after unmount must reach no listener, which is what a missing unsubscribe would break.
+    expect(() => bridge.emit('arrangements:changed', { arrangements: [view] })).not.toThrow()
+    expect(bridge.listenerCount('arrangements:changed')).toBe(0)
   })
 })

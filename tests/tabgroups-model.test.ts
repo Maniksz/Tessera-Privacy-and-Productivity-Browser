@@ -79,7 +79,6 @@ function ids(groups: readonly TabGroup[]): string[] {
 const INSTRUMENTED = instrumented(
   'src/shared/tabgroups/model.ts',
   'src/shared/tabgroups/palette.ts',
-  'src/shared/tabgroups/strip.ts',
   'src/shared/tabgroups/schema.ts'
 )
 
@@ -95,12 +94,12 @@ describe('what the tab strip is allowed to import', () => {
 
     What remains here is the part that rule cannot state: *which* files are the renderer-facing ones.
     `schema.ts` holds the wire schema and must stay out of the strip's reach, exactly as
-    `quicklinks/schema.ts` does; the other three are fair game and must stay cheap.
+    `quicklinks/schema.ts` does; the other two are fair game and must stay cheap.
   */
   const directory = join(process.cwd(), 'src/shared/tabgroups')
 
   /** The files the tab strip may import. `schema.ts` is deliberately absent. */
-  const RENDERER_FACING = ['model.ts', 'palette.ts', 'strip.ts']
+  const RENDERER_FACING = ['model.ts', 'palette.ts']
 
   /**
    * The one module outside the directory these files may name.
@@ -140,7 +139,7 @@ describe('what the tab strip is allowed to import', () => {
   })
 
   it('lists every file in the directory as one or the other', () => {
-    // So a fourth renderer-facing module cannot be added and silently escape both rules above.
+    // So a third renderer-facing module cannot be added and silently escape both rules above.
     const onDisk = readdirSync(directory).sort()
     expect(onDisk).toEqual([...RENDERER_FACING, 'schema.ts'].sort())
   })

@@ -194,7 +194,7 @@ describe('the tab strip names the key beside its one command', () => {
         tabs={[tab()]}
         groups={[]}
         activeTabId="t1"
-        split={null}
+        arrangements={[]}
         leftInset={0}
         rightInset={0}
         titleWithShortcut={shortcutTitles('win32')}
@@ -205,9 +205,8 @@ describe('the tab strip names the key beside its one command', () => {
 
   it('leaves a tab and a group chip without one', () => {
     /*
-      A tab already puts a second line in its `title` — the tile it sits in — which is the precedent the
-      separator follows. Neither a tab nor a group chip is a command with a key, so neither grows a
-      third line.
+      Neither a tab nor a group chip is a command with a key, so neither grows a line for one: a tab's
+      `title` is its title (and, unloaded, why), and a chip's is its name.
     */
     installBridge()
     render(
@@ -217,15 +216,13 @@ describe('the tab strip names the key beside its one command', () => {
           { id: 'g1', tabIds: ['t1'], name: 'Work', color: 'blue', collapsed: false, createdAt: 1 }
         ]}
         activeTabId="t1"
-        split={null}
+        arrangements={[]}
         leftInset={0}
         rightInset={0}
         titleWithShortcut={shortcutTitles('win32')}
       />
     )
-    expect(document.querySelector('[data-tab-id="t1"]')?.getAttribute('title')).toBe(
-      'Example\nIn tile 1'
-    )
+    expect(document.querySelector('[data-tab-id="t1"]')?.getAttribute('title')).toBe('Example')
     expect(titleOf(/^Collapse group Work$/)).toBe('Work')
   })
 })

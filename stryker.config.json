@@ -96,7 +96,6 @@
     "src/shared/thumbnails/model.ts",
     "src/shared/tabgroups/model.ts",
     "src/shared/tabgroups/palette.ts",
-    "src/shared/tabgroups/strip.ts",
     "src/shared/strip/**/*.ts",
     "src/shared/tabgroups/schema.ts",
     "src/shared/history/presentation.ts",

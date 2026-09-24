@@ -2,14 +2,16 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type MouseEvent,
   type WheelEvent
 } from 'react'
-import type { SplitState, TabState } from '@shared/model.js'
-import { stripItems } from '@shared/tabgroups/strip.js'
+import type { TabState } from '@shared/model.js'
+import type { ArrangementSummary } from '@shared/arrangements/screen.js'
+import { stripEntryOf, stripItems, type SplitStripItem } from '@shared/strip/model.js'
 import { MAX_TAB_GROUP_NAME_LENGTH, type TabGroup } from '@shared/tabgroups/model.js'
 import { tabGroupColorToken, type TabGroupColor } from '@shared/tabgroups/palette.js'
 import type { ShortcutTitle } from '@shared/shortcuts/format.js'
@@ -23,9 +25,9 @@ import { TabFavicon } from './TabFavicon.js'
 /**
  * Tab strip.
  *
- * Shows which tile each tab occupies, which is what makes a split layout
- * legible — without it there is no way to tell a hidden-but-loaded tab from a
- * visible one (spec 2).
+ * Loose tabs, group chips, and one entry per tiled view (U7, R1): the pages of a tiled view are
+ * drawn together as that entry rather than as tabs of their own, so the strip needs no tile numbers
+ * to say which pages belong together. `stripItems` decides the sequence.
  *
  * Dragging is pointer-based rather than HTML5 drag and drop; see `useTabDrag` for why. One
  * gesture serves both purposes: released over the strip it reorders, released over a tile it
@@ -41,8 +43,9 @@ interface TabBarProps {
    */
   tabs: TabState[]
   groups: TabGroup[]
+  /** The window's tiled views, as `arrangements:changed` summarises them (KTD5). */
+  arrangements: ArrangementSummary[]
   activeTabId: string | null
-  split: SplitState | null
   leftInset: number
   rightInset: number
   /** Joins a label to the key that also presses the button; see `shortcutTitles`. */
@@ -71,6 +74,8 @@ function groupColorStyle(color: TabGroupColor): CSSProperties {
   const style: Record<string, string> = { '--tab-group-current': tabGroupColorToken(color) }
   return style
 }
+
+type Translate = (key: MessageKey, params?: Record<string, string | number>) => string
 
 /** Which ends of the strip have tabs scrolled past them. */
 interface StripOverflow {
@@ -105,7 +110,7 @@ function GroupChip({
 }: {
   group: TabGroup
   hiddenCount: number
-  t: (key: MessageKey, params?: Record<string, string | number>) => string
+  t: Translate
 }): React.ReactNode {
   const [draft, setDraft] = useState<string | null>(null)
   const name = group.name === '' ? t('tabgroup.unnamed') : group.name
@@ -187,37 +192,169 @@ function GroupChip({
   )
 }
 
+/**
+ * A tiled view's entry: every member's icon in tile order, the title of the tile that had focus, and
+ * controls that act on the whole view by its id (R2, R5, R6).
+ *
+ * By id rather than through a member, because a click brings back the view as it was — its active
+ * tile included — and a close ends every page in it; neither is a question about one tab. The core
+ * owns both (`arrangement-handlers.ts`), so this only reports what was pressed.
+ *
+ * No drag yet: a pointer press on the entry starts nothing, and it carries `data-arrangement-id`
+ * rather than `data-tab-id`, so `useTabDrag` neither counts it as a tab nor drops onto it.
+ */
+function SplitEntry({
+  item,
+  members,
+  selected,
+  listFormat,
+  t
+}: {
+  item: SplitStripItem
+  /** The members this window has, in tile order. */
+  members: TabState[]
+  selected: boolean
+  listFormat: Intl.ListFormat
+  t: Translate
+}): React.ReactNode {
+  const titleOf = (tab: TabState): string => tab.title || t('tab.untitled')
+  const active = members.find((tab) => tab.id === item.activeTabId)
+  const title = active === undefined ? t('tab.untitled') : titleOf(active)
+
+  /*
+    Loud unless every member making sound is muted (KTD11), so the speaker never says "muted" while
+    something plays, and a click on a mixed view silences all of it rather than unmuting the page
+    the user had silenced on purpose. Members with no sound have no say either way.
+  */
+  const audible = members.filter((tab) => tab.audible)
+  const muted = audible.length > 0 && audible.every((tab) => tab.muted)
+
+  const activate = (): void => void invoke('arrangements:activate', { id: item.arrangementId })
+  const close = (): void => void invoke('arrangements:close', { id: item.arrangementId })
+
+  return (
+    <div
+      data-arrangement-id={item.arrangementId}
+      role="tab"
+      tabIndex={selected ? 0 : -1}
+      aria-selected={selected}
+      aria-label={t('tab.splitEntry', {
+        titles: listFormat.format(
+          members.map((tab) =>
+            tab === active ? t('tab.splitEntryActive', { title: titleOf(tab) }) : titleOf(tab)
+          )
+        )
+      })}
+      title={members.map(titleOf).join('\n')}
+      className={[
+        'tab',
+        'tab--split',
+        selected ? 'tab--active' : '',
+        item.group === null ? '' : 'tab--grouped',
+        item.position === null ? '' : `tab--group-${item.position}`
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={item.group === null ? undefined : groupColorStyle(item.group.color)}
+      onClick={activate}
+      onAuxClick={(event) => {
+        // Middle-click closes, as on a tab — here the whole view (R5).
+        if (event.button === 1) {
+          event.preventDefault()
+          close()
+        }
+      }}
+      /*
+        The view's own native menu: change its layout, end it, its group actions, close all (R7). The
+        core builds it from `arrangement-items.ts`; `preventDefault` keeps Chromium's out of the way.
+      */
+      onContextMenu={(event) => {
+        event.preventDefault()
+        void invoke('arrangements:contextMenu', { id: item.arrangementId })
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          activate()
+        }
+      }}
+    >
+      <span className="tab__favicons">
+        {members.map((tab) =>
+          tab.loading ? (
+            <span key={tab.id} className="tab__spinner" aria-hidden="true" />
+          ) : (
+            <TabFavicon key={tab.id} url={tab.faviconUrl} />
+          )
+        )}
+      </span>
+
+      <span className="tab__title">{title}</span>
+
+      {audible.length > 0 && (
+        <button
+          type="button"
+          className="tab__mute"
+          aria-label={t(muted ? 'tab.splitEntryUnmute' : 'tab.splitEntryMute')}
+          onClick={(event) => {
+            event.stopPropagation()
+            void invoke('arrangements:setMuted', { id: item.arrangementId, muted: !muted })
+          }}
+        >
+          <Icon name={muted ? 'volume-off' : 'volume'} size={13} />
+        </button>
+      )}
+
+      <button
+        type="button"
+        className="tab__close"
+        aria-label={t('tab.splitEntryClose')}
+        onClick={(event) => {
+          event.stopPropagation()
+          close()
+        }}
+      >
+        <Icon name="close" size={12} />
+      </button>
+    </div>
+  )
+}
+
 export function TabBar({
   tabs,
   groups,
+  arrangements,
   activeTabId,
-  split,
   leftInset,
   rightInset,
   titleWithShortcut
 }: TabBarProps): React.ReactNode {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
+  // "A, B and C" in the reader's language, for a tiled view's accessible name.
+  const listFormat = useMemo(() => new Intl.ListFormat(locale, { type: 'conjunction' }), [locale])
   const stripRef = useRef<HTMLDivElement>(null)
   const drag = useTabDrag(stripRef)
   const [overflow, setOverflow] = useState<StripOverflow>({ left: false, right: false })
 
-  const tileCount = split?.tileTabIds.length ?? 1
-
   /*
-    The strip's contents: group chips interleaved with the tabs they contain.
+    The strip's contents: group chips interleaved with the tabs and tiled views they contain.
 
-    `stripItems` decides the sequence, including which tabs a folded group hides. The lookups below
+    `stripItems` decides the sequence, including which tabs a folded group hides and which tabs are one
+    tiled view's entry. The lookups below
     exist because it works in tab *ids* — it is shared with anything else that draws a strip and knows
     nothing about `TabState` — while the drag reports positions as indices into `tabs`, which is the
     order the core sent. Keeping the drag on that index means group chips cannot shift a drop target.
   */
   const items = stripItems(
     tabs.map((tab) => tab.id),
-    groups
+    groups,
+    arrangements
   )
   const stateOf = new Map(tabs.map((tab) => [tab.id, tab]))
   const indexOf = new Map(tabs.map((tab, index) => [tab.id, index]))
-  const activeDrawn = items.some((item) => item.kind === 'tab' && item.tabId === activeTabId)
+  // The entry the active tab is drawn in: its own, or its tiled view's whichever tile has focus.
+  const activeEntry = stripEntryOf(items, activeTabId)
+  const activeDrawn = activeEntry !== null
 
   /*
     The active tab stays in sight (R32): whenever it changes, and when a folded group that hid it opens.
@@ -229,9 +366,9 @@ export function TabBar({
   */
   useEffect(() => {
     if (!activeDrawn) return
-    const strip = stripRef.current
-    const element = [...(strip?.querySelectorAll<HTMLElement>('[data-tab-id]') ?? [])].find(
-      (candidate) => candidate.dataset.tabId === activeTabId
+    // The selected entry, a tab or a tiled view, rather than a lookup by id that only a tab answers.
+    const element = stripRef.current?.querySelector<HTMLElement>(
+      '[role="tab"][aria-selected="true"]'
     )
     element?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
   }, [activeTabId, activeDrawn])
@@ -313,6 +450,19 @@ export function TabBar({
             )
           }
 
+          if (item.kind === 'split') {
+            return (
+              <SplitEntry
+                key={`split-${item.arrangementId}`}
+                item={item}
+                members={item.tabIds.flatMap((tabId) => stateOf.get(tabId) ?? [])}
+                selected={item === activeEntry}
+                listFormat={listFormat}
+                t={t}
+              />
+            )
+          }
+
           const tab = stateOf.get(item.tabId)
           const index = indexOf.get(item.tabId) ?? 0
           // Cannot happen — the items were built from `tabs` — but a strip that threw would take the
@@ -320,10 +470,6 @@ export function TabBar({
           if (tab === undefined) return null
 
           const isActive = tab.id === activeTabId
-          const tileLabel =
-            tab.tileIndex === null
-              ? t('tab.unassigned')
-              : t('tab.inTile', { index: tab.tileIndex + 1 })
 
           return (
             <div
@@ -332,18 +478,13 @@ export function TabBar({
               role="tab"
               tabIndex={isActive ? 0 : -1}
               aria-selected={isActive}
-              title={[
-                tab.title || t('tab.untitled'),
-                tileLabel,
-                tab.unloaded ? t('tab.unloaded') : ''
-              ]
+              title={[tab.title || t('tab.untitled'), tab.unloaded ? t('tab.unloaded') : '']
                 .filter(Boolean)
                 .join('\n')}
               className={[
                 'tab',
                 isActive ? 'tab--active' : '',
                 tab.pinned ? 'tab--pinned' : '',
-                tab.tileIndex === null ? 'tab--unassigned' : '',
                 tab.unloaded ? 'tab--unloaded' : '',
                 drag.draggingId === tab.id ? 'tab--dragging' : '',
                 drag.draggingId !== null && drag.reorderIndex === index ? 'tab--dropbefore' : '',
@@ -398,13 +539,6 @@ export function TabBar({
                 >
                   <Icon name={tab.muted ? 'volume-off' : 'volume'} size={13} />
                 </button>
-              )}
-
-              {/* Which tile, so the mapping is visible at a glance (spec 2). */}
-              {tab.tileIndex !== null && tileCount > 1 && (
-                <span className="tab__tile" aria-label={tileLabel}>
-                  {tab.tileIndex + 1}
-                </span>
               )}
 
               <button

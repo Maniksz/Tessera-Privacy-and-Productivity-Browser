@@ -3,7 +3,7 @@ import type { OverlayState } from '@shared/overlay/surface.js'
 import { chromeHiddenAt, chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { internalUrl } from '@shared/product.js'
 import { shortcutTitles } from '@shared/shortcuts/format.js'
-import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
+import { focusTabOf, nextStripEntry, stripItems } from '@shared/strip/model.js'
 import { invoke, subscribe } from './bridge.js'
 import { useBrowserState } from './useBrowserState.js'
 import { useTileRects } from './useTileRects.js'
@@ -162,19 +162,22 @@ export function App(): React.ReactNode {
         case 'nextTab':
         case 'previousTab': {
           /*
+            Over the strip's entries, not over `state.tabs` (U7, R13).
+
             `state.tabs` is `displayOrder()`, which keeps a collapsed group's members in the array
-            so the strip can still say how many are hidden (see `useBrowserState`'s doc comment).
-            Cycling through it unfiltered lands on a tab the strip shows nothing for — the same
-            state `setCollapsed` is supposed to prevent. `activateTabAtStripPosition` already
-            filters with this exact function on the core side; this is that filter's other side.
+            so the chip can say how many are hidden, and which holds every member of a tiled view
+            although the strip draws the view as one entry. Cycling through it would land on a tab
+            the strip shows nothing for. `nextStripEntry` reads the same entries the strip draws
+            and `activateTabAtStripPosition` counts on the core side, so a tiled view is one step
+            and a folded group's members are none.
           */
-          const hidden = new Set(tabsHiddenByCollapse(state.groups))
-          const visible = state.tabs.filter((tab) => !hidden.has(tab.id))
-          if (visible.length === 0) return
-          const index = visible.findIndex((tab) => tab.id === state.activeTabId)
-          const delta = action === 'nextTab' ? 1 : -1
-          const next = visible[(index + delta + visible.length) % visible.length]
-          if (next) void invoke('tabs:activate', { tabId: next.id })
+          const items = stripItems(
+            state.tabs.map((tab) => tab.id),
+            state.groups,
+            state.arrangements
+          )
+          const entry = nextStripEntry(items, state.activeTabId, action === 'nextTab' ? 1 : -1)
+          if (entry) void invoke('tabs:activate', { tabId: focusTabOf(entry) })
           break
         }
         /*
@@ -224,7 +227,7 @@ export function App(): React.ReactNode {
           break
       }
     })
-  }, [state.tabs, state.activeTabId, state.groups])
+  }, [state.tabs, state.activeTabId, state.groups, state.arrangements])
 
   /**
    * Escape walks one step back down the escalation ladder (spec 2).
@@ -312,8 +315,8 @@ export function App(): React.ReactNode {
         <TabBar
           tabs={state.tabs}
           groups={state.groups}
+          arrangements={state.arrangements}
           activeTabId={state.activeTabId}
-          split={state.split}
           leftInset={controls.left}
           rightInset={controls.right}
           titleWithShortcut={titleWithShortcut}

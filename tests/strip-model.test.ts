@@ -175,9 +175,9 @@ describe('stripOrder', () => {
 })
 
 /*
-  The cases `tests/tabgroup-strip.test.ts` holds for the group-only sequence in
-  `src/shared/tabgroups/strip.ts`, held here against this model, so that file and its test can go
-  together once the tab bar reads this one (U7) without a boundary losing its test.
+  The cases the group-only sequence of the former `src/shared/tabgroups/strip.ts` was held to, held
+  here against this model. That file and its test went once the tab bar read this one (U7); these
+  keep every boundary it had tested.
 */
 describe('stripItems for tabs and groups', () => {
   it('is just the tabs in an ungrouped strip, with no group and no position', () => {

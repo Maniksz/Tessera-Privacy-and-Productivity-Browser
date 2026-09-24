@@ -74,7 +74,7 @@ function renderBar(tabs: TabState[], groups: TabGroup[]): void {
       tabs={tabs}
       groups={groups}
       activeTabId={tabs[0]?.id ?? null}
-      split={null}
+      arrangements={[]}
       leftInset={0}
       rightInset={0}
       // The real writer, built for a known platform. A stub returning the label would let a call site
@@ -302,7 +302,7 @@ function bar(tabs: TabState[], groups: TabGroup[], activeTabId: string | null): 
       tabs={tabs}
       groups={groups}
       activeTabId={activeTabId}
-      split={null}
+      arrangements={[]}
       leftInset={0}
       rightInset={0}
       titleWithShortcut={shortcutTitles('win32')}

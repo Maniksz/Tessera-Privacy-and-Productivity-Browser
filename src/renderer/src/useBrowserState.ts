@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { SplitState, TabState, WindowState } from '@shared/model.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
+import type { ArrangementSummary } from '@shared/arrangements/screen.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { invoke, subscribe } from './bridge.js'
 
@@ -22,6 +23,12 @@ export interface BrowserState {
    */
   tabs: TabState[]
   groups: TabGroup[]
+  /**
+   * The window's tiled views, each one entry in the strip (U7, KTD5): members in tile order, the tab
+   * of the active tile, and which one is on screen. Put-away ones included — that is what the strip
+   * draws them for.
+   */
+  arrangements: ArrangementSummary[]
   activeTabId: string | null
   split: SplitState | null
   window: WindowState | null
@@ -31,6 +38,7 @@ export interface BrowserState {
 const EMPTY: BrowserState = {
   tabs: [],
   groups: [],
+  arrangements: [],
   activeTabId: null,
   split: null,
   window: null,
@@ -65,6 +73,13 @@ export function useBrowserState(): BrowserState {
       */
       subscribe('tabgroups:changed', ({ groups }) => {
         setState((previous) => ({ ...previous, groups }))
+      }),
+      /*
+        Its own event for `tabgroups:changed`'s reason: a tiled view is a summary per view rather
+        than a field per tab, and folding it into `tabs:changed` would widen every tab for it.
+      */
+      subscribe('arrangements:changed', ({ arrangements }) => {
+        setState((previous) => ({ ...previous, arrangements }))
       }),
       subscribe('split:changed', (split) => {
         setState((previous) => ({ ...previous, split }))
