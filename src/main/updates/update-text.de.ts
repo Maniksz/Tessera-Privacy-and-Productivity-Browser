@@ -32,6 +32,9 @@ export const de = {
   upToDateMessage: 'Diese Kopie ist {current}; Neueres ist nicht veröffentlicht.',
   nothingPublishedMessage:
     'Es ist noch keine Version veröffentlicht, also gibt es nichts Neueres als diese Kopie.',
+  noStableReleaseTitle: 'Noch keine stabile Version',
+  noStableReleaseMessage:
+    'Jede bisher veröffentlichte Version ist eine Vorabversion, der stabile Kanal hat also noch nichts anzubieten. Diese Kopie ist {current}; mit „Alpha“ in den Einstellungen bekommst du die aktuellen Versionen.',
   checkFailedTitle: 'Die Suche konnte nicht abgeschlossen werden',
   checkFailedMessage:
     'GitHub war nicht erreichbar, es gibt also nichts zu berichten. Diese Kopie ist unverändert; du kannst es später erneut versuchen.',

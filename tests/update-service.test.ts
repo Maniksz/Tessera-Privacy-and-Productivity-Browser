@@ -337,6 +337,91 @@ describe('who is offered what', () => {
   })
 })
 
+/**
+ * The stable channel before this project has published a single stable release.
+ *
+ * Every release so far is a prerelease, and GitHub's "latest release" excludes those, so a `stable`
+ * check has nothing to resolve. "No new version" is the wrong answer to that — it reads as "you are
+ * current" to somebody who will never be offered anything — and "the check could not be completed"
+ * is the other wrong answer, sending them looking for a network problem they do not have.
+ */
+describe('the stable channel with no stable release yet', () => {
+  const stable = { 'updates.channel': 'stable' } as const
+
+  it('says there is no stable version, not that this copy is current', async () => {
+    const h = harness({
+      settings: stable,
+      current: '0.3.0-alpha.2',
+      feed: { kind: 'no-stable-release' }
+    })
+    const outcome = await h.service.checkOnDemand()
+
+    expect(outcome).toEqual({ kind: 'no-stable-release' })
+    expect(h.policies.map((policy) => policy.allowPrerelease)).toEqual([false])
+    const [only] = h.prompts.slice(0, 1)
+    expect(only?.kind).toBe('no-stable-release')
+    expect(only?.severity).toBe('info')
+    expect(only?.title).toBe('No stable version yet')
+    expect(only?.message).toContain('0.3.0-alpha.2')
+    expect(only?.message).toContain('Alpha')
+    expect(only?.buttons.map((button) => button.answer)).toEqual(['dismiss'])
+    expect(h.downloads).toBe(0)
+  })
+
+  it('is its own sentence, apart from both "up to date" and a failed check', () => {
+    for (const locale of ['en', 'de'] as const) {
+      const none = noticePrompt({ locale, kind: 'no-stable-release', current: '1.0.0' })
+      const current = noticePrompt({ locale, kind: 'up-to-date', current: '1.0.0' })
+      const failed = noticePrompt({ locale, kind: 'check-failed', current: '1.0.0' })
+
+      expect(none.title, locale).not.toBe(current.title)
+      expect(none.title, locale).not.toBe(failed.title)
+      expect(none.message, locale).toContain('1.0.0')
+      expect(none.message, locale).toContain('Alpha')
+    }
+    expect(noticePrompt({ locale: 'de', kind: 'no-stable-release', current: '1.0.0' }).title).toBe(
+      'Noch keine stabile Version'
+    )
+  })
+
+  it('keeps "up to date" for a stable release that exists and is not newer', async () => {
+    const h = harness({
+      settings: stable,
+      current: '1.0.0',
+      feed: { kind: 'offer', version: '0.9.0' }
+    })
+    const outcome = await h.service.checkOnDemand()
+
+    expect(outcome).toEqual({ kind: 'up-to-date', version: '0.9.0' })
+    expect(h.prompts.map((prompt) => prompt.kind)).toEqual(['up-to-date'])
+  })
+
+  it('leaves the alpha channel offering the newest prerelease', async () => {
+    const h = harness({
+      settings: { 'updates.channel': 'alpha' },
+      current: '0.3.0-alpha.1',
+      feed: { kind: 'offer', version: '0.3.0-alpha.2' }
+    })
+    await h.service.checkOnDemand()
+
+    expect(h.policies.map((policy) => policy.allowPrerelease)).toEqual([true])
+    expect(h.prompts.map((prompt) => prompt.kind)).toEqual(['offer'])
+  })
+
+  it('writes no warning line, because nothing failed', async () => {
+    const warn = quietWarnings()
+    try {
+      const h = harness({ settings: stable, feed: { kind: 'no-stable-release' } })
+      await h.service.checkAutomatically()
+
+      expect(warn).not.toHaveBeenCalled()
+      expect(h.prompts).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe('the first consent: told, not downloaded', () => {
   it('asks before fetching anything, and fetches nothing when the answer is no', async () => {
     /*
@@ -645,6 +730,7 @@ describe('a check that finds nothing, or fails', () => {
   const uneventful: ReadonlyArray<readonly [string, UpdateFeedResult]> = [
     ['the network is unreachable', { kind: 'unreachable', detail: 'ENOTFOUND github.com' }],
     ['the repository has nothing published', { kind: 'nothing-published' }],
+    ['the stable channel has no release yet', { kind: 'no-stable-release' }],
     ['this copy has no feed at all', { kind: 'no-feed' }],
     ['there is nothing newer', { kind: 'offer', version: '1.0.0' }]
   ]

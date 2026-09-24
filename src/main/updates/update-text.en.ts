@@ -35,6 +35,9 @@ export const en = {
   upToDateMessage: 'This copy is {current}, and nothing newer has been published.',
   nothingPublishedMessage:
     'No version has been published yet, so there is nothing newer than this copy.',
+  noStableReleaseTitle: 'No stable version yet',
+  noStableReleaseMessage:
+    'Every version published so far is a prerelease, so the stable channel has nothing to offer yet. This copy is {current}; choose Alpha in the settings to get the current releases.',
   checkFailedTitle: 'The check could not be completed',
   checkFailedMessage:
     'GitHub could not be reached, so there is nothing to report. This copy is unchanged; you can try again later.',
