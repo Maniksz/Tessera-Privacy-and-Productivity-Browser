@@ -7,7 +7,6 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
-  net,
   safeStorage,
   session,
   shell,
@@ -38,7 +37,7 @@ import {
 } from './startup-flags.js'
 import { openLocalDataProtection } from './data/local-data-protection.js'
 import { describeStoreLoad, type StoreLoadReport } from './data/store-load.js'
-import { applySecureDns } from './session/hardening.js'
+import { installProxy, networkFetch } from './session/proxy.js'
 import {
   registerAsDefaultBrowser,
   registerInternalProtocol,
@@ -309,7 +308,8 @@ async function main(): Promise<void> {
     )
   }
 
-  applySecureDns(settings.snapshot())
+  // The proxy on every session, and secure DNS, before anything below fetches or restores (U13).
+  await installProxy(settings)
   // Armed now, so a crash from here on still leaves the clearing owed on disk (KTD7).
   await watchExitNote(exitNote, settings)
 
@@ -322,7 +322,7 @@ async function main(): Promise<void> {
   */
   const publicSuffixes = new PublicSuffixSubscription({
     directory: publicSuffixDir(),
-    fetchList: async (url) => readPublicSuffixBody(await net.fetch(url)),
+    fetchList: async (url) => readPublicSuffixBody(await networkFetch(url)),
     toAscii: domainToASCII
   })
   await publicSuffixes.load()
@@ -335,13 +335,13 @@ async function main(): Promise<void> {
     the time the handler can be called. Registering first and filling the store in later would work
     almost always and fail on the icons of the very first page — the one case nobody re-tests.
 
-    `net.fetch` rather than the global `fetch`: it goes through Chromium's network stack, so the one
-    request this cache ever makes per site obeys the same proxy, DNS and certificate settings as the
-    page the icon belongs to. Node's fetch would quietly bypass all of it, including secure DNS.
+    `networkFetch` (`net.fetch` behind the kill switch) rather than the global `fetch`: Chromium's stack,
+    so the one request this cache makes per site obeys the same proxy rule, kill switch, DNS and
+    certificates as the page the icon belongs to. Node's fetch would quietly bypass all of it.
   */
   const faviconStore = await FaviconStore.open({
     directory: faviconCacheDir(),
-    fetch: (url) => net.fetch(url),
+    fetch: networkFetch,
     codec: protection.codec
   })
   favicons = faviconStore
@@ -698,10 +698,10 @@ async function main(): Promise<void> {
   /*
     The blocker, wired at last.
 
-    `net.fetch` rather than Node's global, and the store *requires* the fetcher for exactly that
-    reason: a list download must go through Chromium's network stack, so it obeys the same proxy, the
-    same secure DNS and the same certificate store as the pages the list protects. Node's fetch would
-    slip past a tunnel the user turned on — one request every five days, to a third party, outside the
+    `networkFetch` rather than Node's global, and the store *requires* the fetcher for exactly that
+    reason: a list download must go through Chromium's network stack, so it obeys the same proxy rule,
+    kill switch, secure DNS and certificate store as the pages the list protects. Node's fetch would
+    slip past a proxy the user turned on — one request every five days, to a third party, outside the
     protection the user configured.
 
     Built here and *started* further down, after the first window exists. Constructing it is what closes
@@ -727,7 +727,7 @@ async function main(): Promise<void> {
   const filterSubscription = new FilterSubscription({
     directory: filterListCacheDir(),
     fetchList: async (url) => {
-      const response = await net.fetch(url)
+      const response = await networkFetch(url)
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
       return response.text()
     },
@@ -1092,9 +1092,6 @@ async function main(): Promise<void> {
         platform: currentPlatform(),
         checkForUpdates: () => updates.checkNow()
       })
-    }
-    if ('network.secureDnsMode' in changed || 'network.secureDnsServers' in changed) {
-      applySecureDns(settings.snapshot())
     }
   })
 

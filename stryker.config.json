@@ -145,6 +145,7 @@
     "src/main/data/clear-data.ts",
     "src/shared/privacy/https-token.ts",
     "src/main/privacy/https-exemptions.ts",
+    "src/shared/network/proxy-rules.ts",
     "!**/*.d.ts"
   ],
   "checkers": ["typescript"],

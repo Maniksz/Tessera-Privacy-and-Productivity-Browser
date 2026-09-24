@@ -5,6 +5,7 @@ import { autoUpdater } from 'electron-updater'
 import type { Locale } from '@shared/i18n/catalog.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { currentPlatform } from '../paths.js'
+import { updaterNetworkReady } from '../session/proxy.js'
 import {
   UpdateService,
   type UpdateAnswer,
@@ -90,7 +91,8 @@ export function installUpdateChecks(options: InstallUpdatesOptions): UpdateServi
     showPrompt: (prompt) => showPrompt(prompt, options.parentWindow()),
     openReleasePage: (url) => {
       void shell.openExternal(url)
-    }
+    },
+    networkReady: updaterNetworkReady
   })
   service.start()
   return service

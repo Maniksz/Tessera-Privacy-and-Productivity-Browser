@@ -302,9 +302,19 @@ export const settingDefinitions = {
   'permissions.midi': def(z.enum(['ask', 'allow', 'deny']), 'deny', 'permissions'),
 
   // --- Netzwerk ------------------------------------------------------------
-  'network.proxyMode': def(z.enum(['direct', 'system', 'manual']), 'direct', 'network', 'restart'),
-  'network.proxyUrl': def(z.string(), '', 'network', 'restart'),
-  /** No traffic at all if the tunnel drops (spec 4). */
+  /**
+   * Live on every session, the updater's and the main process's own requests (U13, R20). The rule is
+   * `@shared/network/proxy-rules.ts`'s; `main/session/proxy.ts` applies it. "manual" is refused while
+   * the address below is not usable (`proxyModeConflict`), and an address that stops being usable is
+   * not applied: the last valid rule stays.
+   */
+  'network.proxyMode': def(z.enum(['direct', 'system', 'manual']), 'direct', 'network'),
+  'network.proxyUrl': def(z.string(), '', 'network'),
+  /**
+   * No request leaves by a direct way while a proxy is in use (KTD8): a manual rule without
+   * `direct://`, and in system mode the pipeline's `kill-switch` stage. Nothing to do in direct mode,
+   * and an operating-system VPN is not detected.
+   */
   'network.killSwitch': def(z.boolean(), true, 'network'),
   'network.secureDnsMode': def(z.enum(['secure', 'automatic', 'off']), 'secure', 'network'),
   'network.secureDnsServers': def(

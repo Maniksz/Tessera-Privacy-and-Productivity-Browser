@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { app, dialog } from 'electron'
+import { app, dialog, type IpcMainInvokeEvent } from 'electron'
 import type { SettingsStore } from '../settings/SettingsStore.js'
 import { describeSettings } from '../settings/describe.js'
 import { userRulesText } from '../settings/user-rules-text.js'
@@ -12,10 +12,10 @@ import { findLink } from '@shared/quicklinks/model.js'
 import { findService } from '../find/service.js'
 import { readerOutcomeFor } from '../reader/reader-mode.js'
 import { assertAllChannelsRegistered, configureSenderPolicy, handle, OK } from './router.js'
-import { catalogs, resolveLocale, type Locale } from '@shared/i18n/catalog.js'
+import { catalogs, resolveLocale, translate, type Locale } from '@shared/i18n/catalog.js'
 import { DEFAULT_BINDINGS } from '@shared/shortcuts/bindings.js'
 import { nextZoomPercent } from '@shared/gestures/zoom.js'
-import { translate } from '@shared/i18n/catalog.js'
+import { probeSystemProxy } from '../session/proxy.js'
 import type { HistoryStore } from '../data/HistoryStore.js'
 import { buildTabContextMenu } from '../menu/tabContextMenu.js'
 import { registerPermissionHandlers } from './permission-handlers.js'
@@ -32,7 +32,6 @@ import {
 } from '@shared/filters/site-exemption.js'
 import { internalUrl } from '@shared/product.js'
 import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
-import type { IpcMainInvokeEvent } from 'electron'
 import type { MediaSessions } from '../media/MediaSessions.js'
 import type { ElementPicker } from '../privacy/ElementPicker.js'
 import type { UserRuleStore, UserRuleTextEditor } from '../data/UserRuleStore.js'
@@ -149,6 +148,7 @@ export function registerIpcHandlers(deps: {
   )
 
   registerUpdateHandlers({ handle, checkForUpdates: deps.checkForUpdates, ok: OK })
+  handle('network:probeSystemProxy', () => probeSystemProxy())
 
   // --- window --------------------------------------------------------------
   handle('window:getState', (_payload, event) => {

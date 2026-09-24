@@ -1,7 +1,6 @@
 import { app, BrowserWindow, screen, type Session } from 'electron'
 import { join } from 'node:path'
 import type { ChromeInsets, WindowState } from '@shared/model.js'
-
 import type { EventChannel } from '@shared/ipc/channels.js'
 import type { EventPayload } from '@shared/ipc/contract.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
@@ -51,6 +50,7 @@ import { planViews } from '@shared/browser/view-visibility.js'
 import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
 import { CloseTabFallback, pageKeyAction, type PageKeystroke } from './page-keys.js'
 import { CloseContract, askToLeave, hostOf, preventDefaultOf } from './unload-guard.js'
+import { loadAfterProxyRule } from '../session/proxy.js'
 
 /**
  * One browser window: its chrome UI, its tabs, its split layout.
@@ -641,9 +641,8 @@ export class BrowserWindowController implements PermissionHost {
     this.#permissionTabs.set(tab, { webContentsId: tab.view.webContents.id, url: tab.currentUrl })
     this.#close.track(tab.id)
     this.#tabOrder.push(tab.id)
-    // Index 0 puts the tab view at the bottom of the child stack, which keeps the overlay
-    // layer above every tab no matter when each was added. Appending instead would put the
-    // newest tab above the overlay and let it swallow the surface's clicks.
+    // Index 0: the bottom of the child stack, so the overlay stays above every tab whenever it was
+    // added. Appending would put the newest tab above the overlay, swallowing the surface's clicks.
     this.window.contentView.addChildView(tab.view, 0)
 
     /**
@@ -665,7 +664,8 @@ export class BrowserWindowController implements PermissionHost {
       if (!options.background) this.split.setActiveTile(tile)
     }
 
-    if (options.deferred === undefined) tab.loadUrl(options.url ?? this.#startupUrl())
+    if (options.deferred === undefined)
+      loadAfterProxyRule(this.options.session, tab, options.url ?? this.#startupUrl())
     else tab.deferLoad(options.deferred)
 
     this.relayout()

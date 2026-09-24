@@ -35,11 +35,11 @@ export interface FilterSubscriptionOptions {
   /**
    * Downloads one list body.
    *
-   * Electron's `net.fetch` at the call site, never Node's global. A list is fetched over the same
-   * network stack as the pages it protects, which means the same proxy, the same DNS — including
-   * secure DNS — and the same certificate store. Node's fetch would quietly bypass all of it, and
-   * the one request per list per five days is precisely the request a user has configured a proxy
-   * for.
+   * `networkFetch` at the call site — Electron's `net.fetch` once the proxy rule is applied, refused
+   * where the kill switch would refuse a page — never Node's global. A list is fetched over the same
+   * network stack as the pages it protects: the same proxy rule, the same DNS — including secure
+   * DNS — and the same certificate store. Node's fetch would quietly bypass all of it, and the one
+   * request per list per five days is precisely the request a user has configured a proxy for.
    */
   readonly fetchList: (url: string) => Promise<string>
   readonly getSettings: () => SettingsSnapshot

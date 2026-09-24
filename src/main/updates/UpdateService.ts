@@ -342,6 +342,11 @@ export interface UpdateServiceOptions {
   readonly showPrompt: ShowUpdatePrompt
   readonly openReleasePage: (url: string) => void
   /**
+   * Settles once the updater's session runs under the current proxy rule (U13). Awaited before every
+   * check and every download, so neither leaves under a rule that is being replaced. Never rejects.
+   */
+  readonly networkReady?: () => Promise<void>
+  /**
    * Overridden in tests; defaults to `IN_PLACE_UPDATES`. The adapter must not pass it — the fitness
    * functions check that table, and a second one here would be invisible to them.
    */
@@ -495,6 +500,7 @@ export class UpdateService {
     const channel: UpdateChannel = getSettings()['updates.channel']
 
     updater.configure(updatePolicyFor(channel))
+    await this.#options.networkReady?.()
     const found = await updater.check()
 
     if (found.kind === 'unreachable') {
@@ -562,6 +568,7 @@ export class UpdateService {
   /** Consent two has been given; consent three is the restart. */
   async #download(version: string): Promise<UpdateOutcome> {
     const { updater, showPrompt, locale } = this.#options
+    await this.#options.networkReady?.()
     const downloaded = await updater.download()
 
     if (downloaded.kind === 'failed') {

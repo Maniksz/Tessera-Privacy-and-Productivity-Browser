@@ -73,6 +73,7 @@ function harness(
     readonly checkIntervalMs?: number
     readonly shippedTimers?: boolean
     readonly showPrompt?: UpdateServiceOptions['showPrompt']
+    readonly networkReady?: UpdateServiceOptions['networkReady']
   } = {}
 ): Harness {
   const prompts: UpdatePrompt[] = []
@@ -111,6 +112,7 @@ function harness(
         return Promise.resolve(overrides.answer?.(prompt) ?? 'dismiss')
       }),
     openReleasePage: (url) => opened.push(url),
+    ...(overrides.networkReady === undefined ? {} : { networkReady: overrides.networkReady }),
     // No timers by default: every test drives a check itself, so nothing here depends on a clock.
     ...(overrides.shippedTimers === true
       ? {}
@@ -971,5 +973,35 @@ describe('nothing here may end the browser', () => {
     } finally {
       reported.mockRestore()
     }
+  })
+})
+
+describe('the proxy rule before the network (U13)', () => {
+  it('checks and downloads only once the updater session runs under its rule', async () => {
+    const gates: Array<() => void> = []
+    const waits: string[] = []
+    const h = harness({
+      platform: 'darwin',
+      inPlaceUpdates: { ...IN_PLACE_UPDATES, darwin: true },
+      feed: { kind: 'offer', version: '1.1.0' },
+      answer: (prompt) => (prompt.kind === 'offer' ? 'download' : 'dismiss'),
+      networkReady: () =>
+        new Promise<void>((resolve) => {
+          waits.push(`wait-${String(waits.length)}`)
+          gates.push(resolve)
+        })
+    })
+    const running = h.service.checkOnDemand()
+    await Promise.resolve()
+    expect(h.checks, 'checked before the rule was in place').toBe(0)
+    gates.shift()?.()
+    await vi.waitFor(() => {
+      expect(waits).toHaveLength(2)
+    })
+    expect(h.downloads, 'downloaded before the rule was in place').toBe(0)
+    gates.shift()?.()
+    await running
+    expect(h.checks).toBe(1)
+    expect(h.downloads).toBe(1)
   })
 })

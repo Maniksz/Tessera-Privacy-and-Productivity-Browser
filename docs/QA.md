@@ -145,21 +145,29 @@ tatsächliche Netzwerkverkehr — der einzige Beweis, der zählt.
 | 6.1 | Mitschnitt (Wireshark/mitmproxy) beim Kaltstart, keine Seite geöffnet | **Keine** Verbindung zu Google-, Update- oder Telemetrie-Hosts; `publicsuffix.org` höchstens einmal pro Tag und im selben Kanal wie die Filterlisten |
 | 6.2 | Eine Seite öffnen, Anfragen vergleichen | Nur was die Seite braucht; kein Extra-Verkehr aus dem Unterbau |
 | 6.3 | Verschlüsselte Namensauflösung an, DNS-Port 53 beobachten | Kein Klartext-DNS |
-| 6.4 | Kill-Switch: VPN während des Ladens trennen | Verkehr stoppt, Statusanzeige wechselt |
-| 6.5 | Auf einer WebRTC-Testseite die gemeldeten IPs prüfen | Keine lokale IP sichtbar |
+| 6.4 | Kill-Switch an, Proxy manuell `socks5://127.0.0.1:9050`: Proxy laufen lassen und laden, dann Proxy stoppen und neu laden, im normalen und im privaten Fenster | Mit Proxy lädt die Seite ohne Neustart; ohne Proxy zeigt jede Kachel „Der Proxyserver antwortet nicht." (`-130`), und der Mitschnitt zeigt keine direkte Verbindung |
+| 6.4a | Kill-Switch an, Modus „System" mit einer Systemregel oder PAC, die `DIRECT` liefert | Die Einstellungsseite warnt sofort; eine Seite zeigt „Der Kill-Switch hat diese Seite gestoppt …" mit Knopf „Netzwerk-Einstellungen" |
+| 6.4b | Kill-Switch aus, derselbe manuelle Proxy gestoppt | Die Seite lädt direkt (`,direct://`) |
+| 6.5 | Auf einer WebRTC-Testseite die gemeldeten IPs prüfen, ohne und mit Proxy | Keine lokale IP sichtbar; mit Proxy auch keine öffentliche am Proxy vorbei |
 | 6.6 | Kamera anfordern | Wird verweigert, ohne Systemabfrage |
 | 6.7 | Auf einer Fingerprint-Testseite Werte vergleichen | Betriebssystem, Version, Sprache und Bildschirmwerte sind widerspruchsfrei |
 | 6.8 | Privates Fenster: Seite besuchen, Fenster schließen, Profilordner prüfen | Keine neuen Dateien |
 | 6.9 | „Beim Beenden löschen" an, beenden, Profilordner prüfen | Ausgewählte Kategorien sind weg |
 | 6.10 | Bestandsprofil mit Element-Regel auf einer `.com.sg`-Seite: zweimal starten (der erste Start lädt die volle Public Suffix List, der zweite spielt sie ein) | Die Regel steht weiter aktiviert in der Liste, wird aber nicht angewendet; das Log nennt sie als zu breit |
 
+**Zu 6.4:** Der Kill-Switch kennt nur den Proxy, den Tessera verwenden soll. Ein VPN
+des Betriebssystems wird nicht erkannt; ein Test „VPN trennen" prüft ihn nicht. Im
+Modus „System" gehen der PAC/WPAD-Abruf und `dnsResolve()` im PAC-Skript weiter
+direkt hinaus. Ohne erreichbaren Proxy werden auch Filterlisten und Updates nicht
+abgerufen.
+
 **Zu 6.7:** ein *widersprüchlicher* Fingerprint ist schlechter als keine Maßnahme
 (Abschnitt 4). Wenn die Browser-Kennung Windows meldet und die Zeitzone Europa/Berlin
 sagt, ist das ein Befund und kein Detail.
 
 **Zu 6.1:** Die Public Suffix List (`https://publicsuffix.org/list/public_suffix_list.dat`)
-wird über `net.fetch` geholt, also mit Proxy, Kill-Switch und sicherem DNS wie die
-Filterlisten. Ein Versuch pro 24 Stunden, und keiner, solange die angenommene Liste
+wird über `networkFetch` geholt, also mit Proxy-Regel, Kill-Switch und sicherem DNS wie
+die Filterlisten. Ein Versuch pro 24 Stunden, und keiner, solange die angenommene Liste
 jünger als sieben Tage ist. Im Mitschnitt muss die Anfrage denselben Weg nehmen wie die
 Filterlisten-Downloads; eine Umleitung auf einen anderen Host wird abgelehnt. Eine
 heruntergeladene Liste gilt erst ab dem nächsten Start.

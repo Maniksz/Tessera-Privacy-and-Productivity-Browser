@@ -5,6 +5,7 @@ import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { DEFAULT_LOCALE, type Locale } from '@shared/i18n/catalog.js'
 import { interstitialUrl, type ContinueTokens } from '@shared/privacy/https-token.js'
+import { killSwitchActive, originKey, type KillSwitchVerdict } from '@shared/network/proxy-rules.js'
 import {
   HttpsExemptions,
   continueTokens,
@@ -25,14 +26,15 @@ import {
  * So there is one listener per webRequest event, and the stages are an ordered
  * array inside it:
  *
- *   telemetry domains -> ad/tracker blocker -> redirect blocker
- *                     -> tracking parameters -> HTTPS upgrade
+ *   kill switch -> telemetry domains -> ad/tracker blocker -> redirect blocker
+ *               -> tracking parameters -> HTTPS upgrade
  *
  * Order is data, not emergent behaviour, and `STAGE_ORDER` is asserted by a
  * unit test so a future edit cannot reshuffle it by accident.
  */
 
 export const STAGE_ORDER = [
+  'kill-switch',
   'telemetry',
   'blocker',
   'redirect',
@@ -144,6 +146,58 @@ const REDIRECT_HOSTS: readonly string[] = [
   'shareasale.com',
   'out.reddit.com'
 ]
+
+/**
+ * The kill switch's view of one session: `ProxyGate` in `main/session/proxy.ts` (U13, KTD8).
+ *
+ * An interface so this file does not reach into Electron's proxy calls, and so a test can answer for it.
+ */
+export interface KillSwitchGate {
+  /** The answer for this address now. Never waits; `unknown` means nothing has been asked yet. */
+  verdict(url: string): KillSwitchVerdict
+  /** Settles once `verdict(url)` has an answer or its deadline has passed. Never rejects. */
+  settle(url: string): Promise<void>
+}
+
+/**
+ * What a session without a gate gets: every guarded request refused while the kill switch is active.
+ *
+ * Refusal is the only safe default. A wiring that forgot the gate must look like a browser that loads
+ * nothing through a proxy, not like one that silently loads everything past it.
+ */
+export const NO_GATE: KillSwitchGate = { verdict: () => 'block', settle: () => Promise.resolve() }
+
+/*
+  First in the order, so no stage can redirect a request to an address the kill switch never judged.
+
+  Synchronous like every stage: the answer is read from the gate, which fills it from `resolveProxy`
+  while the listener holds the request (`killSwitchWait`). A request still without an answer by the time
+  it gets here has waited out its deadline, and is cancelled rather than let through.
+*/
+const killSwitchStage = (gate: KillSwitchGate): RequestStage => ({
+  id: 'kill-switch',
+  isEnabled: killSwitchActive,
+  evaluate: ({ url }) =>
+    originKey(url) === null || gate.verdict(url) === 'pass'
+      ? { action: 'continue' }
+      : { action: 'block', reason: 'kill-switch' }
+})
+
+/**
+ * The wait before the stages: a promise while the kill switch has no answer for this address yet.
+ *
+ * Its own wait and not the first-compile hold below, which holds only main frames and lets them through
+ * after 750 ms. This one holds every resource type — a subresource, a subframe, a WebSocket to a host the
+ * page has not touched — and nothing it holds is let through for having waited.
+ */
+function killSwitchWait(
+  gate: KillSwitchGate,
+  url: string,
+  settings: SettingsSnapshot
+): Promise<void> | null {
+  if (!killSwitchActive(settings) || originKey(url) === null) return null
+  return gate.verdict(url) === 'unknown' ? gate.settle(url) : null
+}
 
 const telemetryStage: RequestStage = {
   id: 'telemetry',
@@ -380,6 +434,8 @@ export interface PipelineOptions {
   hooks?: Partial<PipelineHooks>
   /** The interface language, resolved, for the interstitial's text. English when not given. */
   uiLocale?: () => Locale
+  /** This session's kill switch; `proxyGateFor(session)`. Without one it refuses (see `NO_GATE`). */
+  killSwitch?: KillSwitchGate
 }
 
 /** What the pipeline needs from Electron's `details`, copied while the request is still live. */
@@ -467,12 +523,17 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
   const onBlockedNavigation = options.hooks?.onBlockedNavigation ?? (() => {})
   const onRequest = options.hooks?.onRequest ?? (() => {})
 
-  const stages = stagesFor(engine, {
-    // This session's own set, so a private window's exemptions stay in the private window (AE2).
-    exemptions: httpsExemptionsFor(session),
-    tokens: continueTokens,
-    uiLocale: options.uiLocale ?? (() => DEFAULT_LOCALE)
-  })
+  const gate = options.killSwitch ?? NO_GATE
+  const stages = stagesFor(
+    engine,
+    {
+      // This session's own set, so a private window's exemptions stay in the private window (AE2).
+      exemptions: httpsExemptionsFor(session),
+      tokens: continueTokens,
+      uiLocale: options.uiLocale ?? (() => DEFAULT_LOCALE)
+    },
+    gate
+  )
 
   // Guards the ordering invariant at startup rather than in review.
   const actualOrder = stages.map((stage) => stage.id)
@@ -531,6 +592,43 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
     callback({})
   }
 
+  return intercept(session, { gate, getSettings, holdForCompile: true }, decide)
+}
+
+/**
+ * The kill switch alone, for a session no page ever loads in: the updater's (U13).
+ *
+ * `electron-updater` fetches through its own partition, which is no window's session and so never gets
+ * the pipeline. The kill switch is the one stage that has to reach it anyway; the others are about pages.
+ */
+export function installKillSwitchOnly(options: {
+  session: Session
+  getSettings(): SettingsSnapshot
+  killSwitch: KillSwitchGate
+}): () => void {
+  const stage = killSwitchStage(options.killSwitch)
+  return intercept(
+    options.session,
+    { gate: options.killSwitch, getSettings: options.getSettings, holdForCompile: false },
+    (facts, callback) => {
+      const settings = options.getSettings()
+      const blocked = stage.isEnabled(settings) && stage.evaluate({ ...facts, settings }).action
+      callback(blocked === 'block' ? { cancel: true } : {})
+    }
+  )
+}
+
+/**
+ * The one `onBeforeRequest` registration, and the waits in front of the stages.
+ *
+ * Shared by both installers so a session still has exactly one listener whichever it got, and so the
+ * kill switch's wait cannot be left out of either.
+ */
+function intercept(
+  session: Session,
+  wiring: { gate: KillSwitchGate; getSettings(): SettingsSnapshot; holdForCompile: boolean },
+  decide: (facts: RequestFacts, callback: (response: CallbackResponse) => void) => void
+): () => void {
   session.webRequest.onBeforeRequest((details, callback) => {
     /*
       Copied before anything is awaited.
@@ -547,14 +645,17 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
       webContentsId: details.webContentsId ?? null
     }
 
-    const held = firstCompile
-    if (held !== null && facts.resourceType === 'mainFrame') {
-      void untilCompiled(held.compiled).then(() => {
-        decide(facts, callback)
-      })
+    const proxy = killSwitchWait(wiring.gate, facts.url, wiring.getSettings())
+    const held = wiring.holdForCompile ? firstCompile : null
+    const compile =
+      held !== null && facts.resourceType === 'mainFrame' ? untilCompiled(held.compiled) : null
+    if (proxy === null && compile === null) {
+      decide(facts, callback)
       return
     }
-    decide(facts, callback)
+    void Promise.all([proxy, compile]).then(() => {
+      decide(facts, callback)
+    })
   })
 
   return () => {
@@ -565,9 +666,11 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
 
 function stagesFor(
   engine: FilterListEngine | null,
-  https: HttpsOnlyWiring
+  https: HttpsOnlyWiring,
+  gate: KillSwitchGate
 ): readonly RequestStage[] {
   return [
+    killSwitchStage(gate),
     telemetryStage,
     blockerStage(engine),
     redirectStage,
@@ -580,7 +683,7 @@ function stagesFor(
  * Exposed for tests: run the stage chain without an Electron session.
  *
  * Without `https`, the HTTPS stage gets an empty set of its own and the process ledger — which a context with
- * no `webContentsId` never writes to.
+ * no `webContentsId` never writes to. Without `gate`, the kill switch refuses, as an unwired session does.
  */
 export function evaluateStages(
   context: RequestContext,
@@ -589,9 +692,10 @@ export function evaluateStages(
     exemptions: new HttpsExemptions(),
     tokens: continueTokens,
     uiLocale: () => DEFAULT_LOCALE
-  }
+  },
+  gate: KillSwitchGate = NO_GATE
 ): StageOutcome {
-  const stages = stagesFor(engine, https)
+  const stages = stagesFor(engine, https, gate)
   for (const stage of stages) {
     if (!stage.isEnabled(context.settings)) continue
     const outcome = stage.evaluate(context)

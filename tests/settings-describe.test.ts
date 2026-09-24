@@ -46,6 +46,7 @@ import { settingTextFor, settingTextKeys } from '@main/settings/settings-text.js
 
 /** The reference locale, used wherever a test needs one and does not care which. */
 const EN: Locale = 'en'
+const DE: Locale = 'de'
 
 /** A key of its own, so nothing that reads the real table sees these fixtures. */
 const PROBE_KEY = 'probe.foreignShape' as SettingsKey
@@ -217,7 +218,7 @@ describe('describeSetting', () => {
     expect(keysOf(describeSetting('privacy.blockThirdPartyCookies', EN))).not.toContain(
       'description'
     )
-    expect(describeSetting('network.killSwitch', EN).description).toContain('Not implemented')
+    expect(describeSetting('network.killSwitch', EN).description).toContain('Only takes effect')
   })
 
   it('leaves the layout ids unlabelled, because they read the same in every language', () => {
@@ -607,5 +608,44 @@ describe('describeSetting reading a schema shape it was not written for', () => 
     // `min` on it describes a control that does not exist — and the day zod spells string
     // length with the numeric check names, that is what would arrive.
     expect(describeSchema(schema)).toStrictEqual(probeDescriptor('text'))
+  })
+})
+
+describe('the kill switch in words (U13, R23)', () => {
+  it('speaks of the proxy in its label, never of a tunnel or a VPN, in both languages', () => {
+    for (const locale of [EN, DE]) {
+      const { label, description } = describeSetting('network.killSwitch', locale)
+      expect(label, locale).toMatch(/proxy/i)
+      expect(label, locale).not.toMatch(/tunnel|vpn/i)
+      expect(description, locale).not.toMatch(/tunnel/i)
+    }
+  })
+
+  it('says it needs a proxy, and that an operating-system VPN is not detected', () => {
+    expect(describeSetting('network.killSwitch', EN).description).toMatch(
+      /^Only takes effect with a proxy/
+    )
+    expect(describeSetting('network.killSwitch', DE).description).toMatch(/^Wirkt erst mit Proxy/)
+    expect(describeSetting('network.killSwitch', EN).description).toContain(
+      'A VPN of the operating system is not detected.'
+    )
+    expect(describeSetting('network.killSwitch', DE).description).toContain(
+      'Ein VPN des Betriebssystems wird nicht erkannt.'
+    )
+  })
+
+  it('names what system mode still leaks', () => {
+    expect(describeSetting('network.proxyMode', EN).description).toMatch(/PAC script/)
+    expect(describeSetting('network.proxyMode', DE).description).toMatch(/PAC-Skript/)
+  })
+
+  it('no longer says the proxy is not applied', () => {
+    for (const key of ['network.proxyMode', 'network.proxyUrl', 'network.killSwitch'] as const) {
+      for (const locale of [EN, DE]) {
+        expect(describeSetting(key, locale).description, `${key} ${locale}`).not.toMatch(
+          /not applied yet|not implemented|noch ohne wirkung|nicht umgesetzt|von nichts gelesen/i
+        )
+      }
+    }
   })
 })

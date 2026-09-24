@@ -64,9 +64,9 @@ export function tabIdForWebContents(
  * Retrieval bound to one session.
  *
  * The whole reason `MediaFetcher` has no default: Node's global `fetch` would compile,
- * work, and bypass Chromium's network stack — and with it the proxy, the DNS settings, the
- * request pipeline and the kill switch. `session.fetch` is indistinguishable from the
- * page's own traffic.
+ * work, and bypass Chromium's network stack — and with it the session's proxy rule, the DNS
+ * settings, and the request pipeline with its kill-switch stage (`main/session/proxy.ts`).
+ * `session.fetch` is indistinguishable from the page's own traffic.
  */
 export function sessionFetcher(session: MediaSession): MediaFetcher {
   return (url, init) =>

@@ -9,6 +9,7 @@ import {
 } from '@main/settings/SettingsStore.js'
 import {
   SETTINGS_KEYS,
+  appliesOf,
   defaultSettings,
   keysBySection,
   settingDefinitions,
@@ -260,5 +261,36 @@ describe('the password settings', () => {
   it('has autofill on, because a browser that fills nothing by default is one nobody notices', () => {
     // The switch exists so it can be turned *off*; arriving off would make the feature look absent.
     expect(defaultSettings()['passwords.autofill']).toBe(true)
+  })
+})
+
+describe('the proxy settings (U13)', () => {
+  it('refuses manual mode until a usable address is there, and keeps what was stored', async () => {
+    const store = await tempStore()
+    for (const url of ['', 'not a url', 'socks4://h:1080']) {
+      store.set('network.proxyUrl', url)
+      expect(() => store.set('network.proxyMode', 'manual'), url).toThrow(InvalidSettingValueError)
+      expect(store.get('network.proxyMode')).toBe('direct')
+    }
+    store.set('network.proxyUrl', 'socks5://127.0.0.1:9050')
+    store.set('network.proxyMode', 'manual')
+    expect(store.get('network.proxyMode')).toBe('manual')
+  })
+
+  it('takes the address as typed, one keystroke at a time', async () => {
+    // Refusing a half-typed address would make the field impossible to type into; the rule is what is
+    // refused instead (`main/session/proxy.ts` keeps the last valid one).
+    const store = await tempStore({
+      'network.proxyMode': 'manual',
+      'network.proxyUrl': 'http://proxy:8080'
+    })
+    store.set('network.proxyUrl', 'h')
+    expect(store.get('network.proxyUrl')).toBe('h')
+  })
+
+  it('applies all three live', () => {
+    for (const key of ['network.proxyMode', 'network.proxyUrl', 'network.killSwitch'] as const) {
+      expect(appliesOf(key), key).toBe('live')
+    }
   })
 })

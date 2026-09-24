@@ -35,6 +35,11 @@ export const INVOKE_CHANNELS = [
    * page would be holding a version number and a decline it has no use for.
    */
   'updates:checkNow',
+  /**
+   * "Does the system setting send an address directly?", asked by the settings page when somebody
+   * switches to it with the kill switch on (U13). `resolveProxy` on a test address; nothing is sent.
+   */
+  'network:probeSystemProxy',
   // window
   'window:getState',
   'window:minimize',
@@ -442,6 +447,7 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'settings:reset',
     'settings:describe',
     'updates:checkNow',
+    'network:probeSystemProxy',
     /*
       The user's own filter rules, which this page is the editor for.
 

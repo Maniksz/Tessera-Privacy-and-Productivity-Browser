@@ -12,12 +12,13 @@ import { useInternalI18n } from './useInternalI18n.js'
  * zoomable, linkable and usable inside a split tile, none of which a panel over the window can be.
  *
  * The page is the *less* privileged of the two hosts it used to have: its bridge carries exactly the
- * six channels in `INTERNAL_PAGE_INVOKE_CHANNELS.settings`, where the chrome renderer had all of them.
+ * channels in `INTERNAL_PAGE_INVOKE_CHANNELS.settings`, where the chrome renderer had all of them.
  * Deleting the panel therefore narrowed the surface rather than widening it.
  *
- * The sixth, `updates:checkNow`, is newer than the rest and is the only one that reaches the network.
- * It is granted to this page and to no other, which is a rule a fitness function holds rather than a
- * habit — see `gives no page but settings an update command` in `architecture.test.ts`.
+ * `updates:checkNow` is newer than most and is the only one that reaches the network. It is granted to
+ * this page and to no other, which is a rule a fitness function holds rather than a habit — see `gives
+ * no page but settings an update command` in `architecture.test.ts`. `network:probeSystemProxy` is
+ * newer still and sends nothing: it asks the core's `resolveProxy` about a test address (U13).
  *
  * ## Why this is a separate file from `settings.tsx`
  *
@@ -30,6 +31,8 @@ import { useInternalI18n } from './useInternalI18n.js'
 export function SettingsPage(): React.ReactNode {
   const { locale, t } = useInternalI18n()
   const [settings, setSettings] = useState<Snapshot | null>(null)
+  // `tessera://settings?q=network.` from a tile the kill switch stopped opens on the network section.
+  const [initialQuery] = useState(() => new URLSearchParams(location.search).get('q') ?? '')
 
   /*
     Memoised on `t`, and that dependency now carries a second job.
@@ -92,6 +95,8 @@ export function SettingsPage(): React.ReactNode {
       checkForUpdates: async () => {
         await invoke('updates:checkNow')
       },
+      // A `resolveProxy` in the core on a test address; nothing leaves the machine (U13).
+      probeSystemProxy: async () => (await invoke('network:probeSystemProxy')).direct,
       t
     }),
     [t]
@@ -125,7 +130,7 @@ export function SettingsPage(): React.ReactNode {
 
   return (
     <main className="panelPage" lang={locale}>
-      <SettingsView host={host} settings={settings} />
+      <SettingsView host={host} settings={settings} initialQuery={initialQuery} />
     </main>
   )
 }

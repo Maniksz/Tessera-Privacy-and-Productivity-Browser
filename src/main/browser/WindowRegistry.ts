@@ -24,6 +24,7 @@ import type { PermissionCheck, PermissionRequestDetails } from '../session/permi
 import type { PermissionHost } from '../permissions/PermissionArbiter.js'
 import { installRequestPipeline } from '../privacy/RequestPipeline.js'
 import { forgetHttpsExemptions } from '../privacy/https-exemptions.js'
+import { proxyGateFor } from '../session/proxy.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
 import { WindowRecency, downloadWindowFor } from './window-recency.js'
 import { windowOfSender, windowOfTab } from './sender-window.js'
@@ -596,6 +597,8 @@ export class WindowRegistry {
       filterEngine: this.#deps.filters.engine,
       // The interstitial's language; it has no bridge to ask for it.
       uiLocale: this.#deps.uiLocale,
+      // This session's kill switch. Its rule came with `session-created`, in `proxy.ts`, not from here.
+      killSwitch: proxyGateFor(session),
       hooks: {
         onBlocked: (documentUrl) => this.#noteBlockedRequest(documentUrl),
         onBlockedNavigation: noteBlockedNavigation

@@ -124,10 +124,10 @@ export interface PublicSuffixSubscriptionOptions {
   /** `join(userDataDir(), PUBLIC_SUFFIX_DIRNAME)` at the call site. */
   readonly directory: string
   /**
-   * Downloads the list body; `readPublicSuffixBody(await net.fetch(url))` at the call site.
+   * Downloads the list body; `readPublicSuffixBody(await networkFetch(url))` at the call site.
    *
-   * Electron's `net.fetch` for the reason `FilterSubscription` gives: the same proxy, secure DNS and
-   * certificate store as the pages the list decides about.
+   * `networkFetch` for the reason `FilterSubscription` gives: the same proxy rule, kill switch, secure
+   * DNS and certificate store as the pages the list decides about.
    */
   readonly fetchList: (url: string) => Promise<string>
   /** `domainToASCII` from `node:url` at the call site. */

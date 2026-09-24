@@ -111,6 +111,14 @@ export interface SettingsHost {
    * `passwords:openManager`, whose whole payload is nothing at all.
    */
   openPasswordManager(): Promise<void>
+  /**
+   * True when the proxy rule now in force would send a test address directly (U13).
+   *
+   * Asked after the proxy mode was switched to the system setting with the kill switch on, so a PAC
+   * script that answers `DIRECT` is named on this screen rather than found as pages that stop loading.
+   * Required for the reason `checkForUpdates` gives.
+   */
+  probeSystemProxy(): Promise<boolean>
   t: Translate
 }
 
@@ -118,13 +126,20 @@ export interface SettingsViewProps {
   host: SettingsHost
   /** The current values, or `null` before the first snapshot has arrived. */
   settings: Snapshot | null
+  /** What the search box starts with: `?q=` of the page's address, so a link can open one section. */
+  initialQuery?: string
 }
 
-export function SettingsView({ host, settings }: SettingsViewProps): React.ReactNode {
+export function SettingsView({
+  host,
+  settings,
+  initialQuery = ''
+}: SettingsViewProps): React.ReactNode {
   const { t } = host
   const [descriptors, setDescriptors] = useState<SettingDescriptor[]>([])
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery)
   const [checking, setChecking] = useState(false)
+  const [systemProxyDirect, setSystemProxyDirect] = useState(false)
   const { error, run } = useCoreCall()
   const searchRef = useRef<HTMLInputElement>(null)
 
@@ -158,7 +173,14 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
     searchRef.current?.focus()
   }, [])
 
-  const write = (key: string, value: unknown): Promise<void> => run(() => host.set(key, value))
+  const write = (key: string, value: unknown): Promise<void> =>
+    run(async () => {
+      await host.set(key, value)
+      if (key !== 'network.proxyMode') return
+      // Asked only for the switch that can reveal it: system mode, kill switch on (U13).
+      const asks = value === 'system' && settings?.['network.killSwitch'] === true
+      setSystemProxyDirect(asks && (await host.probeSystemProxy()))
+    })
 
   /*
     The check, and the whole of what this surface knows about updates.
@@ -419,6 +441,12 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
                 came for, and a link below two rows of controls is a link found by the people who did
                 not need it.
               */}
+              {section === 'network' && systemProxyDirect && (
+                <p className="panel__notice" role="alert">
+                  {t('settings.systemProxyDirect')}
+                </p>
+              )}
+
               {section === 'passwords' && (
                 <div className="panel__lead">
                   <button
@@ -439,7 +467,7 @@ export function SettingsView({ host, settings }: SettingsViewProps): React.React
                   Every sentence under the label, joined into one `aria-describedby`.
 
                   A screen reader reads these after the control's name, so a user hears "Kill switch,
-                  checkbox, not implemented — nothing enforces this today" rather than the label alone.
+                  checkbox, only takes effect with a proxy" rather than the label alone.
                   The description is the important half: it is where a cost or an unimplemented switch
                   is admitted, and admitting it only in ink is admitting it to sighted users only.
                 */

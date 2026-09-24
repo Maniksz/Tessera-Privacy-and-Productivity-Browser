@@ -2,13 +2,18 @@ import type { SplitState, TabState } from '@shared/model.js'
 import type { Rect } from '@shared/split/layout.js'
 import {
   failureMessage,
+  offersNetworkSettings,
   offersOpenAnyway,
   type TabFailure as Failure
 } from '@shared/browser/tab-failure.js'
+import { internalUrl } from '@shared/product.js'
 import { placeView } from '@shared/browser/view-visibility.js'
 import { withSiteExemption } from '@shared/filters/site-exemption.js'
 import { invoke, setSetting } from '../bridge.js'
 import { useI18n } from '../i18n.js'
+
+/** `tessera://settings?q=network.`: the settings page opens filtered to the network keys. */
+const NETWORK_SETTINGS_URL = internalUrl('settings', { q: 'network.' })
 
 /**
  * What a tile shows while its page failed or its renderer is gone (U9, KTD4).
@@ -57,6 +62,16 @@ export function TabFailure({
         {offersOpenAnyway(failure) && (
           <button type="button" className="dialog__button" onClick={() => void openAnyway()}>
             {t('error.openAnyway')}
+          </button>
+        )}
+        {/* The settings page, searched down to the network section, in a tab of its own (U13). */}
+        {offersNetworkSettings(failure) && (
+          <button
+            type="button"
+            className="dialog__button"
+            onClick={() => void invoke('tabs:create', { url: NETWORK_SETTINGS_URL })}
+          >
+            {t('error.networkSettings')}
           </button>
         )}
       </div>

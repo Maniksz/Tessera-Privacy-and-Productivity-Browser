@@ -92,6 +92,27 @@ function codeOnly(text: string): string {
 }
 
 /**
+ * Requests a piece of core source would make outside Chromium's network stack (U13).
+ *
+ * A call to the *global* `fetch` — not `net.fetch`, `session.fetch`, `this.#fetch` or an interface
+ * method named `fetch` — and any import or `require` of Node's `http` or `https`.
+ */
+function networkBypasses(text: string): string[] {
+  const found: string[] = []
+  for (const line of codeOnly(withoutComments(text)).split('\n')) {
+    // An interface or class member called `fetch`, declared with its return type.
+    if (/^\s*fetch\([^)]*\)\s*:/.test(line)) continue
+    if (/(?<![.\w#$])fetch\s*\(|globalThis\.fetch\b/.test(line)) found.push(line.trim())
+  }
+  for (const match of withoutComments(text).matchAll(
+    /(?:from\s+|require\(\s*)'(?:node:)?https?'/g
+  )) {
+    found.push(match[0])
+  }
+  return found
+}
+
+/**
  * Removes comments but keeps string literals.
  *
  * For the few checks whose subject *is* a literal — a colour, a channel name — where
@@ -1178,12 +1199,6 @@ describe('IPC discipline', () => {
 
     /** Declared, not yet honoured. Each line is a bug with a name. */
     const notYetRead = new Map([
-      [
-        'network.killSwitch',
-        'spec 4 promises no traffic when the tunnel drops; nothing implements it'
-      ],
-      ['network.proxyMode', 'no proxy is ever configured from settings'],
-      ['network.proxyUrl', 'same; the address is stored and unused'],
       ['privacy.malwareProtection', 'no reputation check exists'],
       ['advanced.spellcheckLanguages', 'the session’s spellchecker is never told'],
       ['advanced.unloadInactiveTabs', 'no tab is ever unloaded on a timer'],
@@ -1855,6 +1870,40 @@ describe('IPC discipline', () => {
     expect(accessIndex).toBeGreaterThan(-1)
     // Who is calling, before what they are asking for.
     expect(accessIndex).toBeLessThan(parseIndex)
+  })
+
+  /**
+   * Every request the core makes goes through Chromium's network stack, and so through the proxy rule
+   * and the kill switch (U13).
+   *
+   * Node's global `fetch` and its `http`/`https` modules would compile, work, and leave by a way no
+   * proxy setting reaches — for a filter list or an icon, that is the one request somebody set a proxy
+   * up for. Electron's `net.fetch`, `session.fetch` and `networkFetch` are the ways in; each of those is
+   * called as a method or by name, which is what this tells apart from the global.
+   */
+  it('makes no request past Chromium from the core', async () => {
+    const files = await collect('src/main')
+    expect(files.length).toBeGreaterThan(20)
+    for (const file of files) {
+      expect(networkBypasses(file.text), file.relative).toEqual([])
+    }
+  })
+
+  it('would notice a global fetch or a Node HTTP import', () => {
+    expect(networkBypasses("const r = await fetch('https://x.example/')")).toHaveLength(1)
+    expect(networkBypasses('return fetch(url, { signal })')).toHaveLength(1)
+    expect(networkBypasses('globalThis.fetch(url)')).toHaveLength(1)
+    expect(networkBypasses("import { request } from 'node:https'")).toHaveLength(1)
+    expect(networkBypasses("import http from 'node:http'")).toHaveLength(1)
+    expect(networkBypasses("import * as https from 'https'")).toHaveLength(1)
+    expect(networkBypasses("const { get } = require('node:http')")).toHaveLength(1)
+    // The ways that do go through Chromium, and a method named `fetch` on an interface.
+    expect(networkBypasses('await net.fetch(url)')).toEqual([])
+    expect(networkBypasses('session.fetch(url, init)')).toEqual([])
+    expect(networkBypasses('await this.#fetch(url)')).toEqual([])
+    expect(networkBypasses('  fetch(input: string, init?: Init): Promise<Response>')).toEqual([])
+    expect(networkBypasses("// fetch('https://x.example/')")).toEqual([])
+    expect(networkBypasses("import { x } from 'node:http2-less'")).toEqual([])
   })
 
   it('registers one webRequest listener per event', async () => {
@@ -3105,7 +3154,11 @@ describe('public suffix list', () => {
 
   it('fetches it through Chromium, in the filter lists’ channel and moment', () => {
     const entry = index()
-    expect(entry).toMatch(/readPublicSuffixBody\(await net\.fetch\(/)
+    // `networkFetch` is `net.fetch` on the default session, behind its proxy rule and the kill switch (U13).
+    expect(entry).toMatch(/readPublicSuffixBody\(await networkFetch\(/)
+    expect(entry).toMatch(/const response = await networkFetch\(url\)/)
+    const proxy = codeOnly(readFileSync(join(ROOT, 'src/main/session/proxy.ts'), 'utf8'))
+    expect(proxy).toMatch(/export async function networkFetch[\s\S]*?return net\.fetch\(url\)\n\}/)
     expect(entry).toMatch(/toAscii: domainToASCII/)
     expect(entry.indexOf('publicSuffixes.refresh()')).toBeGreaterThan(
       entry.indexOf('filterSubscription.start()')

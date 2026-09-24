@@ -255,7 +255,7 @@ auffälliges Symptom. Deshalb ein Listener pro Ereignis und die Stufen als geord
 Array darin:
 
 ```
-telemetry → blocker → redirect → tracking-params → https-upgrade
+kill-switch → telemetry → blocker → redirect → tracking-params → https-upgrade
 ```
 
 `STAGE_ORDER` wird beim Installieren gegen die tatsächliche Reihenfolge geprüft und
@@ -266,6 +266,32 @@ Die Filterlisten-Engine ist eine Schnittstelle (`FilterListEngine`) und derzeit
 `null` — die Stufe wird übersprungen. Das ist Absicht: eine Eigenentwicklung, die
 einen Bruchteil der Filtersyntax versteht und den Rest verwirft, ist schlechter als
 eine erkennbar fehlende Stufe.
+
+### Proxy und Kill-Switch
+
+`shared/network/proxy-rules.ts` bildet Modus, Adresse und Kill-Switch auf eine
+Chromium-Regel ab; `main/session/proxy.ts` wendet sie an. Beim Start sofort auf
+`session.defaultSession`, danach über `app.on('session-created')` auf jede neue
+Sitzung (`private-N`, die Updater-Partition `electron-updater`), ohne handgepflegte
+Liste, dazu `app.setProxy` für Anfragen ohne Sitzung. Jede Änderung gilt live und
+schließt danach offene Verbindungen (`closeAllConnections`). Der Start wartet auf die
+erste Regel, bevor er Fenster wiederherstellt oder etwas abruft; der erste Ladevorgang
+eines Tabs wartet auf die Regel seiner Sitzung (`loadAfterProxyRule`), `createWindow`
+bleibt synchron.
+
+Kill-Switch heißt: kein direkter Weg. Manuell enthält die Regel dann kein
+`direct://`, und Chromium scheitert selbst geschlossen (`-130`, Kachel „Proxy nicht
+erreichbar"). Im Modus „System" steht die Stufe `kill-switch` als erste in
+`STAGE_ORDER`: Sie liest je Sitzung und Origin (Schema, Host, Port) eine Antwort von
+`session.resolveProxy` und bricht ab, sobald sie irgendwo `DIRECT` enthält. Fehlt die
+Antwort, hält ein eigener Wartepunkt im einzigen Listener die Anfrage (jede
+Ressourcenart, auch WebSockets), bis sie da ist; Fehler oder Ablauf der Frist brechen
+ab. Solange eine Regeländerung aussteht, ist mit Kill-Switch alles gehalten. Die
+Updater-Partition bekommt nur diese Stufe (`installKillSwitchOnly`), die Abrufe des
+Hauptprozesses gehen über `networkFetch`. Nicht abgedeckt: ein VPN des
+Betriebssystems, der PAC/WPAD-Abruf selbst und `dnsResolve()` im PAC-Skript. WebRTC
+bekommt bei jedem Proxy `disable_non_proxied_udp`, für jede `WebContents` über
+`web-contents-created`.
 
 Sessions werden in `WindowRegistry` erzeugt, damit Härtung und Pipeline genau einmal
 pro Session installiert werden. Pro Fenster zu installieren würde sie mehrfach
@@ -296,7 +322,7 @@ Die volle Liste lädt der Kern zur Laufzeit (`main/privacy/PublicSuffixSubscript
   jeweils mit Warnung. `configurePublicSuffixes()` nimmt pro Lauf genau einen Aufruf an:
   eine Site-Zuordnung ändert sich während eines Laufs nie (R7).
 - **Abruf danach, selten.** `refresh()` holt `https://publicsuffix.org/list/public_suffix_list.dat`
-  über `net.fetch` (Proxy, Kill-Switch, sicheres DNS wie die Filterlisten), höchstens
+  über `networkFetch` (Proxy-Regel, Kill-Switch, sicheres DNS wie die Filterlisten), höchstens
   einmal pro 24 Stunden laut Zustandsdatei, und nicht, solange die angenommene Liste
   jünger als sieben Tage ist. Körper über 1 MB oder von einer anderen Adresse werden
   verworfen. Ein Refresh schreibt nur den Cache; die neue Liste gilt ab dem nächsten Start.

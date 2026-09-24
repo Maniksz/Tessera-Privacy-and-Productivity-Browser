@@ -629,6 +629,8 @@ export const en = {
   'settings.listHint': 'One entry per line',
   /* The link out of the Passwords section; the vault's contents are a page, not a settings row. */
   'settings.openPasswordManager': 'Manage saved passwords',
+  'settings.systemProxyDirect':
+    'The system setting sends some addresses directly. With the kill switch on, those are stopped.',
   'settings.on': 'On',
   'settings.off': 'Off',
 
@@ -668,6 +670,9 @@ export const en = {
   'error.proxy': 'The proxy server is not responding.',
   'error.crashed': 'This page stopped working.',
   'error.openAnyway': 'Open anyway',
+  'error.killSwitch':
+    'The kill switch stopped this page: the system setting allows a direct route.',
+  'error.networkSettings': 'Network settings',
   'error.httpsOnly': '{host} does not offer an encrypted connection.',
   'error.httpsOnly.tryHttps': 'Try HTTPS',
   'error.httpsOnly.continue': 'Continue unencrypted',

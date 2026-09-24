@@ -57,9 +57,9 @@ export interface FilterListStoreOptions {
    *
    * Required rather than defaulted, and that is deliberate. A default would be
    * Node's own `fetch`, which goes around Chromium's network stack and therefore
-   * around the proxy settings and the kill switch — a list download leaking past
-   * a tunnel the user turned on. The wiring passes Electron's `net.fetch`, and
-   * having to pass it is what keeps that decision visible.
+   * around the proxy rule and the kill switch — a list download leaking past a
+   * proxy the user turned on. The wiring passes `networkFetch` (`net.fetch` behind
+   * the kill switch), and having to pass it is what keeps that decision visible.
    */
   readonly fetchList: (url: string) => Promise<string>
   /** Injected so staleness is decidable in a test without waiting five days. */

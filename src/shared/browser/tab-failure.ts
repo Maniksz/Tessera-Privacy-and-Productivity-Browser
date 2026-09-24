@@ -129,6 +129,16 @@ export function blockSourceOf(stage: string): BlockSource | null {
   }
 }
 
+/**
+ * The way to the network settings, for a page the kill switch stopped (U13).
+ *
+ * In system mode that is the one thing that can change the answer: the operating system's rule sends
+ * the address directly, and only a different proxy mode, or the kill switch off, lets the page load.
+ */
+export function offersNetworkSettings(failure: TabFailure): boolean {
+  return failure.kind === 'blocked' && failure.source === 'killSwitch'
+}
+
 /** "Open anyway" exists for the blocker alone; see `BLOCK_SOURCES`. */
 export function offersOpenAnyway(failure: TabFailure): boolean {
   return failure.kind === 'blocked' && failure.source === 'blocker'
@@ -150,7 +160,7 @@ export function failureMessage(failure: TabFailure): {
     case 'certificate':
       return { key: 'error.certificate', params }
     case 'blocked':
-      return { key: 'error.blocked', params }
+      return { key: failure.source === 'killSwitch' ? 'error.killSwitch' : 'error.blocked', params }
     case 'network':
       if (DNS_CODES.includes(failure.code)) return { key: 'error.dnsFailed', params }
       if (failure.code === ERR_INTERNET_DISCONNECTED) return { key: 'error.offline', params }

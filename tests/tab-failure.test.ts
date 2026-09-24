@@ -4,6 +4,7 @@ import {
   blockSourceOf,
   classifyFailure,
   failureMessage,
+  offersNetworkSettings,
   offersOpenAnyway,
   type TabFailure
 } from '@shared/browser/tab-failure.js'
@@ -81,6 +82,25 @@ describe('classifyFailure: loads', () => {
   it('offers nothing for the kill switch or the redirect stage either', () => {
     expect(offersOpenAnyway(load(-20, { blockedBy: 'killSwitch' })!)).toBe(false)
     expect(offersOpenAnyway(load(-20, { blockedBy: 'redirect' })!)).toBe(false)
+  })
+
+  it('explains a kill-switch stop with the direct route, and offers the network settings (U13)', () => {
+    const stopped = load(-20, { blockedBy: 'killSwitch' })!
+    expect(failureMessage(stopped).key).toBe('error.killSwitch')
+    expect(offersNetworkSettings(stopped)).toBe(true)
+    // Only there: a blocker's refusal, a dead proxy and a crash have other ways out.
+    expect(offersNetworkSettings(load(-20, { blockedBy: 'blocker' })!)).toBe(false)
+    expect(offersNetworkSettings(load(-130)!)).toBe(false)
+    expect(
+      offersNetworkSettings({ kind: 'crashed', code: 1, host: '', source: 'killSwitch' })
+    ).toBe(false)
+  })
+
+  it('shows a dead proxy under the kill switch as the proxy state (AE6)', () => {
+    // Manual mode with the kill switch on: Chromium fails closed with -130, and that is the tile.
+    const failure = load(-130)!
+    expect(failure.kind).toBe('proxy')
+    expect(failureMessage(failure).key).toBe('error.proxy')
   })
 
   it('names no source, and offers no way through, for a -20 nobody recorded', () => {

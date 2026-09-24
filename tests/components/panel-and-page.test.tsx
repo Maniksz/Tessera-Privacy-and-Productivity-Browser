@@ -237,6 +237,8 @@ function fakeCore(
         */
         case 'updates:checkNow':
           return Promise.resolve({ ok: true })
+        case 'network:probeSystemProxy':
+          return Promise.resolve({ direct: false })
         case 'extensions:list':
           return Promise.resolve([...extensions])
         case 'extensions:load':

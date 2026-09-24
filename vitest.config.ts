@@ -414,6 +414,11 @@ export default defineConfig({
           next resize. Both are single branches, so a floor below all of it leaves room for exactly those.
         */
         'src/shared/browser/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          Settings to a proxy rule and the kill switch's verdict (U13, KTD8). A single wrong branch here is
+          a request that leaves directly while the user believes it cannot, so all of it.
+        */
+        'src/shared/network/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/main/browser/tab-failure-watch.ts': {
           lines: 100,
           functions: 100,

@@ -361,17 +361,19 @@ export const en = {
   network: {
     proxyMode: {
       label: 'Proxy',
-      description: 'Not applied yet: no proxy is ever configured from this screen.',
+      description:
+        'Applies at once to every window, private ones included, and to the browser’s own requests: filter lists, icons, updates. The system setting follows the operating system’s proxy or its PAC script; fetching that script, and any name the script looks up, still go out directly.',
       choices: { direct: 'No proxy', system: 'Use the system setting', manual: 'Set one below' }
     },
     proxyUrl: {
       label: 'Proxy address',
-      description: 'Stored and read by nothing, for the same reason as the setting above.'
+      description:
+        'http://, https:// or socks5:// with host and port, such as socks5://127.0.0.1:9050. An address that cannot be used is not applied; the one before stays in force.'
     },
     killSwitch: {
-      label: 'Stop all traffic if the tunnel drops',
+      label: 'Stop all traffic if the proxy fails',
       description:
-        'Not implemented. Nothing enforces this today, so do not rely on it: with the switch on and a VPN dropping, requests still go out.'
+        'Only takes effect with a proxy: with “No proxy” there is nothing to stop. With an address below, nothing goes out directly when the proxy fails. With the system setting, every address the system would send directly is stopped. A VPN of the operating system is not detected. While no proxy is reachable, filter lists and updates are not fetched either.'
     },
     secureDnsMode: {
       label: 'Encrypted DNS',

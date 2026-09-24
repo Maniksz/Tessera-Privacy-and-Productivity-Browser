@@ -61,6 +61,8 @@ interface Recorded {
   checks: number
   /** How often the Passwords section's link asked the core to open the page. */
   managerOpens: number
+  /** How often the system-proxy check was asked. */
+  probes: number
 }
 
 function hostWith(options: {
@@ -70,8 +72,10 @@ function hostWith(options: {
   refuseCheck?: string
   /** Held open so a test can look at the surface *while* a check is running. */
   checkRunsUntil?: Promise<void>
+  /** What the system-proxy check answers: `true` for a rule that sends the test address directly. */
+  systemProxyDirect?: boolean
 }): { host: SettingsHost; calls: Recorded } {
-  const calls: Recorded = { set: [], reset: [], checks: 0, managerOpens: 0 }
+  const calls: Recorded = { set: [], reset: [], checks: 0, managerOpens: 0, probes: 0 }
   return {
     calls,
     host: {
@@ -108,6 +112,10 @@ function hostWith(options: {
         calls.checks += 1
         if (options.refuseCheck !== undefined) throw new Error(options.refuseCheck)
         await options.checkRunsUntil
+      },
+      probeSystemProxy: () => {
+        calls.probes += 1
+        return Promise.resolve(options.systemProxyDirect ?? false)
       },
       t
     }
@@ -622,5 +630,51 @@ describe('the passwords section', () => {
     await waitFor(() => expect(screen.getByLabelText(BLOCKER)).toBeTruthy())
 
     expect(screen.queryByRole('button', { name: 'settings.openPasswordManager' })).toBeNull()
+  })
+})
+
+describe('the system proxy under the kill switch (U13)', () => {
+  const mode = descriptor({
+    key: 'network.proxyMode',
+    kind: 'choice',
+    section: 'network',
+    label: 'Proxy',
+    choices: ['direct', 'system', 'manual']
+  })
+
+  it('warns at once when the system setting would send an address directly', async () => {
+    const { host, calls } = hostWith({ descriptors: [mode], systemProxyDirect: true })
+    render(<SettingsView host={host} settings={{ 'network.killSwitch': true }} />)
+    const select = await screen.findByLabelText('Proxy')
+    fireEvent.change(select, { target: { value: 'system' } })
+    await waitFor(() => expect(screen.getByText('settings.systemProxyDirect')).toBeTruthy())
+    expect(calls.probes).toBe(1)
+    // Switching away takes the warning with it.
+    fireEvent.change(select, { target: { value: 'direct' } })
+    await waitFor(() => expect(screen.queryByText('settings.systemProxyDirect')).toBeNull())
+  })
+
+  it('stays quiet when the system names a proxy', async () => {
+    const { host, calls } = hostWith({ descriptors: [mode], systemProxyDirect: false })
+    render(<SettingsView host={host} settings={{ 'network.killSwitch': true }} />)
+    fireEvent.change(await screen.findByLabelText('Proxy'), { target: { value: 'system' } })
+    await waitFor(() => expect(calls.probes).toBe(1))
+    expect(screen.queryByText('settings.systemProxyDirect')).toBeNull()
+  })
+
+  it('does not ask with the kill switch off, where a direct way is allowed', async () => {
+    const { host, calls } = hostWith({ descriptors: [mode], systemProxyDirect: true })
+    render(<SettingsView host={host} settings={{ 'network.killSwitch': false }} />)
+    fireEvent.change(await screen.findByLabelText('Proxy'), { target: { value: 'system' } })
+    await waitFor(() => expect(calls.set).toHaveLength(1))
+    expect(calls.probes).toBe(0)
+    expect(screen.queryByText('settings.systemProxyDirect')).toBeNull()
+  })
+
+  it('opens on a section when the address asks for one', async () => {
+    const { host } = hostWith({ descriptors: [mode, descriptor()] })
+    render(<SettingsView host={host} settings={{}} initialQuery="network." />)
+    await waitFor(() => expect(screen.getByLabelText('Proxy')).toBeTruthy())
+    expect(screen.queryByLabelText(BLOCKER)).toBeNull()
   })
 })

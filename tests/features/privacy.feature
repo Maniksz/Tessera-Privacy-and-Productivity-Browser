@@ -16,7 +16,7 @@ Feature: Privacy filtering
     Given default privacy settings
 
   Scenario: The pipeline runs in the order the specification prescribes
-    Then the filter stage order is "telemetry, blocker, redirect, tracking-params, https-upgrade"
+    Then the filter stage order is "kill-switch, telemetry, blocker, redirect, tracking-params, https-upgrade"
 
   Scenario: Telemetry endpoints of the engine itself are blocked
     When a "xhr" request is made to "https://optimizationguide-pa.googleapis.com/v1"

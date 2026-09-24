@@ -556,7 +556,6 @@ export const invokeContract = {
    * `settings:changed`.
    */
   'settings:describe': { request: nothing, response: z.array(settingDescriptorSchema) },
-
   /**
    * A check the user asked for, and the narrowest pair of schemas in this file.
    *
@@ -576,6 +575,7 @@ export const invokeContract = {
    * a button stay disabled for exactly as long as something is happening.
    */
   'updates:checkNow': { request: nothing, response: ok },
+  'network:probeSystemProxy': { request: nothing, response: z.object({ direct: z.boolean() }) },
 
   // --- window --------------------------------------------------------------
   'window:getState': { request: nothing, response: windowStateSchema },

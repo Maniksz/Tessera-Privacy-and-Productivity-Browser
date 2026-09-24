@@ -461,6 +461,8 @@ export const de = {
   'settings.readOnly': 'Hier noch nicht bearbeitbar',
   'settings.listHint': 'Ein Eintrag pro Zeile',
   'settings.openPasswordManager': 'Gespeicherte Passwörter verwalten',
+  'settings.systemProxyDirect':
+    'Die Systemeinstellung schickt manche Adressen direkt. Mit dem Kill-Switch werden sie gestoppt.',
   'settings.on': 'An',
   'settings.off': 'Aus',
 
@@ -490,6 +492,9 @@ export const de = {
   'error.proxy': 'Der Proxyserver antwortet nicht.',
   'error.crashed': 'Diese Seite funktioniert nicht mehr.',
   'error.openAnyway': 'Trotzdem öffnen',
+  'error.killSwitch':
+    'Der Kill-Switch hat diese Seite gestoppt: Die Systemeinstellung erlaubt einen direkten Weg.',
+  'error.networkSettings': 'Netzwerk-Einstellungen',
   'error.httpsOnly': '{host} bietet keine verschlüsselte Verbindung an.',
   'error.httpsOnly.tryHttps': 'Über HTTPS versuchen',
   'error.httpsOnly.continue': 'Unverschlüsselt fortfahren',

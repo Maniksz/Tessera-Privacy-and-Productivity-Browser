@@ -109,6 +109,8 @@ describe('internal page privileges', () => {
       [
         ...invokesMentioned(settingsPage, 'settings'),
         ...invokesMentioned(settingsPage, 'updates'),
+        // The kill switch's system-mode check (U13): a `resolveProxy` in the core, nothing sent.
+        ...invokesMentioned(settingsPage, 'network'),
         /*
           A third family, and the reason it is here is the reason this test is worth having.
 

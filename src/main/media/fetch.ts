@@ -6,12 +6,12 @@
  * Node's global `fetch` is always in scope, so a media downloader that simply
  * called it would compile, work, and be wrong: it goes around Chromium's network
  * stack, and therefore around the proxy configuration, the DNS settings, the
- * request pipeline in `src/main/privacy/` and the kill switch. A user who turned on
- * a tunnel and then downloaded a video would have that one request leave outside
+ * request pipeline in `src/main/privacy/` with its kill-switch stage. A user who set
+ * up a proxy and then downloaded a video would have that one request leave outside
  * it, with nothing on screen to say so. In a privacy browser that is not a rough
  * edge, it is the leak the browser exists to prevent.
  *
- * The wiring passes Electron's session-bound `net.fetch`, which is
+ * The wiring passes the session's own `session.fetch`, which is
  * indistinguishable from the page's own traffic. Having to pass it is what keeps
  * the decision visible; an optional parameter falling back to the global would make
  * the leaking version the one you get by forgetting. Same reasoning, and the same

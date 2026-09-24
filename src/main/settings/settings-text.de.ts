@@ -329,7 +329,8 @@ export const de: SettingTextTable = {
   network: {
     proxyMode: {
       label: 'Proxy',
-      description: 'Noch ohne Wirkung: Aus diesem Fenster wird nie ein Proxy eingerichtet.',
+      description:
+        'Gilt sofort für jedes Fenster, auch private, und für die eigenen Anfragen des Browsers: Filterlisten, Symbole, Updates. Die Systemeinstellung folgt dem Proxy des Betriebssystems oder seinem PAC-Skript; der Abruf dieses Skripts und jeder Name, den es nachschlägt, gehen weiterhin direkt hinaus.',
       choices: {
         direct: 'Kein Proxy',
         system: 'Systemeinstellung verwenden',
@@ -338,12 +339,13 @@ export const de: SettingTextTable = {
     },
     proxyUrl: {
       label: 'Proxy-Adresse',
-      description: 'Wird gespeichert und von nichts gelesen, aus demselben Grund wie oben.'
+      description:
+        'http://, https:// oder socks5:// mit Host und Port, etwa socks5://127.0.0.1:9050. Eine unbrauchbare Adresse wird nicht angewendet; die vorige gilt weiter.'
     },
     killSwitch: {
-      label: 'Allen Verkehr stoppen, wenn der Tunnel abbricht',
+      label: 'Allen Verkehr stoppen, wenn der Proxy ausfällt',
       description:
-        'Nicht umgesetzt. Nichts erzwingt das heute – verlass dich nicht darauf: Mit eingeschaltetem Schalter und abbrechendem VPN gehen Anfragen weiterhin hinaus.'
+        'Wirkt erst mit Proxy: Bei „Kein Proxy“ gibt es nichts zu stoppen. Mit einer Adresse unten geht nichts direkt hinaus, wenn der Proxy ausfällt. Mit der Systemeinstellung wird jede Adresse gestoppt, die das System direkt schicken würde. Ein VPN des Betriebssystems wird nicht erkannt. Solange kein Proxy erreichbar ist, werden auch Filterlisten und Updates nicht abgerufen.'
     },
     secureDnsMode: {
       label: 'Verschlüsseltes DNS',

@@ -61,9 +61,10 @@ import { createHash } from 'node:crypto'
  * retrieval function is a global that is always in scope, ignores the browsing session
  * entirely and therefore bypasses the proxy, the DNS settings, the request pipeline and
  * the kill switch — in a privacy browser that is not a rough edge, it is a leak with no
- * indication that it happened. Wiring is expected to pass Electron's session-bound
- * `net.fetch`. An optional parameter with a global fallback would make the leaking
- * version the one you get by forgetting, so there is no fallback to forget into.
+ * indication that it happened. The wiring passes `networkFetch` (`main/session/proxy.ts`):
+ * `net.fetch` under the proxy rule, behind the kill switch. An optional parameter with a
+ * global fallback would make the leaking version the one you get by forgetting, so there is
+ * no fallback to forget into.
  */
 export type FaviconFetcher = (url: string) => Promise<Response>
 

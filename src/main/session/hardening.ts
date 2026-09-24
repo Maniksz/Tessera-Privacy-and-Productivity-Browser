@@ -3,6 +3,7 @@ import { app, type Session, type WebContents } from 'electron'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { uniformUserAgent } from '@shared/fingerprint/identity.js'
 import { maskingPlanFor, resolvedAcceptLanguage } from '@shared/fingerprint/plan.js'
+import { webRtcPolicyFor } from '@shared/network/proxy-rules.js'
 import { FINGERPRINT_PLAN_CHANNEL } from '@shared/fingerprint/wire.js'
 import {
   answerPermissionCheck,
@@ -365,9 +366,24 @@ export function applySecureDns(settings: SettingsSnapshot): void {
 }
 
 /**
- * Closes the local-IP leak through WebRTC, which persists even behind a VPN
- * (spec 4). Per-webContents, so it is applied when each tab is created.
+ * Closes the local-IP leak through WebRTC, which persists even behind a VPN (spec 4).
+ *
+ * Per `WebContents`, so it is set on each as it is created — every one, through `web-contents-created`,
+ * rather than only the ones a tab remembers to set — and again on all of them when the proxy mode or the
+ * policy changes (`proxy.ts`). With a proxy in use the policy is forced to "nothing that bypasses the
+ * proxy" whatever the setting says (R24); `webRtcPolicyFor` decides.
  */
 export function applyWebRtcPolicy(webContents: WebContents, settings: SettingsSnapshot): void {
-  webContents.setWebRTCIPHandlingPolicy(settings['network.webrtcIpPolicy'])
+  webContents.setWebRTCIPHandlingPolicy(webRtcPolicyFor(settings))
+}
+
+let webRtcInstalled = false
+
+/** Gives every `WebContents` its WebRTC policy the moment it exists. Once per process. */
+export function installWebRtcPolicy(getSettings: () => SettingsSnapshot): void {
+  if (webRtcInstalled) return
+  webRtcInstalled = true
+  app.on('web-contents-created', (_event, contents) => {
+    applyWebRtcPolicy(contents, getSettings())
+  })
 }

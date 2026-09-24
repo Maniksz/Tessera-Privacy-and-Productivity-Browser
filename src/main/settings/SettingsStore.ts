@@ -11,6 +11,7 @@ import {
   type SettingsKey,
   type SettingsSnapshot
 } from '@shared/settings/definitions.js'
+import { proxyModeConflict } from '@shared/network/proxy-rules.js'
 
 /**
  * The one place settings are read from and written to (spec 5).
@@ -217,6 +218,9 @@ export class SettingsStore {
       const detail = parsed.error.issues.map((issue) => issue.message).join('; ')
       throw new InvalidSettingValueError(key, detail)
     }
+    // A value valid on its own that the others make unusable: manual proxy mode with no address.
+    const conflict = proxyModeConflict(key, parsed.data, this.#snapshot)
+    if (conflict !== null) throw new InvalidSettingValueError(key, conflict)
 
     return this.#applyMany({ [key]: parsed.data })
   }

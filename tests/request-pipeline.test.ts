@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  NO_GATE,
   STAGE_ORDER,
   evaluateStages,
   holdMainFrameRequests,
+  installKillSwitchOnly,
   installRequestPipeline,
   type FilterListEngine,
   type HttpsOnlyWiring,
+  type KillSwitchGate,
   type RequestContext
 } from '@main/privacy/RequestPipeline.js'
+import type { KillSwitchVerdict } from '@shared/network/proxy-rules.js'
 import { FilterEngine } from '@main/privacy/FilterEngine.js'
 import {
   HttpsExemptions,
@@ -48,6 +52,8 @@ function withSettings(patch: Partial<SettingsSnapshot>): SettingsSnapshot {
 describe('pipeline ordering', () => {
   it('keeps the order spec 4 prescribes', () => {
     expect([...STAGE_ORDER]).toEqual([
+      // First, before anything that could redirect a request somewhere the kill switch never judged.
+      'kill-switch',
       'telemetry',
       'blocker',
       'redirect',
@@ -849,5 +855,217 @@ describe('the HTTPS stage on an installed session', () => {
     expect(
       answer(normal.listener, { url: 'http://printer.lan/', webContentsId: 4 }).redirectURL
     ).toMatch(/^tessera:\/\/https-only\?/)
+  })
+})
+
+/**
+ * The `kill-switch` stage and its wait (U13, KTD8).
+ *
+ * A gate stands in for `main/session/proxy.ts`: it answers per address, and `settle` is the promise the
+ * listener waits on. `tests/session-proxy.test.ts` runs the same listener over the real gate.
+ */
+describe('the kill-switch stage', () => {
+  type Listener = (details: unknown, callback: (r: unknown) => void) => void
+
+  const systemMode = withSettings({ 'network.proxyMode': 'system', 'network.killSwitch': true })
+
+  function gate(verdicts: Record<string, KillSwitchVerdict>): KillSwitchGate & {
+    settle: ReturnType<typeof vi.fn>
+    answer(url: string, verdict: KillSwitchVerdict): void
+  } {
+    let wake = (): void => {}
+    const table = { ...verdicts }
+    return {
+      verdict: (url) => table[url] ?? 'unknown',
+      settle: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            wake = resolve
+          })
+      ),
+      answer(url, verdict) {
+        table[url] = verdict
+        wake()
+      }
+    }
+  }
+
+  function listen(
+    killSwitch: KillSwitchGate,
+    settings: SettingsSnapshot = systemMode,
+    onBlockedNavigation = vi.fn()
+  ): Listener {
+    const registered: Listener[] = []
+    const session = {
+      webRequest: {
+        onBeforeRequest(listener: Listener | null) {
+          if (listener !== null) registered.push(listener)
+        }
+      }
+    }
+    installRequestPipeline({
+      session: session as never,
+      getSettings: () => settings,
+      filterEngine: null,
+      killSwitch,
+      hooks: { onBlockedNavigation }
+    })
+    return registered[0]!
+  }
+
+  it('cancels a main frame whose origin may leave directly, naming the stage', () => {
+    const blocked = vi.fn()
+    const listener = listen(gate({ 'https://example.com/': 'block' }), systemMode, blocked)
+    const answer = vi.fn()
+    listener(
+      { url: 'https://example.com/', resourceType: 'mainFrame', method: 'GET', webContentsId: 7 },
+      answer
+    )
+    expect(answer).toHaveBeenCalledWith({ cancel: true })
+    // The id U9 maps to the `killSwitch` source.
+    expect(blocked).toHaveBeenCalledWith(7, 'kill-switch')
+  })
+
+  it('lets through what the gate passes', () => {
+    const listener = listen(gate({ 'https://example.com/': 'pass' }))
+    const answer = vi.fn()
+    listener({ url: 'https://example.com/', resourceType: 'mainFrame', method: 'GET' }, answer)
+    expect(answer).toHaveBeenCalledWith({})
+  })
+
+  it('does nothing with the kill switch off', () => {
+    const off = withSettings({ 'network.proxyMode': 'system', 'network.killSwitch': false })
+    const fake = gate({ 'https://example.com/': 'block' })
+    const answer = vi.fn()
+    listen(fake, off)({ url: 'https://example.com/', resourceType: 'mainFrame' }, answer)
+    expect(answer).toHaveBeenCalledWith({})
+    expect(fake.settle).not.toHaveBeenCalled()
+  })
+
+  it('holds a request with no answer yet until the gate has one, then judges it', async () => {
+    const fake = gate({})
+    const listener = listen(fake)
+    const answer = vi.fn()
+    listener({ url: 'https://example.com/', resourceType: 'mainFrame', method: 'GET' }, answer)
+    await Promise.resolve()
+    expect(answer).not.toHaveBeenCalled()
+    fake.answer('https://example.com/', 'block')
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith({ cancel: true })
+    })
+  })
+
+  it('holds a foreign subresource too, and never lets it through unanswered', async () => {
+    const fake = gate({})
+    const listener = listen(fake)
+    const answer = vi.fn()
+    listener({ url: 'wss://tracker.example/s', resourceType: 'webSocket', method: 'GET' }, answer)
+    await Promise.resolve()
+    expect(answer).not.toHaveBeenCalled()
+    // The wait is over and there is still no answer: a deadline, an error. Cancelled.
+    fake.answer('other', 'pass')
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith({ cancel: true })
+    })
+  })
+
+  it('leaves tessera: and file: alone', () => {
+    const fake = gate({})
+    const listener = listen(fake)
+    for (const url of ['tessera://settings', 'file:///tmp/a.html']) {
+      const answer = vi.fn()
+      listener({ url, resourceType: 'mainFrame', method: 'GET' }, answer)
+      expect(answer, url).toHaveBeenCalledWith({})
+    }
+    expect(fake.settle).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when no gate was wired', () => {
+    const outcome = evaluateStages(context({ settings: systemMode }))
+    expect(outcome).toEqual({ action: 'block', reason: 'kill-switch' })
+  })
+
+  it('runs before every other stage', () => {
+    // A tracking parameter would otherwise redirect first, and the kill switch judge only the second hop.
+    const outcome = evaluateStages(
+      context({ url: 'https://example.com/?utm_source=x', settings: systemMode })
+    )
+    expect(outcome.action).toBe('block')
+  })
+
+  it('waits for both the proxy and the first compile when both are pending', async () => {
+    const release = holdMainFrameRequests()
+    const fake = gate({})
+    const listener = listen(fake)
+    const answer = vi.fn()
+    listener({ url: 'https://example.com/', resourceType: 'mainFrame', method: 'GET' }, answer)
+    fake.answer('https://example.com/', 'pass')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(answer).not.toHaveBeenCalled()
+    release()
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith({})
+    })
+  })
+
+  describe('kill switch only, as the updater gets it', () => {
+    function only(killSwitch: KillSwitchGate, settings = systemMode): Listener {
+      const registered: Listener[] = []
+      const session = {
+        webRequest: {
+          onBeforeRequest(listener: Listener | null) {
+            if (listener !== null) registered.push(listener)
+          }
+        }
+      }
+      const dispose = installKillSwitchOnly({
+        session: session as never,
+        getSettings: () => settings,
+        killSwitch
+      })
+      expect(typeof dispose).toBe('function')
+      return registered[0]!
+    }
+
+    it('cancels a fetch whose answer contains DIRECT', () => {
+      const answer = vi.fn()
+      only(gate({ 'https://github.com/x': 'block' }))(
+        { url: 'https://github.com/x', resourceType: 'other', method: 'GET' },
+        answer
+      )
+      expect(answer).toHaveBeenCalledWith({ cancel: true })
+    })
+
+    it('runs none of the other stages', () => {
+      // A telemetry host is the telemetry stage's business on a page's session, not the updater's.
+      const answer = vi.fn()
+      only(gate({ 'https://clients2.google.com/x': 'pass' }))(
+        { url: 'https://clients2.google.com/x', resourceType: 'other', method: 'GET' },
+        answer
+      )
+      expect(answer).toHaveBeenCalledWith({})
+    })
+
+    it('waits like the full pipeline does', async () => {
+      const fake = gate({})
+      const answer = vi.fn()
+      only(fake)({ url: 'https://github.com/x', resourceType: 'other', method: 'GET' }, answer)
+      await Promise.resolve()
+      expect(answer).not.toHaveBeenCalled()
+      fake.answer('https://github.com/x', 'pass')
+      await vi.waitFor(() => {
+        expect(answer).toHaveBeenCalledWith({})
+      })
+    })
+  })
+})
+
+describe('a session without a kill-switch gate', () => {
+  it('refuses every guarded address and has nothing to wait for', async () => {
+    // Wiring that forgot the gate must look like a dead proxy, never like a direct connection.
+    expect(NO_GATE.verdict('https://example.com/')).toBe('block')
+    expect(NO_GATE.verdict('ws://example.com:8080/')).toBe('block')
+    await expect(NO_GATE.settle('https://example.com/')).resolves.toBeUndefined()
   })
 })

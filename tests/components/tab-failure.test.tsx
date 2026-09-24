@@ -139,6 +139,36 @@ describe('TabFailure', () => {
     }
   )
 
+  it('takes a page the kill switch stopped to the network settings, in a new tab (U13)', async () => {
+    render(
+      <TabFailure
+        tabId="t1"
+        failure={failure({ kind: 'blocked', code: -20, source: 'killSwitch' })}
+        exemptSites={[]}
+      />
+    )
+    expect(screen.getByRole('alert').textContent).toContain(
+      'The kill switch stopped this page: the system setting allows a direct route.'
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Network settings' }))
+    await waitFor(() => expect(invocations).toHaveLength(1))
+    expect(invocations[0]).toEqual({
+      channel: 'tabs:create',
+      payload: { url: 'tessera://settings?q=network.' }
+    })
+  })
+
+  it('offers no network settings for any other failure', () => {
+    render(
+      <TabFailure
+        tabId="t1"
+        failure={failure({ kind: 'blocked', code: -20, source: 'blocker' })}
+        exemptSites={[]}
+      />
+    )
+    expect(screen.queryByRole('button', { name: 'Network settings' })).toBeNull()
+  })
+
   it('offers no way past a rejected certificate', () => {
     render(
       <TabFailure
