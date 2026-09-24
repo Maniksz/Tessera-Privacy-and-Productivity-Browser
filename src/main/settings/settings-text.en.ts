@@ -55,7 +55,7 @@ export const en = {
     theme: {
       label: 'Theme',
       description:
-        'Not applied yet: the interface follows the operating system’s light or dark setting through CSS, so choosing one here changes nothing at the moment.',
+        'Light or dark for the tab strip, toolbar and address bar, or follow the operating system. Takes effect at once. Built-in pages such as this one, and the browser’s pop-up panels, still follow the operating system.',
       choices: { system: 'Follow the system', light: 'Light', dark: 'Dark' }
     },
     uiLanguage: {

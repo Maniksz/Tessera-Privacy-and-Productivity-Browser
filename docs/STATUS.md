@@ -6,9 +6,11 @@ gemeldet wurden.
 
 **Legende** — ✅ gebaut und belegt · 🟡 teilweise · ⬜ offen · ❓ braucht eine Entscheidung · ⛔ verworfen
 
-> **Zuletzt gegen den Code geprüft:** 29.07.2026 (dritter Durchgang desselben Tages). Jeder Punkt, der in
-> diesem Durchgang angefasst wurde, ist vor der Arbeit gegen die Datei geprüft worden — und in vier Fällen
-> stimmte der Eintrag nicht mehr. Wer diesen Kasten liest und das Datum alt findet, sollte den Tabellen
+> **Zuletzt gegen den Code geprüft:** 24.09.2026 (Roadmap Herbst 2026, U5). Geprüft sind die Tabellen am
+> Anfang, „Noch zu bauen", die Entscheidungen, die Härtung und die bekannten Risiken; die Durchgangsberichte
+> vom Juli sind Geschichte und bleiben so stehen, wie sie damals galten. Neu ist „Roadmap Herbst 2026" weiter
+> unten. Davor zuletzt am 29.07.2026 (dritter Durchgang desselben Tages) — dort stimmte in vier Fällen der
+> Eintrag nicht mehr. Wer diesen Kasten liest und das Datum alt findet, sollte den Tabellen
 > nicht glauben, sondern nachsehen: **dieses Dokument hat sich jetzt fünfmal selbst widerlegt** — die
 > Tabelle „Noch zu bauen", die Prämisse des Tresor-Abschnitts, zwei Durchgänge davor, und der dritte
 > Durchgang, der das Settings-Panel seit jeher ein „Overlay" nannte, das es nie war.
@@ -37,7 +39,7 @@ gemeldet wurden.
 | 9 | Icons oben links zu klein | ✅ | 32×32 Knopf mit 20 px SVG |
 | 10 | Kein Home-Knopf | ✅ | Smoke: 4 Navigationsknöpfe |
 | 11 | Kachel-Icons der Startseite: Favicon oder Screenshot lokal | ✅ | Screenshot mit Favicon als Rückfall, die Kette liegt in `shared/quicklinks/cards.ts` (`cardImageSequence`), damit Renderer und CSS nicht auseinanderlaufen können. Privater Modus fotografiert nichts: `discardingThumbnailCapturer` hält weder Store noch Verzeichnis noch Kamera |
-| 12 | Der Browser braucht einen Namen | ❓ | **Vorarbeit fertig**: `src/shared/product.ts` ist die eine Quelle für Name, Schema und appId; drei Fitness-Funktionen halten das fest, samt namentlicher Schuldenliste, die nur schrumpfen kann. Die Umbenennung ist damit eine Zeile plus zwei Paketdateien. Der Name selbst braucht deine Entscheidung |
+| 12 | Der Browser braucht einen Namen | ✅ | **Entschieden: Tessera.** `src/shared/product.ts` ist die eine Quelle für Name, Schema (`tessera://`) und appId; drei Fitness-Funktionen halten das fest. Offen bleibt nur das echte App-Symbol, heute ein Platzhalter aus `scripts/make-icon.mjs` |
 | 13 | Kachel-Icons der Startseite größer | ✅ | `.tile__icon` ist volle Kartenbreite bei `aspect-ratio: 8/5` — dasselbe Maß wie `THUMBNAIL_TARGET` (480×300), also wird nichts zweimal beschnitten. Zwei Bildregeln statt einer, weil `object-fit` auch *hoch*skaliert und ein 32-px-Favicon auf Kartenhöhe ein Schmierer wäre; der Rückfall bleibt bei 48 px |
 | 14 | Nicht alle Tabs schließbar; „new tab" bleibt übrig | ✅ | Smoke: 1 Tab übrig nach dem Schließen aller |
 | 15 | Was ich noch finde | 🟡 | Laufend gemeldet; dieses Dokument ist die Liste — und war zweimal die falsche. Siehe „Der Befund dieser Runde" |
@@ -82,7 +84,7 @@ ohne Dashboard und ohne Symbol nicht konfigurierbar. Entschieden: **nativ bauen.
 | Layout-Icons nur weiß, konturiert gewünscht | ✅ `.iconbutton--wide svg` überschrieb das gemeinsame `fill: none; stroke: currentColor`. Zeichenfläche musste auf `-1 -1 18 18` wachsen, weil ein Strich mittig auf seiner Kante liegt |
 | Layouts mit drei und vier Kacheln **nebeneinander** | ✅ `1x3`/`1x4`. Ich hatte „1x1x1" zunächst als Stapel gelesen und musste den Auftrag mitten im Lauf korrigieren. Der Kern ist nicht das Zeichnen: alle bisherigen Aufteilungen haben höchstens **eine** Trennlinie pro Achse, drei Spalten haben zwei, und die müssen in Ordnung bleiben — unabhängig geklemmt rutscht die zweite über die erste und erzeugt eine Kachel mit negativer Breite |
 | App-Symbol ist noch das von Electron | ✅ **Platzhalter**, programmatisch erzeugt von `scripts/make-icon.mjs` ohne neue Abhängigkeit. Motiv ist die Split-View, Geometrie wörtlich aus `LayoutIcon.tsx`, Farben aus `tokens.css`. Deterministisch, mit electron-builders eigenem Resolver als `isFallback: false` bestätigt. Das echte Zeichen gehört zum Namen |
-| Verlauf geht immer noch nicht | 🟡 **Zeichnet jetzt auf**, und die sechs Kanäle haben Handler. Der Recorder sitzt im Tab, nicht im Fenster — der Tab kennt Adresse und Titel selbst, und ein privates Fenster hält ein Objekt ohne jeden Pfad zur Datei. Es fehlt die **Seite** `tessera://history` |
+| Verlauf geht immer noch nicht | ✅ **Erledigt.** Der Recorder sitzt im Tab, nicht im Fenster — der Tab kennt Adresse und Titel selbst, und ein privates Fenster hält ein Objekt ohne jeden Pfad zur Datei. Die Seite `tessera://history` gibt es (`HistoryPage.tsx`, `history.html`); „Beim Beenden löschen" nimmt den Verlauf seit Roadmap U11 mit, auch nach einem Absturz |
 
 ## Gebaut und verdrahtet
 
@@ -130,7 +132,7 @@ Statusdokument, das Erledigtes als offen führt, ist so irreführend wie eines, 
 | Settings und Erweiterungen als eigene Tabs | ✅ | Settings ist jetzt **nur noch** ein Tab (`SettingsPage.tsx` über `renderer/shared/SettingsView.tsx`); das Panel ist entfernt. Erweiterungen haben weiterhin beides |
 | Pro-Kachel-Navigationsleiste | ✅ | `overlay/TileBarSurface.tsx`; der Tastaturweg ist da (`focusTileBar` hat einen Menüeintrag mit Beschleuniger), also kein Maus-Only-Feature |
 | Sitzungswiederherstellung | ✅ | `session-restore/apply.ts`. Der Blocker für Tab-Gruppen ist gelöst und nicht umgangen: `adoptTabId` hebt den Zähler über jede wiederhergestellte ID, `retainTabs` wird **einmal** mit der Vereinigung aller Fenster gerufen |
-| Lesezeichen, Downloads, Passwörter | ✅ | Alle drei Seiten existieren. Beim Tresor fehlt die *Verdrahtung*, nicht die Seite — siehe „Der Tresor, als Nächstes" |
+| Lesezeichen, Downloads, Passwörter | ✅ | Alle drei Seiten existieren, der Tresor ist verdrahtet (`installAutofill()` in `src/main/index.ts`, siehe „Der Tresor — erledigt"). Die Lesezeichenseite nennt seit Roadmap U4 eine neuere, ungültige oder schreibgeschützte Datei wie die Passwortseite |
 | Lesemodus, Suchen-in-Seite | ✅ | `reader/reader-mode.ts`, `overlay/FindBarSurface.tsx` |
 
 ## Was unterwegs gefunden wurde
@@ -824,7 +826,7 @@ Was an ihrer Stelle offen ist, ist neu und stand hier nie:
 |---|---|
 | **Zwei Kacheln auf demselben Host teilen den lebenden Zoomfaktor** | Chromiums Zoomkarte ist pro Ursprung und pro Sitzung. Die gespeicherten Werte sind getrennt und setzen sich bei der nächsten Navigation durch, aber solange beide auf demselben Host stehen, gewinnt der zuletzt gezoomte. Trennen ließe sich das nur über Chromiums isolierten Zoom-Modus, den Electron nicht freigibt, oder über `webFrame` aus dem Inhalts-Preload — eine Brücke in einer besuchten Seite, die Spezifikation 6 verbietet. **Zu entscheiden: leben wir damit** |
 | **Gruppen-Chips bei jeder Kachelung** | Folge der Entscheidung „eine Gruppe entsteht, sobald gekachelt ist". Erwartbar sind ein bis drei Chips pro Sitzung, nicht einer pro Teilung — `reuse` fängt die Wiederholung ab. Ob das im Streifen als Ordnung oder als Lärm ankommt, sieht man erst in der Benutzung |
-| **`about` und `https-only` liefern 404** | Beide stehen in `KNOWN_PAGES`, haben aber keine HTML-Datei und keinen Vite-Eintrag. Betrifft den „Über"-Menüeintrag und die **HTTPS-only-Zwischenseite**. Gefunden bei der Navigationssperre, bewusst nicht mitgebaut — es ist eine fehlende Seite, keine Sperre |
+| **`about` und `https-only` liefern 404** | **In Arbeit (Roadmap U7, U8).** Beide stehen in `KNOWN_PAGES`, haben aber noch keine HTML-Datei und keinen Vite-Eintrag. Betrifft den „Über"-Menüeintrag und die **HTTPS-only-Zwischenseite**. Gefunden bei der Navigationssperre, bewusst nicht mitgebaut — es ist eine fehlende Seite, keine Sperre |
 | **Der Trackpad-Pinch zoomt nicht** | `zoom-changed` ist laut Electron ein Mausrad-Ereignis; ein Pinch nimmt diesen Weg nie. Der einzige Hebel ist `input-event` mit `gesturePinchUpdate`, dessen typisierte Nutzlast aber keinen Skalierungsfaktor trägt — die Richtung käme aus einem Feld, das die Typdatei nicht zusagt. **Zu entscheiden: bauen wir auf eine unzugesagte Laufzeitform, mit einem Test, der rot wird, wenn sie verschwindet** |
 | **Vollbild verlassen über den Knopf des Players** | Der Tastaturweg ist behoben. Bleibt das Symptom, wenn man das Video über seinen eigenen Knopf verkleinert, liegt es in Electrons Buchhaltung (C++, nicht prüfbar von hier). Bewusst nicht blind behoben — der Fix hätte die Beweislage zerstört. **Braucht eine Beobachtung aus der echten App** |
 | **`TileFullscreenController` hat einen unerreichbaren Zweig** | 85,7 % Zweige, weil `escape()` `fullscreenTile` liest, nachdem das Urteil es schon als nicht-null bewiesen hat. Deshalb *keine* Untergrenze eingetragen — eine Zahl unter 100 dort würde den Zweig ratifizieren statt ihn zu entfernen. Ihn zu entfernen hieße, `SplitController.escape()` die Kachel mit dem Urteil zurückgeben zu lassen |
@@ -997,7 +999,7 @@ anderes" standen, sind zu einem geschrumpft.
 
 | Frage | Entscheidung | Stand |
 |---|---|---|
-| Der Name und das echte App-Symbol | Zurückgestellt — „lassen wir erstmal so" | unverändert |
+| Der Name und das echte App-Symbol | Name: **Tessera** (`src/shared/product.ts`). Symbol zurückgestellt | Name ✅, Symbol Platzhalter |
 | Apple Developer-ID | Zurückgestellt, keine vorhanden | unverändert |
 | Soll eine Multi-View eine Tab-Gruppe sein? | **Ja**, und zwar **immer wenn gekachelt ist** | ✅ gebaut |
 | Gemischte Herkunft beim Teilen | **Immer die bestehende Gruppe nehmen** | ✅ gebaut, mit der Ausnahme für zwei Gruppen |
@@ -1225,7 +1227,7 @@ gepackten Build ist nichts davon belegt**; was dort zu prüfen ist, steht darunt
 
 | Einheit | Befund und was jetzt gilt | Stand | Commit |
 |---|---|---|---|
-| U1 | Es gab nur einen Tag-Workflow ohne Coverage, die Floors liefen nie. Jetzt `gates.yml` bei jedem Push und PR: Typecheck, Lint, Build, Formatprüfung, `test:coverage` mit Floors; `release.yml` ruft dieselben Gates. Rechte nur lesend außer beim Veröffentlichen, Actions per SHA gepinnt. Die Formatprüfung ist bis U18 nicht blockierend, und ein Architekturtest erlaubt `continue-on-error` nur dort. `pnpm quality` prüft die Floors wieder, weil die Formatprüfung jetzt zuletzt läuft | ✅ | `340110a`, `a3a852f` |
+| U1 | Es gab nur einen Tag-Workflow ohne Coverage, die Floors liefen nie. Jetzt `gates.yml` bei jedem Push und PR: Typecheck, Lint, Build, Formatprüfung, `test:coverage` mit Floors; `release.yml` ruft dieselben Gates. Rechte nur lesend außer beim Veröffentlichen, Actions per SHA gepinnt. Die Formatprüfung war bis U18 nicht blockierend; seit Roadmap U3 (`a57fde3`) ist sie es, und der Architekturtest erlaubt `continue-on-error` nirgends mehr. `pnpm quality` prüft die Floors wieder, weil die Formatprüfung jetzt zuletzt läuft | ✅ | `340110a`, `a3a852f` |
 | U2 | `.stryker-tmp/` war versioniert. Nicht mehr; Agenten-Worktrees sind ignoriert | ✅ | `599e1b3` |
 | U3 | Eine zweite Instanz lief trotz fehlendem Lock weiter in `main()` gegen die Stores der ersten. Jetzt endet sie sofort und übergibt ihre Adresse. Ein Link, der den Browser startet, wird gepuffert (argv unter Windows und Linux, `open-url` unter macOS), nach der Sitzungswiederherstellung geöffnet, nur `http(s)`, nie in einem privaten Fenster | ✅ | `98c207d` |
 | U4 | Beim Schließen des letzten Fensters ging die letzte Tresor-Änderung verloren, ein zweites Beenden startete alles neu, ein hängender Schreibvorgang hielt den Prozess ewig. Jetzt ein Zustandsautomat mit 10 s für die Flushes und 30 s für das Löschen beim Beenden, Nachholen beim nächsten Start; Sperren und Zurücksetzen des Tresors warten auf ein laufendes Sperren. Siehe `docs/ARCHITECTURE.md`, „Herunterfahren" | ✅ | `fb70779`, `aa6766b`, `5db3824` |
@@ -1243,7 +1245,7 @@ gepackten Build ist nichts davon belegt**; was dort zu prüfen ist, steht darunt
 | U15 | Windows und Linux installierten unsignierte Updates selbst. Jetzt führen alle drei Plattformen zur Release-Seite, siehe „macOS bleibt vorerst unsigniert" | ✅ | `46b0aa9` |
 | U16 | Ein Punkt am Hostende oder Benutzerangaben in der URL schoben den Host unter `\|\|domain^` weg. Jetzt wie uBlock Origin, dazu `@@…$document` und `@@…$important` | ✅ | `2e59ab1` |
 | U17 | Der Router war von der Coverage ausgeschlossen und ohne eigenen Test. Jetzt eigene Tests über ein gefälschtes `electron`, Floors für `ipc/router.ts` und den Passwort-Code | ✅ | `d37930e`, `832481a` |
-| U18 | Einmalige Prettier-Umformatierung samt `.git-blame-ignore-revs`; danach wird die Formatprüfung in `gates.yml` blockierend. Umformatiert wurde vor den Merges (`45d8111`, `b8b611e`); die offenen Branches kamen danach und wurden beim Mergen formatiert | ✅ | `45d8111`, `b8b611e`, Roadmap U3 |
+| U18 | Einmalige Prettier-Umformatierung samt `.git-blame-ignore-revs`; danach wird die Formatprüfung in `gates.yml` blockierend. Umformatiert wurde vor den Merges (`45d8111`, `b8b611e`); die offenen Branches kamen danach und wurden beim Mergen formatiert | ✅ | `45d8111`, `b8b611e`, `a57fde3` (Roadmap U3) |
 
 Nebenbei: die Filter- und Pipeline-Dateien auf ihre alten Floors gebracht, die nie als Gate liefen (`77cbd8f`,
 `5318bc1`); Duplikate der neuen Module zusammengelegt (`c01a94a`); ein Einstellungs-Test, der unter Last
@@ -1284,6 +1286,71 @@ Laufende App (`pnpm dev`) und gepackter Build. Kein Agent startet die App.
 | Eine Testseite, die `tessera://favicon` und `tessera://thumbnail` per `<img>` abfragt | Treffer und Fehltreffer sehen gleich aus |
 | Tab-Leiste und Startseite | Favicons und Vorschaubilder erscheinen weiter, die Oberfläche hängt das Token also richtig an |
 
+## Roadmap Herbst 2026
+
+Plan: `docs/plans/2026-09-24-0756-feat-roadmap-aufraeumen-versprechen-neues-plan.md`, Branch
+`feat/roadmap-herbst-2026`. Stand dieses Abschnitts: 24.09.2026, nach `fb991bc`.
+
+✅ heißt auch hier: gebaut, durch Tests und Architekturtests belegt. **In der laufenden App ist nichts davon
+belegt**; kein Agent startet die App. Was dort zu prüfen ist, steht in der Tabelle darunter.
+
+| Einheit | Was gelandet ist | Stand | Commit |
+|---|---|---|---|
+| — | Der Plan | ✅ | `cf336b1` |
+| U1 | Autofill U2 und U3 auf main: die Vorschlagsliste liegt auf der Overlay-Schicht. Autofill U4 bis U7 stehen aus (Roadmap U14) | ✅ | `96c6609` |
+| U6 | Die Beschriftungen der nativen Menüs kommen aus Text im Kern, nicht mehr aus dem Katalog | ✅ | `cb634c7` |
+| U2 | Tab-Gruppen gehören dem Benutzer; die Anordnung der Kacheln liegt auf einem eigenen Träger | ✅ | `e42c1aa` |
+| U3 | Die Formatprüfung ist in `gates.yml` blockierend, `continue-on-error` gibt es nirgends mehr | ✅ | `a57fde3` |
+| U4 | Die Lesezeichenseite nennt eine neuere, ungültige oder schreibgeschützte Datei. Der Mutationslauf aus U4 läuft noch | 🟡 | `795152b` |
+| U10 | Eine Seite mit `beforeunload` fragt vor dem Schließen und Verlassen nach | ✅ | `3306bc6` |
+| U9 | Eine Kachel zeigt, warum eine Seite nicht lud oder abstürzte | ✅ | `e4322be` |
+| U11 | Dateninventar; „Beim Beenden löschen" nimmt Verlauf und Downloads mit und holt nach einem Absturz nach | ✅ | `fb991bc` |
+| U5 | README, STATUS, TESTING und die Beschreibung von `appearance.theme` auf dem echten Stand | ✅ | dieser Stand |
+| U7, U8 | About-Seite und HTTPS-only-Zwischenseite | ⬜ | in Arbeit |
+
+### Bündel nach R40
+
+Main- und Renderer-Bündel dürfen wachsen, jede Einheit notiert ihren Zuwachs in kB mit dem Feature. Größte
+Datei, Dateien über der Marke, Katalog und Coverage dürfen nicht schlechter werden als am 24.09.2026. Alle
+Größen dezimal (Bytes ÷ 1000), wie im Build-Log.
+
+| Einheit | Feature | Main-Prozess | Katalog-Chunk | `BrowserWindowController.ts` |
+|---|---|---|---|---|
+| Ausgang 24.09.2026 | — | 510,1 kB | 48,84 kB | 1527 Zeilen |
+| U6 | Menütexte aus dem Kern | — | 48,84 → 43,96 kB | — |
+| U2 | Tab-Gruppen, eigener Träger für Anordnungen | +3,9 kB | — | 1527 → 1476 |
+| U4 | Hinweise auf der Lesezeichenseite | — | +0,8 kB | — |
+| U10 | Nachfrage bei `beforeunload` | in den +13,4 kB unten | — | 1476 → 1469 |
+| U9 | Fehler- und Absturzanzeige in der Kachel | in den +13,4 kB unten | +0,4 kB | 1469 → 1462 |
+| U11 | Dateninventar, Löschen beim Beenden | in den +13,4 kB unten | — | — (`src/main/index.ts` 1462 → 1404) |
+| **Stand nach `fb991bc`** | | **527,45 kB** (U9 bis U11 zusammen ≈ +13,4 kB) | **45,12 kB** von 48 | 1462 |
+
+Der Main-Prozess liegt damit weiter über seinem Budget von 320 kB, und das ist nach der Key Decision
+„Bundle-Budgets dürfen mit notiertem Zuwachs wachsen" zulässig, solange der Zuwachs hier steht. Den Anteil von
+U9, U10 und U11 einzeln misst niemand nach, weil zwischen den Einheiten kein Build lief; die Summe ist gemessen.
+Der Preload der Tabs steht bei 41,6 kB; das ist die Messlatte für Roadmap U14 (R25), nicht 35 kB.
+
+### Was nur der Benutzer prüfen kann
+
+Laufende App (`pnpm dev`). Kein Agent startet die App. Jede Zeile ist offen, bis der Benutzer sie bestätigt.
+
+| Einheit | Prüfung | Erwartung |
+|---|---|---|
+| U10 | **Vor der Änderung** (Stand vor `3306bc6`): eine Seite mit `beforeunload` öffnen und wegnavigieren | Festhalten, ob die Navigation still blockiert war. Der Plan vermutet es; belegt ist es nicht |
+| U10 | Ob `preventDefault` auf `will-prevent-unload` bei einer `WebContentsView` wirkt | „Verlassen" verlässt die Seite tatsächlich |
+| U10 | Tab schließen und Fenster schließen auf einer solchen Seite | Dialog mit „Bleiben" und „Verlassen"; beides tut, was es sagt |
+| U10 | Cmd+Q und Update installieren | Keine Nachfrage |
+| U10 | Link-Navigation und Neu laden auf einer solchen Seite | Dialog; „Verlassen" und „Bleiben" wirken |
+| U10 | Tab in einer eingeklappten Gruppe | Der Streifen zeigt die Gruppe aufgeklappt, bevor der Dialog erscheint |
+| U10 | Standardknopf des Dialogs | „Bleiben". Chrome nimmt „Verlassen"; hier ist das eine Produktentscheidung, festgehalten |
+| U9 | Fehleranzeige in einer und in mehreren Kacheln: unbekannte Domain, offline, Zertifikatsfehler, beendeter Renderer, Sperre durch den Blocker gegen Sperre durch die Telemetrie-Stufe | Die Anzeige erscheint in der richtigen Kachel und nennt den richtigen Grund |
+| U9 | Dasselbe in einer maximierten Kachel | Die Anzeige passt in die Kachel |
+| U9 | „Neu laden" | Die Anzeige verschwindet |
+| U9 | „Trotzdem öffnen" | Die Seite lädt |
+| U11 | `docs/QA.md` 7.12 bis 7.15 | Wie dort beschrieben |
+| U2 | Gruppe einklappen, kacheln, mit Tab-Gruppen neu starten | Die Gruppen und ihre Anordnung kommen wieder |
+| U1 | Autofill-Vorschlagsliste auf der Overlay-Schicht | Die Liste erscheint am Feld und füllt aus. Autofill U4 steht noch aus |
+
 ## Bekannte Risiken
 
 | Risiko | Warum es offen ist |
@@ -1296,7 +1363,7 @@ Laufende App (`pnpm dev`) und gepackter Build. Kein Agent startet die App.
 | ~~Tab-Gruppen überleben keinen Neustart~~ **behoben** | Die Sitzungswiederherstellung rekonziliert sie. Die damals genannte Gefahr — fremde neue Tabs in alten Gruppen — ist der Grund für die Reihenfolge in `session-restore/apply.ts`: jede wiederhergestellte Id muss existieren, *bevor* `retainTabs` läuft, und `retainTabs` läuft **einmal** mit der Vereinigung aller Fenster. Pro Fenster gerufen würde das zweite die Gruppen des ersten leerräumen |
 | ~~Von Webinhalten erreichbare interne Seiten~~ **geschlossen** | `will-frame-navigate` und `will-redirect` sperren jetzt, und die zweite, hier nie notierte Hälfte — `history:open`/`bookmarks:open` nahmen jede URL — ist im Vertrag geschlossen. Siehe „Navigationssperre zu `tessera://`" |
 | **Zoom: zwei Kacheln auf demselben Host teilen den lebenden Faktor** | Chromiums Zoomkarte ist pro Ursprung. Neu mit „Zoom pro View" und nicht behebbar, ohne eine Brücke in eine besuchte Seite zu legen. Siehe „Offene Fragen" |
-| **`about` und `https-only` liefern 404** | In `KNOWN_PAGES`, ohne HTML-Datei. Trifft den „Über"-Eintrag und die HTTPS-only-Zwischenseite. Bei der Navigationssperre gefunden, bewusst nicht mitgebaut |
+| **`about` und `https-only` liefern 404** | In Arbeit (Roadmap U7, U8). In `KNOWN_PAGES`, noch ohne HTML-Datei. Trifft den „Über"-Eintrag und die HTTPS-only-Zwischenseite |
 | Drei Größenbudgets angehoben | Preload 16→22 kB, Hauptprozess 200→250→320 kB, größte Datei 750→780 Zeilen. Jede mit Begründung *und* mit dem nächsten Schritt im Kommentar — was eine weitere Anhebung rechtfertigen würde und was nicht |
 | **Sechs Budgets stehen darüber, absichtlich nicht angehoben** | Nach diesem Durchgang: größte Datei **1036 Zeilen** (Grenze 780, vorher 1219), Dateien über der Marke **5** (1, vorher 6), ungetestete Renderer-Zeilen **3900** (2800, unverändert). Die drei Größenzahlen — Hauptprozess 375 kB, Renderer-JavaScript 339 kB, Preload 26 kB — **sind nicht neu gemessen**: `pnpm build` konnte in diesem Durchgang nicht laufen, `metrics.mjs` liest also ein Bündel von vor dieser Arbeit. Sie sind zu erneuern, bevor jemand sie zitiert. Die Kommentare nennen ihren nächsten Schritt selbst, und keiner davon ist „höher setzen" — beim Hauptprozess das Laden der Manifest-Auswertung des Medien-Downloaders auf Abruf. **Beim Preload nennt der Kommentar den Rollen-Split, und der ist gebaut**; dort steht jetzt keine bekannte nächste Maßnahme mehr, siehe „Preload-Budget". Die 320 wurden bereits *für* dieses Funktionsbündel angehoben; eine dritte Anhebung dafür wäre keine Begründung mehr, sondern eine Gewohnheit |
 | **Die Zeilen-Marke maß nur die schlimmste Datei** | Ein Fund aus einer früheren Runde, und er war schlimmer als er aussah. Die Marke gilt *pro Datei*, gemessen wurde aber nur das Maximum — sobald eine Datei darüber stand, konnte jede weitere lautlos vorbeiziehen. Genau das war passiert: `shared/tabgroups/model.ts` erreichte 873 Zeilen, vierzig Zeilen davon entfernt, überhaupt gemeldet zu werden, während die Zahl auf dem Schirm weiter `catalog.ts` nannte. Neue Prüfung `files over the per-file line bar`. Nach diesem Durchgang **fünf**, und `catalog.ts` ist ganz von der Liste verschwunden (1219 → 94): `contract.ts` (1036), `BrowserWindowController.ts` (1034), `tabgroups/model.ts` (954), `main/index.ts` (953), `PasswordsPage.tsx` (788). Zu beachten: die neue Spitzenreiterin `contract.ts` ist die erste, für die **kein nächster Schritt aufgeschrieben** ist |
@@ -1304,7 +1371,13 @@ Laufende App (`pnpm dev`) und gepackter Build. Kein Agent startet die App.
 
 ## Qualitätsstand
 
-Neu gemessen am Ende des dritten Durchgangs. **Eine Ausnahme, unverändert wichtig:** `pnpm build`
+**Stand 24.09.2026.** Letzter voller Testlauf: **6126 grün in 203 Dateien**. Die Bündelgrößen sind am
+Build vom 24.09.2026 gemessen und stehen unter „Roadmap Herbst 2026": Main-Prozess 527,45 kB (Budget 320),
+Renderer-JavaScript 371 kB (320), Preload 41,6 kB (22), Chrome-Preload 3,3 kB (5), Katalog 45,12 kB (48).
+Coverage und Mutationsbewertung sind in diesem Durchgang nicht neu gemessen; die Tabelle darunter ist der
+Stand vom 29.07.2026.
+
+Neu gemessen am Ende des dritten Durchgangs (29.07.2026). **Eine Ausnahme, unverändert wichtig:** `pnpm build`
 konnte auch diesmal nicht laufen, also sind die vier Bündelgrößen die vom 28.07. — sie beschreiben
 einen Stand vor zwei Durchgängen Arbeit. Alles andere ist frisch.
 

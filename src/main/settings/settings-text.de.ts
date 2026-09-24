@@ -20,7 +20,7 @@ export const de: SettingTextTable = {
     theme: {
       label: 'Erscheinungsbild',
       description:
-        'Noch ohne Wirkung: Die Oberfläche folgt über CSS der Hell-/Dunkel-Einstellung des Betriebssystems. Eine Auswahl hier ändert derzeit nichts.',
+        'Hell oder dunkel für Tab-Leiste, Symbolleiste und Adressleiste, oder dem Betriebssystem folgen. Wirkt sofort. Interne Seiten wie diese und die Aufklappfelder des Browsers folgen weiter dem Betriebssystem.',
       choices: { system: 'Dem System folgen', light: 'Hell', dark: 'Dunkel' }
     },
     uiLanguage: {

@@ -40,8 +40,10 @@ Das ist gegen die Spezifikation lesbar, ohne den Code zu kennen. Deshalb liegen 
 Verhaltensanforderungen in `.feature`-Dateien und die Randfälle in Unit-Tests — nicht
 weil BDD ein Prinzip ist, sondern weil die Spec in dieser Sprache geschrieben ist.
 
-Fünf Feature-Dateien, 86 Szenario-Blöcke, die zu 144 Testfällen expandieren (Scenario Outlines mit Beispieltabellen): `quicklinks`, `split-view`, `privacy`,
-`permissions-and-settings`, `address-bar`.
+Vierzehn Feature-Dateien mit 195 Szenario-Blöcken (Stand 24.09.2026; Scenario Outlines expandieren
+über ihre Beispieltabellen zu mehr Testfällen): `address-bar`, `bookmarks`, `closing`, `content-blocker`,
+`downloads`, `find-in-page`, `permissions-and-settings`, `privacy`, `quicklinks`, `reader-mode`,
+`session-restore`, `split-view`, `tab-groups`, `window-layering`.
 
 **Ein Detail, das überrascht:** quickpickle registriert Steps nach ihrem *Text*,
 nicht nach dem Schlüsselwort. `When tile 0 is active` und `Then tile 0 is active`
@@ -88,7 +90,8 @@ Berechtigungen, Sender-Policy, Split-Controller. Electron-gebundenen Code zu mut
 würde Minuten für Mutanten aufwenden, die kein Unit-Test erreichen kann, und ein
 niedriger Wert dort würde nichts über die Testqualität aussagen.
 
-Aktueller Stand: **80,6 %** (730 getötet, 165 überlebt, 11 ohne Abdeckung).
+Der Stand des letzten Laufs steht mit Datum in [STATUS.md](STATUS.md) unter „Qualitätsstand"; der erste
+Lauf lag bei 80,6 %.
 Schwellen: 90 % gut, 80 % Warnung, unter 70 % schlägt fehl. Wenn `break` anspringt,
 sind die ehrlichen Reaktionen, die fehlende Zusicherung zu ergänzen oder Code zu
 löschen, von dem nichts abhängt — nicht, die Zahl zu senken.
@@ -145,15 +148,26 @@ nur dieser Test kann prüfen, dass die geprüfte Policy auch die wirksame ist.
 
 | Metrik | Grenze | Grund |
 |---|---|---|
+| Quelldateien | — | Nur zur Information |
 | Test-zu-testbarem-Quellcode | min 0,5 | Ein Boden, keine Zielgröße: Coverage und Mutation messen direkt, das hier warnt früh |
-| Renderer-Zeilen ohne Unit-Test | max 3000 | Darüber braucht die UI Komponententests statt eines End-to-End-Durchgangs |
+| Renderer-Zeilen, die kein Komponententest erreicht | max 2800 | Der Smoke-Test zeigt, dass jede Oberfläche einmal lädt; was sie bei einer abgelehnten Anfrage oder einer leeren Liste tut, braucht darüber einen Komponententest |
 | Gherkin-Szenarien | min 40 | Verhalten muss irgendwo lesbar für Nicht-Programmierer stehen |
-| Größte Quelldatei | max 750 Zeilen | So lang ist meist zwei ungetrennte Module |
+| Größte Quelldatei | max 780 Zeilen | So lang ist meist zwei ungetrennte Module (einmal von 750 angehoben, Begründung im Skript) |
+| Dateien über der Zeilen-Marke | max 1 | Die Marke oben misst nur die schlimmste Datei; ohne diese Zahl wäre eine zweite zu lange unsichtbar |
 | Kommentaranteil | min 0,15 | Die Begründungen sind der Teil, dessen Wiederentdeckung teuer ist |
-| Laufzeit-Abhängigkeiten | max 8 | Jede ist ausgelieferter Code und Angriffsfläche |
+| Laufzeit-Abhängigkeiten | max 4 | Jede ist ausgelieferter Code und Angriffsfläche; von 2 auf 4 angehoben für zwei benannte Krypto-Pakete |
 | Renderer-JavaScript (Summe) | max 320 kB | Parse-Arbeit bei jedem Fensterstart |
-| Preload | max 16 kB | Läuft vor jeder Seite |
-| Main-Prozess | max 200 kB | Wird geparst, bevor das erste Fenster erscheinen kann |
+| Preload (Tabs, `index.cjs`) | max 22 kB | Läuft vor jeder Seite in jedem Tab |
+| Chrome-Preload (`chrome.cjs`) | max 5 kB | Trägt die ganze IPC-Brücke; Wachstum dort ist Recht, das das Fenster nicht verlangt hat |
+| Main-Prozess | max 320 kB | Wird geparst, bevor das erste Fenster erscheinen kann |
+| Zeilen-Coverage | min 90 % | Dieselbe Schwelle wie in `vitest.config.ts`, hier nur sichtbar gemacht; braucht `coverage/` |
+| Branch-Coverage | min 85 % | Zweige sind die Stellen mit den Entscheidungen; braucht `coverage/` |
+| Mutations-Score | min 70 % | Coverage sagt, dass eine Zeile lief; das hier, dass ein Test eine Änderung bemerkt; braucht `reports/mutation/` |
+
+Die Bündelgrößen misst das Skript nur, wenn `out/` existiert, Coverage und Mutation nur, wenn ihre
+Berichte vorliegen. Am 24.09.2026 stehen drei Bündel über ihrer Grenze (Main-Prozess, Renderer-JavaScript,
+Preload), absichtlich nicht angehoben; die Roadmap Herbst 2026 notiert den Zuwachs je Einheit in
+[STATUS.md](STATUS.md#roadmap-herbst-2026).
 
 Alle Größen in dezimalen kB (Bytes ÷ 1000), dieselbe Einheit wie im Build-Log.
 
@@ -163,13 +177,14 @@ als die Summe:
 | Chunk-Muster | Grenze | Deckt ab |
 |---|---|---|
 | `index-*.js` | max 60 kB | Chrome-UI-Einstieg |
-| `vendor-react-*.js` | max 240 kB | React, von beiden Einstiegen geteilt |
+| `overlay-*.js` | max 20 kB | Overlay-Schicht, eine pro Fenster |
+| `vendor-react-*.js` | max 240 kB | React, von allen Einstiegen geteilt |
 | `*.css` | max 24 kB | Stylesheets |
+| `catalog-*.js` | max 48 kB | Nachrichtenkatalog, beide Sprachen |
+| jede übrige `*.js` | max 40 kB | geteilte Chunks und Einstiege interner Seiten |
 
-**Bekannte Lücke:** die geteilten `shared`-Chunks (`omnibox-*.js`) und der
-Startseiten-Einstieg (`start-*.js`) passen auf keines dieser Muster und sind nur durch
-das Summenbudget gedeckt. Ausgerechnet der Chunk, der die zod-Regression trug, hat also
-kein eigenes Budget. Wer das schließt, ergänzt ein Muster für die geteilten Chunks.
+Die frühere Lücke — geteilte Chunks wie `omnibox-*.js` und der Startseiten-Einstieg passten auf kein Muster —
+ist durch das letzte Muster geschlossen. Die Muster greifen der Reihe nach, das erste passende gilt.
 
 Der Test überspringt nicht, wenn kein Build vorliegt — er läuft trivial durch. So
 verlangt `pnpm test` keinen Build, aber ein Lauf nach dem Build hält die Grenze.

@@ -4,11 +4,11 @@ Ein Desktop-Browser für Windows, Linux und macOS mit Fokus auf Privatsphäre un
 paralleles Arbeiten. Alle Daten bleiben lokal: kein Account, keine Cloud, keine
 Synchronisation, keine Telemetrie.
 
-**Status: Grundgerüst mit funktionierender Startseite.** Der Browser startet, Tabs
-und Navigation funktionieren, Split View ist im Kern implementiert, und die
-Startseite verwaltet Quick Links. Was fehlt, steht vollständig unter
-[Was noch nicht da ist](#was-noch-nicht-da-ist) — bewusst lückenlos, damit niemand
-ein Feature für fertig hält, das es nicht ist.
+**Status: benutzbarer Browser, noch nicht fertig.** Tabs, Split View mit Tab-Gruppen,
+Verlauf, Lesezeichen, Downloads, Passwort-Tresor, Sitzungswiederherstellung, Werbe- und
+Trackerblocker und Fingerprint-Maskierung sind gebaut und getestet. Was fehlt, steht vollständig unter
+[Was noch nicht da ist](#was-noch-nicht-da-ist) — bewusst lückenlos, damit niemand ein Feature für
+fertig hält, das es nicht ist. Die Liste ist am 24.09.2026 Punkt für Punkt gegen den Code geprüft.
 
 ## Loslegen
 
@@ -173,13 +173,22 @@ Alle Größen in dezimalen kB (Bytes ÷ 1000), wie der Build-Log sie ausgibt. Di
 Tabelle mischte vorher dezimale und binäre Werte, was korrekte Zahlen widersprüchlich
 aussehen ließ; `scripts/metrics.mjs` und die Budget-Tests rechnen jetzt ebenso.
 
-| | vorher | nachher |
-|---|---|---|
-| Renderer-JS gesamt | ~750 kB | **227 kB** (62 kB gzip) |
-| Chrome-UI-Einstieg | in einem 705-kB-Chunk | **11,5 kB** + geteilter React-Chunk |
-| Main-Prozess | 160 kB | **87,6 kB** |
-| Preload | 4,0 kB + Chunk | **2,2 kB**, selbstständig |
-| Module im Renderer-Build | 126 | **47** |
+| | vorher | nach der Korrektur | 24.09.2026 | Budget |
+|---|---|---|---|---|
+| Renderer-JS gesamt | ~750 kB | 227 kB (62 kB gzip) | **371 kB** (120 kB gzip), 26 Chunks | 320 kB |
+| Chrome-UI-Einstieg | in einem 705-kB-Chunk | 11,5 kB + geteilter React-Chunk | **24,4 kB** + React-Chunk (192 kB) | 60 kB |
+| Katalog-Chunk (beide Sprachen) | — | — | **45,1 kB** | 48 kB |
+| Main-Prozess | 160 kB | 87,6 kB | **527,5 kB** | 320 kB |
+| Preload (Tabs) | 4,0 kB + Chunk | 2,2 kB, selbstständig | **41,6 kB** | 22 kB |
+| Preload (Fenster und Overlay) | — | — | **3,3 kB** | 5 kB |
+
+Die Spalte „nach der Korrektur" ist der Stand direkt nach dem Fund oben, als der Browser noch
+ein Grundgerüst war. Seitdem sind Blocker, Tresor, Autofill, Medien-Erkennung, Tab-Gruppen und
+die übrigen Funktionen dazugekommen, und drei Summenbudgets stehen darüber: Renderer-JS,
+Main-Prozess und Preload. Sie sind absichtlich nicht angehoben. Für die Roadmap Herbst 2026 gilt:
+Main- und Renderer-Bundle dürfen wachsen, wenn jede Einheit ihren Zuwachs in kB mit dem Feature
+notiert; das steht in [STATUS.md](docs/STATUS.md#roadmap-herbst-2026). Gemessen am Build vom
+24.09.2026 (`out/`), nicht geschätzt.
 
 React liegt jetzt in einem geteilten Chunk, wird also einmal kompiliert statt zweimal
 pro Fenster. Build-Ziele sind auf Chromium 150 und Node 24 gepinnt — was Electron 43
@@ -197,53 +206,67 @@ Hardware von 2015 nicht beides erfüllbar ist.
 ```
 pnpm run typecheck    strict, noUncheckedIndexedAccess, exactOptionalPropertyTypes
 pnpm run lint         0 Fehler, 0 Warnungen (type-aware, strictTypeChecked)
-pnpm test             617 Tests in 21 Dateien
-  davon Gherkin       144 ausgeführte Szenarien aus 86 Blöcken in 5 Feature-Dateien
-  davon Architektur   29 Fitness-Funktionen
-pnpm run test:coverage 99,3 % Zeilen · 95,1 % Zweige · alle Bereichsschwellen erfüllt
-pnpm run test:mutation Mutation Score 80,6 % (Schwelle: 70)
-pnpm run test:smoke   26 Checks gegen die laufende Anwendung
+pnpm test             6126 Tests in 203 Dateien (letzter voller Lauf, 24.09.2026)
+  davon Gherkin       195 Szenario-Blöcke in 14 Feature-Dateien
+  davon Architektur   Fitness-Funktionen in tests/architecture.test.ts
+pnpm run test:coverage Schwellen 90 % Zeilen, 85 % Zweige, dazu Untergrenzen pro Datei
+pnpm run test:mutation Schwelle 70 %; der Stand des letzten Laufs steht in docs/STATUS.md
+pnpm run format:check blockierend in CI seit a57fde3
+pnpm run test:smoke   läuft nur der Benutzer; Agenten starten die App nicht
 ```
+
+Aktuelle Coverage- und Mutationswerte stehen mit Datum unter „Qualitätsstand" in
+[STATUS.md](docs/STATUS.md). Hier stehen sie nicht, weil eine Zahl ohne Datum im README
+schneller veraltet als jede andere Stelle.
 
 Die Teststrategie und was jede Ebene beantwortet: [TESTING.md](docs/TESTING.md).
 Was nur ein Mensch oder echte Hardware prüfen kann: [QA.md](docs/QA.md).
 
 ## Was noch nicht da ist
 
-**Datenhaltung.** Verlauf, Lesezeichen, Passwörter, Downloads und Sitzung fehlen.
-Einstellungen und Quick Links liegen als **unverschlüsseltes JSON** — die
-`DocumentCodec`-Schnittstelle ist die Nahtstelle für die Verschlüsselung, die
-Implementierung fehlt. Abschnitt 3 („alle lokalen Daten verschlüsselt") ist damit
-nicht erfüllt.
+Geprüft am 24.09.2026 gegen `src/`. Gebaut und deshalb nicht mehr auf dieser Liste: Verlauf,
+Lesezeichen, Passwort-Tresor mit Autofill, Downloads, Sitzungswiederherstellung, verschlüsselte
+lokale Daten, Filterlisten-Engine mit kosmetischem Filtern und Element-Picker,
+Fingerprint-Maskierung, Berechtigungs-Dialog, Einstellungsseite, Kontextmenüs, Suchen auf der
+Seite, Lesemodus, Tabs in Kacheln ziehen, Fehler- und Absturzanzeige in der Kachel, Nachfrage
+beim Verlassen einer Seite (`beforeunload`) und Löschen beim Beenden samt Verlauf und Downloads.
 
-**Privacy-Engine.** Die Pipeline steht mit Telemetrie-Sperre, Redirect-Blocker,
-Parameter-Bereinigung und HTTPS-Upgrade. Es fehlen: die Filterlisten-Engine (die Stufe
-wird übersprungen statt behelfsmäßig ersetzt), kosmetisches Filtern, die
-HTTPS-Zwischenseite selbst, Proxy/VPN mit Kill-Switch, Zustandstrennung pro Seite,
-lokale Phishing-Blockliste.
+**In Arbeit.** Die HTTPS-only-Zwischenseite und die About-Seite. Beide Adressen stehen in
+`KNOWN_PAGES`, liefern aber bis zum Abschluss dieser Arbeit keine Seite aus.
 
-**Fingerprinting.** Das Preload markiert nur den Injektionspunkt. Die Maskierung von
-Canvas, WebGL, Audio, Schriften und Bildschirmwerten fehlt. Header-Normalisierung ist
-implementiert und getestet.
+**Privacy-Engine.** Es fehlen: Proxy/VPN mit Kill-Switch (die Einstellungen existieren und
+sagen selbst, dass sie noch nichts tun), Zustandstrennung pro Seite (heute eine Partition pro
+Browsing-Modus, nicht pro Site), lokale Phishing-Blockliste.
 
-**Berechtigungen.** Alles wird abgelehnt, korrekt und getestet. Es fehlt der
-Nachfrage-Dialog — `requestFromUser` gibt immer `false` zurück, was ohne Oberfläche
-richtig ist, aber `ask` praktisch wie `deny` wirken lässt.
+**Verschlüsselung mit einer Grenze.** Lokale Daten werden mit einem Schlüssel aus dem
+Schlüsselspeicher des Betriebssystems versiegelt. Wo es keinen echten gibt (Linux mit
+`basic_text`), startet ein neues Profil unverschlüsselt und sagt das.
 
-**Oberfläche.** Es fehlen: Einstellungsseiten, Kontextmenüs, Suchen auf der Seite,
-Autocomplete in der Adressleiste, Lesemodus, Screenshots, Kachel-Kopfzeilen,
-Per-Site-Panel. Drag & Drop von Tabs in Kacheln braucht ein temporäres Ausblenden der
-nativen Views, sonst erreicht der Drop das DOM nicht.
+**Fingerprinting.** Die Maskierung läuft im Preload der Seite. iframes und Worker bleiben
+unmaskiert.
+
+**Berechtigungen.** Kamera, Mikrofon und Bildschirmfreigabe bleiben bewusst unangetastet:
+„Fragen" ist dort ein stilles Nein. Das ist eine Entscheidung, keine Lücke.
+
+**Oberfläche.** Es fehlen: Vorschläge in der Adressleiste (Verlauf, Lesezeichen, offene Tabs),
+Screenshots einer Seite (Vorschaubilder der Startseite gibt es, ein Screenshot-Werkzeug nicht),
+Kachel-Kopfzeilen, Per-Site-Panel hinter dem Schloss.
+
+**Einstellungen ohne Wirkung.** Neben Proxy, Kill-Switch, Zustandstrennung, Vorschlägen und
+Kachel-Kopfzeilen tun auch diese noch nichts: Tabs nach Zeit entladen, Rechtschreibsprachen,
+Position der Tab-Leiste, Schutz vor Schadsoftware. Jede trägt auf der Einstellungsseite einen
+Hinweis, und `tests/architecture.test.ts` führt sie auf der Liste `notYetRead`.
 
 **Auslieferung.** `electron-builder.yml` ist für alle drei Plattformen konfiguriert,
-inklusive Hardened Runtime und Notarisierung. Nichts davon ist getestet, und
-Signierung braucht Zertifikate: Authenticode für Windows, Apple Developer Account für
-macOS.
+inklusive Hardened Runtime und Notarisierung. Signierung braucht Zertifikate: Authenticode
+für Windows, Apple Developer Account für macOS. Bis dahin führen Updates auf allen drei
+Plattformen zur Release-Seite, statt sich selbst zu installieren.
 
 **Nicht auf allen Plattformen geprüft.** Entwickelt und verifiziert auf macOS.
 Fensterdekoration, Tastenkürzel und besonders `setFullScreenable(false)` als
-Kachel-Vollbild-Mechanismus müssen auf Windows und Linux nachgewiesen werden — das ist
-der riskanteste offene Punkt und steht als erster in [QA.md](docs/QA.md).
+Kachel-Vollbild-Mechanismus müssen auf Linux nachgewiesen werden; auf Windows hat der Benutzer
+das Kachel-Vollbild am 29.07.2026 bestätigt. Das ist der riskanteste offene Punkt und steht als
+erster in [QA.md](docs/QA.md).
 
 ## Lizenz
 
