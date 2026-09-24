@@ -49,6 +49,7 @@ import { isInternalPageUrl } from '../ipc/sender-policy.js'
 import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
 import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
 import { CloseTabFallback, pageKeyAction, type PageKeystroke } from './page-keys.js'
+import { CloseContract, askToLeave, hostOf, preventDefaultOf } from './unload-guard.js'
 
 /**
  * One browser window: its chrome UI, its tabs, its split layout.
@@ -115,33 +116,6 @@ export interface WindowControllerOptions {
 
 const DEFAULT_CHROME_INSETS: ChromeInsets = { top: 88, bottom: 0, left: 0, right: 0 }
 
-/**
- * The host of an address, for a dialogue to lead with.
- *
- * The empty string for anything unparseable, which the surface renders as the full address instead — a
- * prompt that said "wants to open" with no subject would be unanswerable, and a URL this could not read
- * is one the user most needs to see in full.
- */
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host
-  } catch {
-    return ''
-  }
-}
-
-/**
- * `preventDefault` on an Electron event that arrived through `#on` as `unknown`.
- *
- * A declaration rather than a cast, as in `pendingNavigationOf`: `object` is assignable to a type
- * whose only field is optional, so this narrows without asserting anything unchecked.
- */
-function preventDefaultOf(event: unknown): void {
-  if (typeof event !== 'object' || event === null) return
-  const cancellable: { preventDefault?: () => void } = event
-  cancellable.preventDefault?.()
-}
-
 export class BrowserWindowController implements PermissionHost {
   readonly window: BrowserWindow
   readonly split: SplitController
@@ -192,6 +166,8 @@ export class BrowserWindowController implements PermissionHost {
    * `dismissOverlay` bound to this instance.
    */
   readonly #navigationPrompt: AutomaticNavigationPrompt
+  /** What closing a tab or this window asks first, and what it never asks (KTD5); see `unload-guard.ts`. */
+  readonly #close: CloseContract
   /**
    * The second route to `closeTab`, for the state in which the menu accelerator stops arriving.
    *
@@ -321,6 +297,17 @@ export class BrowserWindowController implements PermissionHost {
         presentOverlay: (presentation) => this.presentOverlay(presentation),
         dismissOverlay: () => this.dismissOverlay()
       }
+    })
+
+    this.#close = new CloseContract({
+      on: (event, handler) => this.#on(event, handler),
+      tab: (tabId) => this.#tabs.get(tabId),
+      groups: this.#seams.groups,
+      activateTab: (tabId) => this.activateTab(tabId),
+      confirm: (prompt) =>
+        askToLeave(this.window, prompt, this.getSettings()['appearance.uiLanguage']),
+      finish: (tabId, closed) => this.#finishClose(tabId, closed),
+      closeWindow: () => this.window.close()
     })
 
     /*
@@ -491,6 +478,8 @@ export class BrowserWindowController implements PermissionHost {
       // exist for, so it goes in the same breath.
       this.#closeTabFallback.cancel()
       this.#overlay.destroy()
+      // Before the tabs go: a close still waiting on a page finishes nothing in a window that is gone.
+      this.#close.dispose()
       for (const tab of this.#tabs.values()) tab.destroy()
       this.#tabs.clear()
       // The window's slot goes with it. `SessionStore.seal()` is what keeps this from rewriting the session
@@ -648,6 +637,7 @@ export class BrowserWindowController implements PermissionHost {
 
     this.#tabs.set(tab.id, tab)
     this.#permissionTabs.set(tab, { webContentsId: tab.view.webContents.id, url: tab.currentUrl })
+    this.#close.track(tab.id)
     this.#tabOrder.push(tab.id)
     // Index 0 puts the tab view at the bottom of the child stack, which keeps the overlay
     // layer above every tab no matter when each was added. Appending instead would put the
@@ -682,18 +672,21 @@ export class BrowserWindowController implements PermissionHost {
   }
 
   closeTab(tabId: string): void {
-    const tab = this.#tabs.get(tabId)
-    if (!tab) return
-
+    if (!this.#tabs.has(tabId)) return
     /*
       A tab is closing, so a keystroke waiting to close one has been answered — by the menu, by the
-      strip's button, by anything. Below the `!tab` guard on purpose: a request naming a tab that is
+      strip's button, by anything. Below the unknown-tab guard on purpose: a request naming a tab that is
       already gone closed nothing, and calling off a real pending close on the strength of it would
       turn the fallback back into the thing it is a fallback for.
     */
     this.#closeTabFallback.cancel()
+    this.#close.closeTab(tabId)
+  }
 
-    const url = tab.toState().url
+  /** The second half of `closeTab`, once the tab has really gone; `CloseContract` decides when. */
+  #finishClose(tabId: string, { url, keepOneTab }: { url: string; keepOneTab: boolean }): void {
+    const tab = this.#tabs.get(tabId)
+    if (!tab) return
     if (url !== '' && !this.privateMode) {
       this.#closedTabUrls.push(url)
       if (this.#closedTabUrls.length > 25) this.#closedTabUrls.shift()
@@ -723,7 +716,7 @@ export class BrowserWindowController implements PermissionHost {
      * undefined. A fresh start-page tab is both the safer state and what the user
      * would open next anyway.
      */
-    if (this.#tabs.size === 0 && !this.window.isDestroyed()) {
+    if (this.#tabs.size === 0 && keepOneTab && !this.window.isDestroyed()) {
       this.createTab({})
       return
     }

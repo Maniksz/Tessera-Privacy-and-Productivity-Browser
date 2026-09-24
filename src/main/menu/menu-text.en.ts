@@ -92,7 +92,15 @@ export const en = {
   'blocker.noRules': 'No rules of your own yet',
   'blocker.openSettings': 'Manage in settings…',
   /** How many of the user's own rules apply to the site in front of them, rather than in total. */
-  'blocker.forgetSiteRules': 'Delete my rules for this site ({count})'
+  'blocker.forgetSiteRules': 'Delete my rules for this site ({count})',
+
+  // the question a page's `beforeunload` puts, a native dialog as well; see `browser/unload-guard.ts`
+  'unload.closeTab': 'Close this tab?',
+  'unload.leavePage': 'Leave this page?',
+  /** Names the site (R11): with four pages on screen, "this page" alone does not say which. */
+  'unload.detail': 'Changes you made on {site} may not be saved.',
+  'unload.leave': 'Leave',
+  'unload.stay': 'Stay'
 } as const satisfies Record<string, string>
 
 export type MenuTextKey = keyof typeof en

@@ -5,6 +5,10 @@ import { en, type MenuText, type MenuTextKey } from './menu-text.en.js'
 /**
  * The native menus' own labels, kept in the core beside the only code that builds those menus.
  *
+ * One native surface that is not a menu shares the table on the same terms: the `unload.*` question a
+ * page's `beforeunload` puts (`browser/unload-guard.ts`), a message box the core draws and no renderer
+ * ever shows.
+ *
  * ## Why this is not in `shared/i18n/catalog.*`
  *
  * The application menu, the page context menu and the blocker menu behind the address-bar badge are

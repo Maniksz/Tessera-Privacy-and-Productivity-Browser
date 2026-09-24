@@ -488,6 +488,18 @@ export default defineConfig({
           statements: 100
         },
         /*
+          The close contract (KTD5), held at all of it for the reason `window-events.ts` is: the rules
+          came out of the excluded `BrowserWindowController.ts`, and every branch here is either a
+          question a page is owed or one it must never get — "Stay" finishing nothing, a quit asking
+          nothing, a filler closing in the same pass. A branch left untested is one of those.
+        */
+        'src/main/browser/unload-guard.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           What the entry point decides before anything is ready, carved out of `index.ts` so it could be
           measured.
 

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import { SplitController } from '@main/browser/SplitController.js'
 import {
@@ -6,6 +7,8 @@ import {
 } from '@main/browser/TileOccupancyController.js'
 import { dropZonesFor } from '@shared/split/dropzones.js'
 import { TILE_COUNT, type LayoutId, type Rect } from '@shared/split/layout.js'
+import { HOME_URL } from '@shared/url/omnibox.js'
+import { CloseContract } from '@main/browser/unload-guard.js'
 
 /**
  * Keeping tiles and tabs matched.
@@ -40,6 +43,12 @@ interface Harness {
    * Whether the recording is worth keeping belongs to `@shared/arrangements/model.ts`.
    */
   kept: Array<{ id: LayoutId; tiles: Array<string | null> }>
+  /**
+   * What `closeTab` does to the window once a tab has gone, and where a test may route it through first.
+   * Unset, `closeTab` is `forget` directly, which is what every test here assumed before the close contract.
+   */
+  forget: (tabId: string) => void
+  routeClose: ((tabId: string) => void) | null
 }
 
 function harness(layout: LayoutId, tabs: string[] = []): Harness {
@@ -54,7 +63,14 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     activated: [],
     adapt: true,
     collapsed: new Set<string>(),
-    kept: []
+    kept: [],
+    routeClose: null
+  }
+  state.forget = (tabId) => {
+    state.closed!.push(tabId)
+    state.order = state.order!.filter((id) => id !== tabId)
+    state.ephemeral!.delete(tabId)
+    split.forgetTab(tabId)
   }
 
   let fillerSequence = 0
@@ -71,12 +87,7 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     assignTabToTile: (tabId, tileIndex) => {
       split.assignTab(tabId, tileIndex)
     },
-    closeTab: (tabId) => {
-      state.closed!.push(tabId)
-      state.order = state.order!.filter((id) => id !== tabId)
-      state.ephemeral!.delete(tabId)
-      split.forgetTab(tabId)
-    },
+    closeTab: (tabId) => (state.routeClose ?? state.forget!)(tabId),
     setActiveTile: (tileIndex) => {
       state.activated!.push(tileIndex)
       split.setActiveTile(tileIndex)
@@ -797,4 +808,56 @@ describe('every drag possibility, in every layout', () => {
       })
     }
   }
+})
+
+describe('fillers closing through the close contract', () => {
+  /*
+    `BrowserWindowController.closeTab` now asks a page before it finishes closing its tab, which makes the
+    close asynchronous — except where nothing could object. A filler is that exception, and it has to be: the
+    pass below closes it and then seats a hidden tab, and a filler still waiting on its page would still be
+    "loaded but in no tile" when the seating runs, so it would take the pane the hidden tab was meant for.
+  */
+  it('closes the filler and seats the hidden tab in the same pass, without asking the filler', () => {
+    const h = harness('2x2', ['tab-1', 'filler-b', 'tab-2'])
+    h.split.assignTab('tab-1', 1)
+    h.split.assignTab('filler-b', 2)
+    h.split.assignTab('tab-2', 3)
+    h.ephemeral.add('filler-b')
+
+    const pages = new Map<string, { closes: number }>()
+    const tabFor = (tabId: string) => {
+      if (!h.order.includes(tabId)) return undefined
+      const page = pages.get(tabId) ?? { closes: 0 }
+      pages.set(tabId, page)
+      const contents = Object.assign(new EventEmitter(), {
+        close: () => {
+          page.closes += 1
+        },
+        isDestroyed: () => false,
+        getURL: () => (h.ephemeral.has(tabId) ? HOME_URL : `https://example.com/${tabId}`)
+      })
+      return {
+        ephemeral: h.ephemeral.has(tabId),
+        view: { webContents: contents },
+        toState: () => ({ url: contents.getURL(), unloaded: false })
+      }
+    }
+    const contract = new CloseContract({
+      on: () => undefined,
+      tab: tabFor,
+      groups: { displayOrder: () => h.order, groups: () => [], setCollapsed: () => undefined },
+      activateTab: () => undefined,
+      confirm: () => true,
+      finish: (tabId) => h.forget(tabId),
+      closeWindow: () => undefined,
+      shutdown: { begun: false }
+    })
+    h.routeClose = (tabId) => contract.closeTab(tabId)
+
+    h.occupancy.afterLayoutChange(h.split.setLayout('1x2'), { fill: false, rehome: true })
+
+    expect(h.closed).toEqual(['filler-b'])
+    expect(pages.get('filler-b')?.closes ?? 0).toBe(0)
+    expect(h.split.toState().tileTabIds).toEqual(['tab-2', 'tab-1'])
+  })
 })

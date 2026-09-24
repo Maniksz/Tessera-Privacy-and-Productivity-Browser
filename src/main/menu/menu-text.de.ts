@@ -80,5 +80,11 @@ export const de = {
   'blocker.nothingBlockedYet': 'Auf dieser Seite nichts blockiert',
   'blocker.noRules': 'Noch keine eigenen Regeln',
   'blocker.openSettings': 'In den Einstellungen verwalten…',
-  'blocker.forgetSiteRules': 'Meine Regeln für diese Seite löschen ({count})'
+  'blocker.forgetSiteRules': 'Meine Regeln für diese Seite löschen ({count})',
+
+  'unload.closeTab': 'Tab schließen?',
+  'unload.leavePage': 'Seite verlassen?',
+  'unload.detail': 'Änderungen auf {site} werden möglicherweise nicht gespeichert.',
+  'unload.leave': 'Verlassen',
+  'unload.stay': 'Bleiben'
 } as const satisfies MenuText

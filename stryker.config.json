@@ -153,6 +153,7 @@
     "src/shared/arrangements/schema.ts",
     "src/main/data/ArrangementStore.ts",
     "src/main/browser/ArrangementController.ts",
+    "src/main/browser/unload-guard.ts",
     "!**/*.d.ts"
   ],
   "checkers": [

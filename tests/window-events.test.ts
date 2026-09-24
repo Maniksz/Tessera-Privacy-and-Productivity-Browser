@@ -99,6 +99,18 @@ describe('window event wiring', () => {
     ])
   })
 
+  it("leaves the window's close to the close contract", () => {
+    /*
+      `close` is the one OS event with a consequence for pages: it is where a window asks each tab's
+      `beforeunload` in turn, and where a quit must ask nothing (KTD5). That lives in `unload-guard.ts`,
+      and a second subscription here would be a second place deciding whether the window may go — one
+      that knows nothing about the quit, and would cancel or wave through what the contract decided.
+    */
+    const registered = harness().registered
+    expect(registered).not.toContain('close')
+    expect(registered).not.toContain('closed')
+  })
+
   it('cancels the drag before it relayouts a resized window', () => {
     // The drop zones were computed when the drag began. Relaying out first would leave the drag
     // alive for one moment with zones that no longer describe the window.
