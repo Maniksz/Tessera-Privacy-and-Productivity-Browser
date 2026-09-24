@@ -6,6 +6,7 @@ import { groupOfTab, isTabHidden } from '@shared/tabgroups/model.js'
 import { defaultArrangementView, seatedTabs } from '@shared/arrangements/model.js'
 import type { DropZone } from '@shared/split/dropzones.js'
 import { isStartPageTile } from '@shared/split/tile-fill.js'
+import type { TileDragReport } from '@shared/strip/tile-drag.js'
 import type { ArrangementBook } from '../data/ArrangementStore.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SplitController } from './SplitController.js'
@@ -97,6 +98,12 @@ export interface WindowInternals {
   broadcast(): void
   /** Sent to the chrome UI when the layer's presentation changes. */
   onOverlayPresentationChanged(presentation: OverlayPresentation | null): void
+  /**
+   * Sent to the chrome UI about a tab dragged by its tile bar's grip (U10). Optional because only the
+   * window has a strip to tell; a harness with no strip has nobody to report to, and says so by leaving
+   * it out rather than by a function that pretends to send.
+   */
+  reportTileDrag?(report: TileDragReport): void
 
   /** This window's tab groups, already bound to its browsing mode. */
   tabGroups: TabGroupBook
@@ -144,7 +151,8 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     */
     drop: (tabId, zone) => {
       if (occupancy !== null) dropTab(internals, { occupancy, arrangements, groups }, tabId, zone)
-    }
+    },
+    reportToStrip: (report) => internals.reportTileDrag?.(report)
   })
 
   const fullscreen = new TileFullscreenController({

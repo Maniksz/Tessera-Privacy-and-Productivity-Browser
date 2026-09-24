@@ -7,8 +7,8 @@ import { useI18n } from '@renderer/i18n.js'
 import './tile-bar.css'
 
 /**
- * One tile's navigation bar: back, forward, reload, home, maximise, release from the tiled view (only
- * for a tab in one, U10), that tile's address, and close (spec 2).
+ * One tile's navigation bar: back, forward, reload, home, maximise, release from the tiled view and a
+ * grip to drag the tab out of it (only for a tab in one, U10), that tile's address, and close (spec 2).
  *
  * ## The order the controls are in, which is a decision and not an accident
  *
@@ -51,6 +51,12 @@ import './tile-bar.css'
  * and no room for a backdrop. That is what keeps the rest of the page live while the bar is up.
  */
 
+/**
+ * Movement before a press on the grip becomes a drag, as in the strip: a click with a shaky hand stays
+ * a click, and presents no drop zones over four pages for nothing.
+ */
+const GRIP_DRAG_THRESHOLD = 6
+
 export function TileBarSurface({
   presentation
 }: {
@@ -60,6 +66,8 @@ export function TileBarSurface({
   const barRef = useRef<HTMLDivElement>(null)
   const addressRef = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState<string | null>(null)
+  // A press on the grip that has not moved far enough to be a drag yet.
+  const gripPress = useRef<{ x: number; y: number } | null>(null)
 
   const { tabId, tileIndex, invokedBy } = presentation
   const label = t('tileBar.label', { index: tileIndex + 1 })
@@ -275,6 +283,51 @@ export function TileBarSurface({
             <path d="M11 9l5-5M12 4h4v4" />
           </svg>
         </button>
+      )}
+
+      {/*
+        The same release by dragging, and a swap when let go over another tile (U10, KTD14). Beside the
+        button because it is the button's gesture form, and present exactly when the button is.
+
+        A handle rather than a button: nothing happens on Enter, so it is kept out of the bar's Tab cycle,
+        and the keyboard reaches the same release through the button beside it. The drag itself is the
+        core's (`drag:start` with `fromTile`), the same one the strip starts; once it begins, the layer
+        shows the drop zones instead of this bar, and that surface reports the pointer from then on.
+
+        Captured on the press, so a pointer that slips off the forty-pixel bar before the threshold does
+        not count as leaving it — which would take the bar, and the grip, down mid-gesture.
+      */}
+      {presentation.releasable && (
+        <span
+          className="tilebar__grip"
+          title={t('split.dragOut')}
+          aria-hidden="true"
+          onPointerDown={(event) => {
+            if (event.button !== 0) return
+            event.preventDefault()
+            event.currentTarget.setPointerCapture(event.pointerId)
+            gripPress.current = { x: event.clientX, y: event.clientY }
+          }}
+          onPointerMove={(event) => {
+            const press = gripPress.current
+            if (press === null) return
+            const travelled = Math.hypot(event.clientX - press.x, event.clientY - press.y)
+            if (travelled < GRIP_DRAG_THRESHOLD) return
+            gripPress.current = null
+            void invoke('drag:start', { tabId, fromTile: true })
+          }}
+          onPointerUp={() => {
+            gripPress.current = null
+          }}
+          onPointerCancel={() => {
+            gripPress.current = null
+          }}
+        >
+          {/* Six dots, the platform-neutral mark for "this can be picked up". */}
+          <svg viewBox="0 0 20 20">
+            <path d="M8 5h.01M12 5h.01M8 10h.01M12 10h.01M8 15h.01M12 15h.01" />
+          </svg>
+        </span>
       )}
 
       {/*

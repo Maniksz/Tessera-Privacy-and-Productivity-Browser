@@ -205,8 +205,8 @@ export function registerIpcHandlers(deps: {
   })
 
   // --- dragging a tab into a tile ------------------------------------------
-  handle('drag:start', ({ tabId }, event) => {
-    windows.resolve(event)?.drag.start(tabId)
+  handle('drag:start', ({ tabId, fromTile }, event) => {
+    windows.resolve(event)?.drag.start(tabId, fromTile === true ? 'tile' : 'strip')
     return OK
   })
 

@@ -121,6 +121,7 @@ export const de = {
   'split.activeTile': 'Aktive Kachel',
   'split.maximize': 'Kachel maximieren',
   'split.release': 'Aus Kachelansicht lösen',
+  'split.dragOut': 'In die Tab-Leiste ziehen zum Lösen, auf eine Kachel zum Tauschen',
   'split.restore': 'Layout wiederherstellen',
   'split.dropHere': 'Tab hier ablegen',
   'split.dropLeft': 'Links öffnen',

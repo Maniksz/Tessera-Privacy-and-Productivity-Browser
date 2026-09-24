@@ -768,6 +768,7 @@ export const EVENT_CHANNELS = [
   'passwords:autofillStateChanged',
   'tabgroups:changed',
   'arrangements:changed',
+  'strip:tileDrag', // a tab dragged by its tile bar's grip, told to the strip (U10)
   /**
    * Sent to both the overlay surface, which renders it, and the chrome UI, whose button
    * needs to know whether its menu is up. One event rather than two keeps the two

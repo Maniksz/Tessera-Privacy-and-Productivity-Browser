@@ -265,6 +265,7 @@ export class BrowserWindowController implements PermissionHost {
       broadcast: () => this.#scheduleBroadcast(),
       onOverlayPresentationChanged: (presentation) =>
         this.emit('overlay:presented', { presentation }),
+      reportTileDrag: (report) => this.emit('strip:tileDrag', report),
       tabGroups: this.options.tabGroups,
       arrangements: this.options.arrangements
     })

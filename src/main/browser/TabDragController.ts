@@ -7,6 +7,7 @@ import {
 } from '@shared/split/dropzones.js'
 import type { TabDropPresentation } from '@shared/overlay/surface.js'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
+import type { TileDragReport } from '@shared/strip/tile-drag.js'
 
 /**
  * Owns a tab drag from press to drop.
@@ -24,7 +25,19 @@ import type { LayoutId, Rect } from '@shared/split/layout.js'
  * drop does — and none of it needs a `BrowserWindow`. Behind the `TabDragHost` seam it can be
  * driven directly by a test, so the rules are checked by assertions rather than only by
  * dragging a mouse across a running application.
+ *
+ * ## Two places a drag begins
+ *
+ * In the strip, or at a tile bar's grip (U10, KTD14). Over the tiles the two are the same drag. Over
+ * the strip they are not: the strip's own drag is watched by the strip, which reorders on its own
+ * release, while a tile's drag is a press the strip never saw. So for that one the strip is told —
+ * that it began, where the pointer is while it is over the strip, and where it was let go there
+ * (`TileDragReport`) — and the strip answers with the place under that point, which releases the tab
+ * from its tiled view.
  */
+
+/** Where the press began: the tab strip, or a tile bar's grip. */
+export type DragOrigin = 'strip' | 'tile'
 
 export interface TabDragHost {
   layout(): LayoutId
@@ -36,6 +49,8 @@ export interface TabDragHost {
   dismiss(): void
   /** Apply the drop: switch layout if the zone asks for one, then place the tab. */
   drop(tabId: string, zone: DropZone): void
+  /** Tell the strip about a drag from a tile bar's grip; never called for the strip's own drag. */
+  reportToStrip(report: TileDragReport): void
 }
 
 interface DragState {
@@ -49,6 +64,9 @@ interface DragState {
    */
   zones: DropZone[]
   activeZoneId: string | null
+  origin: DragOrigin
+  /** Whether the strip was last told the pointer is over it, so going back is told exactly once. */
+  overStrip: boolean
 }
 
 export class TabDragController {
@@ -69,20 +87,22 @@ export class TabDragController {
     return this.#state?.activeZoneId ?? null
   }
 
-  start(tabId: string): void {
+  start(tabId: string, origin: DragOrigin = 'strip'): void {
     const title = this.host.titleOf(tabId)
     if (title === null) return
 
     const zones = dropZonesFor(this.host.layout(), this.host.contentRect())
     if (zones.length === 0) return
 
-    this.#state = { tabId, title, zones, activeZoneId: null }
+    this.#state = { tabId, title, zones, activeZoneId: null, origin, overStrip: false }
     this.#present()
+    if (origin === 'tile') this.host.reportToStrip({ tabId, point: null, released: false })
   }
 
   move(point: Point): void {
     const state = this.#state
     if (state === null) return
+    if (state.origin === 'tile') this.#followOverStrip(state, point)
 
     // Null while the pointer is still in the tab strip. That is a real state, not a gap: the
     // drag is live, no tile is targeted, and the indicator shows no highlight.
@@ -101,11 +121,21 @@ export class TabDragController {
     if (state === null || !commit) return
 
     const zone = zoneAt(state.zones, point, this.host.contentRect())
-    if (zone === null) return
     // The tab may have been closed while it was being dragged.
     if (this.host.titleOf(state.tabId) === null) return
 
-    this.host.drop(state.tabId, zone)
+    if (zone !== null) {
+      this.host.drop(state.tabId, zone)
+      return
+    }
+    /*
+      Let go over the strip, from a tile: a release, which the strip places. After the dismissal above,
+      so the strip has already dropped its marker when it is asked where the tab goes, and the answer
+      it sends back cannot race a drag the core still thinks is live.
+    */
+    if (state.origin === 'tile' && this.#aboveTiles(point)) {
+      this.host.reportToStrip({ tabId: state.tabId, point, released: true })
+    }
   }
 
   /**
@@ -118,6 +148,25 @@ export class TabDragController {
     if (this.#state === null) return
     this.#state = null
     this.host.dismiss()
+  }
+
+  /**
+   * Tells the strip where the pointer is while it is over it, and once when it goes back to the tiles.
+   *
+   * Every sample over the strip rather than only changes: the strip turns the point into a target and a
+   * side, which only it can, and it already ignores a sample that lands on the same place. Over the tiles
+   * the strip has nothing to show, so it hears that once and then nothing.
+   */
+  #followOverStrip(state: DragState, point: Point): void {
+    const over = this.#aboveTiles(point)
+    if (!over && !state.overStrip) return
+    state.overStrip = over
+    this.host.reportToStrip({ tabId: state.tabId, point: over ? point : null, released: false })
+  }
+
+  /** Above the tile area is where the strip is; `zoneAt` finds no zone there either. */
+  #aboveTiles(point: Point): boolean {
+    return point.y < this.host.contentRect().y
   }
 
   #present(): void {

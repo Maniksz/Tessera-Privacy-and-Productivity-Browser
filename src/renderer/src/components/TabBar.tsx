@@ -424,7 +424,13 @@ export function TabBar({
     drag.dragging === null || drag.spot === null
       ? null
       : resolveStripDrop(order, groups, arrangements, { subject: drag.dragging, ...drag.spot })
-  const joins = dropPlan === null ? null : dropPlan.groupId !== null
+  /*
+    Except that a tab dragged out of a tile always lands (U10): let go beside the view it came from, the
+    strip moves nothing, but the tab still leaves the view and stands there. So that place is marked too,
+    as one that joins nothing — the tab keeps whatever group its view was in (R10).
+  */
+  const tileLands = drag.fromTile && drag.spot !== null
+  const joins = dropPlan === null ? (tileLands ? false : null) : dropPlan.groupId !== null
   const markerOf = (target: StripDropTarget): string => dropMarker(drag.spot, joins, target)
   // The entry the active tab is drawn in: its own, or its tiled view's whichever tile has focus.
   const activeEntry = stripEntryOf(items, activeTabId)

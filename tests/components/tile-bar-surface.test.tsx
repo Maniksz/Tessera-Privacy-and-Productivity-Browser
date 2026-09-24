@@ -162,6 +162,53 @@ describe('the bar acts on its own tile', () => {
     expect(screen.queryByRole('button', { name: /release/i })).toBeNull()
   })
 
+  it('starts the drag of its own tab from the grip, once the press has moved (U10, KTD14)', () => {
+    // `fromTile`, so the core tells the strip about a drag the strip never saw pressed, and a release
+    // over the strip becomes a release from the tiled view rather than nothing at all.
+    const calls = installBridge()
+    render(<TileBarSurface presentation={presentation({ tabId: 't2' })} />)
+    const grip = screen.getByTitle(/drag to the tab strip/i)
+
+    fireEvent.pointerDown(grip, { button: 0, pointerId: 1, clientX: 300, clientY: 20 })
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 302, clientY: 21 })
+    expect(calls).toEqual([])
+
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 300, clientY: 30 })
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 300, clientY: 40 })
+    expect(calls).toEqual([{ channel: 'drag:start', payload: { tabId: 't2', fromTile: true } }])
+  })
+
+  it('leaves a click on the grip a click, and a press with another button alone', () => {
+    const calls = installBridge()
+    render(<TileBarSurface presentation={presentation()} />)
+    const grip = screen.getByTitle(/drag to the tab strip/i)
+
+    fireEvent.pointerDown(grip, { button: 0, pointerId: 1, clientX: 300, clientY: 20 })
+    fireEvent.pointerUp(grip, { pointerId: 1, clientX: 300, clientY: 20 })
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 300, clientY: 60 })
+
+    fireEvent.pointerDown(grip, { button: 2, pointerId: 1, clientX: 300, clientY: 20 })
+    fireEvent.pointerMove(grip, { pointerId: 1, clientX: 300, clientY: 60 })
+
+    expect(calls).toEqual([])
+  })
+
+  it('has no grip for a tab in no tiled view, and keeps the grip out of the keyboard route', () => {
+    installBridge()
+    const { unmount } = render(
+      <TileBarSurface presentation={presentation({ releasable: false })} />
+    )
+    expect(screen.queryByTitle(/drag to the tab strip/i)).toBeNull()
+    unmount()
+
+    // The release button is the keyboard's way to the same result; a focusable grip would be a stop in
+    // the bar's Tab cycle that does nothing on Enter.
+    render(<TileBarSurface presentation={presentation()} />)
+    const grip = screen.getByTitle(/drag to the tab strip/i)
+    expect(grip.tabIndex).toBe(-1)
+    expect(grip.closest('button')).toBeNull()
+  })
+
   it('navigates its own tab from the address field', () => {
     const calls = installBridge()
     render(<TileBarSurface presentation={presentation()} />)

@@ -16,7 +16,7 @@ import { isInternalScheme } from '../product.js'
 import { quickLinkCardSchema, quickLinkKindSchema, quickLinkSchema } from '../quicklinks/schema.js'
 import { tabGroupInvokeContract, tabGroupSchema } from '../tabgroups/schema.js'
 import { arrangementInvokeContract, arrangementsChangedSchema } from '../arrangements/schema.js'
-import { stripInvokeContract } from '../strip/schema.js'
+import { dragStartSchema, stripInvokeContract, tileDragReportSchema } from '../strip/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
@@ -609,7 +609,7 @@ export const invokeContract = {
    * pushes the indicator, so the two renderers reporting the gesture never have to agree
    * on anything beyond where the pointer is.
    */
-  'drag:start': { request: z.object({ tabId: z.string() }), response: ok },
+  'drag:start': { request: dragStartSchema, response: ok },
   'drag:move': { request: z.object({ x: z.number(), y: z.number() }), response: ok },
   'drag:end': {
     request: z.object({
@@ -1250,6 +1250,7 @@ export const eventContract = {
   'quicklinks:changed': z.object({ links: z.array(quickLinkCardSchema) }),
   'tabgroups:changed': z.object({ groups: z.array(tabGroupSchema) }),
   'arrangements:changed': arrangementsChangedSchema,
+  'strip:tileDrag': tileDragReportSchema, // a tab dragged by its tile bar's grip (U10)
   'media:changed': mediaFindingListSchema,
   /**
    * The download list, pushed.

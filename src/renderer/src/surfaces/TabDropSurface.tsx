@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import type { TabDropPresentation } from '@shared/overlay/surface.js'
 import type { DropZone } from '@shared/split/dropzones.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
@@ -34,11 +35,44 @@ export function TabDropSurface({
   const { t } = useI18n()
   const active = presentation.zones.find((zone) => zone.id === presentation.activeZoneId) ?? null
 
-  /** Local coordinates back into the window space the core reasons in. */
-  const toWindow = (event: React.PointerEvent): { x: number; y: number } => ({
-    x: event.clientX + presentation.origin.x,
-    y: event.clientY + presentation.origin.y
-  })
+  const { x: originX, y: originY } = presentation.origin
+
+  /*
+    On the window, not on the surface's element, for a drag begun at a tile bar's grip (U10, KTD14).
+
+    That press began on this layer, so where the platform keeps a held button with the view it was
+    pressed on, this layer goes on hearing the pointer once it has left the tile area for the strip —
+    at a negative `clientY`, over no element of this document, where a handler on the surface would
+    never run. The strip's own drag reaches this layer only inside it, so for that one nothing changes.
+
+    Keyed on the origin's numbers rather than the presentation: the core re-sends the presentation
+    each time the target changes, and re-subscribing on each would drop nothing but cost a teardown.
+  */
+  useEffect(() => {
+    // Local coordinates back into the window space the core reasons in.
+    const toWindow = (event: PointerEvent): { x: number; y: number } => ({
+      x: event.clientX + originX,
+      y: event.clientY + originY
+    })
+    const onMove = (event: PointerEvent): void => {
+      void invoke('drag:move', toWindow(event))
+    }
+    const onUp = (event: PointerEvent): void => {
+      void invoke('drag:end', { ...toWindow(event), commit: true })
+    }
+    // A cancelled drag — Escape, or the pointer taken away — must not move anything.
+    const onCancel = (event: PointerEvent): void => {
+      void invoke('drag:end', { ...toWindow(event), commit: false })
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+    }
+  }, [originX, originY])
 
   const labelFor = (zone: DropZone): string =>
     zone.kind === 'tile'
@@ -46,19 +80,7 @@ export function TabDropSurface({
       : t(ZONE_LABELS[zone.kind])
 
   return (
-    <div
-      className="surface surface--drop"
-      onPointerMove={(event) => {
-        void invoke('drag:move', toWindow(event))
-      }}
-      onPointerUp={(event) => {
-        void invoke('drag:end', { ...toWindow(event), commit: true })
-      }}
-      /* A cancelled drag — Escape, or the pointer taken away — must not move anything. */
-      onPointerCancel={(event) => {
-        void invoke('drag:end', { ...toWindow(event), commit: false })
-      }}
-    >
+    <div className="surface surface--drop">
       {presentation.zones.map((zone) => {
         const isActive = zone.id === presentation.activeZoneId
         return (

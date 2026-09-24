@@ -3,6 +3,7 @@ import { TabDragController, type TabDragHost } from '@main/browser/TabDragContro
 import type { TabDropPresentation } from '@shared/overlay/surface.js'
 import type { DropZone } from '@shared/split/dropzones.js'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
+import type { TileDragReport } from '@shared/strip/tile-drag.js'
 
 /**
  * The drag from press to drop.
@@ -20,6 +21,8 @@ interface Recorder {
   presented: TabDropPresentation[]
   dismissals: number
   drops: Array<{ tabId: string; zone: DropZone }>
+  /** What the strip was told about a drag from a tile bar's grip (U10). */
+  reports: TileDragReport[]
   /** Tabs the host knows about; delete one to simulate it closing mid-drag. */
   titles: Map<string, string>
   layout: LayoutId
@@ -30,6 +33,7 @@ function harness(layout: LayoutId = '1x1'): Recorder {
     presented: [],
     dismissals: 0,
     drops: [],
+    reports: [],
     titles: new Map([['tab-1', 'Example']]),
     layout
   }
@@ -46,6 +50,9 @@ function harness(layout: LayoutId = '1x1'): Recorder {
     },
     drop: (tabId, zone) => {
       recorder.drops!.push({ tabId, zone })
+    },
+    reportToStrip: (report) => {
+      recorder.reports!.push(report)
     }
   }
 
@@ -260,5 +267,112 @@ describe('a multi-tile layout', () => {
     h.controller.end({ x: 40, y: CONTENT.y + 40 }, true)
     expect(h.drops[0]?.zone.layout).toBeNull()
     expect(h.drops[0]?.zone.tileIndex).toBe(0)
+  })
+})
+
+/**
+ * A drag begun at a tile bar's grip (U10, R9, KTD14): the tab leaves its tile rather than the strip.
+ *
+ * What differs from the strip's own drag is who hears about the pointer over the strip. The strip holds no
+ * press of its own here, so it is told: once that the drag began, while the pointer is over it, and where
+ * it was let go — which is the only way a release over the strip is ever applied, because the strip is
+ * the one that knows what is under a point. Over the tiles nothing changes: the zones decide, and a drop
+ * on another tile swaps the two pages by the same `drop` the strip's drag uses.
+ */
+describe('a drag from a tile bar’s grip', () => {
+  const report = (point: TileDragReport['point'], released = false): TileDragReport => ({
+    tabId: 'tab-1',
+    point,
+    released
+  })
+
+  it('tells the strip that a tile drag has begun, and a strip drag tells it nothing', () => {
+    const fromTile = harness('1x2')
+    fromTile.controller.start('tab-1', 'tile')
+    expect(fromTile.reports).toEqual([report(null)])
+    expect(fromTile.presented).toHaveLength(1)
+
+    const fromStrip = harness('1x2')
+    fromStrip.controller.start('tab-1')
+    fromStrip.controller.move(inStrip)
+    fromStrip.controller.end(inStrip, true)
+    expect(fromStrip.reports).toEqual([])
+  })
+
+  it('reports the pointer while it is over the strip, and once when it goes back to the tiles', () => {
+    const h = harness('1x2')
+    h.controller.start('tab-1', 'tile')
+
+    h.controller.move(inTiles)
+    h.controller.move(inStrip)
+    h.controller.move({ x: 90, y: 12 })
+    h.controller.move(inTiles)
+    h.controller.move({ x: inTiles.x + 5, y: inTiles.y })
+
+    expect(h.reports).toEqual([
+      report(null),
+      report(inStrip),
+      report({ x: 90, y: 12 }),
+      report(null)
+    ])
+  })
+
+  it('treats the first row of the tiles as the tiles, not the strip', () => {
+    const h = harness('1x2')
+    h.controller.start('tab-1', 'tile')
+    h.controller.move({ x: 60, y: CONTENT.y })
+    expect(h.reports).toEqual([report(null)])
+    h.controller.move({ x: 60, y: CONTENT.y - 1 })
+    expect(h.reports.at(-1)).toEqual(report({ x: 60, y: CONTENT.y - 1 }))
+  })
+
+  it('hands a release over the strip to the strip, after the indicator has gone', () => {
+    const h = harness('1x2')
+    h.controller.start('tab-1', 'tile')
+    h.controller.move(inStrip)
+    h.controller.end(inStrip, true)
+
+    expect(h.drops).toEqual([])
+    expect(h.dismissals).toBe(1)
+    expect(h.reports.at(-1)).toEqual(report(inStrip, true))
+    expect(h.controller.active).toBe(false)
+  })
+
+  it('hands nothing over for a cancelled release, or for a tab closed mid-drag', () => {
+    const cancelled = harness('1x2')
+    cancelled.controller.start('tab-1', 'tile')
+    cancelled.controller.end(inStrip, false)
+    expect(cancelled.reports.filter((sent) => sent.released)).toEqual([])
+
+    const closed = harness('1x2')
+    closed.controller.start('tab-1', 'tile')
+    closed.titles.delete('tab-1')
+    closed.controller.end(inStrip, true)
+    expect(closed.reports.filter((sent) => sent.released)).toEqual([])
+  })
+
+  it('drops on another tile through the zones, which swaps the two pages, and tells the strip nothing', () => {
+    const h = harness('1x2')
+    h.controller.start('tab-1', 'tile')
+    // The middle of the right half of the tile area: tile 1, occupied by another page.
+    const otherTile = { x: (CONTENT.width * 3) / 4, y: CONTENT.y + CONTENT.height / 2 }
+    h.controller.move(otherTile)
+    h.controller.end(otherTile, true)
+
+    expect(h.drops).toHaveLength(1)
+    expect(h.drops[0]?.tabId).toBe('tab-1')
+    expect(h.drops[0]?.zone.tileIndex).toBe(1)
+    expect(h.drops[0]?.zone.layout).toBeNull()
+    expect(h.reports).toEqual([report(null)])
+  })
+
+  it('forgets the origin with the drag, so the next strip drag is the strip’s own again', () => {
+    const h = harness('1x2')
+    h.controller.start('tab-1', 'tile')
+    h.controller.cancel()
+    h.controller.start('tab-1')
+    h.controller.move(inStrip)
+    h.controller.end(inStrip, true)
+    expect(h.reports).toEqual([report(null)])
   })
 })

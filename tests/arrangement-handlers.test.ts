@@ -231,6 +231,10 @@ async function harness(tabs: string[]): Promise<Harness> {
       removeTab: (tabId) => {
         groupCalls.push(['removeTab', tabId])
         seams.groups.removeTab(tabId)
+      },
+      dropInStrip: (drop) => {
+        groupCalls.push(['dropInStrip', drop])
+        seams.groups.dropInStrip(drop)
       }
     },
     split,
@@ -397,6 +401,15 @@ describe('registration', () => {
     expect(contract['arrangements:releaseTab'].request.safeParse({ tabId: 't' }).success).toBe(true)
     expect(contract['arrangements:releaseTab'].request.safeParse({ tabId: '' }).success).toBe(false)
     expect(contract['arrangements:releaseTab'].request.safeParse({ id: 'a' }).success).toBe(false)
+    // The place a drag from the grip let go of it (U10): a target and a side, as a strip drop has.
+    const at = { target: { kind: 'tab', tabId: 'x' }, side: 'before' }
+    const release = contract['arrangements:releaseTab'].request
+    expect(release.safeParse({ tabId: 't', at }).success).toBe(true)
+    expect(
+      release.safeParse({ tabId: 't', at: { target: { kind: 'end' }, side: 'after' } }).success
+    ).toBe(true)
+    expect(release.safeParse({ tabId: 't', at: { ...at, side: 'onto' } }).success).toBe(false)
+    expect(release.safeParse({ tabId: 't', at: { side: 'after' } }).success).toBe(false)
   })
 })
 
@@ -771,5 +784,83 @@ describe('arrangements:releaseTab — the tile bar’s release (U10, R9)', () =>
     expect(entries(h).map((entry) => entry.id)).toEqual([a, b])
     expect(h.split.toState().tileTabIds).toEqual(['b1', 'b2'])
     expect(h.order()).toEqual(['x', 'a1', 'a2', 'b1', 'b2'])
+  })
+})
+
+/**
+ * The same release by dragging the tile bar's grip into the strip (U10, KTD14): the strip names the place
+ * under the pointer, and the tab goes there instead of behind the entry.
+ *
+ * The order of the two steps is the whole of what can go wrong. A drop in the strip widens a member of a
+ * tiled view to the view (R10), so a drop applied while the tab is still a member moves every page of the
+ * view there, and the release after it puts the tab back behind the entry — the user drags one page and
+ * watches the whole view move. The release has to come first.
+ */
+describe('arrangements:releaseTab with a place — the grip let go over the strip (U10)', () => {
+  it('releases first and drops the tab alone, not the view it was in', async () => {
+    const h = await harness(['x', 'b1', 'b2', 'b3', 'y'])
+    h.show('1x3', ['b1', 'b2', 'b3'])
+    h.round()
+    const [b] = h.window.arrangements.summaries().map((summary) => summary.id)
+    const { call } = register(h.window)
+
+    const at = { target: { kind: 'tab', tabId: 'x' }, side: 'before' }
+    expect(call('arrangements:releaseTab', { tabId: 'b2', at })).toEqual({ ok: true })
+    h.round()
+
+    expect(h.order()).toEqual(['b2', 'x', 'b1', 'b3', 'y'])
+    expect(entries(h)).toEqual([{ id: b, layoutId: '1x2', tabIds: ['b1', 'b3'], visible: true }])
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b3'])
+    expect(h.window.arrangements.isMember('b2')).toBe(false)
+  })
+
+  it('puts the tab in the group it is dropped into, and leaves the view where it was', async () => {
+    const h = await harness(['x', 'b1', 'b2', 'b3', 'y'])
+    h.show('1x3', ['b1', 'b2', 'b3'])
+    h.round()
+    const group = h.window.groups.create({ tabIds: ['y'] })
+    const { call } = register(h.window)
+
+    call('arrangements:releaseTab', {
+      tabId: 'b2',
+      at: { target: { kind: 'tab', tabId: 'y' }, side: 'after' }
+    })
+    h.round()
+
+    const after = h.window.groups.groups().find((candidate) => candidate.id === group.id)
+    expect(after?.tabIds).toEqual(['y', 'b2'])
+    expect(h.order()).toEqual(['x', 'b1', 'b3', 'y', 'b2'])
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b3'])
+  })
+
+  it('ends a view of two and drops the page at the end of the strip', async () => {
+    const h = await harness(['b1', 'b2', 'x'])
+    h.show('1x2', ['b1', 'b2'])
+    h.round()
+    const { call } = register(h.window)
+
+    call('arrangements:releaseTab', {
+      tabId: 'b1',
+      at: { target: { kind: 'end' }, side: 'after' }
+    })
+    h.round()
+
+    expect(entries(h)).toEqual([])
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['b2'])
+    expect(h.order()).toEqual(['b2', 'x', 'b1'])
+  })
+
+  it('moves nothing for a tab in no view on screen, place or not', async () => {
+    const { h } = await twoViews()
+    const { call } = register(h.window)
+    const at = { target: { kind: 'end' }, side: 'after' }
+
+    call('arrangements:releaseTab', { tabId: 'x', at })
+    call('arrangements:releaseTab', { tabId: 'a1', at })
+    h.round()
+
+    expect(h.order()).toEqual(['x', 'a1', 'a2', 'b1', 'b2'])
+    expect(h.window.groupCalls).toEqual([])
   })
 })

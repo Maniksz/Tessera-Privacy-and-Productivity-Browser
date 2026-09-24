@@ -20,6 +20,16 @@ import { rafThrottle } from './rafThrottle.js'
  * renderer stops seeing the gesture. Both halves report to the core, which owns the drag.
  * That also makes "the pointer is over the tab strip" a real state rather than a gap: no
  * tile is targeted, the indicator shows no highlight, and the reorder preview shows here.
+ *
+ * ## A drag this strip did not start
+ *
+ * A tab dragged out of a tile by its bar's grip (U10, KTD14) is a press on the overlay layer, so this
+ * strip learns of it from the core (`strip:tileDrag`, see `TileDragReport`): that it began, where the
+ * pointer is while it is over the strip, and where it was let go. It marks the place the way it marks
+ * its own drags, and answers a release with the place under the point, which is a release from the
+ * tiled view (`arrangements:releaseTab` with `at`). Where the platform hands the held button to the view
+ * under the pointer instead, the pointer is heard here directly, and reported to the core the way the
+ * overlay would have reported it — so both ways the core ends the drag and hands the release back.
  */
 
 /** Movement before a press becomes a drag, so a click with a shaky hand stays a click. */
@@ -127,6 +137,8 @@ function sameSpot(a: StripSpot | null, b: StripSpot | null): boolean {
 export interface TabDrag {
   /** The tab or entry being dragged, once the press has passed the threshold. */
   dragging: StripDropSubject | null
+  /** True while that is a tab dragged out of a tile (U10): let go over the strip, it leaves its view. */
+  fromTile: boolean
   /** Where it would land in the strip, or null while it is over the tiles. */
   spot: StripSpot | null
   begin(event: ReactPointerEvent<HTMLElement>, subject: StripDropSubject): void
@@ -137,6 +149,9 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
     null
   )
   const [dragging, setDragging] = useState<StripDropSubject | null>(null)
+  // The tab of a drag from a tile bar's grip, while the core says one is live; see the header.
+  const tileDrag = useRef<string | null>(null)
+  const [fromTile, setFromTile] = useState(false)
   const [spot, setSpotState] = useState<StripSpot | null>(null)
   const setSpot = useMemo(
     () =>
@@ -166,11 +181,44 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
     return subscribe('overlay:presented', ({ presentation }) => {
       if (presentation?.kind === 'tab-drop') return
       press.current = null
+      tileDrag.current = null
       moves.cancel()
       setDragging(null)
+      setFromTile(false)
       setSpot(null)
     })
   }, [moves, setSpot])
+
+  /*
+    A tab dragged out of a tile, as the core reports it (U10).
+
+    The release is answered whether or not the start was heard: it carries the tab and the point, which
+    is all the answer needs. It arrives after the core has taken the drop zones down, so the marker has
+    already gone by the time the place is read — from where each target is drawn now, as for a drag of
+    the strip's own. Nothing is answered for a point off the strip: that is not a place in it.
+  */
+  useEffect(() => {
+    return subscribe('strip:tileDrag', ({ tabId, point, released }) => {
+      // The strip's own drag is watched here already; the core never reports one, and must not start to.
+      if (press.current !== null) return
+      const landed = point === null ? null : stripSpotAt(stripRef.current, point.x, point.y)
+      if (released) {
+        tileDrag.current = null
+        moves.cancel()
+        setDragging(null)
+        setFromTile(false)
+        setSpot(null)
+        if (landed !== null) void invoke('arrangements:releaseTab', { tabId, at: landed })
+        return
+      }
+      if (tileDrag.current !== tabId) {
+        tileDrag.current = tabId
+        setDragging({ kind: 'tab', tabId })
+        setFromTile(true)
+      }
+      setSpot(landed)
+    })
+  }, [moves, setSpot, stripRef])
 
   useEffect(() => {
     /*
@@ -213,7 +261,13 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
 
     const onMove = (event: PointerEvent): void => {
       const current = press.current
-      if (current === null) return
+      if (current === null) {
+        // A tile's drag whose pointer this strip hears itself: reported on, and marked, as the core would.
+        if (tileDrag.current === null) return
+        moves.post({ x: event.clientX, y: event.clientY })
+        setSpot(stripSpotAt(stripRef.current, event.clientX, event.clientY))
+        return
+      }
 
       const { subject } = current
       if (!current.active) {
@@ -236,6 +290,15 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
 
     const finish = (event: PointerEvent, commit: boolean): void => {
       const current = press.current
+      /*
+        A tile's drag let go where this strip hears it. Reported, not applied: the core decides what the
+        point means and, for a place over the strip, hands the release back through the report above.
+      */
+      if (current === null && tileDrag.current !== null) {
+        moves.cancel()
+        void invoke('drag:end', { x: event.clientX, y: event.clientY, commit })
+        return
+      }
       press.current = null
       stopEdgeScroll()
       // A press that never passed the threshold was a click; the click handler owns it.
@@ -274,6 +337,7 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
 
   return {
     dragging,
+    fromTile,
     spot,
     begin: (event, subject) => {
       // Left button only, and never from a control inside the tab: the close and mute

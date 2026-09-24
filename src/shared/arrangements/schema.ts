@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { LAYOUT_IDS } from '../split/layout.js'
 import { tileAudioSchema } from '../model.js'
 import type { SameShape } from '../ipc/same-shape.js'
+import { stripSpotSchema } from '../strip/schema.js'
 import type { KnownFields } from '../known-fields.js'
 import type { Arrangement, ArrangementDocument } from './model.js'
 import type { ArrangementSummary } from './screen.js'
@@ -133,9 +134,12 @@ export const arrangementInvokeContract = {
    *
    * The one channel here that names a tab rather than an entry, because the bar sits over a page and
    * knows no entry. It acts on the view on screen only: a tab that is not seated in it is refused.
+   *
+   * `at` for the same release by dragging the bar's grip into the strip: the place the strip found under
+   * the pointer, where the released tab goes instead of behind the entry (U10, KTD14).
    */
   'arrangements:releaseTab': {
-    request: z.object({ tabId: z.string().min(1) }),
+    request: z.object({ tabId: z.string().min(1), at: stripSpotSchema.optional() }),
     response: ok
   }
 }

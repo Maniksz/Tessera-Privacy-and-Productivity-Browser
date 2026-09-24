@@ -169,6 +169,7 @@ export const en = {
   'split.activeTile': 'Active tile',
   'split.maximize': 'Maximize tile',
   'split.release': 'Release from tiled view',
+  'split.dragOut': 'Drag to the tab strip to release, or onto a tile to swap',
   'split.restore': 'Restore layout',
   'split.dropHere': 'Drop tab here',
   'split.dropLeft': 'Open on the left',

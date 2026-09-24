@@ -133,6 +133,36 @@
   stroke-linejoin: round;
 }
 
+/*
+  The grip beside the release button: a handle, narrower than a button because it is pressed and pulled
+  rather than clicked, and `grab` so the pointer says so before the press.
+*/
+.tilebar__grip {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--fg-dim);
+  cursor: grab;
+  touch-action: none;
+}
+
+.tilebar__grip:hover {
+  background: var(--bg-input);
+  color: var(--fg);
+}
+
+.tilebar__grip svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
 .tilebar__address {
   flex: 1 1 auto;
   min-width: 0;

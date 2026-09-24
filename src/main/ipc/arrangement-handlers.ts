@@ -33,6 +33,8 @@ import { arrangementMenuTemplate } from '../menu/arrangement-items.js'
  *   - **The speaker** writes the same per-tile mute either way (KTD11): through the tiles for the view
  *     on screen, into the record and onto the tabs for one that is put away.
  *   - **Release**, from a tile bar: the entry lets go of the tab before the panes close ranks (U10).
+ *     Dragged into the strip by the bar's grip, the drop at the place the strip named comes *after* the
+ *     release: a drop widens a member to its whole view (R10), so before it would move the view.
  */
 
 type ArrangementChannel = keyof typeof arrangementInvokeContract
@@ -56,7 +58,10 @@ export interface ArrangementWindow {
     ArrangementController,
     'liveId' | 'summaries' | 'restore' | 'endArrangement' | 'dissolve' | 'setMuted' | 'releaseTab'
   >
-  readonly groups: Pick<TabGroupController, 'groups' | 'create' | 'addTab' | 'removeTab'>
+  readonly groups: Pick<
+    TabGroupController,
+    'groups' | 'create' | 'addTab' | 'removeTab' | 'dropInStrip'
+  >
   readonly split: Pick<SplitController, 'layout' | 'tileCount' | 'activeTabId' | 'tabIdAt'>
   readonly occupancy: Pick<TileOccupancyController, 'afterTabClosed' | 'releaseTab'>
   setLayout(layout: LayoutId): void
@@ -130,9 +135,11 @@ export function registerArrangementHandlers<W extends ArrangementWindow>(
     return OK
   })
 
-  handle('arrangements:releaseTab', ({ tabId }, event) => {
+  handle('arrangements:releaseTab', ({ tabId, at }, event) => {
     const window = windows.resolve(event)
-    if (window !== undefined) release(window, tabId)
+    if (window === undefined || !release(window, tabId) || at === undefined) return OK
+    // A member no longer, so the drop moves this one page and not the view it left.
+    window.groups.dropInStrip({ subject: { kind: 'tab', tabId }, ...at })
     return OK
   })
 }
@@ -189,10 +196,12 @@ function closeAll(window: ArrangementWindow, id: string): void {
  * ranks around the gap and the tab stands behind the entry. In that order because the entry is what
  * says whether the tab is a member of the view on screen at all, and because a view of two has to be
  * forgotten before its last page is alone in a pane — a settle in between would find one page and keep
- * the record, and a click on either would bring the view back.
+ * the record, and a click on either would bring the view back. Answers whether the tab left a view.
  */
-function release(window: ArrangementWindow, tabId: string): void {
-  if (window.arrangements.releaseTab(tabId)) window.occupancy.releaseTab(tabId)
+function release(window: ArrangementWindow, tabId: string): boolean {
+  if (!window.arrangements.releaseTab(tabId)) return false
+  window.occupancy.releaseTab(tabId)
+  return true
 }
 
 function setMuted(window: ArrangementWindow, id: string, muted: boolean): void {
