@@ -75,9 +75,11 @@ export interface WindowEventHost {
   split: { setWindowFullscreen(fullscreen: boolean): void }
   /**
    * What leaving fullscreen means for the tile confinement — which is not always "put it back", because
-   * a window can leave fullscreen because a *page* gave up its own. See `TileFullscreenController`.
+   * a window can leave fullscreen because a *page* gave up its own. Entering is reported too, because
+   * telling those two apart later depends on whether the window was fullscreen before the page asked.
+   * See `TileFullscreenController`.
    */
-  fullscreen: { onWindowLeftFullscreen(): void }
+  fullscreen: { onWindowEnteredFullscreen(): void; onWindowLeftFullscreen(): void }
   /** Which tile a hardware navigation gesture meant, decided from the cursor; see `TileInputController`. */
   tileInput: { navigateByGesture(source: GestureSource, name: string): void }
 
@@ -164,6 +166,12 @@ export function wireWindowEvents(host: WindowEventHost): void {
   }
   const onEnterFullscreen = (): void => {
     host.split.setWindowFullscreen(true)
+    /*
+      Told, because whose fullscreen this is gets decided from it: a page that asks for fullscreen later
+      finds the window already fullscreen, and its exit must then leave the window alone — unless the
+      page's own request is what took the window here in this very turn. See `onWindowEnteredFullscreen`.
+    */
+    host.fullscreen.onWindowEnteredFullscreen()
     host.relayout()
     host.scheduleBroadcast()
   }

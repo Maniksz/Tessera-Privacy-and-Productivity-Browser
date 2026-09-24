@@ -57,6 +57,7 @@ function harness(): Harness {
       setWindowFullscreen: (fullscreen) => calls.push(`setWindowFullscreen(${fullscreen})`)
     },
     fullscreen: {
+      onWindowEnteredFullscreen: () => calls.push('fullscreen.onWindowEnteredFullscreen'),
       onWindowLeftFullscreen: () => calls.push('fullscreen.onWindowLeftFullscreen')
     },
     tileInput: {
@@ -247,14 +248,21 @@ describe('window event wiring', () => {
     expect(window.calls).toEqual(['rememberPlacement'])
   })
 
-  it('records window fullscreen on the way in without touching the tile policy', () => {
+  it('records window fullscreen on the way in, and tells the seam after the split', () => {
     /*
       `applyPolicy` on entry would restore `fullScreenable` while the user is *in* fullscreen, which is
-      how the window becomes one they cannot leave. Its absence here is the assertion.
+      how the window becomes one they cannot leave. Its absence here is the assertion — the seam is told
+      instead, because whether a page later finds the window fullscreen already is how the page's exit
+      is judged, and a window fullscreen since this turn was taken by that page rather than the user.
     */
     const window = harness()
     window.emit('enter-full-screen')
-    expect(window.calls).toEqual(['setWindowFullscreen(true)', 'relayout', 'scheduleBroadcast'])
+    expect(window.calls).toEqual([
+      'setWindowFullscreen(true)',
+      'fullscreen.onWindowEnteredFullscreen',
+      'relayout',
+      'scheduleBroadcast'
+    ])
   })
 
   it('hands leaving fullscreen to the seam, before anything else redraws', () => {
