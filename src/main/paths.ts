@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { app } from 'electron'
+import type { InventoryPath } from '@shared/data/inventory.js'
 import type { Platform } from '@shared/model.js'
 import { FILTER_LIST_CACHE_DIRNAME } from './privacy/FilterListStore.js'
 import { PUBLIC_SUFFIX_DIRNAME } from './privacy/PublicSuffixSubscription.js'
@@ -212,9 +213,9 @@ export function faviconCacheDir(): string {
  * Start-page screenshots, taken locally.
  *
  * Cache rather than user data, and deliberately: every picture can be taken again by visiting the
- * page, so losing the directory costs nothing the user typed. It also means these go with the
- * `cache` category of "clear data" — which is the right default for a directory holding pictures of
- * pages somebody visited.
+ * page, so losing the directory costs nothing the user typed. Cleared with *history*, though, not
+ * with the cache (KTD7): a picture of a page is a record that somebody visited it, and a history
+ * cleared while its pictures stayed would not be cleared.
  */
 export function thumbnailCacheDir(): string {
   return join(cacheDir(), 'thumbnails')
@@ -232,17 +233,10 @@ export function filterListCacheDir(): string {
 }
 
 /**
- * The downloaded Public Suffix List and the state that judges the next one.
+ * The note that clearing on exit is owed, read and removed at the next start.
  *
- * User data rather than cache, though the list itself can be downloaded again, because losing it is
- * not free: it puts the profile back on the built-in suffixes until the next accepted download, and
- * that silently changes which hosts count as one site — which is what a saved password is offered to.
- * It also carries the baseline a candidate's removals are measured against, and a cache clear that
- * reset the baseline would reset the check with it. Not beside the filter lists either: their store
- * prunes every file its manifest does not name.
- */
-/**
- * The note a quit leaves when its clearing did not finish, read and removed at the next start.
+ * Armed at the start of every run that clears on exit and removed only by a quit that finished the
+ * clearing and every write after it, so a crash, a kill or a logout still leaves it behind (KTD7).
  *
  * A file of its own rather than a key in one that exists. Not `settings.json`: that is encrypted and
  * is itself one of the writes the same shutdown is racing. Not `startup-flags.json`: every settings
@@ -254,12 +248,70 @@ export function pendingClearFile(): string {
   return join(userDataDir(), 'clear-on-exit-pending.json')
 }
 
+/**
+ * The note a panic leaves before it deletes anything, read and removed at the next start.
+ *
+ * Its own file beside the exit note rather than inside it (KTD7): neither may overwrite the other,
+ * and a panic's categories — the session among them — are ones clearing on exit never reaches.
+ * Unencrypted for the same reason as the exit note: it names categories, not anything visited.
+ */
+export function panicPendingFile(): string {
+  return join(userDataDir(), 'panic-pending.json')
+}
+
+/**
+ * The downloaded Public Suffix List and the state that judges the next one.
+ *
+ * User data rather than cache, though the list itself can be downloaded again, because losing it is
+ * not free: it puts the profile back on the built-in suffixes until the next accepted download, and
+ * that silently changes which hosts count as one site — which is what a saved password is offered to.
+ * It also carries the baseline a candidate's removals are measured against, and a cache clear that
+ * reset the baseline would reset the check with it. Not beside the filter lists either: their store
+ * prunes every file its manifest does not name.
+ */
 export function publicSuffixDir(): string {
   return join(userDataDir(), PUBLIC_SUFFIX_DIRNAME)
 }
 
 export function defaultDownloadsDir(): string {
   return app.getPath('downloads')
+}
+
+/**
+ * Every path the data inventory names, by name.
+ *
+ * Typed against `InventoryPath`, so a row naming a function this file does not have — or a name
+ * missing here — is a compile error rather than a clearing that silently skips a file.
+ */
+const INVENTORY_PATHS = {
+  historyFile,
+  faviconCacheDir,
+  thumbnailCacheDir,
+  downloadsFile,
+  sessionStateFile,
+  tabGroupsFile,
+  arrangementsFile,
+  permissionsFile,
+  bookmarksFile,
+  quickLinksFile,
+  settingsFile,
+  userRulesFile,
+  passwordsFile,
+  passwordVaultKeyFile,
+  localDataKeyFile,
+  unencryptedDataNoticeFile,
+  startupFlagsFile,
+  windowPlacementFile,
+  extensionsFile,
+  pendingClearFile,
+  panicPendingFile,
+  filterListCacheDir,
+  publicSuffixDir
+} satisfies Record<InventoryPath, () => string>
+
+/** Where an inventory path is on this machine; see `src/shared/data/inventory.ts`. */
+export function inventoryPath(name: InventoryPath): string {
+  return INVENTORY_PATHS[name]()
 }
 
 /** Which preload a renderer gets. A file each, not a flag — see `preloadFile`. */

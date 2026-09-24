@@ -148,7 +148,17 @@ Dazu gilt:
   `main/data/quarantine.ts`.
 - Sicherungen, Quarantäne-Kopien und Temp-Reste gehören zu ihrer Datenkategorie:
   Verlauf löschen, Downloads-Liste leeren und Tresor zurücksetzen entfernen sie mit
-  (`removeCopiesOf`). „Beim Beenden löschen" leert Verlauf und Downloads noch nicht.
+  (`removeCopiesOf`). „Beim Beenden löschen" ebenso: bei offenen Stores über `seal()`,
+  `clear()` und `discardCopies()`, beim Nachholen auf Dateiebene über `removeCopiesOf`
+  (`main/data/clear-data.ts`).
+- Was zu einer Kategorie gehört, sagt das Dateninventar `shared/data/inventory.ts`
+  (KTD7): Dateien aus `paths.ts`, Chromium-Datentypen, Reste im Speicher, und welcher
+  Weg — Löschen jetzt, beim Beenden, Panic, Backup — sie erreicht. Zum Verlauf gehören
+  Favicons und Vorschaubilder. Ein Architekturtest verlangt für jede `*File()`- und
+  `*Dir()`-Funktion in `paths.ts` genau einen Platz im Inventar.
+- **Startreihenfolge:** erst beide Notizen nachholen (Panic, dann Beenden) auf
+  Dateiebene, dann das Staging aus dem Wiederherstellen (U23), dann Schutz, Einstellungen
+  und Stores öffnen. Umgekehrt löschte das Nachholen gerade Wiederhergestelltes.
 
 Wie ein Nutzer eine Kopie zurückspielt, steht in `docs/QA.md`, Abschnitt 7.
 
@@ -345,8 +355,8 @@ Der Ablauf ist ein Zustandsautomat in `main/shutdown.ts` (`ShutdownSequence`), o
 Electron und mit eingereichten Zeitgebern testbar; `index.ts` verdrahtet nur.
 
 - **`idle → running → done`.** Das erste `before-quit` holt die Arbeit ab
-  (`beginShutdown`: Sitzung versiegeln, Leerlauf-Timer des Tresors stoppen,
-  Löschkategorien lesen) und bricht das Beenden ab. Ein weiteres `before-quit` während
+  (`beginShutdown`: Sitzung versiegeln, Leerlauf-Timer des Tresors stoppen, die
+  geschuldeten Kategorien der Beenden-Notiz holen) und bricht das Beenden ab. Ein weiteres `before-quit` während
   `running` tut nichts außer `preventDefault`; früher startete es die ganze Folge ein
   zweites Mal. Erst in `done` geht `app.quit()` durch. `main()` fragt zwischen seinen
   Phasen `quitting()` und öffnet nach begonnenem Beenden keine Fenster mehr.
@@ -354,10 +364,17 @@ Electron und mit eingereichten Zeitgebern testbar; `index.ts` verdrahtet nur.
   Flushes gleichzeitig unter einer gemeinsamen Frist von 10 s. Ein Store, der hängt oder
   scheitert, hält die anderen nicht auf; das Log nennt ihn beim Namen. Ein nur-lesender
   Store antwortet sofort und lässt nie auf die Frist warten.
-- **Nachholen.** Läuft das Löschen ab oder scheitert es, schreibt das Beenden eine Notiz
-  (`clear-on-exit-pending.json`). Der nächste Start löscht direkt nach `app.whenReady()`
-  und vor dem ersten Fenster (`catchUpPendingClear`, wieder mit 30 s) und entfernt die
-  Notiz erst nach Erfolg.
+- **Notiz und Nachholen (KTD7).** Ist Löschen beim Beenden an, liegt ab dem Start eine
+  Notiz (`clear-on-exit-pending.json`, `ExitNote`). Sie folgt `clearData.onExit` und
+  `onExitCategories` und führt eine noch offene Notiz zusammen, statt sie zu
+  überschreiben. Das Beenden versiegelt Verlauf, Downloads, Favicons und Vorschaubilder,
+  leert sie und entfernt die Notiz erst, wenn Löschen, alle Flushes und `discardCopies`
+  fertig sind; ein hängender oder gescheiterter Flush lässt sie liegen. Ein Absturz, Kill
+  oder Abmelden lässt sie ebenso liegen. Der nächste Start holt direkt nach
+  `app.whenReady()` beide Notizen nach — die Panic-Notiz `panic-pending.json` zuerst —,
+  auf Dateiebene und vor Schutz, Einstellungen und Stores (`catchUpPendingClears`, je
+  30 s), und entfernt jede erst nach Erfolg. Eine unlesbare Beenden-Notiz löscht nur
+  Cookies, Seitenspeicher und Cache; Verlauf und Downloads nur aus einer lesbaren.
 - **Anmeldung.** Jeder Store trägt seinen Flush beim Öffnen unter einem Namen in die
   `FlushRegistry` ein; ein Architekturtest prüft, dass jeder Store mit `flush` dort steht.
 - **Tresor.** `window-all-closed` sperrt den Tresor, solange kein Beenden läuft.

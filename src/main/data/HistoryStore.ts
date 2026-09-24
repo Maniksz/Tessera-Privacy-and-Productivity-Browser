@@ -94,6 +94,7 @@ export interface HistoryStoreOptions {
 export class HistoryStore {
   readonly #store: JsonStore<HistoryDocument>
   readonly #now: () => number
+  #sealed = false
 
   private constructor(store: JsonStore<HistoryDocument>, now: () => number) {
     this.#store = store
@@ -160,6 +161,16 @@ export class HistoryStore {
     return this.#replace((visits) => removeRange(visits, from, to))
   }
 
+  /**
+   * No visit is recorded from here on. What clearing on exit does before `clear`, as
+   * `SessionStore.seal()` does for the session: the windows are still open while the quit waits,
+   * and a page finishing its load then must not write a trace into the history just emptied.
+   * A title needs no seal of its own — it only fills in an entry that exists, and none does.
+   */
+  seal(): void {
+    this.#sealed = true
+  }
+
   /** Everything. This is what `clearData.onExitCategories` containing `history` runs. */
   clear(): number {
     return this.#replace(() => [])
@@ -195,7 +206,7 @@ export class HistoryStore {
     // Asked here as well as inside the pure function, and not redundantly: without
     // this, a navigation to `about:blank` would still schedule a file write and wake
     // every listener to deliver an unchanged list.
-    if (historyUrlOf(input.url) === null) return
+    if (this.#sealed || historyUrlOf(input.url) === null) return
     this.#store.update((document) => ({
       ...document,
       visits: recordVisit(document.visits, input, { now: this.#now() })

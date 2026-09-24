@@ -1258,8 +1258,12 @@ zufällig fiel (`0d25d81`); vier Quelldateien mit rohem NUL-Byte, die git als bi
   Berechtigung auf „Fragen" stellt.
 - **`grantFileProtocolExtraPrivileges` bleibt an**, solange die Chrome-UI über `file://` lädt. Siehe
   „Bekannte Risiken".
-- **„Beim Beenden löschen"** leert Verlauf und Downloads weiterhin nicht, also auch nicht deren Sicherungs-
-  und Quarantäne-Kopien. Folgearbeit laut Plan.
+- **„Beim Beenden löschen" und die Netzwerkspuren (U11).** Mit den Cookies gehen Auth- und Host-Cache und die
+  Code-Caches. Das ungefilterte `session.clearData()` (Network Persistent State, TransportSecurity, Reporting/NEL)
+  läuft nur, wenn auch Seitenspeicher und Cache gewählt sind — der Standard und der Rückfall einer unlesbaren
+  Notiz —, weil es sonst Kategorien mitnähme, die niemand gewählt hat. Heruntergeladene Dateien bleiben, laufende
+  Downloads bleiben in der Liste. „Formulardaten" ist aus der Auswahl verschwunden; ein gespeichertes `formData`
+  wird beim Laden verworfen, die übrige Auswahl bleibt.
 - Code-Signing, die Renderer-UX-Befunde und die übrigen Main-Prozess-Befunde des Reviews stehen im Plan unter
   „Deferred to Follow-Up Work".
 

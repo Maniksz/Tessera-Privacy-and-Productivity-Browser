@@ -99,6 +99,7 @@ export interface DownloadStoreOptions {
 export class DownloadStore {
   readonly #store: JsonStore<DownloadDocument>
   readonly #now: () => number
+  #sealed = false
 
   private constructor(store: JsonStore<DownloadDocument>, now: () => number) {
     this.#store = store
@@ -162,6 +163,16 @@ export class DownloadStore {
   }
 
   /**
+   * No new download is recorded from here on; what clearing on exit does before `clear`.
+   *
+   * Updates still land, and only on records that exist: those are the running downloads `clear`
+   * keeps, and a list that stopped following them would claim a finished file is still arriving.
+   */
+  seal(): void {
+    this.#sealed = true
+  }
+
+  /**
    * Forgets every finished download.
    *
    * What `clearData.onExitCategories` containing `downloads` runs, and what the page's
@@ -202,6 +213,7 @@ export class DownloadStore {
   }
 
   #start(started: StartedDownload): void {
+    if (this.#sealed) return
     this.#store.update((document) => ({
       ...document,
       downloads: addDownload(document.downloads, recordFor(started))

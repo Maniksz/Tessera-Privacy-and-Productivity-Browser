@@ -412,7 +412,7 @@ export const de: SettingTextTable = {
     onExitCategories: {
       label: 'Was gelöscht wird',
       description:
-        'Eines je Zeile, aus: cookies, cache, storage, history, downloads, formData. Alles andere wird abgelehnt.'
+        'Eines je Zeile, aus: cookies, cache, storage, history, downloads. Alles andere wird ignoriert.'
     }
   },
 

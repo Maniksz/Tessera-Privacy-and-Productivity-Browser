@@ -408,6 +408,19 @@ export default defineConfig({
           statements: 100
         },
         /*
+          Whether a failed page or a gone renderer takes its tile, and whether the view is shown (U9,
+          KTD22). A state where none belongs covers a working page — the browser's own HTTPS redirect, an
+          advert frame the blocker refused — and a view the rule forgets comes back over the panel at the
+          next resize. Both are single branches, so a floor below all of it leaves room for exactly those.
+        */
+        'src/shared/browser/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/browser/tab-failure-watch.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           Which window an IPC call acts for, carved out of `WindowRegistry.ts` so it could be measured.
 
           The registry is excluded as Electron-bound, and this decision in it was wrong for as long as
@@ -436,12 +449,39 @@ export default defineConfig({
           written. Every branch is a way to lose or keep the user's data, so a floor below all of it
           leaves room for exactly the branch nobody tested.
         */
-        'src/main/data/store-load.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/data/store-load.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         /*
           The copies a store keeps before it replaces a file, and their removal in the deletion
           paths. A copy that is not made loses data; one that is not removed breaks a deletion promise.
         */
-        'src/main/data/quarantine.ts': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/data/quarantine.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
+          The data inventory and the clearing that reads it (KTD7). A row wrong is a panic that leaves
+          a trace or a backup that carries one; a branch untested in the clearing is a history that
+          survives the quit, or one deleted from a note the user never wrote.
+        */
+        'src/shared/data/inventory.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/data/clear-data.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         /*
           The Public Suffix List's download, its checks and the fallbacks at start. A list that is
           accepted wrongly merges sites and offers passwords across them, so each refusal is a branch

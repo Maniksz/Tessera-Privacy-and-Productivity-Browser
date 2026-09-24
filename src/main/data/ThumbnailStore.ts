@@ -247,6 +247,9 @@ export class ThumbnailStore {
    */
   #generation = 0
 
+  /** Set by `seal`: no picture is taken or recorded from then on. */
+  #sealed = false
+
   private constructor(store: JsonStore<ThumbnailIndex>, options: ThumbnailStoreOptions) {
     this.#store = store
     this.#directory = options.directory
@@ -355,8 +358,25 @@ export class ThumbnailStore {
   }
 
   /**
-   * Removes every picture and empties the index. This is what `clearData` running the
-   * `cache` category on exit calls, and it is the promise the whole feature rests on.
+   * No picture is taken or recorded from here on; what clearing history on exit does before
+   * `clear`. A capture already in flight is thrown away by the generation `clear` bumps.
+   */
+  seal(): void {
+    this.#sealed = true
+  }
+
+  /**
+   * Removes the index's backup and quarantine copies after writing what is pending; the second
+   * half of clearing, as in `HistoryStore.discardCopies`.
+   */
+  discardCopies(): Promise<void> {
+    return this.#store.discardCopies()
+  }
+
+  /**
+   * Removes every picture and empties the index. This is what clearing `history` on exit
+   * calls — a picture of a page says it was visited (KTD7) — and it is the promise the whole
+   * feature rests on.
    *
    * Files first, index second: the reverse order would leave pictures on disk that
    * nothing remembers, and therefore nothing can ever delete.
@@ -375,6 +395,7 @@ export class ThumbnailStore {
   }
 
   #shouldCapture(url: string): boolean {
+    if (this.#sealed) return false
     const key = thumbnailKeyOf(url)
     if (key === null) return false
     if (this.#inFlight.has(key)) return false
@@ -385,6 +406,7 @@ export class ThumbnailStore {
   async #capture(request: ThumbnailRequest): Promise<ThumbnailOutcome> {
     const key = thumbnailKeyOf(request.url)
     if (key === null) return this.#refuse(null, 'not-a-page')
+    if (this.#sealed) return this.#refuse(null, 'discarded')
 
     const existing = findThumbnailEntry(this.#store.get().shots, key)
     if (existing !== null && !thumbnailIsStale(existing, this.#now(), this.#maxAgeMs)) {

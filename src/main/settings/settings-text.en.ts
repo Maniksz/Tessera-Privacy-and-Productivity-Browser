@@ -439,7 +439,7 @@ export const en = {
     onExitCategories: {
       label: 'What gets cleared',
       description:
-        'One per line, from: cookies, cache, storage, history, downloads, formData. Anything else is refused.'
+        'One per line, from: cookies, cache, storage, history, downloads. Anything else is ignored.'
     }
   },
 

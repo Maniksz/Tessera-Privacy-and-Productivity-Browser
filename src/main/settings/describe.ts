@@ -149,9 +149,21 @@ function choiceLabelsFor(
   return Object.keys(labels).length > 0 ? labels : undefined
 }
 
+/**
+ * The schema a value ends up checked against, past any `z.preprocess` in front of it.
+ *
+ * A preprocess is a pipe from a transform into the real schema, and the control is decided by the
+ * real one: `clearData.onExitCategories` drops unknown names first and is still a list of choices.
+ */
+function checkedSchemaOf(schema: z.ZodType): z.ZodType {
+  // Every zod pipe has an `out`; that is what makes it one.
+  const def = defOf(schema) as ZodDefView & { out: z.ZodType }
+  return def.type === 'pipe' ? checkedSchemaOf(def.out) : schema
+}
+
 /** Describes one setting, in one language. */
 export function describeSetting(key: SettingsKey, locale: Locale): SettingDescriptor {
-  const schema = settingDefinitions[key].schema
+  const schema = checkedSchemaOf(settingDefinitions[key].schema)
   const kind = kindOf(schema)
   const text = settingTextFor(locale, key)
 

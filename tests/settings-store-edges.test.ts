@@ -203,3 +203,44 @@ describe('snapshot isolation', () => {
     expect(store.snapshot()).not.toBe(before)
   })
 })
+
+describe('categories cleared on exit', () => {
+  /*
+    `formData` left the setting because nothing stood behind it (R19). A profile that chose it still
+    has it in its file, and a schema that refused the whole array for one stale member would fall
+    back to the default — cookies, cache and storage — and clear on exit what the user never chose.
+  */
+  it('drops a member this build no longer knows and keeps the rest, without falling back', async () => {
+    const filePath = await tempFile()
+    await writeFile(
+      filePath,
+      JSON.stringify({
+        'clearData.onExit': true,
+        'clearData.onExitCategories': ['history', 'formData']
+      })
+    )
+
+    const store = await SettingsStore.open(filePath)
+
+    expect(store.get('clearData.onExitCategories')).toEqual(['history'])
+    expect(store.get('clearData.onExit')).toBe(true)
+  })
+
+  it('still falls back when the stored value is not a list at all', async () => {
+    const filePath = await tempFile()
+    await writeFile(filePath, JSON.stringify({ 'clearData.onExitCategories': 'history' }))
+
+    const store = await SettingsStore.open(filePath)
+
+    expect(store.get('clearData.onExitCategories')).toEqual(
+      defaultSettings()['clearData.onExitCategories']
+    )
+  })
+
+  it('no longer offers form data as a category', async () => {
+    const store = await SettingsStore.open(await tempFile())
+    expect(store.set('clearData.onExitCategories', ['formData', 'cache']).snapshot).toMatchObject({
+      'clearData.onExitCategories': ['cache']
+    })
+  })
+})

@@ -18,8 +18,11 @@
  * gets thirty, and after that the quit goes ahead and says what it gave up on.
  *
  * A clearing that ran out of time is not the same as one that happened, and the user asked for their
- * cookies to be gone. So it leaves a note, and the next start does the clearing before any page loads
- * — see `catchUpPendingClear`.
+ * cookies to be gone. So there is a note, and the next start does the clearing before any page loads
+ * — see `catchUpPendingClear`. It is written when the run starts, not when the quit fails (KTD7): a
+ * crash, a kill or a logout has no quit to write it, and those are exactly the runs whose history
+ * the user asked not to keep. The quit removes it only once the clearing and every write after it
+ * are done — see `ExitNote`.
  *
  * ## What is not here
  *
@@ -58,7 +61,10 @@ export interface NamedFlush {
 /** Clearing browsing data on exit, and what to leave for the next start if it does not finish. */
 export interface ShutdownClear {
   readonly run: () => Promise<void>
+  /** Writes the note again, for a clearing that did not finish. */
   readonly remember: () => Promise<void>
+  /** Removes the note, once the clearing and every write after it are done. */
+  readonly forget: () => Promise<void>
 }
 
 /** What one quit has to do, gathered at the moment it begins. */
@@ -84,7 +90,7 @@ export interface ShutdownOptions {
   readonly finish: (report: ShutdownReport) => void
 }
 
-/** The name the note's own write is reported under when it does not finish. */
+/** The name the note's own write, or its removal, is reported under when it does not finish. */
 const NOTE_FLUSH_NAME = 'clear-on-exit note'
 
 export class ShutdownSequence {
@@ -144,6 +150,16 @@ export class ShutdownSequence {
       if (clear !== 'done') flushes.push({ name: NOTE_FLUSH_NAME, flush: work.clear.remember })
     }
     const { hung, failed } = await flushAll(flushes, this.#options.after)
+    /*
+      The note goes last, and only when nothing was left undone. A flush that hangs may be the history
+      being written empty; the note is what makes the next start empty it anyway (KTD7).
+    */
+    if (work.clear !== null && clear === 'done' && hung.length === 0 && failed.length === 0) {
+      const removal = [{ name: NOTE_FLUSH_NAME, flush: work.clear.forget }]
+      const { hung: stuck, failed: refused } = await flushAll(removal, this.#options.after)
+      this.#end({ clear, hung: stuck, failed: refused })
+      return
+    }
     this.#end({ clear, hung, failed })
   }
 
@@ -305,4 +321,94 @@ export async function catchUpPendingClear(
   if (outcome !== 'done') return 'still-pending'
   await options.forget()
   return 'cleared'
+}
+
+// --- the note while the browser runs -------------------------------------------------------------
+
+/** The note's file, as `ExitNote` needs it. `read` answers `null` when there is none. */
+export interface NoteFile {
+  readonly read: () => Promise<string | null>
+  readonly write: (text: string) => Promise<void>
+  readonly remove: () => Promise<void>
+}
+
+/**
+ * The exit note from the start of a run to its end (KTD7).
+ *
+ * Armed at the start when clearing on exit is on, so a run that never reaches its quit — a crash, a
+ * kill, a logout — still leaves the promise on disk for `catchUpPendingClear`. Kept in step with
+ * `clearData.onExit` and `onExitCategories`: rewritten when they change, removed when clearing is
+ * switched off. Removed for good by the quit that did the clearing (`clearing().forget`).
+ *
+ * A note the catch-up could not finish is merged, never overwritten: its categories are a promise an
+ * earlier quit made, and switching clearing off during this run takes back this run's wish, not that
+ * one. Every write goes through one queue, so a burst of settings changes lands in its own order.
+ */
+export class ExitNote {
+  readonly #file: NoteFile
+  readonly #fallback: readonly string[]
+  #leftover: readonly string[] = []
+  #wanted: readonly string[] = []
+  #done = false
+  #queue: Promise<void> = Promise.resolve()
+
+  constructor(file: NoteFile, fallback: readonly string[]) {
+    this.#file = file
+    this.#fallback = fallback
+  }
+
+  /** Reads what an earlier run left, merges it and writes the note as this run's settings want. */
+  arm(onExit: boolean, categories: readonly string[]): Promise<void> {
+    this.#wanted = onExit ? [...categories] : []
+    return this.#enqueue(async () => {
+      const text = await this.#file.read()
+      this.#leftover = text === null ? [] : readPendingClear(text, this.#fallback)
+      await this.#sync()
+    })
+  }
+
+  /** Follows a settings change. One that leaves both settings as they were writes nothing. */
+  want(onExit: boolean, categories: readonly string[]): Promise<void> {
+    const wanted = onExit ? [...categories] : []
+    if (sameNames(wanted, this.#wanted)) return this.#queue
+    this.#wanted = wanted
+    return this.#enqueue(() => this.#sync())
+  }
+
+  /** Every category owed: the earlier run's first, then this run's, each once. */
+  owed(): readonly string[] {
+    return [...new Set([...this.#leftover, ...this.#wanted])]
+  }
+
+  /** What a quit clears and how it keeps or removes the note; `null` when nothing is owed. */
+  clearing(clear: (categories: readonly string[]) => Promise<void>): ShutdownClear | null {
+    const owed = this.owed()
+    if (owed.length === 0) return null
+    return {
+      run: () => clear(owed),
+      remember: () => this.#enqueue(() => this.#file.write(pendingClearText(owed))),
+      forget: () => {
+        // For good: a settings change that arrives after the quit removed the note must not write it.
+        this.#done = true
+        return this.#enqueue(() => this.#file.remove())
+      }
+    }
+  }
+
+  #sync(): Promise<void> {
+    if (this.#done) return Promise.resolve()
+    const owed = this.owed()
+    return owed.length === 0 ? this.#file.remove() : this.#file.write(pendingClearText(owed))
+  }
+
+  /** Runs `task` after every earlier one; a failure is the caller's, not the queue's. */
+  #enqueue(task: () => Promise<void>): Promise<void> {
+    const run = this.#queue.then(task)
+    this.#queue = run.catch(() => undefined)
+    return run
+  }
+}
+
+function sameNames(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((name, index) => name === right[index])
 }

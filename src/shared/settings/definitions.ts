@@ -46,6 +46,12 @@ function def<S extends z.ZodType>(
 
 const percentage = z.number().int().min(30).max(300)
 
+const EXIT_CATEGORIES = ['cookies', 'cache', 'storage', 'history', 'downloads'] as const
+
+function isExitCategory(value: unknown): boolean {
+  return (EXIT_CATEGORIES as readonly unknown[]).includes(value)
+}
+
 export const settingDefinitions = {
   // --- Darstellung -----------------------------------------------------------
   'appearance.theme': def(z.enum(['system', 'light', 'dark']), 'system', 'appearance'),
@@ -330,8 +336,19 @@ export const settingDefinitions = {
 
   // --- Daten löschen -------------------------------------------------------
   'clearData.onExit': def(z.boolean(), false, 'clearData'),
+  /**
+   * What clearing on exit reaches; the rows of the data inventory exit can choose (KTD7).
+   *
+   * A name this build does not know is dropped before the members are checked, not refused with the
+   * list. `formData` was a member with nothing behind it and left (R19); a profile that chose it
+   * still has it in its file, and refusing the whole list would load the default — clearing cookies,
+   * cache and storage for somebody who chose only their history.
+   */
   'clearData.onExitCategories': def(
-    z.array(z.enum(['cookies', 'cache', 'storage', 'history', 'downloads', 'formData'])),
+    z.preprocess(
+      (value) => (Array.isArray(value) ? value.filter(isExitCategory) : value),
+      z.array(z.enum(EXIT_CATEGORIES))
+    ),
     ['cookies', 'cache', 'storage'],
     'clearData'
   ),

@@ -266,14 +266,7 @@ describe('describeSetting', () => {
     expect(descriptor.kind).toBe('text-list')
     // The full list, not a sample: the UI shows it as the hint for what may be typed, so
     // a member lost on the way here is a category the user cannot discover.
-    expect(descriptor.choices).toEqual([
-      'cookies',
-      'cache',
-      'storage',
-      'history',
-      'downloads',
-      'formData'
-    ])
+    expect(descriptor.choices).toEqual(['cookies', 'cache', 'storage', 'history', 'downloads'])
   })
 
   it('reads a record as a map, which the UI renders read-only', () => {

@@ -187,8 +187,12 @@ bis ein Download gelingt.
 | 7.7 | Dieselbe beschädigte Datei zweimal hintereinander starten lassen, ohne etwas zu ändern | Nur eine `.unreadable`-Kopie |
 | 7.8 | In `history.json` die Version auf `2` setzen (unverschlüsseltes Profil), starten, Seiten besuchen, beenden | Log meldet „newer version … changes made in this run are discarded“; die Datei ist danach byte-gleich |
 | 7.9 | Dasselbe mit `bookmarks.json`, dann ein Lesezeichen anlegen | Vorhandene Lesezeichen sichtbar; Anlegen schlägt mit Fehler fehl; Datei byte-gleich |
-| 7.10 | Neben `history.json` eine `history.json.v1.bak` und eine `history.json.unreadable` ablegen, im Verlauf „Alles löschen“ | Beide Kopien sind danach weg; ebenso für Downloads („Liste leeren“) und den Tresor („Tresor zurücksetzen“) |
+| 7.10 | Neben `history.json` eine `history.json.v1.bak` und eine `history.json.unreadable` ablegen, im Verlauf „Alles löschen“ | Beide Kopien sind danach weg; ebenso für Downloads („Liste leeren“), den Tresor („Tresor zurücksetzen“) und „Beim Beenden löschen“ mit Verlauf und Downloads |
 | 7.11 | Windows: Tresor entsperren, ein Passwort ändern, das letzte Fenster per X schließen, neu starten | Die Änderung ist da; der Prozess ist nach dem Schließen ohne Hänger beendet |
+| 7.12 | „Beim Beenden löschen“ mit Verlauf und Downloads an, Seiten besuchen, eine Datei herunterladen, normal beenden, neu starten | Verlauf, Favicons, Vorschaubilder und Downloads-Liste leer; die heruntergeladene Datei liegt noch im Ordner; `clear-on-exit-pending.json` ist weg |
+| 7.13 | Wie 7.12, aber während eines laufenden Downloads beenden | Der laufende Download steht nach dem Löschen noch in der Liste |
+| 7.14 | „Beim Beenden löschen“ mit Verlauf an, Seiten besuchen, Prozess hart beenden (`kill -9`), neu starten | Der Verlauf ist leer, bevor das erste Fenster erscheint; `history.json` samt Kopien ist weg |
+| 7.15 | „Beim Beenden löschen“ an, dann während des Laufs wieder aus, hart beenden, neu starten | Nichts wurde gelöscht; `clear-on-exit-pending.json` gibt es nicht |
 
 ### Wiederherstellen aus einer Sicherung oder Quarantäne-Kopie
 
@@ -204,7 +208,7 @@ Zurückspielen, wenn eine Migration oder eine Reparatur das falsche Ergebnis hat
 3. Die Kopie unter den Originalnamen kopieren: `history.json.v1.bak` → `history.json`. Kopieren statt Umbenennen, damit die Sicherung erhalten bleibt, falls der Versuch wieder scheitert.
 4. Starten. Eine `.v<N>.bak` wird erneut migriert; die vorhandene Sicherung dieser Version bleibt, wie sie ist. Eine `.unreadable`-Kopie wird nur gelesen, wenn sie vorher von Hand repariert wurde; sonst liegt sie danach wieder als Kopie daneben.
 
-Grenzen: Eine Kopie ist nur mit dem Schlüssel lesbar, mit dem das Original verschlüsselt war; in einem verschlüsselten Profil lassen sich `.unreadable`-Kopien daher nicht von Hand reparieren, nur zurückspielen, sobald eine Version sie lesen kann. Zu `passwords.json` gehört der Tresor-Schlüssel `passwords.key`. Verlauf löschen, Downloads-Liste leeren und Tresor zurücksetzen entfernen die Kopien ihrer Kategorie; „Beim Beenden löschen“ tut das für Verlauf und Downloads noch nicht.
+Grenzen: Eine Kopie ist nur mit dem Schlüssel lesbar, mit dem das Original verschlüsselt war; in einem verschlüsselten Profil lassen sich `.unreadable`-Kopien daher nicht von Hand reparieren, nur zurückspielen, sobald eine Version sie lesen kann. Zu `passwords.json` gehört der Tresor-Schlüssel `passwords.key`. Verlauf löschen, Downloads-Liste leeren, Tresor zurücksetzen und „Beim Beenden löschen“ entfernen die Kopien ihrer Kategorie.
 
 ## 8. Auslieferung
 

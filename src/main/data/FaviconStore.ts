@@ -164,6 +164,9 @@ export class FaviconStore {
    */
   readonly #inFlight = new Map<string, Promise<FaviconOutcome>>()
 
+  /** Set by `seal`: no icon is written from then on. */
+  #sealed = false
+
   private constructor(store: JsonStore<FaviconIndex>, options: FaviconStoreOptions) {
     this.#store = store
     this.#directory = options.directory
@@ -257,8 +260,26 @@ export class FaviconStore {
   }
 
   /**
+   * No icon is fetched or written from here on; what clearing history on exit does before
+   * `clear`. A retrieval already in flight is refused before it writes, so an icon arriving
+   * while the quit waits does not put a visited site back on disk. Answered as `write-failed`,
+   * which is what it is to the caller: the cache no longer writes.
+   */
+  seal(): void {
+    this.#sealed = true
+  }
+
+  /**
+   * Removes the index's backup and quarantine copies after writing what is pending; the second
+   * half of clearing, as in `HistoryStore.discardCopies`.
+   */
+  discardCopies(): Promise<void> {
+    return this.#store.discardCopies()
+  }
+
+  /**
    * Removes every icon and empties the index. This is what `clearData.onExitCategories`
-   * containing `cache` runs.
+   * containing `history` runs: an icon says a site was visited (KTD7).
    *
    * Files first, index second: the reverse order would leave images on disk that nothing
    * remembers, and therefore nothing can ever delete.
@@ -278,6 +299,7 @@ export class FaviconStore {
   async #ensure(pageUrl: string, candidateUrls: readonly string[]): Promise<FaviconOutcome> {
     const domain = faviconDomainOf(pageUrl)
     if (domain === null) return this.#refuse(null, 'not-a-site')
+    if (this.#sealed) return this.#refuse(null, 'write-failed')
 
     const existing = findFaviconEntry(this.#store.get().icons, domain)
     if (existing !== null && !faviconIsStale(existing, this.#now(), this.#maxAgeMs)) {
@@ -314,6 +336,9 @@ export class FaviconStore {
       this.#failed.add(domain)
       return this.#refuse(existing, image.reason)
     }
+
+    // Sealed while the request was out: nothing more is written.
+    if (this.#sealed) return this.#refuse(existing, 'write-failed')
 
     // The file before the index. A file nothing points at wastes a few kilobytes; an
     // index entry with no file behind it is a broken picture in the tab strip.

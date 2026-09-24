@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   CLEAR_TIMEOUT_MS,
+  ExitNote,
   FLUSH_TIMEOUT_MS,
   FlushRegistry,
   ShutdownSequence,
   catchUpPendingClear,
   pendingClearText,
   readPendingClear,
+  type NoteFile,
   type ShutdownReport,
   type ShutdownWork
 } from '@main/shutdown.js'
@@ -141,7 +143,8 @@ describe('the shutdown sequence', () => {
             cleared += 1
             return clearing.promise
           },
-          remember: () => Promise.resolve()
+          remember: () => Promise.resolve(),
+          forget: () => Promise.resolve()
         },
         flushes: [{ name: 'history', flush: resolving(() => (flushed += 1)) }]
       }
@@ -171,7 +174,8 @@ describe('the shutdown sequence', () => {
           order.push('clear')
           return clearing.promise
         },
-        remember: () => Promise.resolve()
+        remember: () => Promise.resolve(),
+        forget: () => Promise.resolve()
       },
       flushes: [{ name: 'history', flush: resolving(() => order.push('flush')) }]
     }))
@@ -287,7 +291,8 @@ describe('the shutdown sequence', () => {
     shutdown.beforeQuit(() => ({
       clear: {
         run: () => new Promise<void>(() => undefined),
-        remember: resolving(() => order.push('remember'))
+        remember: resolving(() => order.push('remember')),
+        forget: resolving(() => order.push('forget'))
       },
       flushes: [{ name: 'history', flush: resolving(() => order.push('history')) }]
     }))
@@ -312,7 +317,11 @@ describe('the shutdown sequence', () => {
     const refusal = new Error('storage partition busy')
 
     shutdown.beforeQuit(() => ({
-      clear: { run: () => Promise.reject(refusal), remember: resolving(() => (remembered += 1)) },
+      clear: {
+        run: () => Promise.reject(refusal),
+        remember: resolving(() => (remembered += 1)),
+        forget: () => Promise.reject(new Error('a failed clearing must keep its note'))
+      },
       flushes: []
     }))
     await settle()
@@ -322,20 +331,109 @@ describe('the shutdown sequence', () => {
     expect(timers.live(), 'the clearing deadline outlived the clearing').toBe(0)
   })
 
-  it('leaves no note when the clearing finished', async () => {
+  it('removes the note once the clearing and every write after it are done', async () => {
     const timers = fakeTimers()
     const { shutdown, reports } = sequence(timers)
-    let remembered = 0
+    const order: string[] = []
 
     shutdown.beforeQuit(() => ({
-      clear: { run: () => Promise.resolve(), remember: resolving(() => (remembered += 1)) },
+      clear: {
+        run: resolving(() => order.push('clear')),
+        remember: resolving(() => order.push('remember')),
+        forget: resolving(() => order.push('forget'))
+      },
+      flushes: [{ name: 'history', flush: resolving(() => order.push('history')) }]
+    }))
+    await settle()
+
+    // After the flush, not before: the note is the promise, and the flush is what keeps it.
+    expect(order).toEqual(['clear', 'history', 'forget'])
+    expect(reports).toEqual([{ clear: 'done', hung: [], failed: [] }])
+    expect(timers.live(), 'the clearing deadline outlived the clearing').toBe(0)
+  })
+
+  it('keeps the note when the history flush hangs, so the next start clears again', async () => {
+    const timers = fakeTimers()
+    const { shutdown, reports } = sequence(timers)
+    let forgotten = 0
+
+    shutdown.beforeQuit(() => ({
+      clear: {
+        run: () => Promise.resolve(),
+        remember: () => Promise.resolve(),
+        forget: resolving(() => (forgotten += 1))
+      },
+      flushes: [{ name: 'history', flush: () => new Promise<void>(() => undefined) }]
+    }))
+    await settle()
+    timers.advance(FLUSH_TIMEOUT_MS)
+    await settle()
+
+    expect(forgotten, 'a flush that did not land took the note with it').toBe(0)
+    expect(reports).toEqual([{ clear: 'done', hung: ['history'], failed: [] }])
+  })
+
+  it('keeps the note when a flush fails', async () => {
+    const timers = fakeTimers()
+    const { shutdown, reports } = sequence(timers)
+    let forgotten = 0
+    const refusal = new Error('EACCES')
+
+    shutdown.beforeQuit(() => ({
+      clear: {
+        run: () => Promise.resolve(),
+        remember: () => Promise.resolve(),
+        forget: resolving(() => (forgotten += 1))
+      },
+      flushes: [{ name: 'downloads', flush: () => Promise.reject(refusal) }]
+    }))
+    await settle()
+
+    expect(forgotten).toBe(0)
+    expect(reports).toEqual([
+      { clear: 'done', hung: [], failed: [{ name: 'downloads', reason: refusal }] }
+    ])
+  })
+
+  it('bounds removing the note by ten seconds and names it when it hangs', async () => {
+    const timers = fakeTimers()
+    const { shutdown, reports } = sequence(timers)
+
+    shutdown.beforeQuit(() => ({
+      clear: {
+        run: () => Promise.resolve(),
+        remember: () => Promise.resolve(),
+        forget: () => new Promise<void>(() => undefined)
+      },
+      flushes: []
+    }))
+    await settle()
+    expect(shutdown.phase).toBe('running')
+    timers.advance(FLUSH_TIMEOUT_MS)
+    await settle()
+
+    expect(shutdown.phase).toBe('done')
+    expect(reports).toEqual([{ clear: 'done', hung: ['clear-on-exit note'], failed: [] }])
+  })
+
+  it('says so when the note cannot be removed, and still ends', async () => {
+    const timers = fakeTimers()
+    const { shutdown, reports } = sequence(timers)
+    const refusal = new Error('EPERM')
+
+    shutdown.beforeQuit(() => ({
+      clear: {
+        run: () => Promise.resolve(),
+        remember: () => Promise.resolve(),
+        forget: () => Promise.reject(refusal)
+      },
       flushes: []
     }))
     await settle()
 
-    expect(remembered).toBe(0)
-    expect(reports).toEqual([{ clear: 'done', hung: [], failed: [] }])
-    expect(timers.live(), 'the clearing deadline outlived the clearing').toBe(0)
+    expect(reports).toEqual([
+      { clear: 'done', hung: [], failed: [{ name: 'clear-on-exit note', reason: refusal }] }
+    ])
   })
 
   it('bounds writing the note by the same ten seconds as every other write', async () => {
@@ -345,7 +443,8 @@ describe('the shutdown sequence', () => {
     shutdown.beforeQuit(() => ({
       clear: {
         run: () => Promise.reject(new Error('no')),
-        remember: () => new Promise<void>(() => undefined)
+        remember: () => new Promise<void>(() => undefined),
+        forget: () => Promise.resolve()
       },
       flushes: []
     }))
@@ -495,5 +594,144 @@ describe('the clearing the last quit did not finish', () => {
     await settle()
     expect(outcome).toBe('still-pending')
     expect(forgotten).toBe(0)
+  })
+})
+
+/** A note file in memory: what it holds, and how often it was written and removed. */
+function noteFile(initial: string | null = null): {
+  readonly state: { text: string | null; writes: number; removes: number; failWrites: number }
+  readonly file: NoteFile
+} {
+  const state = { text: initial, writes: 0, removes: 0, failWrites: 0 }
+  const file: NoteFile = {
+    read: () => Promise.resolve(state.text),
+    write: (text) => {
+      if (state.failWrites > 0) {
+        state.failWrites -= 1
+        return Promise.reject(new Error('ENOSPC'))
+      }
+      state.writes += 1
+      state.text = text
+      return Promise.resolve()
+    },
+    remove: () => {
+      state.removes += 1
+      state.text = null
+      return Promise.resolve()
+    }
+  }
+  return { state, file }
+}
+
+/** What a note on disk asks for, as the next start would read it. */
+function noted(text: string | null): readonly string[] | null {
+  return text === null ? null : readPendingClear(text, ['unreadable'])
+}
+
+describe('the note clearing on exit keeps while the browser runs', () => {
+  /*
+    KTD7: armed at the start, so a crash, a kill or a logout still leaves the promise on disk; kept in
+    step with the two settings; removed only by a quit that finished what it promised.
+  */
+  const FALLBACK = ['cookies', 'storage', 'cache'] as const
+
+  it('is written at the start only when clearing on exit is on', async () => {
+    const off = noteFile()
+    await new ExitNote(off.file, FALLBACK).arm(false, ['history'])
+    expect(off.state.writes).toBe(0)
+    expect(off.state.text).toBeNull()
+
+    const on = noteFile()
+    await new ExitNote(on.file, FALLBACK).arm(true, ['history', 'cookies'])
+    expect(noted(on.state.text)).toEqual(['history', 'cookies'])
+  })
+
+  it('carries the new categories when they change during the run', async () => {
+    const { state, file } = noteFile()
+    const note = new ExitNote(file, FALLBACK)
+    await note.arm(true, ['cookies'])
+    await note.want(true, ['history', 'downloads'])
+    expect(noted(state.text)).toEqual(['history', 'downloads'])
+    expect(note.owed()).toEqual(['history', 'downloads'])
+  })
+
+  it('is removed when clearing on exit is switched off, so a crash after that clears nothing', async () => {
+    const { state, file } = noteFile()
+    const note = new ExitNote(file, FALLBACK)
+    await note.arm(true, ['history'])
+    await note.want(false, ['history'])
+    expect(state.text).toBeNull()
+
+    const cleared: string[][] = []
+    const outcome = await catchUpPendingClear({
+      read: file.read,
+      clear: (categories) => resolving(() => cleared.push([...categories]))(),
+      forget: file.remove,
+      fallback: FALLBACK,
+      after: fakeTimers().after
+    })
+    expect(outcome).toBe('none')
+    expect(cleared).toEqual([])
+  })
+
+  it('does not write again for a change that leaves both settings as they were', async () => {
+    const { state, file } = noteFile()
+    const note = new ExitNote(file, FALLBACK)
+    await note.arm(true, ['cookies'])
+    await note.want(true, ['cookies'])
+    expect(state.writes).toBe(1)
+  })
+
+  it('merges a note the catch-up could not finish instead of overwriting it', async () => {
+    const { state, file } = noteFile(pendingClearText(['downloads', 'cookies']))
+    const note = new ExitNote(file, FALLBACK)
+    await note.arm(true, ['cookies', 'history'])
+    expect(noted(state.text)).toEqual(['downloads', 'cookies', 'history'])
+
+    // Switching off takes back this run's wish, not the promise an earlier quit left.
+    await note.want(false, [])
+    expect(noted(state.text)).toEqual(['downloads', 'cookies'])
+  })
+
+  it('merges an unreadable open note as the fallback, never as nothing', async () => {
+    const { state, file } = noteFile('not json')
+    await new ExitNote(file, FALLBACK).arm(false, [])
+    expect(noted(state.text)).toEqual(['cookies', 'storage', 'cache'])
+  })
+
+  it('keeps writing after a write that failed', async () => {
+    const { state, file } = noteFile()
+    const note = new ExitNote(file, FALLBACK)
+    state.failWrites = 1
+    await expect(note.arm(true, ['cookies'])).rejects.toThrow('ENOSPC')
+    await note.want(true, ['cache'])
+    expect(noted(state.text)).toEqual(['cache'])
+  })
+
+  it('hands the quit nothing to clear when nothing is owed', () => {
+    const note = new ExitNote(noteFile().file, FALLBACK)
+    expect(note.clearing(() => Promise.resolve())).toBeNull()
+  })
+
+  it('hands the quit what is owed, rewrites it on failure and removes it for good on success', async () => {
+    const { state, file } = noteFile(pendingClearText(['downloads']))
+    const note = new ExitNote(file, FALLBACK)
+    await note.arm(true, ['history'])
+    const asked: string[][] = []
+    const clear = note.clearing((categories) => resolving(() => asked.push([...categories]))())
+    expect(clear).not.toBeNull()
+
+    await clear?.run()
+    expect(asked).toEqual([['downloads', 'history']])
+
+    state.text = null
+    await clear?.remember()
+    expect(noted(state.text)).toEqual(['downloads', 'history'])
+
+    await clear?.forget()
+    expect(state.text).toBeNull()
+    // A settings change that arrives after the quit removed the note must not bring it back.
+    await note.want(true, ['cookies'])
+    expect(state.text).toBeNull()
   })
 })

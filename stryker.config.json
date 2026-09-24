@@ -24,33 +24,18 @@
     "died during setup, before a single mutant, and reported a copy error rather than anything about tests.",
     "The rest are simply large and pointless to copy: nothing in them is mutated or read by a test."
   ],
-  "ignorePatterns": [
-    "dist",
-    "out",
-    "coverage",
-    "reports",
-    ".stryker-tmp",
-    "node_modules/.cache"
-  ],
+  "ignorePatterns": ["dist", "out", "coverage", "reports", ".stryker-tmp", "node_modules/.cache"],
   "_comment_plugins": [
     "Declared explicitly because pnpm's symlinked layout defeats Stryker's default",
     "plugin glob: without this it reports that no checker plugins were loaded."
   ],
-  "plugins": [
-    "@stryker-mutator/vitest-runner",
-    "@stryker-mutator/typescript-checker"
-  ],
+  "plugins": ["@stryker-mutator/vitest-runner", "@stryker-mutator/typescript-checker"],
   "testRunner": "vitest",
   "testRunnerNodeArgs": [],
   "vitest": {
     "configFile": "vitest.config.ts"
   },
-  "reporters": [
-    "progress",
-    "clear-text",
-    "html",
-    "json"
-  ],
+  "reporters": ["progress", "clear-text", "html", "json"],
   "htmlReporter": {
     "fileName": "reports/mutation/index.html"
   },
@@ -154,11 +139,13 @@
     "src/main/data/ArrangementStore.ts",
     "src/main/browser/ArrangementController.ts",
     "src/main/browser/unload-guard.ts",
+    "src/shared/browser/**/*.ts",
+    "src/main/browser/tab-failure-watch.ts",
+    "src/shared/data/inventory.ts",
+    "src/main/data/clear-data.ts",
     "!**/*.d.ts"
   ],
-  "checkers": [
-    "typescript"
-  ],
+  "checkers": ["typescript"],
   "tsconfigFile": "tsconfig.node.json",
   "ignoreStatic": true,
   "thresholds": {

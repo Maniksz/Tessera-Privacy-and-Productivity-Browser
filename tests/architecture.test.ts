@@ -16,6 +16,7 @@ import {
   type ShortcutAction
 } from '@shared/shortcuts/bindings.js'
 import { platformSchema } from '@shared/model.js'
+import { DATA_INVENTORY, NEVER_BACKED_UP, OUTSIDE_INVENTORY } from '@shared/data/inventory.js'
 import { menuTexts } from '@main/menu/menu-text.js'
 
 /**
@@ -725,23 +726,13 @@ describe('sandbox rules', () => {
     expect(tab, 'the refusal never reaches preventDefault').toMatch(/\.prevent\(\)/)
   })
 
-  it('creates the chrome window sandboxed too', () => {
-    /*
-      In `window-options.ts` now, not in the controller — and the behaviour is asserted by an ordinary
-      unit test in `tests/window-options.test.ts`, which is the point of the move: for the whole life of
-      the project these three lines could only be checked by reading the source for a pattern.
-
-      This one stays as the *structural* half. Grepping still catches the case a unit test cannot: a
-      second `new BrowserWindow` added somewhere with its own inline options, bypassing the function
-      those tests cover. That is what the second half below checks.
-    */
-    const options = readFileSync(join(ROOT, 'src/main/browser/window-options.ts'), 'utf8')
-    expect(options).toMatch(/sandbox:\s*true/)
-    expect(options).toMatch(/contextIsolation:\s*true/)
-    expect(options).toMatch(/nodeIntegration:\s*false/)
-  })
-
   it('builds every browser window through the one options function', async () => {
+    /*
+      The sandbox, isolation and Node settings themselves are asserted by `tests/window-options.test.ts`
+      against the real options. Grepping `window-options.ts` for them used to sit here too; it broke the
+      mutation run, which reads an instrumented copy of that file, and it proved nothing the unit test
+      does not. What only a grep can catch is a second window built with inline options.
+    */
     // A second `new BrowserWindow({ … })` with its own `webPreferences` would be a window nothing
     // above covers, and it would look perfectly ordinary in review.
     for (const file of await collect('src/main')) {
@@ -2694,12 +2685,16 @@ describe('shutdown', () => {
     const main = entry.slice(start, entry.indexOf('\n}\n', start))
     const check = /if \(quitting\(\)\) return/
     expect([...main.matchAll(/if \(quitting\(\)\) return/g)].length).toBeGreaterThanOrEqual(3)
-    expect(main.indexOf('catchUpPendingClear(')).toBeGreaterThan(
+    expect(main.indexOf('catchUpPendingClears(')).toBeGreaterThan(
       main.indexOf('await app.whenReady()')
     )
-    expect(main.indexOf('catchUpPendingClear(')).toBeLessThan(
+    // Both notes on the files, before protection, settings or any store opens (KTD7).
+    expect(main.indexOf('catchUpPendingClears(')).toBeLessThan(
       main.indexOf('openLocalDataProtection(')
     )
+    // Armed from the settings, before the first store that clearing on exit empties.
+    expect(main.indexOf('watchExitNote(')).toBeGreaterThan(main.indexOf('SettingsStore.open('))
+    expect(main.indexOf('watchExitNote(')).toBeLessThan(main.indexOf('FaviconStore.open('))
     expect(main.indexOf('if (quitting()) return')).toBeLessThan(
       main.indexOf('openLocalDataProtection(')
     )
@@ -2911,6 +2906,46 @@ describe('store loading', () => {
     expect(downloads).toMatch(/handle\('downloads:clear'[\s\S]*?await discardCopies\(\)/)
     expect(index).toMatch(/discardDownloadCopies:\s*\(\)\s*=>\s*downloads\?\.discardCopies\(\)/)
     expect(vault).toMatch(/resetVault[\s\S]*?removeCopiesOf\(this\.#options\.documentPath\)/)
+
+    // Clearing on exit (open stores) and its catch-up at the next start (files), KTD7.
+    const clearing = withoutComments(
+      readFileSync(join(ROOT, 'src/main/data/clear-data.ts'), 'utf8')
+    )
+    expect(clearing).toMatch(/history\.clear\(\)[\s\S]*?history\.discardCopies\(\)/)
+    expect(clearing).toMatch(/downloads\.clear\(\)[\s\S]*?downloads\.discardCopies\(\)/)
+    expect(clearing).toMatch(/favicons\.clear\(\)[\s\S]*?favicons\.discardCopies\(\)/)
+    expect(clearing).toMatch(/thumbnails\.clear\(\)[\s\S]*?thumbnails\.discardCopies\(\)/)
+    expect(clearing).toMatch(/removeFile\(target\)[\s\S]*?removeCopiesOf\(target\)/)
+    expect(index).toMatch(/exitNote\.clearing\(\(categories\) =>\s*clearOnExit\(categories,/)
+  })
+
+  it('files every path of the profile in the data inventory, exactly once', () => {
+    /*
+      KTD7: clearing now, on exit, panic and backup all read the inventory. A file `paths.ts` gains
+      without a row is a file none of them knows about — a history that panic leaves behind, a key
+      that the backup carries off. So a new `*File()` or `*Dir()` fails here until it has a home.
+    */
+    const source = withoutComments(readFileSync(join(ROOT, 'src/main/paths.ts'), 'utf8'))
+    const declared = [...source.matchAll(/export function (\w+(?:File|Dir))\(/g)].map(
+      (match) => match[1]
+    )
+    const homes = [
+      ...DATA_INVENTORY.flatMap((row) => row.files.map((name) => [name, row.category])),
+      ...NEVER_BACKED_UP.files.map((name) => [name, 'never backed up']),
+      ...OUTSIDE_INVENTORY.map((entry) => [entry.name, 'outside'])
+    ]
+    expect(declared.length, 'no path functions found; has paths.ts moved?').toBeGreaterThan(20)
+    for (const name of declared) {
+      const found = homes.filter(([home]) => home === name).map(([, where]) => where)
+      expect(
+        found,
+        `${String(name)} is in the inventory ${String(found.length)} times`
+      ).toHaveLength(1)
+    }
+    expect(
+      homes.map(([name]) => name).filter((name) => !declared.includes(name)),
+      'the inventory names a path paths.ts does not have'
+    ).toEqual([])
   })
 })
 

@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { readFile, rm } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { domainToASCII, pathToFileURL } from 'node:url'
 import {
@@ -58,7 +58,7 @@ import {
   permissionsFile,
   passwordsFile,
   passwordVaultKeyFile,
-  pendingClearFile,
+  inventoryPath,
   publicSuffixDir,
   quickLinksFile,
   sessionStateFile,
@@ -82,7 +82,8 @@ import { SessionStore } from './data/SessionStore.js'
 import { WindowPlacementStore } from './data/WindowPlacementStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
 import { DownloadStore } from './data/DownloadStore.js'
-import { removeTempFilesOf, writeFileAtomically } from './data/atomic-write.js'
+import { removeTempFilesOf } from './data/atomic-write.js'
+import { catchUpPendingClears, clearOnExit, exitNoteAt, watchExitNote } from './data/clear-data.js'
 import {
   applySessionRestore,
   restoredTabOptions,
@@ -113,8 +114,6 @@ import {
   FLUSH_TIMEOUT_MS,
   FlushRegistry,
   ShutdownSequence,
-  catchUpPendingClear,
-  pendingClearText,
   type After,
   type ShutdownWork
 } from './shutdown.js'
@@ -257,41 +256,24 @@ let permissionStore: PermissionStore | null = null
  */
 const flushOnExit = new FlushRegistry()
 
+/** What clearing on exit owes, on disk from the start of the run to the quit that did it (KTD7). */
+const exitNote = exitNoteAt(inventoryPath)
+
 async function main(): Promise<void> {
   await app.whenReady()
 
   /*
-    The clearing the last quit ran out of time for, done before anything can load a page.
-
-    Here, first thing after `ready`, because that is the earliest `session.defaultSession` exists, and
-    because the cookies the user asked to be rid of must be gone before the first restored tab can send
-    them. Not a reason to refuse to start: a failure keeps the note for the next start and is said out
-    loud, and `catchUpPendingClear` bounds the wait so a hanging clearing cannot keep the window away.
+    The clearing the last run still owes — a panic, or clearing on exit after a crash — done before
+    anything can load a page. First thing after `ready`, the earliest `session.defaultSession` exists,
+    and before protection, settings or any store opens (KTD7): on the files, so the history is gone
+    before its store could load it. U23's staging goes after this, or the catch-up would delete it.
+    Never a reason to refuse to start; `catchUpPendingClears` bounds the wait and keeps the note.
   */
-  await catchUpPendingClear({
-    read: () =>
-      readFile(pendingClearFile(), 'utf8').catch((error: unknown) => {
-        if ((error as { code?: string }).code === 'ENOENT') return null
-        throw error
-      }),
-    clear: (categories) => clearDataOnExit(categories),
-    forget: () => rm(pendingClearFile(), { force: true }),
-    fallback: EVERY_CLEARED_CATEGORY,
+  await catchUpPendingClears({
+    session: session.defaultSession,
+    path: inventoryPath,
     after: nodeAfter
   })
-    .then((outcome) => {
-      if (outcome === 'still-pending') {
-        console.warn(
-          '[clear-on-exit] the clearing from the last quit did not finish again; kept for later'
-        )
-      }
-    })
-    .catch((error: unknown) => {
-      console.warn(
-        '[clear-on-exit] the note from the last quit could not be handled:',
-        String(error)
-      )
-    })
   // Each of these is a point where a quit that arrived during startup ends it; see `quitting`.
   if (quitting()) return
 
@@ -328,6 +310,8 @@ async function main(): Promise<void> {
   }
 
   applySecureDns(settings.snapshot())
+  // Armed now, so a crash from here on still leaves the clearing owed on disk (KTD7).
+  await watchExitNote(exitNote, settings)
 
   /*
     The Public Suffix List decides what counts as one site, and several things below key on that:
@@ -1366,24 +1350,18 @@ function beginShutdown(): ShutdownWork {
   // The idle timer, which could otherwise start a lock of its own halfway through the flushes.
   passwords?.dispose()
 
-  // No store yet means a quit during startup, before anybody could have asked for anything to go.
-  const store = settings
-  const categories =
-    store?.get('clearData.onExit') === true ? store.get('clearData.onExitCategories') : null
+  /*
+    No settings yet means a quit during startup, before anybody could have asked for anything to go.
+    A store a category needs and startup had not opened fails the clearing, which keeps the note.
+  */
+  const stores = { history, downloads, favicons, thumbnails }
   return {
     clear:
-      categories === null
+      settings === null
         ? null
-        : {
-            run: () =>
-              clearDataOnExit(categories).catch((error: unknown) => {
-                // Said here because the sequence records only that it failed, not why.
-                console.error('[shutdown] clearing on exit failed:', error)
-                throw error
-              }),
-            remember: () =>
-              writeFileAtomically(pendingClearFile(), pendingClearText(categories), { mode: 0o600 })
-          },
+        : exitNote.clearing((categories) =>
+            clearOnExit(categories, { session: session.defaultSession, stores })
+          ),
     // Anything written after the process exits is lost, so everything registered is flushed and
     // awaited rather than left to a debounce timer.
     flushes: flushOnExit.entries()
@@ -1414,42 +1392,6 @@ function nodeAfter(ms: number, callback: () => void): ReturnType<After> {
 function warnAboutStoreLoad(label: string, report: StoreLoadReport): void {
   const message = describeStoreLoad(report)
   if (message !== null) console.warn(`[${label}] ${message}`)
-}
-
-/**
- * What a note is read as when it cannot be read: everything `clearDataOnExit` knows how to clear.
- * The note exists because the user asked for their data to go.
- */
-const EVERY_CLEARED_CATEGORY = ['cookies', 'storage', 'cache'] as const
-
-type StorageType = NonNullable<
-  NonNullable<Parameters<Electron.Session['clearStorageData']>[0]>['storages']
->[number]
-
-async function clearDataOnExit(categories: readonly string[]): Promise<void> {
-  const target = session.defaultSession
-  const storageTypes: StorageType[] = []
-
-  if (categories.includes('cookies')) storageTypes.push('cookies')
-  if (categories.includes('storage')) {
-    storageTypes.push(
-      'localstorage',
-      'indexdb',
-      'serviceworkers',
-      'cachestorage',
-      'filesystem',
-      'shadercache'
-    )
-  }
-
-  const work: Array<Promise<unknown>> = []
-  if (storageTypes.length > 0) work.push(target.clearStorageData({ storages: storageTypes }))
-  if (categories.includes('cache')) work.push(target.clearCache())
-
-  // History, downloads and form data live in tessera's own store rather than
-  // Chromium's; they are cleared here once that layer exists.
-
-  await Promise.all(work)
 }
 
 // Only in the instance holding the lock: a second one exits above, and must open nothing.
