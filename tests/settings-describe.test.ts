@@ -639,6 +639,23 @@ describe('the kill switch in words (U13, R23)', () => {
     expect(describeSetting('network.proxyMode', DE).description).toMatch(/PAC-Skript/)
   })
 
+  it('no longer says the address bar suggestions are not applied (U18)', () => {
+    for (const key of [
+      'search.suggestFromHistory',
+      'search.suggestFromBookmarks',
+      'search.suggestFromOpenTabs'
+    ] as const) {
+      for (const locale of [EN, DE]) {
+        expect(describeSetting(key, locale).description, `${key} ${locale}`).not.toMatch(
+          /not applied yet|not implemented|noch ohne wirkung|nicht umgesetzt|von nichts gelesen/i
+        )
+      }
+    }
+    // The one switch still unread keeps saying so.
+    expect(describeSetting('search.remoteSuggestions', EN).description).toMatch(/guards nothing/)
+    expect(describeSetting('search.remoteSuggestions', DE).description).toMatch(/schützt derzeit/)
+  })
+
   it('no longer says the proxy is not applied', () => {
     for (const key of ['network.proxyMode', 'network.proxyUrl', 'network.killSwitch'] as const) {
       for (const locale of [EN, DE]) {

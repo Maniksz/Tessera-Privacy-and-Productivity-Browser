@@ -158,6 +158,9 @@ export class OverlayLayer {
     if (outgoing === null) return null
     this.#presentation = null
     const view = this.#view
+    // Read before hiding: a hidden view is not asked whether it had the keyboard.
+    const holdsKeyboard =
+      view !== null && !view.webContents.isDestroyed() && view.webContents.isFocused()
     if (view !== null) view.setVisible(false)
     /*
       Focus goes back to the chrome UI, where the button that opened the surface is, so a keyboard
@@ -165,9 +168,13 @@ export class OverlayLayer {
       the first place. Doing it unconditionally would mean a bar that appeared under a drifting
       pointer, took no focus, and then *moved* focus out of the page on its way out: the page would
       lose the caret because the mouse passed by.
+
+      Or for one that has the keyboard now although it never asked for it: a click on a row of the
+      address bar's list moves the keyboard into this view, and a view hidden with the keyboard in it
+      leaves every keystroke going nowhere (KTD12). Taking it back costs no page anything — none had it.
     */
     const host = this.options.window
-    if (takesFocus(outgoing) && !host.isDestroyed()) host.webContents.focus()
+    if ((takesFocus(outgoing) || holdsKeyboard) && !host.isDestroyed()) host.webContents.focus()
     this.#send(null)
     this.options.onPresentationChanged(null)
     this.#vacated(outgoing, 'dismissed')

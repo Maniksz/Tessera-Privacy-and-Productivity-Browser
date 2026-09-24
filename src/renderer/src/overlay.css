@@ -569,3 +569,63 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* --- address bar suggestions (U18) ------------------------------------------ */
+
+/*
+  The list under the address field, and the layer is cut to exactly this box (KTD12): row zero plus the
+  ranked rows at `OMNIBOX_ROW_HEIGHT` each, and `OMNIBOX_LIST_PADDING` above and below, which the
+  component sets inline from the same constants the core sized the box with. The border is an inset
+  shadow so it takes no room from a box measured to the pixel.
+
+  Opaque, for the find bar's reason: a translucent list over an arbitrary page is unreadable exactly when
+  the page is light and busy.
+*/
+.omnibox-suggestions {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--fg);
+}
+
+.omnibox-suggestions__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.omnibox-suggestions__row:hover {
+  background: var(--bg-input);
+}
+
+/* The row Enter would open: a fill, because the arrow keys move it while the caret stays in the field. */
+.omnibox-suggestions__row[aria-selected='true'] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.omnibox-suggestions__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.omnibox-suggestions__detail {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}

@@ -97,15 +97,16 @@ export const en = {
     },
     suggestFromHistory: {
       label: 'Suggest pages from the history',
-      description: 'Not applied yet: the address bar draws no suggestions from the history.'
+      description:
+        'While you type, the address bar offers pages you have visited. Never in a private window. The suggestions are worked out on this device; nothing you type is sent anywhere for them.'
     },
     suggestFromBookmarks: {
       label: 'Suggest pages from the bookmarks',
-      description: 'Not applied yet either.'
+      description: 'Includes the quick links on the start page.'
     },
     suggestFromOpenTabs: {
       label: 'Suggest open tabs',
-      description: 'Not applied yet: the address bar never consults the open tabs.'
+      description: 'Offers the tabs open in this window; choosing one switches to it.'
     },
     remoteSuggestions: {
       label: 'Suggestions from the search engine',

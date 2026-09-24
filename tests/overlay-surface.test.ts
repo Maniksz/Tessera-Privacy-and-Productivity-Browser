@@ -8,6 +8,7 @@ import {
   OVERLAY_PRECEDENCE,
   OVERLAY_REFOCUSES_ON_UPDATE,
   OVERLAY_REGION,
+  TILE_BOUND_KINDS,
   awaitsAnswer,
   downloadsPanelPresentation,
   downloadsPanelUpdate,
@@ -39,6 +40,8 @@ import {
   AUTOFILL_SUGGEST_WIDTH
 } from '@shared/passwords/suggest-bounds.js'
 import { MIN_MASTER_PASSWORD_LENGTH } from '@shared/passwords/vault.js'
+import { MAX_RANKED_ROWS } from '@shared/search/rank.js'
+import type { OmniboxSuggestionsPresentation } from '@shared/omnibox/model.js'
 import { downloadEntry } from './download-fakes.js'
 
 /**
@@ -98,6 +101,15 @@ function suggestSample(
 ): AutofillSuggestPresentation {
   const sample = SAMPLES['autofill-suggest']
   if (sample.kind !== 'autofill-suggest') throw new Error('the suggest sample is no longer a list')
+  return { ...sample, ...overrides }
+}
+
+/** The address bar's list, whose rows and highlight are what its updates change. */
+function omniboxSample(
+  overrides: Partial<OmniboxSuggestionsPresentation> = {}
+): OmniboxSuggestionsPresentation {
+  const sample = SAMPLES['omnibox-suggestions']
+  if (sample.kind !== 'omnibox-suggestions') throw new Error('the omnibox sample is not the list')
   return { ...sample, ...overrides }
 }
 
@@ -208,6 +220,18 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
         { id: 'p2', username: '' }
       ]
     }
+  },
+  'omnibox-suggestions': {
+    kind: 'omnibox-suggestions',
+    seq: 7,
+    bounds: { x: 200, y: 76, width: 600, height: 110 },
+    text: 'wiki',
+    lead: { action: 'search', engine: 'DuckDuckGo' },
+    rows: [
+      { source: 'history', title: 'Wikipedia', url: 'https://en.wikipedia.org/', tabId: null },
+      { source: 'tab', title: 'Team wiki', url: 'https://wiki.team.example/', tabId: 't2' }
+    ],
+    selected: 0
   }
 }
 
@@ -792,8 +816,10 @@ describe('the downloads panel', () => {
 
 describe('whether an update takes the keyboard again', () => {
   it('keeps what every existing kind did, and leaves the keyboard alone only for the panel', () => {
+    // And for the address bar's list, which never takes the keyboard in the first place (KTD12).
+    const stays = new Set(['downloads-panel', 'omnibox-suggestions'])
     for (const kind of OVERLAY_KINDS) {
-      expect(OVERLAY_REFOCUSES_ON_UPDATE[kind], kind).toBe(kind !== 'downloads-panel')
+      expect(OVERLAY_REFOCUSES_ON_UPDATE[kind], kind).toBe(!stays.has(kind))
     }
   })
 
@@ -871,7 +897,7 @@ describe('what the chrome UI may send, and what the layer is sent', () => {
 
   it('still accepts every other surface as it was', () => {
     for (const kind of OVERLAY_KINDS) {
-      if (kind === 'downloads-panel') continue
+      if (kind === 'downloads-panel' || kind === 'omnibox-suggestions') continue
       expect(request.safeParse(SAMPLES[kind]).success, kind).toBe(true)
     }
   })
@@ -883,6 +909,92 @@ describe('what the chrome UI may send, and what the layer is sent', () => {
         downloadEntry(`${index}`)
       )
     })
+    expect(presented.safeParse({ presentation: tooMany }).success).toBe(false)
+  })
+})
+
+describe('the address bar suggestions (U18, KTD12)', () => {
+  const list = SAMPLES['omnibox-suggestions']
+
+  it('takes the rectangle under the field it names, and nothing else', () => {
+    expect(regionOf('omnibox-suggestions')).toBe('toolbar')
+    expect(overlayBounds(list, WINDOW, CONTENT)).toEqual({ x: 200, y: 76, width: 600, height: 110 })
+  })
+
+  it('is not a tile surface, so dragging a divider leaves it alone', () => {
+    expect(TILE_BOUND_KINDS).not.toContain('omnibox-suggestions')
+    expect(TILE_BOUND_KINDS).toEqual(
+      OVERLAY_KINDS.filter((kind) => OVERLAY_REGION[kind] === 'tile')
+    )
+  })
+
+  it('never takes the keyboard, first time or update, so the caret stays in the field', () => {
+    expect(takesFocus(list)).toBe(false)
+    expect(OVERLAY_REFOCUSES_ON_UPDATE['omnibox-suggestions']).toBe(false)
+    expect(movesFocus(list, null)).toBe(false)
+    expect(movesFocus(omniboxSample({ selected: 1 }), list)).toBe(false)
+    expect(movesFocus(list, SAMPLES['tile-bar'])).toBe(false)
+    expect(capturesKeyboard(list)).toBe(false)
+  })
+
+  it('waits for nothing and marks nothing, so a blur or a resize takes it like a menu', () => {
+    expect(awaitsAnswer(list)).toBe(false)
+    expect(marksThePage(list)).toBe(false)
+    expect(departureMatters(list)).toBe(false)
+  })
+
+  it('is one surface however its text, rows and highlight change', () => {
+    const typed = omniboxSample({ seq: 8, text: 'wikip', rows: [], selected: 0 })
+    expect(surfaceIdentity(typed)).toBe(surfaceIdentity(list))
+    expect(surfaceIdentity(omniboxSample({ selected: 2 }))).toBe(surfaceIdentity(list))
+  })
+
+  it('ranks above the tile bar and below every other kind', () => {
+    for (const kind of OVERLAY_KINDS) {
+      if (kind === 'omnibox-suggestions') continue
+      const rank = OVERLAY_PRECEDENCE[kind]
+      if (kind === 'tile-bar') expect(rank).toBeLessThan(OVERLAY_PRECEDENCE['omnibox-suggestions'])
+      else expect(rank, kind).toBeGreaterThan(OVERLAY_PRECEDENCE['omnibox-suggestions'])
+    }
+  })
+
+  it('leaves an open find bar where it is: the list waits for it to close', () => {
+    expect(mayPresentOver('omnibox-suggestions', SAMPLES['find-bar'])).toBe(false)
+    expect(mayPresentOver('find-bar', list)).toBe(true)
+  })
+
+  it('never displaces the picker bar, the account picker, the panel or a prompt', () => {
+    for (const kind of [
+      'picker-bar',
+      'autofill-suggest',
+      'downloads-panel',
+      'permission-request',
+      'navigation-request',
+      'master-password',
+      'layout-menu',
+      'tab-drop'
+    ] as const) {
+      expect(mayPresentOver('omnibox-suggestions', SAMPLES[kind]), kind).toBe(false)
+      expect(mayPresentOver(kind, list), kind).toBe(true)
+    }
+  })
+
+  it('updates itself on every keystroke, and a drifting pointer cannot take it', () => {
+    expect(mayPresentOver('omnibox-suggestions', list)).toBe(true)
+    expect(mayPresentOver('omnibox-suggestions', SAMPLES['tile-bar'])).toBe(true)
+    expect(mayPresentOver('tile-bar', list)).toBe(false)
+  })
+
+  it('reaches the layer only from the core: overlay:present refuses it', () => {
+    const request = invokeContract['overlay:present'].request
+    expect(request.safeParse(list).success).toBe(false)
+  })
+
+  it('carries at most the rows the ranker returns to the layer', () => {
+    const presented = eventContract['overlay:presented']
+    expect(presented.safeParse({ presentation: list }).success).toBe(true)
+    const row = { source: 'history', title: 'x', url: 'https://x.example/', tabId: null } as const
+    const tooMany = omniboxSample({ rows: Array.from({ length: MAX_RANKED_ROWS + 1 }, () => row) })
     expect(presented.safeParse({ presentation: tooMany }).success).toBe(false)
   })
 })

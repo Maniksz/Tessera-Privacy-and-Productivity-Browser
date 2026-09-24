@@ -125,6 +125,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(picker-bar)',
       'overlay.dismissKind(downloads-panel)',
       'overlay.dismissKind(autofill-suggest)',
+      'overlay.dismissKind(omnibox-suggestions)',
       'relayout',
       'rememberPlacement'
     ])
@@ -143,6 +144,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(picker-bar)',
       'overlay.dismissKind(downloads-panel)',
       'overlay.dismissKind(autofill-suggest)',
+      'overlay.dismissKind(omnibox-suggestions)',
       'broadcastWindowState'
     ])
   })
@@ -221,7 +223,9 @@ describe('window event wiring', () => {
       'find-bar',
       'picker-bar',
       'downloads-panel',
-      'autofill-suggest'
+      'autofill-suggest',
+      // The address bar's list: a lost window focus is one of the four things that close it (KTD12).
+      'omnibox-suggestions'
     ])
     expect(dismissed).toEqual(OVERLAY_KINDS.filter((kind) => !OVERLAY_AWAITS_ANSWER[kind]))
   })

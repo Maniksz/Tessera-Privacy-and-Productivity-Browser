@@ -13,6 +13,7 @@ import type { Rect, Size } from '../ui/anchor.js'
   eTLD suffixes into a bundle that never consults one. See the bundle-weight fitness functions.
 */
 import type { FillRefusal } from '../passwords/fill-policy.js'
+import type { OmniboxSuggestionsPresentation } from '../omnibox/model.js'
 import type { PermissionDevice, PermissionSubject } from './permission.js'
 import type { PickerBarMode } from './picker-bar.js'
 
@@ -52,7 +53,8 @@ export const OVERLAY_KINDS = [
   'navigation-request',
   'picker-bar',
   'downloads-panel',
-  'autofill-suggest'
+  'autofill-suggest',
+  'omnibox-suggestions'
 ] as const
 
 export type OverlayKind = (typeof OVERLAY_KINDS)[number]
@@ -73,8 +75,10 @@ export type OverlayWindowRegion = 'window' | 'content'
  * `tile` — a rectangle inside one tile that the presentation itself names, and the only region
  *   whose rectangle cannot be derived from the window: which tile, and where in it, is known only
  *   to the surface being presented. See `overlayBounds`.
+ * `toolbar` — a rectangle the presentation names too, hung from the chrome rather than from a tile, so
+ *   moving the tiles does not move it (`TILE_BOUND_KINDS` leaves it out).
  */
-export type OverlayRegion = OverlayWindowRegion | 'tile'
+export type OverlayRegion = OverlayWindowRegion | 'tile' | 'toolbar'
 
 export const OVERLAY_REGION = {
   'layout-menu': 'window',
@@ -167,7 +171,12 @@ export const OVERLAY_REGION = {
    * reimplement "clicked outside" and would swallow the click while doing it, so choosing an account and
    * then reaching for a link would cost two clicks.
    */
-  'autofill-suggest': 'tile'
+  'autofill-suggest': 'tile',
+  /**
+   * The address bar's suggestions, cut to the list under the field (KTD12), for the account picker's third
+   * reason: a click beside the list lands where it was aimed.
+   */
+  'omnibox-suggestions': 'toolbar'
 } as const satisfies Record<OverlayKind, OverlayRegion>
 
 /** The layout menu carries the current layout so it can render its radio state at once. */
@@ -292,7 +301,8 @@ export interface DownloadsPanelRequest {
  * asked for by kind and anchor and filled in by the core. See `DownloadsPanelPresentation`.
  */
 export type OverlayRequest =
-  Exclude<OverlayPresentation, DownloadsPanelPresentation> | DownloadsPanelRequest
+  | Exclude<OverlayPresentation, DownloadsPanelPresentation | OmniboxSuggestionsPresentation>
+  | DownloadsPanelRequest
 
 /**
  * Why a surface came up, for the surfaces where it changes what they do.
@@ -689,6 +699,7 @@ export type OverlayPresentation =
   | PickerBarPresentation
   | DownloadsPanelPresentation
   | AutofillSuggestPresentation
+  | OmniboxSuggestionsPresentation
 
 /** Nothing presented is a first-class state, not an absent one. */
 export type OverlayState = OverlayPresentation | null
@@ -756,7 +767,9 @@ export const OVERLAY_AWAITS_ANSWER = {
    * Its departure is not free all the same, and that fact lives in `OVERLAY_MARKS_THE_PAGE` rather than
    * being smuggled in here: what has to be undone is a mark on a page, not a promise.
    */
-  'autofill-suggest': false
+  'autofill-suggest': false,
+  /** Rows to look at. The field keeps what was typed, whatever becomes of the list. */
+  'omnibox-suggestions': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function awaitsAnswer(presentation: OverlayPresentation): boolean {
@@ -821,7 +834,8 @@ export const OVERLAY_MARKS_THE_PAGE = {
    * so a request left open after its surface has gone is a view that satisfies `no-user-gesture`
    * indefinitely — which is exactly the standing permission the one-shot rule exists to deny.
    */
-  'autofill-suggest': true
+  'autofill-suggest': true,
+  'omnibox-suggestions': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function marksThePage(presentation: OverlayPresentation): boolean {
@@ -899,6 +913,9 @@ export function surfaceIdentity(presentation: OverlayPresentation): string {
     */
     case 'autofill-suggest':
       return `autofill-suggest:${presentation.requestId}`
+    // A singleton like the panel: every keystroke re-presents the one list, as an update.
+    case 'omnibox-suggestions':
+      return presentation.kind
   }
 }
 
@@ -952,7 +969,9 @@ export const OVERLAY_CAPTURES_KEYBOARD = {
    * password is fetched in the core after the choice and never reaches this renderer. Capturing here
    * would buy nothing and cost the list its keyboard behaviour, which R3 requires it to have.
    */
-  'autofill-suggest': false
+  'autofill-suggest': false,
+  /** Its keys never reach this layer: the address field keeps them (`takesFocus`). */
+  'omnibox-suggestions': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function capturesKeyboard(presentation: OverlayPresentation): boolean {
@@ -1109,7 +1128,13 @@ export const OVERLAY_PRECEDENCE = {
    * user had opened a find bar would take the find bar down. The core therefore re-presents only while
    * the panel is the window's current surface, and never presents it on a tick otherwise.
    */
-  'downloads-panel': 2
+  'downloads-panel': 2,
+  /**
+   * Above the tile bar, below everything else (KTD12). Every keystroke re-presents the list, so at a higher
+   * rank typing an address would take down a find bar, a picker bar, the account picker, the panel or a
+   * prompt; those keep the layer, and the list appears once they have gone.
+   */
+  'omnibox-suggestions': 0.25
 } as const satisfies Record<OverlayKind, number>
 
 /** Whether `incoming` may take the layer from whatever is on it. */
@@ -1179,6 +1204,9 @@ export function takesFocus(presentation: OverlayPresentation): boolean {
       return true
     case 'tile-bar':
       return presentation.invokedBy === 'keyboard'
+    // Never: the caret stays in the address field while the list follows it (KTD12).
+    case 'omnibox-suggestions':
+      return false
   }
 }
 
@@ -1216,7 +1244,8 @@ export const OVERLAY_REFOCUSES_ON_UPDATE = {
    * is no keyboard for it to steal back; what the update does need is the keyboard in the list, whose rows
    * are walked with the arrow keys (R3).
    */
-  'autofill-suggest': true
+  'autofill-suggest': true,
+  'omnibox-suggestions': false
 } as const satisfies Record<OverlayKind, boolean>
 
 /**
@@ -1306,7 +1335,8 @@ export function overlayBounds(
     presentation.kind === 'tile-bar' ||
     presentation.kind === 'find-bar' ||
     presentation.kind === 'picker-bar' ||
-    presentation.kind === 'autofill-suggest'
+    presentation.kind === 'autofill-suggest' ||
+    presentation.kind === 'omnibox-suggestions'
   ) {
     return presentation.bounds
   }

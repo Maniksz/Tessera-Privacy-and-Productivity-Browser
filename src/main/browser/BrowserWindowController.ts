@@ -21,6 +21,7 @@ import {
   type OverlayState
 } from '@shared/overlay/surface.js'
 import type { DownloadEntry } from '@shared/downloads/model.js'
+import type { OmniboxSuggestionsPresentation } from '@shared/omnibox/model.js'
 import { Tab, adoptTabId, nextTabId, type TabWiring } from './Tab.js'
 // The seams' *types* only: what each one is, and what it may reach, both live in `window-seams.ts`.
 import { createWindowSeams, type WindowSeams } from './window-seams.js'
@@ -730,6 +731,7 @@ export class BrowserWindowController implements PermissionHost {
 
   activateTab(tabId: string): void {
     if (!this.#tabs.has(tabId)) return
+    this.#overlay.dismissKind('omnibox-suggestions') // A tab switch closes the address bar's list.
     // Activating an unloaded tab is what brings it back, out of a folded group too (U15, `TabDiscards.wake`).
     this.#discards.wake(tabId)
     const tile = this.split.tileOfTab(tabId)
@@ -870,6 +872,7 @@ export class BrowserWindowController implements PermissionHost {
 
     const tab = this.resolveTab(tabId) ?? this.createTab({ url })
     tab.loadUrl(url)
+    this.#overlay.dismissKind('omnibox-suggestions') // Whether typed or chosen from the list (KTD12).
     return url
   }
 
@@ -914,11 +917,12 @@ export class BrowserWindowController implements PermissionHost {
     */
     this.#overlay.dismissKind('layout-menu')
     /*
-      The downloads panel as well, by name — nothing derives it. It hangs from a toolbar button that a
-      new layout can move, so it goes the way the layout menu does rather than staying up beside a
-      button that is no longer where it points.
+      The downloads panel and the address bar's list as well, by name — nothing derives them. Both hang
+      from the toolbar, which a new layout can move, so they go the way the layout menu does rather than
+      staying up beside a control that is no longer where they point (KTD12).
     */
     this.#overlay.dismissKind('downloads-panel')
+    this.#overlay.dismissKind('omnibox-suggestions')
     this.#dismissTileBoundSurfaces()
     const changed = this.split.setLayout(layout)
     /*
@@ -1059,6 +1063,7 @@ export class BrowserWindowController implements PermissionHost {
    * it just took focus, and re-entering focus from a focus handler is how a loop starts.
    */
   #handleTabFocused(tab: Tab): void {
+    this.#overlay.dismissKind('omnibox-suggestions') // A click into a page closes the address bar's list.
     const tile = this.split.tileOfTab(tab.id)
     if (tile === null || tile === this.split.activeTile) return
     this.split.setActiveTile(tile)
@@ -1085,26 +1090,22 @@ export class BrowserWindowController implements PermissionHost {
 
   /**
    * Puts a surface on the layer, as described — except the downloads panel, which is described by kind
-   * and anchor only and whose rows this window fills in (KTD2).
+   * and anchor only and whose rows this window fills in (KTD2), and the address bar's suggestions, which
+   * only the core describes (`ipc/omnibox-handlers.ts`, KTD12).
    */
-  presentOverlay(request: OverlayRequest): void {
-    if (request.kind === 'downloads-panel') {
-      this.#presentDownloadsPanel(
-        downloadsPanelPresentation(request.anchor, this.options.downloadsPanelEntries())
-      )
-      return
-    }
-    this.#present(request)
+  presentOverlay(request: OverlayRequest | OmniboxSuggestionsPresentation): void {
+    if (request.kind !== 'downloads-panel') return void this.#present(request)
+    this.#presentDownloadsPanel(
+      downloadsPanelPresentation(request.anchor, this.options.downloadsPanelEntries())
+    )
   }
 
   /**
    * The panel again, with the rows of a coalesced download change — if, and only if, it is up.
    *
-   * Called for every change whether anybody is looking or not, with the same snapshot the downloads
-   * page and the button are sent, so the three views describe one moment (R9). A panel that is closed
-   * stays closed, and one that something else has replaced is not brought back over it; the rule is
-   * `downloadsPanelUpdate`'s. The layer treats what does go up as an update: same identity, no
-   * departure, and no second grab of the keyboard (KTD8).
+   * Called for every change, with the snapshot the downloads page and the button are sent, so the three
+   * views describe one moment (R9). A closed panel stays closed and a replaced one is not brought back
+   * (`downloadsPanelUpdate`); what goes up is an update, with no second grab of the keyboard (KTD8).
    */
   refreshDownloadsPanel(entries: readonly DownloadEntry[]): void {
     const update = downloadsPanelUpdate(this.#overlay.presentation, entries)
@@ -1151,12 +1152,11 @@ export class BrowserWindowController implements PermissionHost {
   /**
    * Drops every surface whose rectangle belongs to a tile, because the tiles have moved.
    *
-   * Called from each site that changes the geometry. The bounds of a `tile` surface are captured when it
-   * is presented and the layer is repositioned from that stored rectangle, so a bar kept across a layout
-   * change, a dragged divider or a maximised tile ends up over a page it has nothing to do with. Dropped
-   * rather than recomputed, because each of them comes back cheaply: the tile bar re-reveals itself on
-   * the next pointer move, the find bar's term is remembered by the core, and a picking session that
-   * loses its bar is told through the layer's vacancy report and takes its preview back off the page.
+   * Called from each site that changes the geometry: a `tile` surface's bounds are captured when it is
+   * presented, so a bar kept across a layout change, a dragged divider or a maximised tile ends up over a
+   * page it has nothing to do with. Dropped rather than recomputed, because each comes back cheaply: the
+   * tile bar on the next pointer move, the find bar's term from the core, and a picking session through
+   * the layer's vacancy report, which takes its preview back off the page.
    *
    * By kind, never wholesale, and derived from the region table rather than written out here; see
    * `TILE_BOUND_KINDS`.

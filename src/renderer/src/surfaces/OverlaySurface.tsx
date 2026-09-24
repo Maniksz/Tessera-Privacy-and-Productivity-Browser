@@ -44,6 +44,15 @@ const AutofillSuggestSurface = lazy(() =>
     default: module.AutofillSuggestSurface
   }))
 )
+/*
+  The address bar's suggestions, behind the same boundary and for the same budget. The first keystroke
+  that shows a list pays one local chunk fetch; every later one is an update of a surface already drawn.
+*/
+const OmniboxSuggestionsSurface = lazy(() =>
+  import('./OmniboxSuggestionsSurface.js').then((module) => ({
+    default: module.OmniboxSuggestionsSurface
+  }))
+)
 
 /**
  * Root of the window's topmost layer.
@@ -251,6 +260,19 @@ export function OverlaySurface(): React.ReactNode {
             void invoke('overlay:dismiss')
           }}
         />
+      </Suspense>
+    )
+  }
+
+  /*
+    Returned before the wrapper below for the account picker's reason: the layer is cut to the list, so a
+    press beside it lands in the page or the toolbar and never here. The surface chooses a row on the press,
+    over the same channels the address bar uses on Enter (`chooseSuggestion`); the core closes the list.
+  */
+  if (presentation.kind === 'omnibox-suggestions') {
+    return (
+      <Suspense fallback={null}>
+        <OmniboxSuggestionsSurface presentation={presentation} />
       </Suspense>
     )
   }

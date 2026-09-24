@@ -24,6 +24,7 @@ import { registerUpdateHandlers } from './update-handlers.js'
 import { registerDownloadHandlers } from './download-handlers.js'
 import { registerPasswordHandlers } from './password-handlers.js'
 import { registerSiteHandlers } from './site-handlers.js'
+import { registerOmniboxHandlers } from './omnibox-handlers.js'
 import { popupSiteMenu } from '../menu/siteMenu.js'
 import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
 import type { PermissionStore } from '../data/PermissionStore.js'
@@ -248,12 +249,9 @@ export function registerIpcHandlers(deps: {
   })
 
   /*
-    Two areas registered from their own modules rather than written out here.
-
-    Both are wiring whose *shape* is the interesting part — a permission answer has to be matched against
-    the prompt actually on screen, and a media request has to be resolved to the session that fetched the
-    stream — and both would otherwise add sixty lines to a file that is already the longest list of
-    channels in the project. The seam also lets each be tested against a fake `handle`.
+    Areas registered from their own modules: wiring whose *shape* is the interesting part (a permission
+    answer matched against the prompt on screen, a media request resolved to the session that fetched the
+    stream), kept out of this file's list of channels and testable against a fake `handle`.
   */
   registerPermissionHandlers({ permissions: deps.permissions.arbiter, windows })
   registerMediaHandlers({
@@ -283,6 +281,7 @@ export function registerIpcHandlers(deps: {
     refreshFilters: () => void windows.refreshFilters(),
     showMenu: (template, window) => popupSiteMenu(template, window.window)
   })
+  registerOmniboxHandlers({ handle, windows, settings, history, bookmarks, quickLinks })
 
   // --- element picker and the user's own rules ------------------------------
   /*

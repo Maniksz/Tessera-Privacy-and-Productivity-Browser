@@ -92,3 +92,59 @@ Feature: Address bar
       | https://example.com/doc?utm_source=x#part-3             | https://example.com/doc#part-3      |
       | https://open.spotify.com/track/abc?si=xyz               | https://open.spotify.com/track/abc?si=xyz |
       | https://www.youtube.com/watch?v=abc&si=xyz              | https://www.youtube.com/watch?v=abc |
+
+  # --- suggestions (U18, R28–R30) ---------------------------------------------
+  #
+  # Ranked on this device from the history, the bookmarks, the quick links and the
+  # window's own tabs, and drawn over the page. Nothing typed is sent anywhere for them.
+
+  Scenario: Typing shows what Enter does, then the history and the bookmark that match
+    Given the history holds "https://en.wikipedia.org/wiki/Main_Page" titled "Wikipedia"
+    And a bookmark "https://wiki.example.org/" titled "Company wiki"
+    When I type "wiki" into the address bar
+    Then the first suggestion searches for "wiki" with "DuckDuckGo"
+    And the suggestions offer the history entry "https://en.wikipedia.org/wiki/Main_Page"
+    And the suggestions offer the bookmark "https://wiki.example.org/"
+
+  Scenario: No history rows while suggestions from the history are off
+    Given the history holds "https://en.wikipedia.org/wiki/Main_Page" titled "Wikipedia"
+    And a bookmark "https://wiki.example.org/" titled "Company wiki"
+    And the setting "search.suggestFromHistory" is off
+    When I type "wiki" into the address bar
+    Then no suggestion comes from the history
+    And the suggestions offer the bookmark "https://wiki.example.org/"
+
+  Scenario: A private window is offered no history, but its bookmarks and its own tabs
+    Given a private window
+    And the history holds "https://en.wikipedia.org/wiki/Main_Page" titled "Wikipedia"
+    And a bookmark "https://wiki.example.org/" titled "Company wiki"
+    And a tab is open at "https://wiki.team.example/" titled "Team wiki"
+    When I type "wiki" into the address bar
+    Then no suggestion comes from the history
+    And the suggestions offer the bookmark "https://wiki.example.org/"
+    And the suggestions offer the open tab "https://wiki.team.example/"
+
+  Scenario: An answer to older text is dropped
+    Given the history holds "https://en.wikipedia.org/wiki/Main_Page" titled "Wikipedia"
+    When I type "wiki" into the address bar
+    And a request for the older text "wik" arrives late
+    Then the suggestions still describe "wiki"
+
+  Scenario: Arrow down and Enter on an open tab switches to it
+    Given a tab is open at "https://wiki.team.example/" titled "Team wiki"
+    When I type "wiki" into the address bar
+    And I press the down arrow once and Enter
+    Then the tab showing "https://wiki.team.example/" is activated
+
+  Scenario: Enter with nothing chosen opens what was typed
+    Given the history holds "https://en.wikipedia.org/wiki/Main_Page" titled "Wikipedia"
+    When I type "wiki" into the address bar
+    And I press Enter without choosing a suggestion
+    Then the typed text "wiki" is navigated to
+
+  Scenario: An open find bar keeps its place, and the list waits for it
+    Given the history holds "https://en.wikipedia.org/wiki/Main_Page" titled "Wikipedia"
+    And the find bar is open
+    When I type "wiki" into the address bar
+    Then the find bar is still on the layer
+    And no suggestion list is shown

@@ -1,19 +1,35 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react'
 import type { SecurityState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
-import { SEARCH_ENGINES, classifyOmniboxInput, omniboxDisplayValue } from '@shared/url/omnibox.js'
+import { omniboxDisplayValue } from '@shared/url/omnibox.js'
+import {
+  OMNIBOX_MAX_TEXT,
+  nextSelection,
+  type OmniboxSuggestionsPresentation
+} from '@shared/omnibox/model.js'
 import { filteringExemptFor } from '@shared/filters/site-exemption.js'
-import { invoke } from '../bridge.js'
+import { invoke, subscribe } from '../bridge.js'
+import { chooseSuggestion } from '../omnibox-choice.js'
 import { useI18n } from '../i18n.js'
 import { Icon, type IconName } from '../../shared/Icon.js'
 
 /**
- * Address bar (spec 1).
+ * Address bar (spec 1), and the keyboard half of its suggestion list (U18, R28–R30).
  *
- * The preview under the field ("Search with DuckDuckGo" versus "Open
- * example.com") comes from `classifyOmniboxInput` — the same function the core
- * uses to resolve the navigation. The label can therefore never promise
- * something different from what pressing Enter does.
+ * ## The list
+ *
+ * Every keystroke asks the core for suggestions with a running number; the core ranks, presents the list
+ * on the overlay layer and tells both renderers. This field keeps only the presentation that answers its
+ * *latest* number — an older one describes text it no longer holds — and walks it with the arrow keys.
+ * Row zero is what Enter does with the text as typed ("Search with DuckDuckGo", "Open example.com"), the
+ * line the old hint under the field said from behind the page, and its label comes from the same
+ * classification the core navigates with.
+ *
+ * Enter with no row reached opens the text. Escape closes the list first and reverts the text second.
+ * During an IME composition Enter and the arrows belong to the composition. The list is never closed on
+ * this field's `blur`: a press on a row takes the keyboard into the overlay first, and closing here would
+ * race the choice. The core closes it — a choice, Escape, a tab switch, a navigation, the window losing
+ * focus, a click into a page.
  */
 
 /** What the badge in front of the address draws, per state. The label says it in words. */
@@ -48,6 +64,47 @@ export function Omnibox({
   const [editing, setEditing] = useState(false)
   const [syncedUrl, setSyncedUrl] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  /** The latest request's number. A presentation carrying any other is stale and is not walked. */
+  const seqRef = useRef(0)
+  /** The row Enter opens, kept here so a key pressed before the core answers means the row reached. */
+  const selectedRef = useRef(0)
+  const [suggestions, setSuggestions] = useState<OmniboxSuggestionsPresentation | null>(null)
+
+  useEffect(() => {
+    return subscribe('overlay:presented', ({ presentation }) => {
+      if (presentation?.kind !== 'omnibox-suggestions') setSuggestions(null)
+      else if (presentation.seq === seqRef.current) setSuggestions(presentation)
+    })
+  }, [])
+
+  /** Asks for the list for `text` with row `selected` reached; closes it for text that would do nothing. */
+  const suggest = (text: string, selected: number): void => {
+    const form = formRef.current
+    selectedRef.current = selected
+    if (form === null || text.trim() === '' || text.length > OMNIBOX_MAX_TEXT) {
+      closeSuggestions()
+      return
+    }
+    seqRef.current += 1
+    const box = form.getBoundingClientRect()
+    const anchor = { x: box.x, y: box.y, width: box.width, height: box.height }
+    void invoke('omnibox:suggest', { seq: seqRef.current, text, anchor, selected })
+  }
+
+  const closeSuggestions = (): void => {
+    selectedRef.current = 0
+    setSuggestions(null)
+    void invoke('omnibox:close')
+  }
+
+  /** Leaves the field after Enter; the core closes the list on the navigation or the tab switch. */
+  const finish = (): void => {
+    selectedRef.current = 0
+    setSuggestions(null)
+    setEditing(false)
+    inputRef.current?.blur()
+  }
 
   /*
     Focus *and* select, which is what every other browser does for Ctrl+L.
@@ -85,26 +142,35 @@ export function Omnibox({
     event.preventDefault()
     if (value.trim() === '') return
     void invoke('nav:navigate', { input: value })
-    setEditing(false)
-    inputRef.current?.blur()
+    finish()
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === 'Escape') {
-      setEditing(false)
-      setValue(omniboxDisplayValue(tab?.url ?? ''))
-      inputRef.current?.blur()
+    // The composition owns these keys until it ends; Enter there commits text, it never picks a row.
+    // `Process` is how Chromium names a key an IME has taken, for the moment before `isComposing` is set.
+    if (event.nativeEvent.isComposing || event.key === 'Process') return
+    const list = suggestions
+    if (list !== null && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+      event.preventDefault()
+      const step = event.key === 'ArrowDown' ? 'down' : 'up'
+      const next = nextSelection(selectedRef.current, list.rows.length, step)
+      if (next !== selectedRef.current) suggest(value, next)
+      return
     }
+    if (event.key === 'Enter' && list !== null && selectedRef.current > 0) {
+      event.preventDefault()
+      chooseSuggestion(list, selectedRef.current)
+      finish()
+      return
+    }
+    if (event.key !== 'Escape') return
+    // Closed either way: a list this field has not been told about yet may still be up.
+    closeSuggestions()
+    if (list !== null) return
+    setEditing(false)
+    setValue(omniboxDisplayValue(tab?.url ?? ''))
+    inputRef.current?.blur()
   }
-
-  const intent = classifyOmniboxInput(value)
-  const engine = settings?.['search.defaultEngine'] ?? 'duckduckgo'
-  const hint =
-    !editing || intent.kind === 'empty'
-      ? null
-      : intent.kind === 'search'
-        ? t('omnibox.searchWith', { engine: SEARCH_ENGINES[engine].label })
-        : t('omnibox.openUrl', { url: intent.url })
 
   /*
     Whether this page is being filtered, and the three states the shield has to tell apart.
@@ -143,7 +209,7 @@ export function Omnibox({
   )
 
   return (
-    <form className="omnibox" onSubmit={submit} role="search">
+    <form ref={formRef} className="omnibox" onSubmit={submit} role="search">
       {/*
         The lock, and a button now rather than a picture of one (U19).
 
@@ -178,6 +244,9 @@ export function Omnibox({
         onChange={(event) => {
           setValue(event.target.value)
           setEditing(true)
+          // What is on screen now describes the previous text; it is not walked until the answer arrives.
+          setSuggestions(null)
+          suggest(event.target.value, 0)
         }}
         onFocus={(event) => {
           setEditing(true)
@@ -225,12 +294,6 @@ export function Omnibox({
             <span className="omnibox__blockerCount">{tab.blockedRequests}</span>
           )}
         </button>
-      )}
-
-      {hint !== null && (
-        <div className="omnibox__hint" role="status">
-          {hint}
-        </div>
       )}
     </form>
   )

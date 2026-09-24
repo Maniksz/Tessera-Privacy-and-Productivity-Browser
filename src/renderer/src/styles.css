@@ -682,23 +682,6 @@ body {
   text-align: center;
 }
 
-/* Preview of what Enter will do — address or search (spec 1). */
-.omnibox__hint {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-elevated);
-  color: var(--fg-dim);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* --- panels (settings, extensions) ---------------------------------------- */
 
 /*

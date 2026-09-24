@@ -62,15 +62,16 @@ export const de: SettingTextTable = {
     },
     suggestFromHistory: {
       label: 'Seiten aus dem Verlauf vorschlagen',
-      description: 'Noch ohne Wirkung: Die Adressleiste zieht keine Vorschläge aus dem Verlauf.'
+      description:
+        'Beim Tippen schlägt die Adressleiste besuchte Seiten vor, in einem privaten Fenster nie. Die Vorschläge entstehen auf diesem Gerät; nichts Getipptes wird dafür irgendwohin gesendet.'
     },
     suggestFromBookmarks: {
       label: 'Seiten aus den Lesezeichen vorschlagen',
-      description: 'Ebenfalls noch ohne Wirkung.'
+      description: 'Schließt die Quick Links der Startseite ein.'
     },
     suggestFromOpenTabs: {
       label: 'Offene Tabs vorschlagen',
-      description: 'Noch ohne Wirkung: Die Adressleiste fragt die offenen Tabs nie ab.'
+      description: 'Schlägt die in diesem Fenster offenen Tabs vor; die Wahl wechselt zum Tab.'
     },
     remoteSuggestions: {
       label: 'Vorschläge von der Suchmaschine',
