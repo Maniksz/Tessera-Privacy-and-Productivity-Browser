@@ -1125,13 +1125,13 @@ export const invokeContract = {
    */
   'bookmarks:list': { request: nothing, response: z.array(bookmarkSchema) },
   /**
-   * How many nodes the core kept raw because this version could not read them (R3).
-   *
-   * Only the count: a raw node is data nothing here can interpret, so it never leaves the store.
+   * Raw-node count (R3), never the nodes; R4's load flags only when true, as `VaultStatus` has them.
    */
   'bookmarks:status': {
     request: nothing,
-    response: z.object({ unreadableEntries: z.number().int().nonnegative() })
+    response: vaultStateResponseSchema.shape.vault
+      .pick({ newer: true, invalid: true, readOnly: true })
+      .extend({ unreadableEntries: z.number().int().nonnegative() })
   },
   /**
    * `url` is raw user input. The core normalises it with the same classifier the address bar uses

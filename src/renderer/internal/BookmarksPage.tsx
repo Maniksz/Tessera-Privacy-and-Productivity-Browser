@@ -12,7 +12,7 @@ import {
   type BookmarkRootId
 } from '@shared/bookmarks/model.js'
 import { readableUrl } from '@shared/history/presentation.js'
-import { bookmarksApi, internalBridgeAvailable } from './internal-calls.js'
+import { bookmarksApi, internalBridgeAvailable, type BookmarkStatus } from './internal-calls.js'
 import {
   BOOKMARK_MESSAGES,
   pendingTranslator,
@@ -83,15 +83,21 @@ export function BookmarksPage(): React.ReactNode {
   const [notice, setNotice] = useState<string | null>(null)
   const [editing, setEditing] = useState<EditingState | null>(null)
   const [loaded, setLoaded] = useState(false)
-  /** Nodes the core kept raw because it could not read them. Only the count ever reaches this page. */
-  const [unreadable, setUnreadable] = useState(0)
+  /**
+   * How the file loaded: the nodes the core kept raw because it could not read them — only the count ever
+   * reaches this page — and, when it was not a clean load, which of the three things opening it found.
+   */
+  const [status, setStatus] = useState<BookmarkStatus>({ unreadableEntries: 0 })
+  const unreadable = status.unreadableEntries
+  /* The core refuses every write to such a file; offering "new" here would only produce that refusal. */
+  const readOnly = status.readOnly === true
 
   const refresh = useCallback(async (): Promise<void> => {
     // Both on every refresh: deleting a folder can take raw nodes along, and the line below must not
     // go on counting what is gone.
-    const [listed, status] = await Promise.all([bookmarksApi.list(), bookmarksApi.status()])
+    const [listed, fileStatus] = await Promise.all([bookmarksApi.list(), bookmarksApi.status()])
     setNodes(listed)
-    setUnreadable(status.unreadableEntries)
+    setStatus(fileStatus)
   }, [])
 
   useEffect(() => {
@@ -281,10 +287,15 @@ export function BookmarksPage(): React.ReactNode {
           aria-label={tp('bookmarks.searchPlaceholder')}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <button type="button" className="bookmarks__action" onClick={addFolder}>
+        <button type="button" className="bookmarks__action" disabled={readOnly} onClick={addFolder}>
           {tp('bookmarks.addFolder')}
         </button>
-        <button type="button" className="bookmarks__action" onClick={importFile}>
+        <button
+          type="button"
+          className="bookmarks__action"
+          disabled={readOnly}
+          onClick={importFile}
+        >
           {tp('bookmarks.import')}
         </button>
       </header>
@@ -312,6 +323,22 @@ export function BookmarksPage(): React.ReactNode {
         <p className="bookmarks__notice" role="status">
           {notice}
         </p>
+      )}
+
+      {/*
+        What opening the file found, each line only when it is true — the rules of the passwords page. A newer
+        file's own sentence already says it cannot be changed, so the read-only line is not repeated for it; and
+        a file is only said to have been copied aside when the copy was made, which is exactly when it is *not*
+        read-only.
+      */}
+      {status.newer === true && (
+        <p className="bookmarks__notice">{tp('bookmarks.documentNewer')}</p>
+      )}
+      {status.invalid === true && !readOnly && (
+        <p className="bookmarks__notice">{tp('bookmarks.documentInvalid')}</p>
+      )}
+      {readOnly && status.newer !== true && (
+        <p className="bookmarks__notice">{tp('bookmarks.documentReadOnly')}</p>
       )}
 
       {unreadable > 0 && (

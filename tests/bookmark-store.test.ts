@@ -339,6 +339,19 @@ describe('a file from another version', () => {
     await store.flush()
     expect(await readFile(filePath, 'utf8')).toBe(JSON.stringify(newer))
   })
+
+  it('tells the page a newer file is read-only, and says nothing of a clean one (R4)', async () => {
+    const filePath = await seeded({ version: 2, nodes: [node] })
+    const store = await BookmarkStore.open({ filePath, debounceMs: 0 })
+    expect(store.status).toEqual({ unreadableEntries: 0, newer: true, readOnly: true })
+
+    const clean = await BookmarkStore.open({
+      filePath: await seeded({ version: 1, nodes: [node] }),
+      debounceMs: 0
+    })
+    // Exactly the fields that are true, so a clean load answers what it answered before R4.
+    expect(clean.status).toEqual({ unreadableEntries: 0 })
+  })
 })
 
 describe('an entry this version cannot read', () => {
@@ -447,6 +460,8 @@ describe('an entry this version cannot read', () => {
 
     expect(store.recoveredFromInvalidFile).toBe(true)
     expect(store.unreadableEntryCount).toBe(0)
+    // Copied aside, so this run may write again: invalid, but not read-only.
+    expect(store.status).toEqual({ unreadableEntries: 0, invalid: true })
     expect(JSON.parse(await readFile(`${filePath}.unreadable`, 'utf8'))).toEqual({
       version: 1,
       nodes: 'not a list'

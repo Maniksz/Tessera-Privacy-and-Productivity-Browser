@@ -58,7 +58,13 @@ const bookmarksEn = {
   'bookmarks.save': 'Save',
   'bookmarks.cancel': 'Cancel',
   'bookmarks.unreadableEntry': 'One bookmark could not be read and is kept unchanged.',
-  'bookmarks.unreadableEntries': '{count} bookmarks could not be read and are kept unchanged.'
+  'bookmarks.unreadableEntries': '{count} bookmarks could not be read and are kept unchanged.',
+  'bookmarks.documentNewer':
+    'A newer version saved these bookmarks. They are shown here but cannot be changed.',
+  'bookmarks.documentInvalid':
+    'The bookmarks file could not be read and is kept as bookmarks.json.unreadable. Bookmarks started empty.',
+  'bookmarks.documentReadOnly':
+    'The bookmarks file could not be backed up, so nothing can be changed until the next start.'
 } as const satisfies Record<string, string>
 
 const bookmarksDe = {
@@ -99,7 +105,13 @@ const bookmarksDe = {
   'bookmarks.unreadableEntry':
     'Ein Lesezeichen konnte nicht gelesen werden und bleibt unverändert erhalten.',
   'bookmarks.unreadableEntries':
-    '{count} Lesezeichen konnten nicht gelesen werden und bleiben unverändert erhalten.'
+    '{count} Lesezeichen konnten nicht gelesen werden und bleiben unverändert erhalten.',
+  'bookmarks.documentNewer':
+    'Eine neuere Version hat diese Lesezeichen gespeichert. Sie werden angezeigt, lassen sich aber nicht ändern.',
+  'bookmarks.documentInvalid':
+    'Die Lesezeichendatei ließ sich nicht lesen und liegt als bookmarks.json.unreadable daneben. Die Lesezeichen beginnen leer.',
+  'bookmarks.documentReadOnly':
+    'Die Lesezeichendatei ließ sich nicht sichern, deshalb lässt sich bis zum nächsten Start nichts ändern.'
 } as const satisfies Record<keyof typeof bookmarksEn, string>
 
 const downloadsEn = {

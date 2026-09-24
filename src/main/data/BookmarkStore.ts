@@ -130,6 +130,14 @@ export interface BookmarkImportSummary {
   skipped: number
 }
 
+/** The answer to `bookmarks:status`. See `BookmarkStore.status`. */
+export interface BookmarkFileStatus {
+  readonly unreadableEntries: number
+  readonly newer?: true
+  readonly invalid?: true
+  readonly readOnly?: true
+}
+
 export class BookmarkStore {
   readonly #store: JsonStore<BookmarkDocument>
   readonly #generateId: () => string
@@ -308,6 +316,20 @@ export class BookmarkStore {
   /** How many nodes were kept raw, for the line on the bookmarks page. Never the nodes themselves. */
   get unreadableEntryCount(): number {
     return this.#store.unreadableEntries.length
+  }
+
+  /**
+   * What the bookmarks page says about the file (R3, R4): the count of raw nodes, and each of the
+   * three load flags only when it is true — the same shape `documentStatusOf` gives `VaultStatus`.
+   */
+  get status(): BookmarkFileStatus {
+    const outcome = this.#store.loadReport.outcome.kind
+    return {
+      unreadableEntries: this.unreadableEntryCount,
+      ...(outcome === 'newer' ? { newer: true } : {}),
+      ...(outcome === 'invalid' ? { invalid: true } : {}),
+      ...(this.#store.readOnly ? { readOnly: true } : {})
+    }
   }
 
   /** Where the raw nodes sit, as far as that can be read. See `BookmarkLink`. */

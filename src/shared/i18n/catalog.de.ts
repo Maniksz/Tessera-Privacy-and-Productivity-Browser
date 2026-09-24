@@ -164,6 +164,12 @@ export const de = {
     'Ein Lesezeichen konnte nicht gelesen werden und bleibt unverändert erhalten.',
   'bookmarks.unreadableEntries':
     '{count} Lesezeichen konnten nicht gelesen werden und bleiben unverändert erhalten.',
+  'bookmarks.documentNewer':
+    'Eine neuere Version hat diese Lesezeichen gespeichert. Sie werden angezeigt, lassen sich aber nicht ändern.',
+  'bookmarks.documentInvalid':
+    'Die Lesezeichendatei ließ sich nicht lesen und liegt als bookmarks.json.unreadable daneben. Die Lesezeichen beginnen leer.',
+  'bookmarks.documentReadOnly':
+    'Die Lesezeichendatei ließ sich nicht sichern, deshalb lässt sich bis zum nächsten Start nichts ändern.',
 
   'downloads.title': 'Downloads',
   'downloads.empty': 'Noch nichts heruntergeladen.',

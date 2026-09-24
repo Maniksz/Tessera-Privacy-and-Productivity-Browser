@@ -887,7 +887,7 @@ export function registerIpcHandlers(deps: {
     the person did and can undo.
   */
   handle('bookmarks:list', () => bookmarks.list())
-  handle('bookmarks:status', () => ({ unreadableEntries: bookmarks.unreadableEntryCount }))
+  handle('bookmarks:status', () => bookmarks.status)
   // Rebuilt key by key: `exactOptionalPropertyTypes` treats an absent field and one holding
   // `undefined` as different types, and a request that crossed IPC has the second shape.
   handle('bookmarks:create', (payload) =>

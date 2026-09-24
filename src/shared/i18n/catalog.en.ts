@@ -213,6 +213,12 @@ export const en = {
   'bookmarks.cancel': 'Cancel',
   'bookmarks.unreadableEntry': 'One bookmark could not be read and is kept unchanged.',
   'bookmarks.unreadableEntries': '{count} bookmarks could not be read and are kept unchanged.',
+  'bookmarks.documentNewer':
+    'A newer version saved these bookmarks. They are shown here but cannot be changed.',
+  'bookmarks.documentInvalid':
+    'The bookmarks file could not be read and is kept as bookmarks.json.unreadable. Bookmarks started empty.',
+  'bookmarks.documentReadOnly':
+    'The bookmarks file could not be backed up, so nothing can be changed until the next start.',
 
   // downloads
   'downloads.title': 'Downloads',

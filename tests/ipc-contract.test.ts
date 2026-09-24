@@ -119,6 +119,18 @@ describe('IPC contract', () => {
     ).toBe(false)
   })
 
+  it('lets the bookmarks status leave out what a clean load has nothing to say about (R4)', () => {
+    const response = invokeContract['bookmarks:status'].response
+    // What a handler from before R4 answers, and what a clean load still answers.
+    expect(response.safeParse({ unreadableEntries: 0 }).success).toBe(true)
+    expect(
+      response.safeParse({ unreadableEntries: 2, newer: true, invalid: true, readOnly: true })
+        .success
+    ).toBe(true)
+    // Present means true: a flag that says "false" is a second way to say nothing.
+    expect(response.safeParse({ unreadableEntries: 0, readOnly: false }).success).toBe(false)
+  })
+
   it('rejects a malformed request', () => {
     // The main process must not trust the renderer, even our own.
     expect(invokeContract['split:setLayout'].request.safeParse({ layout: '9x9' }).success).toBe(

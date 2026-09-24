@@ -100,10 +100,18 @@ export interface RemovedCount {
   removed: number
 }
 
+/** Each flag only when it is true; see `bookmarks:status`. */
+export interface BookmarkStatus {
+  unreadableEntries: number
+  newer?: true
+  invalid?: true
+  readOnly?: true
+}
+
 export const bookmarksApi = {
   list: () => call<Bookmark[]>('bookmarks:list'),
-  /** How many nodes the core could not read. See `bookmarks:status`. */
-  status: () => call<{ unreadableEntries: number }>('bookmarks:status'),
+  /** How many nodes the core could not read, and how the file loaded. See `bookmarks:status`. */
+  status: () => call<BookmarkStatus>('bookmarks:status'),
   create: (request: CreateBookmarkRequest) => call<Bookmark>('bookmarks:create', request),
   update: (request: { id: string; title?: string }) => call<Bookmark>('bookmarks:update', request),
   /** The "this page has moved" operation; keeps the title, folder and position. */
