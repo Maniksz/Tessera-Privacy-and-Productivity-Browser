@@ -129,7 +129,7 @@ function actions(state: unknown): MenuActions<Window, ClearingSession> {
     },
     stopped: current.stopped,
     downloads: { cancelUnfinished: () => [] },
-    media: { release: () => undefined },
+    media: { forgetAll: () => undefined },
     locale: () => 'en',
     path: current.path
   })

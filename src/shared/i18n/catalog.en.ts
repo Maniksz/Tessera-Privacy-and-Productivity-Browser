@@ -85,6 +85,8 @@ export const en = {
   'toolbar.autofillLocked': 'Passwords are locked — unlock',
   'toolbar.autofillMatches': 'Fill in a saved password ({count} for this site)',
   'toolbar.autofillNone': 'No password saved for this site',
+  // The media button's name and tooltip; the count is the active tab's finds, zero included.
+  'toolbar.media': 'Media on this page ({count})',
 
   // address bar
   'omnibox.placeholder': 'Search or enter address',

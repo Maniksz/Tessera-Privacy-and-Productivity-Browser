@@ -222,6 +222,11 @@ export const DOWNLOAD_REFUSALS = [
   'manifest-unavailable',
   /** Not http(s) — a `blob:` or `data:` address the session cannot re-request. */
   'unsupported-scheme',
+  /**
+   * An address the stream named that the browser does not fetch on a page's behalf: not http(s),
+   * or on this computer or the local network. See `url-guard.ts`.
+   */
+  'address-not-allowed',
   /** One segment failed; a file with a hole in it is not a download. */
   'segment-unavailable',
   /** Past the byte ceiling. */

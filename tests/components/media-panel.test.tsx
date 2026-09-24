@@ -60,11 +60,12 @@ function harness(options: {
 
   const port: MediaPort = {
     list: () => Promise.resolve({ tabId: 'tab-1', findings: options.findings ?? [] }),
-    describe: () =>
-      Promise.resolve(options.describe ?? { manifest: null, message: null }),
+    describe: () => Promise.resolve(options.describe ?? { manifest: null, message: null }),
     download: (findingId, variantId) => {
       downloads.push({ findingId, variantId })
-      return Promise.resolve(options.download ?? { ok: true, filePath: '/d/clip.mp4', byteLength: 1 })
+      return Promise.resolve(
+        options.download ?? { ok: true, filePath: '/d/clip.mp4', byteLength: 1 }
+      )
     },
     cancel: (findingId) => {
       cancelled.push(findingId)
@@ -190,7 +191,12 @@ describe('the media panel', () => {
     const stop = await screen.findByText(mediaMessage('en', 'media.panel.cancel'))
     fireEvent.click(stop)
     expect(world.cancelled).toEqual(['media-1'])
-    finish({ ok: false, refusal: 'cancelled', message: refusalSentence('en', 'cancelled'), detail: 'stopped' })
+    finish({
+      ok: false,
+      refusal: 'cancelled',
+      message: refusalSentence('en', 'cancelled'),
+      detail: 'stopped'
+    })
     expect(await screen.findByText(refusalSentence('en', 'cancelled'))).toBeTruthy()
   })
 
@@ -213,6 +219,38 @@ describe('the media panel', () => {
     world.publish({ tabId: 'tab-2', findings: [finding({ id: 'media-3', label: 'other.mp4' })] })
     expect(screen.queryByText('other.mp4')).toBeNull()
     expect(screen.getByText('clip.mp4')).toBeTruthy()
+  })
+
+  it('shows the new active tab’s finds after a tab switch (roadmap U16)', async () => {
+    /*
+      The panel covers the window, but a shortcut still switches tabs under it. Left alone it kept
+      the first tab's list — and its downloads would have gone to a tab nobody was looking at.
+    */
+    const byTab: Record<string, MediaFindingList> = {
+      'tab-1': { tabId: 'tab-1', findings: [finding()] },
+      'tab-2': {
+        tabId: 'tab-2',
+        findings: [finding({ id: 'media-7', tabId: 'tab-2', label: 'other.mp4' })]
+      }
+    }
+    const portFor = (tabId: string): MediaPort => ({
+      ...harness({}).port,
+      list: () => Promise.resolve(byTab[tabId]!),
+      subscribe: world.port.subscribe
+    })
+    const world = harness({})
+    const { rerender } = render(
+      <MediaPanel port={portFor('tab-1')} tabId="tab-1" onClose={vi.fn()} />
+    )
+    await screen.findByText('clip.mp4')
+
+    rerender(<MediaPanel port={portFor('tab-2')} tabId="tab-2" onClose={vi.fn()} />)
+
+    expect(await screen.findByText('other.mp4')).toBeTruthy()
+    expect(screen.queryByText('clip.mp4')).toBeNull()
+    // And what is pushed for the tab it left no longer lands here.
+    world.publish({ tabId: 'tab-1', findings: [finding({ id: 'media-9', label: 'late.mp4' })] })
+    expect(screen.queryByText('late.mp4')).toBeNull()
   })
 
   it('closes on Escape and on a click outside the panel', async () => {

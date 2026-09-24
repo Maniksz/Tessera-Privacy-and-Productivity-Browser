@@ -338,6 +338,11 @@ export class MediaRegistry {
     this.#apply(tabId, forgetTabFindings(this.#state, tabId))
   }
 
+  /** Every tab's findings, discarded, each tab announced. For clearing browsing data and panic. */
+  forgetAll(): void {
+    for (const tabId of Object.keys(this.#state.byTab)) this.forgetTab(tabId)
+  }
+
   onChange(listener: ChangeListener): () => void {
     this.#listeners.add(listener)
     return () => {

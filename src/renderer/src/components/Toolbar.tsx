@@ -10,16 +10,17 @@ import { useI18n } from '../i18n.js'
 import { AutofillKey } from './AutofillKey.js'
 import { DownloadsButton } from './DownloadsButton.js'
 import { LayoutMenu } from './LayoutMenu.js'
+import { MediaButton } from './MediaButton.js'
 import { Omnibox } from './Omnibox.js'
 
 /**
  * The toolbar.
  *
  * Left: navigation and Home — the things you reach for constantly, grouped where the
- * pointer already is after using the tab strip. Right: the layout menu, the downloads
- * button once there is something to show, and the panels, which are occasional. Five
- * separate layout buttons used to sit on the right and cost five slots to express one
- * choice; `LayoutMenu` is one button that also shows which arrangement is active.
+ * pointer already is after using the tab strip. Right: the layout menu, the media button,
+ * the downloads button once there is something to show, and the panels, which are
+ * occasional. Five separate layout buttons used to sit on the right and cost five slots to
+ * express one choice; `LayoutMenu` is one button that also shows which arrangement is active.
  */
 
 interface ToolbarProps {
@@ -38,6 +39,11 @@ interface ToolbarProps {
   downloadsPanelOpen?: boolean
   /** The password key's state, from `useAutofillKeyState`. Absent, like `downloads`, means no key. */
   autofillKey?: AutofillKeyState
+  /** The active tab's media finds, from `useMediaFindingCount`. Absent means no button. */
+  media?: number
+  /** Whether the media panel is open. */
+  mediaPanelOpen?: boolean
+  onOpenMedia?: () => void
   onOpenSettings: () => void
   onOpenExtensions: () => void
   /** Bumped when the user asks for the address bar; passed straight to `Omnibox`. */
@@ -55,6 +61,9 @@ export function Toolbar({
   downloads,
   downloadsPanelOpen = false,
   autofillKey,
+  media,
+  mediaPanelOpen = false,
+  onOpenMedia,
   onOpenSettings,
   onOpenExtensions,
   focusRequest,
@@ -219,6 +228,10 @@ export function Toolbar({
 
         {autofillKey !== undefined && (
           <AutofillKey state={autofillKey} titleWithShortcut={titleWithShortcut} />
+        )}
+
+        {media !== undefined && onOpenMedia !== undefined && (
+          <MediaButton count={media} open={mediaPanelOpen} onOpen={onOpenMedia} />
         )}
 
         {downloads !== undefined && (

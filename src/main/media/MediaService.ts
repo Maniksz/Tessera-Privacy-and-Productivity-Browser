@@ -1,3 +1,4 @@
+import { basename } from 'node:path'
 import type { Locale } from '@shared/i18n/catalog.js'
 import { manifestFailureSentence, refusalSentence } from '@shared/media/messages.js'
 import type {
@@ -5,6 +6,7 @@ import type {
   MediaFindingList,
   MediaManifestReport
 } from '@shared/media/wire.js'
+import type { ForeignTransfer, ForeignTransferRequest } from '../downloads/foreign-transfer.js'
 import type { ObservedRequest } from '../privacy/RequestPipeline.js'
 import type { ObservedResponse } from '../session/hardening.js'
 import { MediaDownloader, type DownloadResult } from './MediaDownloader.js'
@@ -43,12 +45,13 @@ import { mediaResponseObservation } from './observation.js'
  * has settings anyway, passes it in per call. That also means a language change applies to
  * the next refusal rather than to the next restart.
  *
- * ## Not here yet: progress
+ * ## Where progress goes
  *
- * `MediaDownloader` reports progress and nothing consumes it. Publishing it needs
- * coalescing — a per-chunk event is thousands of IPC messages for one file — and a
- * downloads surface to render it. Wiring an uncoalesced event now would be the kind of
- * "it works on my machine" that is only visible on the hardware this browser is aimed at.
+ * To the downloads list, not to the media panel (media plan R19). Once `MediaDownloader` has
+ * reserved its target, the transfer is filed with `DownloadManager.track()` under the window
+ * that asked, and its progress reports go there — the manager coalesces them, as it does
+ * Chromium's, so a per-chunk report is not a per-chunk IPC message. The row's cancel aborts this
+ * download, and this download's cancel ends the row.
  */
 
 /** A tab named a request cannot be attributed to. Distinct from a refusal, which is a decision. */
@@ -82,11 +85,25 @@ export interface MediaServiceOptions {
    * belong to no tab.
    */
   readonly resolveTabId: (webContentsId: number | null) => string | null
+  /** `app.getPath('downloads')`, for an empty or relative `downloads.directory`. */
+  readonly fallbackDirectory?: () => string
+  /** The downloads list, already bound to this service's session; see `MediaSessions`. */
+  readonly transfers?: MediaTransfers
   readonly now?: () => number
 }
 
+/** A transfer as this service describes it; the session is added by whoever knows it. */
+export type MediaTransferRequest = Omit<ForeignTransferRequest, 'session' | 'pausing'>
+
+/** `DownloadManager`'s two calls, with the session bound. */
+export interface MediaTransfers {
+  track(request: MediaTransferRequest): ForeignTransfer | null
+  cancel(id: string): boolean
+}
+
 interface RunningDownload {
-  readonly controller: AbortController
+  /** Through the downloads row once it has one, so both say "cancelled"; else the abort alone. */
+  readonly stop: () => void
   readonly report: Promise<MediaDownloadReport>
 }
 
@@ -95,6 +112,8 @@ export class MediaService {
   readonly #fetch: MediaFetcher
   readonly #now: () => number
   readonly #directory: () => string
+  readonly #fallbackDirectory: (() => string) | undefined
+  readonly #transfers: MediaTransfers | undefined
   /** In flight, keyed by finding, so a second click joins the first rather than racing it. */
   readonly #downloads = new Map<string, RunningDownload>()
 
@@ -102,6 +121,8 @@ export class MediaService {
     this.#fetch = options.fetch
     this.#now = options.now ?? Date.now
     this.#directory = options.directory
+    this.#fallbackDirectory = options.fallbackDirectory
+    this.#transfers = options.transfers
     this.#registry = new MediaRegistry({
       fetch: options.fetch,
       now: this.#now,
@@ -151,12 +172,16 @@ export class MediaService {
    * `DOWNLOAD_REFUSALS` is a decision about media that exists, and answering "you named
    * something that is not here" with one of them would put a sentence about encryption
    * or muxers in front of a user whose tab merely navigated mid-click.
+   *
+   * `windowId` is the window the request came from; the downloads row is filed under it. Without
+   * one the file is still written, and no row says so.
    */
   async download(
     tabId: string,
     findingId: string,
     variantId: string | null,
-    locale: Locale
+    locale: Locale,
+    windowId?: number
   ): Promise<MediaDownloadReport> {
     const joined = this.#downloads.get(findingId)
     if (joined !== undefined) return joined.report
@@ -165,16 +190,44 @@ export class MediaService {
     if (finding === null) throw new UnknownMediaFindingError(findingId)
 
     const controller = new AbortController()
+    const transfers = this.#transfers
+    let transfer: ForeignTransfer | null = null
     // Built per download, so `downloads.directory` is read now rather than at startup.
     const downloader = new MediaDownloader({
       fetch: this.#fetch,
       now: this.#now,
-      directory: this.#directory()
+      directory: this.#directory(),
+      ...(this.#fallbackDirectory === undefined
+        ? {}
+        : { fallbackDirectory: this.#fallbackDirectory() })
     })
     const report = downloader
-      .download(finding, variantId, { signal: controller.signal })
-      .then((result) => reportOf(result, locale))
-    this.#downloads.set(findingId, { controller, report })
+      .download(finding, variantId, {
+        signal: controller.signal,
+        onTarget: (targetPath) => {
+          if (windowId === undefined || transfers === undefined) return
+          transfer = transfers.track({
+            windowId,
+            url: finding.url,
+            fileName: basename(targetPath),
+            targetPath,
+            cancel: () => controller.abort()
+          })
+        },
+        onProgress: (progress) => transfer?.progress(progress)
+      })
+      .then((result) => {
+        // After the row's own cancel both are ignored; it already reads "cancelled".
+        if (result.ok) transfer?.complete()
+        else transfer?.fail()
+        return reportOf(result, locale)
+      })
+    // The row's cancel aborts this download, so going through it ends both the same way.
+    const stop = (): void => {
+      if (transfer !== null && transfers !== undefined) transfers.cancel(transfer.id)
+      else controller.abort()
+    }
+    this.#downloads.set(findingId, { stop, report })
     try {
       return await report
     } finally {
@@ -191,13 +244,18 @@ export class MediaService {
   cancel(findingId: string): boolean {
     const running = this.#downloads.get(findingId)
     if (running === undefined) return false
-    running.controller.abort()
+    running.stop()
     return true
   }
 
   /** For a tab that closed. Navigation is handled by the registry's own mainFrame rule. */
   forgetTab(tabId: string): void {
     this.#registry.forgetTab(tabId)
+  }
+
+  /** Every finding, each tab told. For clearing browsing data and for panic (media R5). */
+  forgetAll(): void {
+    this.#registry.forgetAll()
   }
 
   onChange(listener: (list: MediaFindingList) => void): () => void {

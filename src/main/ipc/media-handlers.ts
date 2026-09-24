@@ -77,6 +77,8 @@ export interface MediaHandlerTab {
 
 /** One window. `BrowserWindowController` satisfies this. */
 export interface MediaHandlerWindow {
+  /** `BrowserWindow.id`; a media download's row is filed under it (media plan R19). */
+  readonly window?: { readonly id: number }
   /** Undefined for an id this window does not hold; no argument means the active tile's tab. */
   resolveTab(tabId?: string): MediaHandlerTab | undefined
   tab(tabId: string): { readonly id: string } | undefined
@@ -112,12 +114,16 @@ export function registerMediaHandlers(deps: MediaHandlerDeps): void {
   const target = (
     tabId: string | undefined,
     event: IpcMainInvokeEvent
-  ): { service: MediaService; tabId: string } => {
+  ): { service: MediaService; tabId: string; windowId: number | undefined } => {
     const window = windows.resolve(event)
     if (window === undefined) throw new Error('No window for this request')
     const tab = window.resolveTab(tabId)
     if (tab === undefined) throw new Error(`No tab for this request: ${tabId ?? '(active tile)'}`)
-    return { service: media.forSession(tab.view.webContents.session), tabId: tab.id }
+    return {
+      service: media.forSession(tab.view.webContents.session),
+      tabId: tab.id,
+      windowId: window.window?.id
+    }
   }
 
   handle('media:list', (payload, event) => {
@@ -142,8 +148,8 @@ export function registerMediaHandlers(deps: MediaHandlerDeps): void {
     one answer and it arrives when it arrives. `media:cancel` is how the user takes it back.
   */
   handle('media:download', async (payload, event) => {
-    const { service, tabId } = target(payload.tabId, event)
-    return service.download(tabId, payload.findingId, payload.variantId ?? null, locale())
+    const { service, tabId, windowId } = target(payload.tabId, event)
+    return service.download(tabId, payload.findingId, payload.variantId ?? null, locale(), windowId)
   })
 
   handle('media:cancel', (payload, event) => {

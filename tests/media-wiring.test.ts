@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { mkdtemp, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -15,7 +15,12 @@ import {
   type MediaSession,
   type MediaTabHost
 } from '@main/media/MediaSessions.js'
-import type { MediaFetcher } from '@main/media/fetch.js'
+import type { MediaFetchInit, MediaFetcher } from '@main/media/fetch.js'
+import { registerMediaHandlers, type MediaHandle } from '@main/ipc/media-handlers.js'
+import { DownloadManager } from '@main/downloads/DownloadManager.js'
+import { DownloadStore } from '@main/data/DownloadStore.js'
+import type { MediaFindingList } from '@shared/media/wire.js'
+import { FakeSession as DownloadFakeSession } from './download-fakes.js'
 import {
   mediaDownloadReportSchema,
   mediaFindingListSchema,
@@ -799,5 +804,356 @@ describe('what the handlers answer with survives the contract', () => {
         detail: 'y'
       }).success
     ).toBe(false)
+  })
+})
+
+// --- the MVP wiring (roadmap U16) -----------------------------------------------------------
+
+/**
+ * What connects the pieces above to a running browser, and what a user sees of it.
+ *
+ * The classes that need a browser process — `WindowRegistry`, `BrowserWindowController`, the entry
+ * point — are held by their source: each has to hand the one thing below to the one place named.
+ * Everything those lines call is driven for real here, including the download manager and its store.
+ */
+
+const source = (path: string): string => readFileSync(join(process.cwd(), path), 'utf8')
+
+/** A session both features can use: the download manager's `will-download`, the media fetch. */
+class BothSessions extends DownloadFakeSession implements MediaSession {
+  readonly calls: string[] = []
+  respond: (url: string, init?: MediaFetchInit) => Promise<Response> = () =>
+    Promise.resolve(
+      new Response(new Uint8Array([1, 2, 3, 4]), { headers: { 'content-length': '4' } })
+    )
+
+  fetch(url: string, init?: MediaFetchInit): Promise<Response> {
+    this.calls.push(url)
+    return this.respond(url, init)
+  }
+}
+
+async function downloadsWorld() {
+  const root = await mkdtemp(join(tmpdir(), 'tessera-media-u16-'))
+  const store = await DownloadStore.open({ filePath: join(root, 'downloads.json'), debounceMs: 0 })
+  const manager = new DownloadManager({
+    store,
+    getSettings: () => defaultSettings(),
+    defaultDirectory: () => join(root, 'Downloads'),
+    fileExists: () => false,
+    shell: { openPath: () => Promise.resolve(''), showItemInFolder: () => {} },
+    progressIntervalMs: 0
+  })
+  const session = new BothSessions()
+  manager.attach(session, 'normal')
+  const media = new MediaSessions<BothSessions>({
+    hosts: () => [windowWith({ 11: 'tab-1', 22: 'tab-2' })],
+    directory: () => '',
+    fallbackDirectory: () => join(root, 'Downloads'),
+    downloads: manager,
+    now: () => T0
+  })
+  const viewer = { windowId: 7, mode: 'normal' as const, session }
+  return { root, store, manager, session, media, viewer, directory: join(root, 'Downloads') }
+}
+
+describe('observing a session through the hooks the registry installs (media R1)', () => {
+  it('turns a video/mp4 response into a finding for the tab that asked', () => {
+    const media = sessions([windowWith({ 11: 'tab-1' })])
+    const session = spySession('')
+    const hooks = media.observe(session)
+
+    hooks.onResponse(observedResponse({ url: 'https://cdn.example.com/v/9d2f' }))
+
+    expect(media.forSession(session).list('tab-1').findings).toMatchObject([
+      { tabId: 'tab-1', contentType: 'video/mp4', kind: 'progressive' }
+    ])
+  })
+
+  it('feeds requests the pipeline let through into the same service', () => {
+    const media = sessions([windowWith({ 11: 'tab-1' })])
+    const session = spySession('')
+    const listener = installWithObserver(media.observe(session).onRequest)
+
+    listener(
+      {
+        url: 'https://example.com/clip.mp4',
+        resourceType: 'media',
+        method: 'GET',
+        webContentsId: 11
+      },
+      () => {}
+    )
+
+    expect(
+      media
+        .forSession(session)
+        .list('tab-1')
+        .findings.map((one) => one.label)
+    ).toEqual(['clip.mp4'])
+  })
+
+  it('is what the registry hands each session’s pipeline and hardening', () => {
+    const registry = source('src/main/browser/WindowRegistry.ts')
+    expect(registry).toMatch(/const media = this\.#deps\.media\.observe\(session\)/)
+    expect(registry).toMatch(/applySessionHardening\(\{[\s\S]*?onResponse: media\.onResponse/)
+    expect(registry).toMatch(/hooks: \{[\s\S]*?onRequest: media\.onRequest[\s\S]*?\}/)
+    expect(source('src/main/index.ts')).toMatch(
+      /new WindowRegistry\(\{[\s\S]*?media: mediaSessions/
+    )
+  })
+})
+
+function sessions(hosts: readonly MediaTabHost[]) {
+  return new MediaSessions({ hosts: () => hosts, directory: () => tmpdir(), now: () => T0 })
+}
+
+describe('letting findings go (media R4, R5)', () => {
+  it('forgets a closed tab’s findings, whichever way the tab closed', () => {
+    const controller = source('src/main/browser/BrowserWindowController.ts')
+    // Through the close contract's finish, and for every tab when the window itself goes.
+    expect(controller).toMatch(
+      /#finishClose\([^)]*\)[^{]*\{[\s\S]*?this\.options\.onTabClosed\(tabId\)/
+    )
+    expect(controller).toMatch(
+      /for \(const tab of this\.#tabs\.values\(\)\) \{\s*tab\.destroy\(\)\s*this\.options\.onTabClosed\(tab\.id\)/
+    )
+    expect(source('src/main/browser/WindowRegistry.ts')).toMatch(
+      /onTabClosed: \(tabId\) => this\.#deps\.media\.forgetTab\(tabId\)/
+    )
+  })
+
+  it('releases a private window’s session with the window', () => {
+    const registry = source('src/main/browser/WindowRegistry.ts')
+    expect(registry).toMatch(
+      /if \(closed\.privateMode\) \{[\s\S]*?this\.#deps\.media\.release\(session\)[\s\S]*?forgetHttpsExemptions/
+    )
+  })
+
+  it('empties every finding of a session when its data is cleared, and says so', () => {
+    const media = sessions([windowWith({ 11: 'tab-1', 22: 'tab-2' })])
+    const cleared = spySession('')
+    const other = spySession('')
+    const service = media.forSession(cleared)
+    service.observeRequest(request({ webContentsId: 11 }))
+    service.observeRequest(request({ webContentsId: 22, url: 'https://example.com/b.mp4' }))
+    media.forSession(other).observeRequest(request({ webContentsId: 11 }))
+    const heard: MediaFindingList[] = []
+    media.onChange((list) => heard.push(list))
+
+    media.forgetAll(cleared)
+
+    expect(service.list('tab-1').findings).toEqual([])
+    expect(service.list('tab-2').findings).toEqual([])
+    // An open panel is told, rather than showing what was cleared until the page plays again.
+    expect(heard).toEqual([
+      { tabId: 'tab-1', findings: [] },
+      { tabId: 'tab-2', findings: [] }
+    ])
+    // The service stays: the session's hooks still feed it, and a new one would be fed by nobody.
+    expect(media.forSession(cleared)).toBe(service)
+    expect(media.forSession(other).list('tab-1').findings).toHaveLength(1)
+  })
+
+  it('empties every session at once, for panic', () => {
+    const media = sessions([windowWith({ 11: 'tab-1' })])
+    const one = media.forSession(spySession(''))
+    const two = media.forSession(spySession(''))
+    one.observeRequest(request())
+    two.observeRequest(request())
+
+    media.forgetAll()
+
+    expect(one.list('tab-1').findings).toEqual([])
+    expect(two.list('tab-1').findings).toEqual([])
+  })
+
+  it('is what clearing with cookies and panic call', () => {
+    const actions = source('src/main/menu/menu-actions.ts')
+    expect(actions).toMatch(
+      /forgetSession: \(session\) => \{[\s\S]*?wiring\.media\.forgetAll\(session\)/
+    )
+    expect(actions).toMatch(/closeWindows: \(\) => \{\s*wiring\.media\.forgetAll\(\)/)
+  })
+})
+
+describe('a media download in the downloads list (media R19, R23)', () => {
+  it('shows with its progress under the window it was started from, and completes there', async () => {
+    const world = await downloadsWorld()
+    const service = world.media.forSession(world.session)
+    service.observeResponse(observedResponse({ url: 'https://example.com/clip.mp4' }))
+    const [finding] = service.list('tab-1').findings
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    world.session.respond = async () => {
+      await gate
+      return new Response(new Uint8Array([1, 2, 3, 4]), { headers: { 'content-length': '4' } })
+    }
+
+    const report = service.download('tab-1', finding!.id, null, 'en', 7)
+    await vi.waitFor(() => expect(world.manager.snapshot(world.viewer)).toHaveLength(1))
+    expect(world.manager.snapshot(world.viewer)[0]).toMatchObject({
+      state: 'progressing',
+      fileName: 'clip.mp4',
+      savePath: join(world.directory, 'clip.mp4')
+    })
+    expect([...world.manager.idsStartedIn(7)]).toHaveLength(1)
+    release()
+
+    expect(await report).toMatchObject({ ok: true, filePath: join(world.directory, 'clip.mp4') })
+    expect(world.manager.snapshot(world.viewer)[0]).toMatchObject({
+      state: 'completed',
+      receivedBytes: 4,
+      totalBytes: 4
+    })
+  })
+
+  it('removes the .part file when the row’s own cancel is pressed', async () => {
+    const world = await downloadsWorld()
+    const service = world.media.forSession(world.session)
+    service.observeResponse(observedResponse({ url: 'https://example.com/clip.mp4' }))
+    const [finding] = service.list('tab-1').findings
+    world.session.respond = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })
+
+    const report = service.download('tab-1', finding!.id, null, 'en', 7)
+    await vi.waitFor(() => expect(readdirSync(world.directory)).toEqual(['clip.mp4.part']))
+    const [row] = world.manager.snapshot(world.viewer)
+    expect(world.manager.cancel(row!.id)).toBe(true)
+
+    expect(await report).toMatchObject({ ok: false, refusal: 'cancelled' })
+    expect(readdirSync(world.directory)).toEqual([])
+    expect(world.manager.snapshot(world.viewer)[0]?.state).toBe('cancelled')
+  })
+
+  it('cancels the row too when the panel stops it', async () => {
+    const world = await downloadsWorld()
+    const service = world.media.forSession(world.session)
+    service.observeResponse(observedResponse({ url: 'https://example.com/clip.mp4' }))
+    const [finding] = service.list('tab-1').findings
+    world.session.respond = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      })
+
+    const report = service.download('tab-1', finding!.id, null, 'en', 7)
+    await vi.waitFor(() => expect(world.manager.snapshot(world.viewer)).toHaveLength(1))
+    expect(service.cancel(finding!.id)).toBe(true)
+
+    expect(await report).toMatchObject({ ok: false, refusal: 'cancelled' })
+    expect(world.manager.snapshot(world.viewer)[0]?.state).toBe('cancelled')
+    expect(readdirSync(world.directory)).toEqual([])
+  })
+
+  it('marks the row failed when a download fails after it started', async () => {
+    const world = await downloadsWorld()
+    const service = world.media.forSession(world.session)
+    service.observeResponse(observedResponse({ url: 'https://example.com/clip.mp4' }))
+    const [finding] = service.list('tab-1').findings
+    world.session.respond = () => Promise.resolve(new Response('', { status: 503 }))
+
+    const report = await service.download('tab-1', finding!.id, null, 'en', 7)
+
+    expect(report).toMatchObject({ ok: false, refusal: 'segment-unavailable' })
+    expect(world.manager.snapshot(world.viewer)[0]?.state).toBe('interrupted')
+  })
+
+  it('files nothing for a download refused before it had a target', async () => {
+    const world = await downloadsWorld()
+    const service = world.media.forSession(world.session)
+    service.observeResponse(
+      observedResponse({
+        url: 'https://example.com/dash/manifest.mpd',
+        headers: { 'content-type': 'application/dash+xml' }
+      })
+    )
+    const [finding] = service.list('tab-1').findings
+
+    expect(await service.download('tab-1', finding!.id, null, 'en', 7)).toMatchObject({ ok: false })
+    expect(world.manager.snapshot(world.viewer)).toEqual([])
+  })
+
+  it('writes without a row when nobody said which window asked', async () => {
+    const world = await downloadsWorld()
+    const service = world.media.forSession(world.session)
+    service.observeResponse(observedResponse({ url: 'https://example.com/clip.mp4' }))
+    const [finding] = service.list('tab-1').findings
+
+    expect(await service.download('tab-1', finding!.id, null, 'en')).toMatchObject({ ok: true })
+    expect(world.manager.snapshot(world.viewer)).toEqual([])
+  })
+
+  it('is started from the window the request came from', async () => {
+    const world = await downloadsWorld()
+    const handlers = new Map<string, (payload: never, event: never) => unknown>()
+    const handle: MediaHandle = (channel, handler) => {
+      handlers.set(channel, handler)
+    }
+    const tabOf = { id: 'tab-1', view: { webContents: { session: world.session } } }
+    registerMediaHandlers({
+      handle,
+      media: world.media,
+      locale: () => 'en',
+      windows: {
+        resolve: () => ({
+          window: { id: 7 },
+          resolveTab: () => tabOf,
+          tab: () => tabOf,
+          emit: () => {}
+        }),
+        controllers: []
+      }
+    })
+    const service = world.media.forSession(world.session)
+    service.observeResponse(observedResponse({ url: 'https://example.com/clip.mp4' }))
+    const [finding] = service.list('tab-1').findings
+
+    const payload: unknown = { findingId: finding!.id }
+    await handlers.get('media:download')!(payload as never, undefined as never)
+
+    expect([...world.manager.idsStartedIn(7)]).toHaveLength(1)
+  })
+})
+
+describe('what a session fetch refuses to ask for (media R25)', () => {
+  it('never asks the session for an address on the local network', async () => {
+    const session = new BothSessions()
+    const fetcher = sessionFetcher(session)
+    await expect(fetcher('http://192.168.0.1/admin')).rejects.toThrow(/192\.168\.0\.1/)
+    expect(session.calls).toEqual([])
+  })
+
+  it('refuses where a redirect ended, before a byte is read', async () => {
+    const session = new BothSessions()
+    session.respond = () => {
+      const response = new Response('router admin page')
+      Object.defineProperty(response, 'url', { value: 'http://10.0.0.1/admin' })
+      return Promise.resolve(response)
+    }
+    await expect(sessionFetcher(session)('https://example.com/clip.mp4')).rejects.toThrow(
+      /10\.0\.0\.1/
+    )
+  })
+
+  it('reads a manifest only through that guard', async () => {
+    const media = sessions([windowWith({ 11: 'tab-1' })])
+    const session = spySession(MEDIA_PLAYLIST)
+    const service = media.forSession(session)
+    service.observeResponse(
+      observedResponse({
+        url: 'http://127.0.0.1:9000/local.m3u8',
+        headers: { 'content-type': 'application/x-mpegurl' }
+      })
+    )
+    const [finding] = service.list('tab-1').findings
+
+    const report = await service.describe('tab-1', finding!.id, 'en')
+
+    expect(report.manifest).toMatchObject({ status: 'failed' })
+    expect(session.calls).toEqual([])
   })
 })

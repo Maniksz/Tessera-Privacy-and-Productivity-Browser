@@ -82,6 +82,8 @@ export const MEDIA_MESSAGES_EN = {
   'media.refusal.manifest-unavailable': 'The playlist for this stream could not be read.',
   'media.refusal.unsupported-scheme':
     'This media was assembled inside the page, so there is no address to request it from again.',
+  'media.refusal.address-not-allowed':
+    'This stream points at an address the browser does not fetch for a page: one on this computer, on the local network, or outside the web.',
   'media.refusal.segment-unavailable':
     'A piece of this stream could not be retrieved, and a file with a gap in it is not a download.',
   'media.refusal.too-large': 'This download is past the size limit.',
@@ -124,6 +126,8 @@ export const MEDIA_MESSAGES_DE = {
     'Die Wiedergabeliste dieses Streams konnte nicht gelesen werden.',
   'media.refusal.unsupported-scheme':
     'Dieses Medium wurde in der Seite selbst zusammengesetzt, es gibt also keine Adresse, von der es erneut abgerufen werden könnte.',
+  'media.refusal.address-not-allowed':
+    'Dieser Stream verweist auf eine Adresse, die der Browser für keine Seite abruft: auf diesem Rechner, im lokalen Netz oder außerhalb des Webs.',
   'media.refusal.segment-unavailable':
     'Ein Teil dieses Streams konnte nicht geladen werden, und eine Datei mit einer Lücke ist kein Download.',
   'media.refusal.too-large': 'Dieser Download liegt über der Größengrenze.',

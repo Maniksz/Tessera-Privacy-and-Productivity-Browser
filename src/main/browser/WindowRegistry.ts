@@ -25,6 +25,7 @@ import type { PermissionHost } from '../permissions/PermissionArbiter.js'
 import { installRequestPipeline } from '../privacy/RequestPipeline.js'
 import { forgetHttpsExemptions } from '../privacy/https-exemptions.js'
 import { proxyGateFor } from '../session/proxy.js'
+import type { MediaObservers } from '../media/MediaSessions.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
 import { WindowRecency, downloadWindowFor } from './window-recency.js'
 import { windowOfSender, windowOfTab } from './sender-window.js'
@@ -178,6 +179,17 @@ export interface WindowRegistryDeps {
    * and it is bound once, in `#prepareSession`.
    */
   downloads: DownloadSubscriber
+  /**
+   * Media finds, one service per session; `MediaSessions` satisfies it (media plan R1, R4).
+   *
+   * Observed through the pipeline and the hardening each session gets in `#prepareSession`,
+   * forgotten per tab as tabs close, and released with a private window.
+   */
+  media: {
+    observe(session: Session): MediaObservers
+    forgetTab(tabId: string): void
+    release(session: Session): void
+  }
   /**
    * The user's own rules, for one call: the end of the private session.
    *
@@ -377,6 +389,8 @@ export class WindowRegistry {
             when an ordinary window closed would stop the downloads of every other one.
           */
           this.#deps.downloads.releaseSession(session)
+          // And its media finds, which name the addresses its pages fetched (media R4).
+          this.#deps.media.release(session)
           void session.clearStorageData()
           void session.clearCache()
           // And the hosts the user continued to over plain HTTP, which lived only in memory (R8).
@@ -413,6 +427,7 @@ export class WindowRegistry {
           closed.downloadsPanelPresentedAt
         )
       },
+      onTabClosed: (tabId) => this.#deps.media.forgetTab(tabId),
       onPageContextMenu: (tab, target) => {
         // The controller travels with it: the menu opens a new tab beside the page that was clicked, and
         // "beside" is a property of the window rather than of the tab.
@@ -543,6 +558,8 @@ export class WindowRegistry {
   #prepareSession(session: Session, mode: BrowsingMode): void {
     if (this.#preparedSessions.has(session)) return
     this.#preparedSessions.add(session)
+    // Media finds come from the same two listeners as everything else, never a third (media R1).
+    const media = this.#deps.media.observe(session)
 
     applySessionHardening({
       session,
@@ -564,7 +581,8 @@ export class WindowRegistry {
         `webContents` at all, and this is the only place that knows which kind of window the session
         is for.
       */
-      checkPermission: (check) => this.#deps.permissions.check(check, mode)
+      checkPermission: (check) => this.#deps.permissions.check(check, mode),
+      onResponse: media.onResponse
     })
 
     /*
@@ -601,7 +619,8 @@ export class WindowRegistry {
       killSwitch: proxyGateFor(session),
       hooks: {
         onBlocked: (documentUrl) => this.#noteBlockedRequest(documentUrl),
-        onBlockedNavigation: noteBlockedNavigation
+        onBlockedNavigation: noteBlockedNavigation,
+        onRequest: media.onRequest
       }
     })
   }

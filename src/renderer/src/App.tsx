@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { OverlayState } from '@shared/overlay/surface.js'
 import { chromeHiddenAt, chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { internalUrl } from '@shared/product.js'
@@ -12,6 +12,7 @@ import { TabBar } from './components/TabBar.js'
 import { Toolbar } from './components/Toolbar.js'
 import { isDownloadsPanel, useDownloadSummary } from './components/DownloadsButton.js'
 import { useAutofillKeyState } from './components/AutofillKey.js'
+import { mediaPortFor, useMediaFindingCount } from './components/MediaButton.js'
 import { SplitDividers } from './components/SplitDividers.js'
 import { ExtensionsPanel } from './components/ExtensionsPanel.js'
 import { TileFailures } from './components/TabFailure.js'
@@ -29,12 +30,22 @@ const openSettingsTab = (): void => {
   void invoke('tabs:create', { url: internalUrl('settings') })
 }
 
+/**
+ * The media panel, fetched when first opened (roadmap U16).
+ *
+ * It carries the media feature's sentences in both languages, and most windows never open it; the
+ * button, which every window draws, needs only its count and one catalogue line.
+ */
+const MediaPanel = lazy(() =>
+  import('./components/MediaPanel.js').then((module) => ({ default: module.MediaPanel }))
+)
+
 export function App(): React.ReactNode {
   const { t } = useI18n()
   const state = useBrowserState()
   const chromeRef = useRef<HTMLDivElement>(null)
   const [chromeHeight, setChromeHeight] = useState(88)
-  const [panel, setPanel] = useState<'none' | 'extensions'>('none')
+  const [panel, setPanel] = useState<'none' | 'extensions' | 'media'>('none')
   /** Bumped when the user asks for the address bar; see `Omnibox`. */
   const [focusRequest, setFocusRequest] = useState(0)
   /**
@@ -51,6 +62,8 @@ export function App(): React.ReactNode {
   const { ref: contentRef, rects: tileRects } = useTileRects(state.split)
 
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
+  /** What the media button counts: the active tab's finds, following the tab (media plan R3). */
+  const mediaFinds = useMediaFindingCount(activeTab?.id)
   const privateMode = state.window?.privateMode ?? false
   /** The password key, asked again whenever the tile, its page, the layer or the setting moves. */
   const autofillKey = useAutofillKeyState(
@@ -223,7 +236,7 @@ export function App(): React.ReactNode {
    * open. Without this the panel would be drawn beneath the native views and receive
    * no pointer events — the same layering that forces the tile gutter.
    *
-   * Only the extensions panel is left to need it. Settings is a tab now, and a tab is
+   * The extensions and media panels need it. Settings is a tab now, and a tab is
    * content: it is drawn *by* one of those native views rather than over them, so it
    * suspends nothing and stays usable beside a page in a split tile.
    */
@@ -298,6 +311,9 @@ export function App(): React.ReactNode {
           downloads={downloads}
           downloadsPanelOpen={isDownloadsPanel(overlay)}
           autofillKey={autofillKey}
+          media={mediaFinds}
+          mediaPanelOpen={panel === 'media'}
+          onOpenMedia={() => setPanel('media')}
           focusRequest={focusRequest}
           onOpenSettings={openSettingsTab}
           onOpenExtensions={() => setPanel('extensions')}
@@ -305,6 +321,16 @@ export function App(): React.ReactNode {
       </div>
 
       {panel === 'extensions' && <ExtensionsPanel onClose={() => setPanel('none')} />}
+      {/* The active tab's finds, and the next tab's once a shortcut switches under the panel. */}
+      {panel === 'media' && (
+        <Suspense fallback={null}>
+          <MediaPanel
+            port={mediaPortFor(activeTab?.id)}
+            {...(activeTab === undefined ? {} : { tabId: activeTab.id })}
+            onClose={() => setPanel('none')}
+          />
+        </Suspense>
+      )}
 
       {state.split !== null && <SplitDividers split={state.split} contentTop={contentInsets.top} />}
 

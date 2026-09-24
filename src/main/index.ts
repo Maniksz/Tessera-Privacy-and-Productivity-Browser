@@ -907,16 +907,15 @@ async function main(): Promise<void> {
   })
 
   /*
-    Media detection and download.
-
-    One service per browsing *session* rather than per window: a stream is fetched by a session, and two
-    windows sharing the normal one are looking at the same findings. A private window's session gets its
-    own, released with the window — its findings name the addresses a page fetched, which is browsing
-    history by another route.
+    Media detection and download, one service per browsing *session*: a stream is fetched by a session, and
+    windows sharing the normal one see the same findings. A private window's is released with the window;
+    its findings name the addresses a page fetched. Its downloads are ordinary rows in the manager's list.
   */
-  const mediaSessions = new MediaSessions({
+  const mediaSessions = new MediaSessions<Electron.Session>({
     hosts: () => windows?.controllers ?? [],
-    directory: () => settings?.get('downloads.directory') ?? defaultDownloadsDir()
+    directory: () => settings?.get('downloads.directory') ?? '',
+    fallbackDirectory: defaultDownloadsDir,
+    downloads: downloadManager
   })
   /*
     Not a flush but the same need: interrupting `writeAtomically` between its write and its rename leaves
@@ -945,6 +944,7 @@ async function main(): Promise<void> {
     // Bound to a browsing mode where the session is created, so a private window holds a recorder
     // that discards rather than a flag somebody has to remember to check.
     downloads: downloadManager,
+    media: mediaSessions,
     // Every session asks through the one arbiter, so two windows' prompts queue in one place and a
     // check reads the same memory the answer was written to.
     permissions: permissionArbiter,

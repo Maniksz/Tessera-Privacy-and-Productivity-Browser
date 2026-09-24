@@ -72,9 +72,16 @@ function variantLabel(variant: MediaVariant): string {
 
 export function MediaPanel({
   port,
+  tabId,
   onClose
 }: {
   port: MediaPort
+  /**
+   * The tab whose finds are shown: the active one, followed as it changes. The panel covers the
+   * window, but a shortcut still switches tabs under it, and a list of the tab it left would send
+   * a download to a page nobody is looking at. Absent, the first list answered decides.
+   */
+  tabId?: string
   onClose: () => void
 }): React.ReactNode {
   const { locale } = useI18n()
@@ -108,16 +115,19 @@ export function MediaPanel({
     })
 
     const unsubscribe = portRef.current.subscribe((next) => {
-      // Only the tab this panel was opened for. The core pushes changes for every tab in
+      // Only the tab this panel is showing. The core pushes changes for every tab in
       // the window, and a panel that accepted them all would show a background tile's
       // video as if it were this page's.
-      setList((current) => (current === null || current.tabId === next.tabId ? next : current))
+      setList((current) => {
+        const shown = tabId ?? current?.tabId ?? next.tabId
+        return shown === next.tabId ? next : current
+      })
     })
     return () => {
       cancelled = true
       unsubscribe()
     }
-  }, [])
+  }, [tabId])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -148,7 +158,8 @@ export function MediaPanel({
     }
   }
 
-  const findings = list?.findings ?? []
+  // A list of the tab just left is not shown while the new one is asked for.
+  const findings = (tabId === undefined || list?.tabId === tabId ? list?.findings : null) ?? []
 
   return (
     <div

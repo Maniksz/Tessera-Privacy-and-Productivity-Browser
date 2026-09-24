@@ -562,7 +562,12 @@ describe('installMenuActions', () => {
       },
       stopped: ['session', 'tabGroups', 'arrangements', 'permissions'].map(stopped),
       downloads: { cancelUnfinished: () => [] },
-      media: { release: (session: ClearingSession) => released.push(session) },
+      media: {
+        forgetAll: (session?: ClearingSession) => {
+          if (session === undefined) log.push('media.forgetAll')
+          else released.push(session)
+        }
+      },
       locale: () => 'en',
       path: (name: InventoryPath) => join(dir, name)
     })
@@ -620,6 +625,7 @@ describe('installMenuActions', () => {
       'arrangements.abandon',
       'permissions.abandon',
       'favicons.seal',
+      'media.forgetAll',
       'closeAll',
       'default.clearData',
       'quit'

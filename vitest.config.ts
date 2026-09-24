@@ -224,6 +224,13 @@ export default defineConfig({
         'src/shared/tabgroups/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         // The local ranker (U17): pure, and every suggestion row the address bar shows is its answer.
         'src/shared/search/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        // Which addresses a media download may fetch (U16, media R25): each branch is a way in.
+        'src/shared/media/url-guard.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         /*
           The arrangement model, entered the moment the directory appeared, which is what the
           paragraph above asks for.

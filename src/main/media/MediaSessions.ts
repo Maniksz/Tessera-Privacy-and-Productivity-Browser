@@ -1,6 +1,10 @@
 import type { Session } from 'electron'
+import { mediaUrlVerdict } from '@shared/media/url-guard.js'
 import type { MediaFindingList } from '@shared/media/wire.js'
-import { MediaService } from './MediaService.js'
+import type { ForeignTransfer } from '../downloads/foreign-transfer.js'
+import type { ObservedRequest } from '../privacy/RequestPipeline.js'
+import type { ObservedResponse } from '../session/hardening.js'
+import { MediaService, type MediaTransferRequest } from './MediaService.js'
 import type { MediaFetchInit, MediaFetcher } from './fetch.js'
 
 /**
@@ -67,10 +71,16 @@ export function tabIdForWebContents(
  * work, and bypass Chromium's network stack — and with it the session's proxy rule, the DNS
  * settings, and the request pipeline with its kill-switch stage (`main/session/proxy.ts`).
  * `session.fetch` is indistinguishable from the page's own traffic.
+ *
+ * And guarded (media plan R25): every address the feature asks for — a manifest, a variant, a
+ * segment — goes through `url-guard.ts` first, and so does the address a redirect ended at, before
+ * a byte of its body is read. The downloader checks a plan whole before writing; this is the line
+ * that also holds for the registry's manifest reads and for where the network stack was sent.
  */
 export function sessionFetcher(session: MediaSession): MediaFetcher {
-  return (url, init) =>
-    session.fetch(url, {
+  return async (url, init) => {
+    refuseLocal(url)
+    const response = await session.fetch(url, {
       // Rebuilt rather than forwarded: `exactOptionalPropertyTypes` makes a present
       // `headers: undefined` a different type from an absent one, and passing the first
       // to a fetch implementation is how an empty header set becomes a header named
@@ -78,18 +88,47 @@ export function sessionFetcher(session: MediaSession): MediaFetcher {
       ...(init?.headers === undefined ? {} : { headers: init.headers }),
       ...(init?.signal === undefined ? {} : { signal: init.signal })
     })
+    // Empty for a response nobody fetched, which is what a test constructs.
+    if (response.url !== '') refuseLocal(response.url)
+    return response
+  }
 }
 
-export interface MediaSessionsOptions {
+function refuseLocal(url: string): void {
+  const verdict = mediaUrlVerdict(url)
+  if (!verdict.ok) throw new Error(`Not fetched for a page: ${verdict.detail}`)
+}
+
+/** The two observers a session's request pipeline and hardening call; see `MediaSessions.observe`. */
+export interface MediaObservers {
+  onRequest(observation: ObservedRequest): void
+  onResponse(observation: ObservedResponse): void
+}
+
+/** `DownloadManager`, as far as media transfers need it. */
+export interface MediaDownloads<S> {
+  track(request: MediaTransferRequest & { readonly session: S }): ForeignTransfer | null
+  cancel(id: string): boolean
+}
+
+export interface MediaSessionsOptions<S extends MediaSession> {
   /** Every window that can answer "which of your tabs owns this view". */
   readonly hosts: () => readonly MediaTabHost[]
-  /** Where downloads land. Read per download, so the setting stays live. */
+  /** `downloads.directory`, empty or relative included. Read per download, so it stays live. */
   readonly directory: () => string
+  /** `app.getPath('downloads')`, for a `directory` that is unusable; see `downloadDirectoryOf`. */
+  readonly fallbackDirectory?: () => string
+  /** Where a media download is filed as an ordinary one (media plan R19). */
+  readonly downloads?: MediaDownloads<S>
   readonly now?: () => number
 }
 
-export class MediaSessions {
-  readonly #options: MediaSessionsOptions
+/**
+ * Generic over the session so the entry point can hand over Electron's and the download manager
+ * can take it back: the session is what files a transfer under the right browsing mode.
+ */
+export class MediaSessions<S extends MediaSession = MediaSession> {
+  readonly #options: MediaSessionsOptions<S>
   /**
    * Strong references, deliberately, with `release` as the counterpart.
    *
@@ -98,23 +137,33 @@ export class MediaSessions {
    * something decides, not whenever a garbage collector gets round to it. A `WeakMap`
    * would have made that unobservable and untestable.
    */
-  readonly #services = new Map<MediaSession, MediaService>()
+  readonly #services = new Map<S, MediaService>()
   readonly #listeners = new Set<(list: MediaFindingList) => void>()
 
-  constructor(options: MediaSessionsOptions) {
+  constructor(options: MediaSessionsOptions<S>) {
     this.#options = options
   }
 
   /** The service for this session, created on first use. */
-  forSession(session: MediaSession): MediaService {
+  forSession(session: S): MediaService {
     const existing = this.#services.get(session)
     if (existing !== undefined) return existing
 
+    const { downloads, fallbackDirectory, now } = this.#options
     const service = new MediaService({
       fetch: sessionFetcher(session),
       directory: this.#options.directory,
       resolveTabId: (webContentsId) => tabIdForWebContents(this.#options.hosts(), webContentsId),
-      ...(this.#options.now === undefined ? {} : { now: this.#options.now })
+      ...(fallbackDirectory === undefined ? {} : { fallbackDirectory }),
+      ...(downloads === undefined
+        ? {}
+        : {
+            transfers: {
+              track: (request) => downloads.track({ ...request, session }),
+              cancel: (id) => downloads.cancel(id)
+            }
+          }),
+      ...(now === undefined ? {} : { now })
     })
     // Fanned in here rather than subscribed per service by the caller: a window is created
     // long after the first session, and a subscriber that had to be told about each new
@@ -137,8 +186,35 @@ export class MediaSessions {
     for (const service of this.#services.values()) service.forgetTab(tabId)
   }
 
-  /** A session that is going away, with everything observed through it. */
-  release(session: MediaSession): void {
+  /**
+   * The observers `WindowRegistry` installs for a session (media plan R1), bound to its service once.
+   *
+   * Once, because the pipeline and the hardening each install a single listener per session for its
+   * whole life. That is also why clearing data calls `forgetAll` rather than `release`: a released
+   * service would go on being fed by these, while `forSession` handed out a new, empty one.
+   */
+  observe(session: S): MediaObservers {
+    const service = this.forSession(session)
+    return {
+      onRequest: (observation) => service.observeRequest(observation),
+      onResponse: (observation) => service.observeResponse(observation)
+    }
+  }
+
+  /**
+   * Every finding of `session`, or of every session when none is named, dropped and announced.
+   *
+   * For clearing browsing data with the cookies, which is per session, and for panic, which is all
+   * of them (media plan R5). The services stay: their sessions' observers still feed them.
+   */
+  forgetAll(session?: S): void {
+    for (const [owner, service] of this.#services) {
+      if (session === undefined || owner === session) service.forgetAll()
+    }
+  }
+
+  /** A session that is going away, with everything observed through it: a private window's. */
+  release(session: S): void {
     this.#services.delete(session)
   }
 

@@ -56,6 +56,7 @@ export const de = {
   'toolbar.autofillLocked': 'Passwörter sind gesperrt – entsperren',
   'toolbar.autofillMatches': 'Gespeichertes Passwort einsetzen ({count} für diese Seite)',
   'toolbar.autofillNone': 'Kein Passwort für diese Seite gespeichert',
+  'toolbar.media': 'Medien auf dieser Seite ({count})',
 
   'omnibox.placeholder': 'Suchen oder Adresse eingeben',
   'omnibox.searchWith': 'Mit {engine} suchen',

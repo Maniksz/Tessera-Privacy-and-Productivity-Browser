@@ -515,6 +515,28 @@ body {
   color: var(--fg-dim);
 }
 
+/*
+  The media button: dim while the active tab plays nothing, and the count beside the frame once it
+  does (media plan R3). There either way, because the panel is where "nothing recognised" is said.
+*/
+.media-button {
+  width: auto;
+  min-width: 32px;
+  grid-auto-flow: column;
+  gap: 3px;
+  padding: 0 6px;
+  color: var(--fg-dim);
+}
+
+.media-button[data-found] {
+  color: var(--fg);
+}
+
+.media-button [data-part='count'] {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- address bar ----------------------------------------------------------- */
 
 .omnibox {

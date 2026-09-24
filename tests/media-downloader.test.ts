@@ -1,8 +1,10 @@
-import { readdir, readFile, mkdtemp, writeFile } from 'node:fs/promises'
+import { existsSync, readdirSync } from 'node:fs'
+import { chmod, mkdir, readdir, readFile, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MediaDownloader, type DownloadProgress } from '@main/media/MediaDownloader.js'
+import { MAX_SAVE_PATH_ATTEMPTS } from '@main/downloads/target-path.js'
 import type { MediaFetcher } from '@main/media/fetch.js'
 import type { ManifestState, MediaFinding, MediaVariant } from '@shared/media/model.js'
 
@@ -505,19 +507,210 @@ one.ts
     expect(result.refusal).toBe('write-failed')
   })
 
-  it('reports a name it cannot open', async () => {
+  it('reports a directory it may not write into', async () => {
+    const world = await harness()
+    await mkdir(world.directory, { recursive: true })
+    await chmod(world.directory, 0o500)
+    world.answer(() => new Response(new Uint8Array([1])))
+    try {
+      const result = await world.downloader.run({
+        kind: 'progressive',
+        url: 'https://example.com/clip.mp4',
+        fileName: 'clip.mp4',
+        container: 'mp4'
+      })
+      if (result.ok) throw new Error('expected a refusal')
+      expect(result.refusal).toBe('write-failed')
+    } finally {
+      await chmod(world.directory, 0o700)
+    }
+  })
+})
+
+describe('where a media download lands (media plan R23)', () => {
+  const PLAN = {
+    kind: 'progressive' as const,
+    url: 'https://example.com/clip.mp4',
+    fileName: 'clip.mp4',
+    container: 'mp4' as const
+  }
+
+  it('reserves its target before the first byte, and says where', async () => {
+    // The downloads row needs the path the moment the transfer starts, and "reserved" has to mean
+    // something on disk: another download choosing a name now must see this one as taken.
+    const world = await harness()
+    const seen: Array<{ target: string; partial: string[] }> = []
+    world.answer(() => new Response(new Uint8Array([1])))
+
+    const result = await world.downloader.run(PLAN, {
+      onTarget: (target) => {
+        seen.push({ target, partial: readdirSync(world.directory) })
+      }
+    })
+
+    if (!result.ok) throw new Error('expected a download')
+    expect(seen).toEqual([
+      { target: join(world.directory, 'clip.mp4'), partial: ['clip.mp4.part'] }
+    ])
+    expect(result.filePath).toBe(seen[0]?.target)
+  })
+
+  it('gives two downloads of one name two targets, even when they start together', async () => {
+    /*
+      Two players on one page both call their playlist `index.m3u8`, so the same name twice is the
+      ordinary case. Numbered by the rule `target-path.ts` uses for every download — and reserved on
+      disk, because two downloads starting in the same tick both saw a free name before.
+    */
+    const world = await harness()
+    let marker = 0
+    world.answer(() => {
+      marker += 1
+      return segmentBody(marker, 2)
+    })
+
+    const [first, second] = await Promise.all([
+      world.downloader.run(PLAN),
+      world.downloader.run(PLAN)
+    ])
+
+    if (!first.ok || !second.ok) throw new Error('expected two downloads')
+    expect(new Set([first.filePath, second.filePath])).toEqual(
+      new Set([join(world.directory, 'clip.mp4'), join(world.directory, 'clip-2.mp4')])
+    )
+    const contents = [await readFile(first.filePath), await readFile(second.filePath)]
+    expect(contents.map((bytes) => [...bytes].sort())).toEqual(
+      expect.arrayContaining([
+        [1, 1],
+        [2, 2]
+      ])
+    )
+  })
+
+  it('counts a name another download is still writing as taken', async () => {
+    const world = await harness()
+    await mkdir(world.directory, { recursive: true })
+    await writeFile(join(world.directory, 'clip.mp4.part'), 'someone else')
+    world.answer(() => new Response(new Uint8Array([1])))
+
+    const result = await world.downloader.run(PLAN)
+    if (!result.ok) throw new Error('expected a download')
+    expect(result.filePath).toBe(join(world.directory, 'clip-2.mp4'))
+  })
+
+  it('writes into the platform folder when the setting is empty', async () => {
+    // `downloads.directory` defaults to empty, and an empty directory joined to a name is a path
+    // relative to wherever the process happens to run.
+    const root = await mkdtemp(join(tmpdir(), 'tessera-media-'))
+    const fallbackDirectory = join(root, 'Downloads')
+    const downloader = new MediaDownloader({
+      fetch: () => Promise.resolve(new Response(new Uint8Array([1]))),
+      now: () => T0,
+      directory: '',
+      fallbackDirectory
+    })
+
+    const result = await downloader.run(PLAN)
+    if (!result.ok) throw new Error(`expected a download, got ${result.refusal}: ${result.detail}`)
+    expect(result.filePath).toBe(join(fallbackDirectory, 'clip.mp4'))
+  })
+
+  it('keeps a name inside the directory, whatever the plan called it', async () => {
+    // A plan builder never produces a name with a directory in it; a caller handing over its own
+    // still gets the sanitiser every other download goes through.
     const world = await harness()
     world.answer(() => new Response(new Uint8Array([1])))
-    const result = await world.downloader.run({
-      kind: 'progressive',
-      url: 'https://example.com/clip.mp4',
-      // A name with a directory in it that does not exist. The plan builder never
-      // produces one, so this is what happens when a caller hands over its own.
-      fileName: 'missing/clip.mp4',
-      container: 'mp4'
-    })
+
+    const result = await world.downloader.run({ ...PLAN, fileName: '../../missing/clip.mp4' })
+    if (!result.ok) throw new Error('expected a download')
+    expect(result.filePath).toBe(join(world.directory, 'clip.mp4'))
+  })
+
+  it('refuses when no name is free', async () => {
+    const world = await harness()
+    await mkdir(world.directory, { recursive: true })
+    await writeFile(join(world.directory, 'clip.mp4'), 'x')
+    for (let attempt = 2; attempt <= MAX_SAVE_PATH_ATTEMPTS; attempt += 1) {
+      await writeFile(join(world.directory, `clip-${attempt}.mp4`), 'x')
+    }
+    world.answer(() => new Response(new Uint8Array([1])))
+
+    const result = await world.downloader.run(PLAN)
     if (result.ok) throw new Error('expected a refusal')
     expect(result.refusal).toBe('write-failed')
+    expect(world.requests).toEqual([])
+  })
+})
+
+describe('addresses a stream may not send the browser to (media plan R25)', () => {
+  function playlistWith(segment: string): string {
+    return `#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:9.0,\nfirst.ts\n#EXTINF:9.0,\n${segment}\n#EXT-X-ENDLIST\n`
+  }
+
+  it.each([
+    'http://127.0.0.1/second.ts',
+    'http://10.0.0.1/second.ts',
+    'http://[::1]/second.ts',
+    'file:///etc/passwd',
+    'data:video/mp2t;base64,AAAA',
+    'blob:https://example.com/9d2f'
+  ])('refuses a playlist with a segment at %s, before writing anything', async (segment) => {
+    const world = await harness()
+    world.answer((url) =>
+      url === PLAYLIST_URL ? new Response(playlistWith(segment)) : segmentBody(0x11, 4)
+    )
+
+    const result = await world.downloader.download(finding(), null)
+
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.refusal).toBe('address-not-allowed')
+    // Only the playlist was asked for: not the first, public segment, and never the other one.
+    expect(world.requests.map((one) => one.url)).toEqual([PLAYLIST_URL])
+    expect(existsSync(world.directory) ? await readdir(world.directory) : []).toEqual([])
+  })
+
+  it('refuses an initialisation segment on the local network', async () => {
+    const world = await harness()
+    const result = await world.downloader.run({
+      kind: 'segments',
+      fileName: 'index.mp4',
+      container: 'mp4',
+      initSegment: { url: 'http://192.168.0.1/init.mp4', byteRange: null },
+      segments: [{ url: 'https://example.com/hls/one.m4s', byteRange: null }]
+    })
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.refusal).toBe('address-not-allowed')
+    expect(result.detail).toContain('192.168.0.1')
+    expect(world.requests).toEqual([])
+  })
+
+  it('refuses a quality whose playlist is on the local network, without asking it', async () => {
+    const world = await harness()
+    world.answer(() => new Response(TS_PLAYLIST))
+
+    const result = await world.downloader.download(
+      finding({
+        manifest: ready([variant({ id: 'v0', url: 'http://169.254.169.254/latest/1080p.m3u8' })])
+      }),
+      null
+    )
+
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.refusal).toBe('address-not-allowed')
+    expect(world.requests).toEqual([])
+  })
+
+  it('refuses a progressive file on this computer', async () => {
+    const world = await harness()
+    world.answer(() => new Response(new Uint8Array([1])))
+
+    const result = await world.downloader.download(
+      finding({ kind: 'progressive', url: 'http://localhost:8080/clip.mp4', manifest: null }),
+      null
+    )
+
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.refusal).toBe('address-not-allowed')
+    expect(world.requests).toEqual([])
   })
 })
 

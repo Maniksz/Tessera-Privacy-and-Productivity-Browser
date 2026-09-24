@@ -1,5 +1,5 @@
-import { mkdir, open, rename, stat, unlink, type FileHandle } from 'node:fs/promises'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { mkdir, open, rename, unlink, type FileHandle } from 'node:fs/promises'
 import { parseHlsPlaylist } from '@shared/media/hls.js'
 import {
   NOT_PROTECTED,
@@ -16,7 +16,13 @@ import {
   type PlanOutcome,
   type PlannedSegment
 } from '@shared/media/plan.js'
-import { numberedFileName } from '@shared/media/url.js'
+import { mediaUrlVerdict } from '@shared/media/url-guard.js'
+import { partialFileOf } from '../downloads/foreign-transfer.js'
+import {
+  MAX_SAVE_PATH_ATTEMPTS,
+  downloadDirectoryOf,
+  resolveSavePath
+} from '../downloads/target-path.js'
 import { fetchText, messageOf, type MediaFetchInit, type MediaFetcher } from './fetch.js'
 
 /**
@@ -47,8 +53,13 @@ export interface MediaDownloaderOptions {
   readonly fetch: MediaFetcher
   /** Injected, so the timings in a result do not depend on when the test ran. */
   readonly now: () => number
-  /** Where files land. Created on first use. */
+  /**
+   * Where files land: `downloads.directory`, which may be empty or relative. Created on first use.
+   * Resolved by `downloadDirectoryOf`, the rule every download follows (media plan R23).
+   */
   readonly directory: string
+  /** `app.getPath('downloads')`, for a `directory` that is unusable. Defaults to `directory`. */
+  readonly fallbackDirectory?: string
   readonly maxBytes?: number
   readonly maxSegments?: number
   readonly maxManifestBytes?: number
@@ -76,6 +87,13 @@ export interface DownloadProgress {
 
 export interface DownloadOptions {
   readonly onProgress?: (progress: DownloadProgress) => void
+  /**
+   * The target, once it is reserved and before the first byte is written.
+   *
+   * Where the caller files the transfer with the downloads list, which needs the path from the start
+   * (media plan R19). Not called for a download refused before it had one.
+   */
+  readonly onTarget?: (targetPath: string) => void
   readonly signal?: AbortSignal
 }
 
@@ -130,14 +148,17 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted ?? false
 }
 
-async function pathExists(path: string): Promise<boolean> {
-  try {
-    await stat(path)
-    return true
-  } catch {
-    return false
+/** The first address the guard refuses, as a refusal; null when every one may be fetched (R25). */
+function refusedAddress(urls: readonly string[]): DownloadFailure | null {
+  for (const url of urls) {
+    const verdict = mediaUrlVerdict(url)
+    if (!verdict.ok) return refuse('address-not-allowed', verdict.detail)
   }
+  return null
 }
+
+type Reservation =
+  { readonly ok: true; readonly target: string; readonly handle: FileHandle } | DownloadFailure
 
 /**
  * Streams a response body through a writer, returning how many bytes went.
@@ -193,6 +214,7 @@ export class MediaDownloader {
   readonly #fetch: MediaFetcher
   readonly #now: () => number
   readonly #directory: string
+  readonly #fallbackDirectory: string
   readonly #maxBytes: number
   readonly #maxSegments: number
   readonly #maxManifestBytes: number
@@ -201,6 +223,7 @@ export class MediaDownloader {
     this.#fetch = options.fetch
     this.#now = options.now
     this.#directory = options.directory
+    this.#fallbackDirectory = options.fallbackDirectory ?? options.directory
     this.#maxBytes = options.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES
     this.#maxSegments = options.maxSegments ?? DEFAULT_MAX_SEGMENTS
     this.#maxManifestBytes = options.maxManifestBytes ?? DEFAULT_MAX_PLAYLIST_BYTES
@@ -234,6 +257,9 @@ export class MediaDownloader {
 
     const chosen = this.#chooseHlsPlaylist(finding, variantId)
     if (!chosen.ok) return chosen
+    // A variant's address is the master playlist's choice, and is not asked if it names the local network.
+    const refused = refusedAddress([chosen.playlistUrl])
+    if (refused !== null) return refused
 
     const fetched = await fetchText(this.#fetch, chosen.playlistUrl, this.#maxManifestBytes)
     if (!fetched.ok) return refuse('manifest-unavailable', fetched.detail)
@@ -271,24 +297,20 @@ export class MediaDownloader {
    * An interrupted download leaves a file whose name says it is incomplete rather
    * than a plausible-looking video that stops halfway through, and a failure
    * removes it so a retry has nothing to reason about.
+   *
+   * Every address is checked before the first is asked and before anything is written: a playlist
+   * that sends its last segment to `127.0.0.1` is refused whole, not after forty seconds of video.
    */
   async run(plan: DownloadPlan, options: DownloadOptions = {}): Promise<DownloadResult> {
     const startedAt = this.#now()
-    try {
-      await mkdir(this.#directory, { recursive: true })
-    } catch (error) {
-      return refuse('write-failed', messageOf(error))
-    }
+    const refused = refusedAddress(partsOf(plan).map((part) => part.url))
+    if (refused !== null) return refused
 
-    const target = await this.#freePath(plan.fileName)
-    const partial = `${target}.part`
-
-    let handle: FileHandle
-    try {
-      handle = await open(partial, 'w')
-    } catch (error) {
-      return refuse('write-failed', messageOf(error))
-    }
+    const reserved = await this.#reserve(plan.fileName)
+    if (!reserved.ok) return reserved
+    const { target, handle } = reserved
+    const partial = partialFileOf(target)
+    options.onTarget?.(target)
 
     let written: WriteOutcome
     try {
@@ -320,6 +342,45 @@ export class MediaDownloader {
       startedAt,
       finishedAt: this.#now()
     }
+  }
+
+  /**
+   * A target by the rule every download follows, with its `.part` created before anything else can.
+   *
+   * The name comes from `resolveSavePath`: sanitised, numbered with `numberedFileName`, inside the
+   * directory `downloadDirectoryOf` settles on (R23). A name whose `.part` exists counts as taken,
+   * because two downloads from one page routinely share a name — `index.m3u8` from two players is
+   * the ordinary case — and two writers on one `.part` interleave their bytes, both succeed, and
+   * leave one file that plays for a few seconds.
+   *
+   * Created with `wx`, so "free" is decided by the file system and not by a look a moment earlier:
+   * two downloads starting in the same tick both see the name free, only one creates the file, and
+   * the other takes the next name.
+   */
+  async #reserve(fileName: string): Promise<Reservation> {
+    const request = {
+      directory: this.#directory,
+      fallbackDirectory: this.#fallbackDirectory,
+      fileName
+    }
+    try {
+      await mkdir(downloadDirectoryOf(request), { recursive: true })
+    } catch (error) {
+      return refuse('write-failed', messageOf(error))
+    }
+    const exists = (path: string): boolean => existsSync(path) || existsSync(partialFileOf(path))
+    for (let attempt = 0; attempt < MAX_SAVE_PATH_ATTEMPTS; attempt += 1) {
+      const target = resolveSavePath(request, { exists })
+      if (target === null) break
+      try {
+        return { ok: true, target, handle: await open(partialFileOf(target), 'wx') }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+          return refuse('write-failed', messageOf(error))
+        }
+      }
+    }
+    return refuse('write-failed', 'no free name in the downloads folder')
   }
 
   /** What the manifest said about encryption, when it has been read at all. */
@@ -355,32 +416,6 @@ export class MediaDownloader {
       return refuse('manifest-unavailable', `variant ${chosen.id} has no address of its own`)
     }
     return { ok: true, playlistUrl: chosen.url, track: chosen.track }
-  }
-
-  /**
-   * The first name in the directory that is not taken.
-   *
-   * A name whose `.part` sibling exists counts as taken, and that is not belt-and-braces:
-   * two downloads from one page routinely produce the same file name — `index.m3u8` and
-   * `index.m3u8` from two different players is the ordinary case, not a contrived one —
-   * and while the *finished* names would have been numbered apart, both would have been
-   * written through the same `<name>.part` first. Two writers on one handle interleave
-   * their bytes, both succeed, and the user gets one file that plays for a few seconds and
-   * then stops. Nothing reports it.
-   *
-   * This closes the case where one download is already running. Two starting within the
-   * same tick can still both see a free name; guarding that properly means creating the
-   * partial file exclusively (`open(…, 'wx')`) and treating `EEXIST` as "try the next
-   * name", which is a change to `run` rather than to the naming.
-   */
-  async #freePath(fileName: string): Promise<string> {
-    let attempt = 1
-    let candidate = join(this.#directory, fileName)
-    while ((await pathExists(candidate)) || (await pathExists(`${candidate}.part`))) {
-      attempt += 1
-      candidate = join(this.#directory, numberedFileName(fileName, attempt))
-    }
-    return candidate
   }
 
   async #writeParts(

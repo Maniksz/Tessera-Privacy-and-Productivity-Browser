@@ -99,6 +99,8 @@ export interface WindowControllerOptions {
   onPageContextMenu(tab: Tab, target: PageContextTarget): void
   getSettings(): SettingsSnapshot
   onClosed(controller: BrowserWindowController): void
+  /** A tab has gone, closed or with its window; its media finds go with it (media plan R4). */
+  onTabClosed(tabId: string): void
   onRequestNewWindow(options: { privateMode: boolean }): void
   /**
    * This window has just presented its downloads panel; `downloadsPanelPresentedAt` already says when.
@@ -473,7 +475,10 @@ export class BrowserWindowController implements PermissionHost {
       this.#overlay.destroy()
       // Before the tabs go: a close still waiting on a page finishes nothing in a window that is gone.
       this.#close.dispose()
-      for (const tab of this.#tabs.values()) tab.destroy()
+      for (const tab of this.#tabs.values()) {
+        tab.destroy()
+        this.options.onTabClosed(tab.id)
+      }
       this.#tabs.clear()
       // The window's slot goes with it. `SessionStore.seal()` is what keeps this from rewriting the session
       // during shutdown, when every window closes and none of them means it.
@@ -697,17 +702,12 @@ export class BrowserWindowController implements PermissionHost {
     this.#discards.forget(tabId)
     // After the tab has left `#tabs` and the split, so the arbiter, reacting, cannot find it in front.
     this.#permissionTabs.closed(tab)
+    this.options.onTabClosed(tabId)
 
     this.#seams.occupancy.afterTabClosed(vacatedTile)
 
-    /**
-     * A window always keeps at least one tab.
-     *
-     * Closing the last one used to leave an empty window with a live toolbar acting
-     * on nothing — every command silently no-oped because `activeTab()` was
-     * undefined. A fresh start-page tab is both the safer state and what the user
-     * would open next anyway.
-     */
+    // A window always keeps a tab: an empty one had a live toolbar acting on nothing, every command a
+    // silent no-op. A fresh start page is both the safer state and what the user would open next.
     if (this.#tabs.size === 0 && keepOneTab && !this.window.isDestroyed()) {
       this.createTab({})
       return

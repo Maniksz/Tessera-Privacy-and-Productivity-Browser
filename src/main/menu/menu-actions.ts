@@ -261,7 +261,8 @@ export interface MenuActionWiring<W extends ActionWindow & { readonly window: Ba
   /** The other stores of a panic category: the session, tab groups, arrangements, permissions. */
   readonly stopped: readonly AbandonableStore[]
   readonly downloads: { cancelUnfinished(): readonly string[] }
-  readonly media: { release(session: S): void }
+  /** Media finds: of one session when its cookies go, of all of them for panic (media plan R5). */
+  readonly media: { forgetAll(session?: S): void }
   readonly locale: () => Locale
   /** `inventoryPath` in `paths.ts`. */
   readonly path: (name: InventoryPath) => string
@@ -279,6 +280,7 @@ export function installMenuActions<
     stores: [...wiring.stopped, stores.history, stores.downloads],
     caches: [stores.favicons, stores.thumbnails],
     closeWindows: () => {
+      wiring.media.forgetAll()
       windows.closeAll()
     },
     clearing: { session: electron.defaultSession, path: wiring.path },
@@ -291,7 +293,7 @@ export function installMenuActions<
     stores,
     forgetSession: (session) => {
       httpsExemptionsFor(session).clear()
-      wiring.media.release(session)
+      wiring.media.forgetAll(session)
     },
     ask: async (window, box) => {
       const options: MessageBoxOptions = box
