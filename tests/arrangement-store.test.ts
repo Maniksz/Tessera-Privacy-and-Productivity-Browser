@@ -4,12 +4,8 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { ArrangementStore, type ArrangementBook } from '@main/data/ArrangementStore.js'
 import { plainJsonDocumentCodec, type DocumentCodec } from '@main/data/JsonStore.js'
-import {
-  MAX_ARRANGEMENTS,
-  type Arrangement,
-  type ArrangementDocument,
-  type WindowTabs
-} from '@shared/arrangements/model.js'
+import type { Arrangement, ArrangementDocument, WindowTabs } from '@shared/arrangements/model.js'
+import { DEFAULT_FRACTIONS, TILE_COUNT, type LayoutId } from '@shared/split/layout.js'
 
 /**
  * The arrangement store: identity, the clock, the write path, and who is allowed to use it.
@@ -27,6 +23,24 @@ import {
  */
 
 const T0 = 1_700_000_000_000
+
+/** What a tile's sound is before anybody touches it. */
+const LOUD = { muted: false, volume: 1 }
+
+/**
+ * The view a recording of this layout starts with: first tile active, default dividers, all loud.
+ * Spelled out here rather than read from `defaultArrangementView`, so a store that wrote the wrong
+ * defaults could not pass by agreeing with itself.
+ */
+function freshView(
+  layoutId: LayoutId
+): Pick<Arrangement, 'activeTile' | 'fractions' | 'tileAudio'> {
+  return {
+    activeTile: 0,
+    fractions: { ...DEFAULT_FRACTIONS[layoutId] },
+    tileAudio: Array.from({ length: TILE_COUNT[layoutId] }, () => ({ ...LOUD }))
+  }
+}
 
 /** A window that owns these tabs and is hiding none of them. */
 function windowWith(...liveTabIds: string[]): WindowTabs {
@@ -119,16 +133,127 @@ describe('ArrangementStore basics', () => {
     expect(await exists(filePath)).toBe(false)
   })
 
+  it('answers the id it gave a new recording, and nothing for one it refused', async () => {
+    // The one mutation that answers: whoever creates a recording is about to show it and has to
+    // know which one it is (KTD1). A refusal — here a tab already in the first — is `undefined`.
+    const { store } = await openStore()
+    const live = windowWith('tab-1', 'tab-2', 'tab-3')
+    expect(store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, live)).toBe('a1')
+    expect(store.create({ layoutId: '1x2', seats: ['tab-2', 'tab-3'] }, live)).toBeUndefined()
+    expect(store.list().map((entry) => entry.id)).toEqual(['a1'])
+  })
+
+  it('keeps the view a caller hands in', async () => {
+    const { store } = await openStore()
+    store.create(
+      {
+        layoutId: '1x2',
+        seats: ['tab-1', 'tab-2'],
+        activeTile: 1,
+        fractions: { v: 0.3 },
+        tileAudio: [LOUD, { muted: true, volume: 0.2 }]
+      },
+      windowWith('tab-1', 'tab-2')
+    )
+    expect(store.list()[0]).toMatchObject({
+      activeTile: 1,
+      fractions: { v: 0.3 },
+      tileAudio: [LOUD, { muted: true, volume: 0.2 }]
+    })
+  })
+
+  it('changes a recording under the id and the time it already had', async () => {
+    const { store, filePath } = await openStore()
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.update(
+      'a1',
+      { layoutId: '1+2', seats: ['tab-1', 'tab-3', 'tab-2'], activeTile: 1 },
+      windowWith('tab-1', 'tab-2', 'tab-3')
+    )
+    await store.flush()
+    expect(await storedArrangements(filePath)).toEqual([
+      {
+        id: 'a1',
+        layoutId: '1+2',
+        seats: ['tab-1', 'tab-3', 'tab-2'],
+        ...freshView('1+2'),
+        activeTile: 1,
+        // The divider `1x2` and `1+2` share stays where it was, as in `SplitController.setLayout`.
+        fractions: { v: 0.5, hRight: 0.5 },
+        recordedAt: T0 + 1_000
+      }
+    ])
+  })
+
+  it('empties the tile of a tab that closed, and drops a recording left too thin', async () => {
+    const { store, filePath } = await openStore()
+    store.create(
+      { layoutId: '1+2', seats: ['tab-1', 'tab-2', 'tab-3'] },
+      windowWith('tab-1', 'tab-2', 'tab-3')
+    )
+    store.create({ layoutId: '1x2', seats: ['tab-4', 'tab-5'] }, windowWith('tab-4', 'tab-5'))
+    store.removeTab('tab-2')
+    store.removeTab('tab-5')
+    await store.flush()
+    expect((await storedArrangements(filePath)).map((entry) => [entry.id, entry.seats])).toEqual([
+      ['a1', ['tab-1', null, 'tab-3']]
+    ])
+  })
+
+  it('leaves the store alone for a closing tab no recording seats', async () => {
+    // Every tab close in the window reaches this, and a write publishes: nothing to remove must
+    // mean nothing written, or closing an ordinary tab would schedule a broadcast for nothing.
+    const { store } = await openStore()
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    const writes = vi.fn()
+    store.onChange(writes)
+    store.removeTab('tab-9')
+    store.forgetTabs(['tab-9'])
+    expect(writes).not.toHaveBeenCalled()
+  })
+
+  it("forgets every recording of a window's tabs at once", async () => {
+    const { store } = await openStore()
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
+    store.create({ layoutId: '1x2', seats: ['tab-5', 'tab-6'] }, windowWith('tab-5', 'tab-6'))
+    store.forgetTabs(['tab-1', 'tab-4'])
+    expect(store.list().map((entry) => entry.id)).toEqual(['a3'])
+  })
+
+  it('evicts none of forty recordings, and all forty survive a save and a load (KTD3)', async () => {
+    const { store, filePath } = await openStore()
+    const live: string[] = []
+    for (let index = 0; index < 40; index += 1) {
+      live.push(`tab-${index}-a`, `tab-${index}-b`)
+      store.create(
+        { layoutId: '1x2', seats: [`tab-${index}-a`, `tab-${index}-b`] },
+        windowWith(...live)
+      )
+    }
+    await store.flush()
+
+    const reopened = await ArrangementStore.open({ filePath, debounceMs: 0 })
+    expect(reopened.list()).toHaveLength(40)
+    expect(reopened.list()).toEqual(store.list())
+  })
+
   it('records a tiling and puts it on disk with its layout and seating', async () => {
     const { store, filePath } = await openStore()
-    store.record(
+    store.create(
       { layoutId: '2x2', seats: ['tab-1', null, 'tab-2', null] },
       windowWith('tab-1', 'tab-2')
     )
     await store.flush()
 
     expect(await storedArrangements(filePath)).toEqual([
-      { id: 'a1', layoutId: '2x2', seats: ['tab-1', null, 'tab-2', null], recordedAt: T0 + 1_000 }
+      {
+        id: 'a1',
+        layoutId: '2x2',
+        seats: ['tab-1', null, 'tab-2', null],
+        ...freshView('2x2'),
+        recordedAt: T0 + 1_000
+      }
     ])
   })
 
@@ -140,12 +265,18 @@ describe('ArrangementStore basics', () => {
       wrong places.
     */
     const { store, filePath } = await openStore()
-    store.record({ layoutId: '1+2', seats: ['tab-1', null, 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1+2', seats: ['tab-1', null, 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     await store.flush()
 
     const reopened = await ArrangementStore.open({ filePath, debounceMs: 0 })
     expect(reopened.list()).toEqual([
-      { id: 'a1', layoutId: '1+2', seats: ['tab-1', null, 'tab-2'], recordedAt: T0 + 1_000 }
+      {
+        id: 'a1',
+        layoutId: '1+2',
+        seats: ['tab-1', null, 'tab-2'],
+        ...freshView('1+2'),
+        recordedAt: T0 + 1_000
+      }
     ])
   })
 
@@ -153,13 +284,20 @@ describe('ArrangementStore basics', () => {
     // `seats` is the array that makes a shallow copy a bug: a window holding a snapshot could
     // otherwise move a page between panes without going through a rule.
     const { store } = await openStore()
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
 
     store.list()[0]!.seats[0] = 'smuggled'
     store.arrangementOfTab('tab-2', windowWith('tab-1', 'tab-2'))!.seats[1] = 'smuggled'
+    store.list()[0]!.tileAudio[0]!.muted = true
 
     expect(store.list()).toEqual([
-      { id: 'a1', layoutId: '1x2', seats: ['tab-1', 'tab-2'], recordedAt: T0 + 1_000 }
+      {
+        id: 'a1',
+        layoutId: '1x2',
+        seats: ['tab-1', 'tab-2'],
+        ...freshView('1x2'),
+        recordedAt: T0 + 1_000
+      }
     ])
   })
 
@@ -167,7 +305,7 @@ describe('ArrangementStore basics', () => {
     // The window-scoping parameters have to survive the trip through the store: dropped, a
     // click in one window would re-tile another (R16).
     const { store } = await openStore()
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
 
     expect(store.arrangementOfTab('tab-1', windowWith('tab-1', 'tab-2'))?.id).toBe('a1')
     expect(store.arrangementOfTab('tab-9', windowWith('tab-1', 'tab-2'))).toBeUndefined()
@@ -188,7 +326,7 @@ describe('ArrangementStore basics', () => {
       `arrangementIsCurrent` is the gate, and it lives in the controller that settles, not here.
     */
     const { store, filePath } = await openStore()
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1'))
     await store.flush()
 
     expect(store.list()).toEqual([])
@@ -197,8 +335,8 @@ describe('ArrangementStore basics', () => {
 
   it('forgets one recording by id and writes the removal down', async () => {
     const { store, filePath } = await openStore()
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
-    store.record({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
     await store.flush()
     expect(await storedArrangements(filePath)).toHaveLength(2)
 
@@ -209,18 +347,24 @@ describe('ArrangementStore basics', () => {
 
   it('keeps only the tabs a session brought back', async () => {
     const { store, filePath } = await openStore()
-    store.record(
+    store.create(
       { layoutId: '2x2', seats: ['tab-1', 'tab-2', 'tab-3', null] },
       windowWith('tab-1', 'tab-2', 'tab-3')
     )
-    store.record({ layoutId: '1x2', seats: ['tab-4', 'tab-5'] }, windowWith('tab-4', 'tab-5'))
+    store.create({ layoutId: '1x2', seats: ['tab-4', 'tab-5'] }, windowWith('tab-4', 'tab-5'))
 
     store.retainTabs(['tab-1', 'tab-2'])
     await store.flush()
     // The second recording fell below `MIN_ARRANGED_TILES` and went; the first kept its tiles
     // rather than closing the gap, which is what makes the pages come back where they were.
     expect(await storedArrangements(filePath)).toEqual([
-      { id: 'a1', layoutId: '2x2', seats: ['tab-1', 'tab-2', null, null], recordedAt: T0 + 1_000 }
+      {
+        id: 'a1',
+        layoutId: '2x2',
+        seats: ['tab-1', 'tab-2', null, null],
+        ...freshView('2x2'),
+        recordedAt: T0 + 1_000
+      }
     ])
   })
 
@@ -229,8 +373,8 @@ describe('ArrangementStore basics', () => {
     const seen: string[][] = []
     const unsubscribe = store.onChange((arrangements) => seen.push(arrangements.map((a) => a.id)))
 
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
-    store.record({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
     store.retainTabs(['tab-1', 'tab-2', 'tab-3', 'tab-4'])
     store.forget('a1')
     unsubscribe()
@@ -242,7 +386,7 @@ describe('ArrangementStore basics', () => {
 
   it('coalesces writes when a debounce is set, and flush gets them out', async () => {
     const { store, filePath } = await openStore({ debounceMs: 50 })
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     expect(await exists(filePath)).toBe(false)
 
     await store.flush()
@@ -262,7 +406,7 @@ describe('ArrangementStore basics', () => {
       const { store, filePath } = await openStore()
       // `open` is not what this is about; only the write the change triggers.
       scheduled.mockClear()
-      store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+      store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
       expect(scheduled, 'the write was put behind a timer').not.toHaveBeenCalled()
 
       await store.flush()
@@ -274,7 +418,7 @@ describe('ArrangementStore basics', () => {
 
   it('works through an injected codec', async () => {
     const { store, filePath } = await openStore({ codec: true })
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     await store.flush()
     expect(await storedArrangements(filePath)).toHaveLength(1)
   })
@@ -302,7 +446,7 @@ describe('ArrangementStore basics', () => {
       generateId: () => 'a1',
       now: () => T0
     })
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     await store.flush()
 
     const raw = await readFile(filePath, 'utf8')
@@ -328,8 +472,8 @@ describe('ArrangementStore defaults', () => {
     // Also the one place the default debounce is used, so the two writes are coalesced the way
     // they are in a running browser. `flush` cancels the pending timer.
     const store = await ArrangementStore.open({ filePath, now: () => T0 })
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
-    store.record({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
 
     const [first, second] = store.list()
     expect(first!.id).not.toBe(second!.id)
@@ -353,7 +497,7 @@ describe('ArrangementStore defaults', () => {
       generateId: () => 'a1'
     })
     const before = Date.now()
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     const recordedAt = store.list()[0]!.recordedAt
     expect(recordedAt).toBeGreaterThanOrEqual(before)
     expect(recordedAt).toBeLessThanOrEqual(Date.now())
@@ -388,16 +532,16 @@ describe('ArrangementStore repairing a damaged file', () => {
   it('starts from defaults on a newer version, without writing over its file', async () => {
     // Degradable: a recording is one drag to rebuild, so this run works on defaults and a newer
     // build's file stays exactly as that build wrote it.
-    const seed = { version: 2, arrangements: [stored('a-1', '1x2', ['tab-1', 'tab-2'])] }
+    const seed = { version: 3, arrangements: [stored('a-1', '1x2', ['tab-1', 'tab-2'])] }
     const { store, filePath } = await openStore({ seed })
     expect(store.list()).toEqual([])
     expect(store.recoveredFromInvalidFile).toBe(false)
     expect(store.loadReport).toEqual({
-      outcome: { kind: 'newer', version: 2 },
+      outcome: { kind: 'newer', version: 3 },
       criticality: 'degradable'
     })
 
-    store.record({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
+    store.create({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
     await store.flush()
     expect(await readFile(filePath, 'utf8')).toBe(JSON.stringify(seed))
   })
@@ -422,7 +566,7 @@ describe('ArrangementStore repairing a damaged file', () => {
         arrangements: [{ ...(stored('a-1', '1x2', ['tab-1', 'tab-2']) as object), pinned: true }]
       }
     })
-    store.record(
+    store.create(
       { layoutId: '2x2', seats: ['tab-3', 'tab-4', null, null] },
       windowWith('tab-3', 'tab-4')
     )
@@ -493,12 +637,12 @@ describe('ArrangementStore repairing a damaged file', () => {
     expect(store.recoveredFromInvalidFile).toBe(false)
   })
 
-  it('trims a file with more recordings than the cap', async () => {
-    const arrangements = Array.from({ length: MAX_ARRANGEMENTS + 3 }, (_, index) =>
+  it('keeps every recording of a long file, because there is no cap to trim to (KTD3)', async () => {
+    const arrangements = Array.from({ length: 40 }, (_, index) =>
       stored(`a${index}`, '1x2', [`tab-${index}-a`, `tab-${index}-b`])
     )
     const { store } = await openStore({ seed: { version: 1, arrangements } })
-    expect(store.list()).toHaveLength(MAX_ARRANGEMENTS)
+    expect(store.list()).toHaveLength(40)
   })
 
   it('heals a seat that is not a tab id instead of losing the recording', async () => {
@@ -509,9 +653,101 @@ describe('ArrangementStore repairing a damaged file', () => {
       }
     })
     expect(store.list()).toEqual([
-      { id: 'a-x', layoutId: '1+2', seats: ['tab-1', null, 'tab-2'], recordedAt: T0 }
+      {
+        id: 'a-x',
+        layoutId: '1+2',
+        seats: ['tab-1', null, 'tab-2'],
+        ...freshView('1+2'),
+        recordedAt: T0
+      }
     ])
     expect(store.recoveredFromInvalidFile).toBe(false)
+  })
+})
+
+describe('ArrangementStore migrating a version-1 file (KTD15, step 1)', () => {
+  it('loads a recording without a view as version 2, under the same id, with the view it starts with', async () => {
+    const { store } = await openStore({
+      seed: { version: 1, arrangements: [stored('a-old', '1x2', ['tab-1', 'tab-2'])] }
+    })
+    expect(store.loadReport.outcome).toMatchObject({ kind: 'migrated', fromVersion: 1 })
+    expect(store.list()).toEqual([
+      {
+        id: 'a-old',
+        layoutId: '1x2',
+        seats: ['tab-1', 'tab-2'],
+        ...freshView('1x2'),
+        recordedAt: T0
+      }
+    ])
+    // Nothing about the upgrade is damage, so nothing warns the user about it.
+    expect(store.recoveredFromInvalidFile).toBe(false)
+  })
+
+  it('writes the migrated file at open and keeps the original beside it', async () => {
+    const seed = { version: 1, arrangements: [stored('a-old', '1x3', ['tab-1', 'tab-2', null])] }
+    const { filePath } = await openStore({ seed })
+
+    expect(JSON.parse(await readFile(filePath, 'utf8'))).toMatchObject({ version: 2 })
+    expect(await storedArrangements(filePath)).toEqual([
+      {
+        id: 'a-old',
+        layoutId: '1x3',
+        seats: ['tab-1', 'tab-2', null],
+        ...freshView('1x3'),
+        recordedAt: T0
+      }
+    ])
+    expect(await readFile(`${filePath}.v1.bak`, 'utf8')).toBe(JSON.stringify(seed))
+  })
+
+  it('adds only what is missing, and leaves a layout it does not know to the schema', async () => {
+    // A view already there — from a build that wrote one early — is not overwritten, and an entry
+    // whose layout this build does not have gets no invented dividers: the schema heals its layout
+    // to `1x1` and `repairArrangements` drops it, exactly as it did at version 1.
+    const { store } = await openStore({
+      seed: {
+        version: 1,
+        arrangements: [
+          stored('a-kept', '1x2', ['tab-1', 'tab-2'], { activeTile: 1 }),
+          stored('a-gone', '9x9', ['tab-3', 'tab-4'])
+        ]
+      }
+    })
+    expect(store.list()).toEqual([
+      {
+        id: 'a-kept',
+        layoutId: '1x2',
+        seats: ['tab-1', 'tab-2'],
+        ...freshView('1x2'),
+        activeTile: 1,
+        recordedAt: T0
+      }
+    ])
+  })
+
+  it('passes what is not an arrangement on untouched, for the schema to judge', async () => {
+    // The migration never decides on its own that a file is broken; the schema does, as before.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { store } = await openStore({
+      seed: { version: 1, arrangements: [stored('a-1', '1x2', ['tab-1', 'tab-2']), 'junk'] }
+    })
+    expect(store.list()).toEqual([])
+    expect(store.recoveredFromInvalidFile).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('reads a version-2 file as current and leaves it as it is', async () => {
+    const seed = {
+      version: 2,
+      arrangements: [
+        { ...(stored('a-1', '1x2', ['tab-1', 'tab-2']) as object), ...freshView('1x2') }
+      ]
+    }
+    const { store, filePath } = await openStore({ seed })
+    expect(store.loadReport.outcome).toEqual({ kind: 'current' })
+    expect(await readFile(filePath, 'utf8')).toBe(JSON.stringify(seed))
+    expect(await exists(`${filePath}.v1.bak`)).toBe(false)
   })
 })
 
@@ -525,16 +761,22 @@ describe('a private window stores nothing', () => {
     const { store, filePath } = await openStore()
     const book = store.bookFor('private')
 
-    book.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
-    book.record(
+    book.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    book.create(
       { layoutId: '2x2', seats: ['tab-3', 'tab-4', null, null] },
       windowWith('tab-3', 'tab-4')
     )
     book.retainTabs(['tab-1', 'tab-2', 'tab-3', 'tab-4'])
+    book.update(book.list()[1]!.id, { activeTile: 1 }, windowWith('tab-3', 'tab-4'))
+    book.create({ layoutId: '1x2', seats: ['tab-5', 'tab-6'] }, windowWith('tab-5', 'tab-6'))
+    book.create({ layoutId: '1x2', seats: ['tab-7', 'tab-8'] }, windowWith('tab-7', 'tab-8'))
+    book.removeTab('tab-5')
+    book.forgetTabs(['tab-7'])
     book.forget(book.list()[0]!.id)
     await book.flush()
 
     expect(book.list()).toHaveLength(1)
+    expect(book.list()[0]?.activeTile).toBe(1)
     // The file was never created, and the normal session never heard about any of it.
     expect(await exists(filePath)).toBe(false)
     expect(store.list()).toEqual([])
@@ -542,7 +784,7 @@ describe('a private window stores nothing', () => {
 
   it('cannot see the normal session’s recordings', async () => {
     const { store } = await openStore()
-    store.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     expect(store.bookFor('private').list()).toEqual([])
   })
 
@@ -551,7 +793,7 @@ describe('a private window stores nothing', () => {
     const first = store.bookFor('private')
     const second = store.bookFor('private')
 
-    first.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    first.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     expect(second.list()).toEqual([])
     expect(second.arrangementOfTab('tab-1', windowWith('tab-1', 'tab-2'))).toBeUndefined()
     expect(first.list()).toHaveLength(1)
@@ -561,10 +803,10 @@ describe('a private window stores nothing', () => {
     const { store } = await openStore()
     const book = store.bookFor('private')
     // One tab in two tiles is not an arrangement, here as anywhere.
-    book.record({ layoutId: '1x2', seats: ['tab-1', 'tab-1'] }, windowWith('tab-1'))
+    book.create({ layoutId: '1x2', seats: ['tab-1', 'tab-1'] }, windowWith('tab-1'))
     expect(book.list()).toEqual([])
 
-    book.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    book.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     expect(book.arrangementOfTab('tab-2', windowWith('tab-1', 'tab-2'))?.layoutId).toBe('1x2')
   })
 
@@ -574,9 +816,9 @@ describe('a private window stores nothing', () => {
     const seen: number[] = []
     const unsubscribe = book.onChange((arrangements) => seen.push(arrangements.length))
 
-    book.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    book.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
     unsubscribe()
-    book.record({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
+    book.create({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
     expect(seen).toEqual([1])
   })
 
@@ -590,7 +832,7 @@ describe('a private window stores nothing', () => {
       throw new Error('listener is broken')
     })
     book.onChange(() => reached.push('second'))
-    book.record({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    book.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
 
     expect(reached).toEqual(['second'])
     // Named, not merely logged. A private window's book is the one place a listener can throw
