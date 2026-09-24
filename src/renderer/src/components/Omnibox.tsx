@@ -144,13 +144,24 @@ export function Omnibox({
 
   return (
     <form className="omnibox" onSubmit={submit} role="search">
-      <span
+      {/*
+        The lock, and a button now rather than a picture of one (U19).
+
+        It opens the site menu — connection, blocker, stored permissions, the tile's zoom, fingerprint mode —
+        which is the same native menu the shield opens (KTD13). A button so that it has a name, is in the tab
+        order and opens on Enter or Space; the name stays the connection's state, which is what it says
+        before it is pressed, and `aria-haspopup` says that pressing it opens a menu.
+      */}
+      <button
+        type="button"
         className={`omnibox__security omnibox__security--${security}`}
         title={securityLabel}
         aria-label={securityLabel}
+        aria-haspopup="menu"
+        onClick={() => void invoke('site:menu')}
       >
         <Icon name={SECURITY_ICONS[security]} size={13} />
-      </span>
+      </button>
 
       {privateMode && (
         <span className="omnibox__badge omnibox__badge--private">{t('omnibox.privateMode')}</span>
@@ -195,7 +206,8 @@ export function Omnibox({
         and has forgotten.
 
         A native menu still, because a DOM one here would drop down behind the page: content is a native
-        view above this renderer's own document.
+        view above this renderer's own document. Since U19 it is the site menu, the one the lock opens; the
+        blocker's items are carried in it unchanged.
       */}
       {tab !== undefined && (
         <button
@@ -203,7 +215,8 @@ export function Omnibox({
           className={`omnibox__blocker${filtering ? '' : ' omnibox__blocker--off'}`}
           title={blockerLabel}
           aria-label={blockerLabel}
-          onClick={() => void invoke('blocker:menu')}
+          aria-haspopup="menu"
+          onClick={() => void invoke('site:menu')}
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path d="M8 1.6l5 1.7v4.2c0 3-2 5.4-5 6.9-3-1.5-5-3.9-5-6.9V3.3z" />

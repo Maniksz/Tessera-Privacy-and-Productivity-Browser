@@ -119,6 +119,8 @@
     "src/main/menu/tab-context-items.ts",
     "src/main/menu/page-context-items.ts",
     "src/main/menu/blocker-menu-items.ts",
+    "src/main/menu/site-menu-items.ts",
+    "src/shared/site/model.ts",
     "src/main/menu/alternative-accelerators.ts",
     "src/main/menu/tab-position-accelerators.ts",
     "src/main/menu/menu-text.ts",

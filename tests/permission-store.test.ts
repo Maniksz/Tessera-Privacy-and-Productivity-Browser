@@ -8,6 +8,7 @@ import {
   MAX_SITE_PERMISSIONS,
   findSitePermission,
   forgetOrigin,
+  forgetfulSiteAnswers,
   forgetfulSitePermissions,
   putSitePermission,
   recallSiteDecision,
@@ -147,6 +148,19 @@ describe('forgetOrigin', () => {
       entry({ origin: 'https://other.example' })
     ])
   })
+
+  it('removes only the named topics when it is given some (U19)', () => {
+    // What the site menu's "forget" runs: the camera answer next to the location one stays standing.
+    const sites = [
+      entry({ topic: 'geolocation' }),
+      entry(),
+      entry({ origin: 'https://other.example', topic: 'geolocation' })
+    ]
+    expect(forgetOrigin(sites, 'https://example.com', ['geolocation'])).toEqual([
+      entry(),
+      entry({ origin: 'https://other.example', topic: 'geolocation' })
+    ])
+  })
 })
 
 describe('repairSitePermissions', () => {
@@ -185,6 +199,13 @@ describe('forgetfulSitePermissions', () => {
   it('remembers nothing and answers nothing', () => {
     forgetfulSitePermissions.remember('https://example.com', 'camera', 'allow')
     expect(forgetfulSitePermissions.recall('https://example.com', 'camera')).toBe('ask')
+  })
+})
+
+describe('forgetfulSiteAnswers', () => {
+  it('lists nothing and forgets nothing', () => {
+    expect(forgetfulSiteAnswers.list()).toEqual([])
+    expect(forgetfulSiteAnswers.forget('https://example.com')).toBe(0)
   })
 })
 
@@ -265,6 +286,36 @@ describe('PermissionStore', () => {
     expect(store.forget('https://example.com')).toBe(1)
     expect(rules.recall('https://example.com', 'camera')).toBe('ask')
     expect(rules.recall('https://other.example', 'camera')).toBe('allow')
+  })
+
+  it('forgets exactly one origin and one topic through the site menu’s answers (U19)', async () => {
+    const store = await open()
+    const rules = store.rulesFor('normal')
+    rules.remember('https://example.com', 'camera', 'allow')
+    rules.remember('https://example.com', 'geolocation', 'allow')
+    rules.remember('https://other.example', 'geolocation', 'allow')
+
+    expect(store.answersFor('normal').forget('https://example.com', ['geolocation'])).toBe(1)
+    expect(rules.recall('https://example.com', 'geolocation')).toBe('ask')
+    expect(rules.recall('https://example.com', 'camera')).toBe('allow')
+    expect(rules.recall('https://other.example', 'geolocation')).toBe('allow')
+  })
+
+  it('lists the stored answers to a normal window and none to a private one (U19)', async () => {
+    const store = await open()
+    store.rulesFor('normal').remember('https://example.com', 'geolocation', 'deny')
+
+    expect(
+      store
+        .answersFor('normal')
+        .list()
+        .map((site) => site.topic)
+    ).toEqual(['geolocation'])
+    expect(store.answersFor('private')).toBe(forgetfulSiteAnswers)
+    expect(store.answersFor('private').list()).toEqual([])
+    // And a private window cannot forget one either: the answer is still there afterwards.
+    expect(store.answersFor('private').forget('https://example.com')).toBe(0)
+    expect(store.list()).toHaveLength(1)
   })
 
   it('clears everything and reports how much went', async () => {

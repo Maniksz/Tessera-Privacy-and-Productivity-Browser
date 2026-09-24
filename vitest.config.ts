@@ -87,6 +87,8 @@ export default defineConfig({
             happy-dom — so a `@vitest-environment` docblock there fails on something unrelated to the test.
           */
           include: ['tests/components/**/*.test.{ts,tsx}'],
+          // What each renderer's entry does before its first render; the file says why.
+          setupFiles: ['tests/components/setup.ts'],
           environment: 'happy-dom',
           testTimeout
         }
@@ -526,6 +528,23 @@ export default defineConfig({
           statements: 100
         },
         'src/main/menu/menu-actions.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
+          The site menu behind the lock (U19) and the connection status it opens with. Whole, because the
+          decisions that matter here are absences — a camera answer not listed, not forgotten by "forget
+          all", no stored answer in a private window — and an untaken branch is where one would hide.
+        */
+        'src/main/menu/site-menu-items.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/shared/site/**': {
           lines: 100,
           functions: 100,
           branches: 100,

@@ -2,17 +2,20 @@ import { z } from 'zod'
 import {
   PERMISSION_TOPICS,
   subjectTopics,
-  type PermissionSubject
+  type PermissionSubject,
+  type PermissionTopic
 } from '@shared/overlay/permission.js'
 import {
   MAX_SITE_PERMISSIONS,
   emptyPermissionDocument,
   forgetOrigin,
+  forgetfulSiteAnswers,
   forgetfulSitePermissions,
   putSitePermission,
   recallSiteDecision,
   repairSitePermissions,
   type PermissionDocument,
+  type SiteAnswers,
   type SitePermission,
   type SitePermissionRules
 } from '../permissions/model.js'
@@ -156,14 +159,34 @@ export class PermissionStore {
     }
   }
 
-  /** Everything remembered, newest first. For a site-settings page and for tests. */
+  /**
+   * The stored answers for the site menu behind the lock (U19), bound to a browsing mode.
+   *
+   * A private window gets `forgetfulSiteAnswers`, which lists nothing and forgets nothing, for the
+   * reason `rulesFor` gives: the window holds no path to this file, so it can neither show the normal
+   * profile's answers nor remove one of them.
+   */
+  answersFor(mode: BrowsingMode): SiteAnswers {
+    if (mode === 'private') return forgetfulSiteAnswers
+    return {
+      list: () => this.list(),
+      forget: (origin, topics) => this.forget(origin, topics)
+    }
+  }
+
+  /** Everything remembered, newest first. The site menu reads it through `answersFor`. */
   list(): SitePermission[] {
     return [...this.#store.get().sites]
   }
 
-  /** Number of answers removed, so a caller can report what happened. */
-  forget(origin: string): number {
-    return this.#replace((sites) => forgetOrigin(sites, origin))
+  /**
+   * Number of answers removed, so a caller can report what happened.
+   *
+   * Every topic for the origin, or only the named ones — the site menu names them, because it leaves
+   * camera, microphone and screen answers alone. See `forgetOrigin`.
+   */
+  forget(origin: string, topics?: readonly PermissionTopic[]): number {
+    return this.#replace((sites) => forgetOrigin(sites, origin, topics))
   }
 
   /** Everything. What a "clear browsing data" run over permissions does. */

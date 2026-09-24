@@ -95,6 +95,28 @@ export const en = {
   /** How many of the user's own rules apply to the site in front of them, rather than in total. */
   'blocker.forgetSiteRules': 'Delete my rules for this site ({count})',
 
+  // site menu, behind the lock in the address bar; see `menu/site-menu-items.ts`
+  /** One stored answer: what the site asked for, and what it was told. */
+  'site.permission.allowed': '{topic}: Allowed',
+  'site.permission.blocked': '{topic}: Blocked',
+  'site.permission.forget': 'Forget',
+  /** Counts only what the menu lists, so camera, microphone and screen answers are not in it. */
+  'site.permissions.forgetAll': 'Forget all permissions for this site ({count})',
+  'site.permissions.none': 'No saved permissions for this site',
+  'site.permissions.private': 'Permissions are not saved in private windows',
+  'site.topic.geolocation': 'Location',
+  'site.topic.notifications': 'Notifications',
+  'site.topic.clipboardRead': 'Reading the clipboard',
+  'site.topic.clipboardWrite': 'Writing to the clipboard',
+  'site.topic.midi': 'MIDI devices',
+  'site.topic.midiSysex': 'MIDI device commands',
+  'site.topic.storageAccess': 'Storage across sites',
+  'site.topic.topLevelStorageAccess': 'Storage across sites (whole page)',
+  'site.zoom': 'Zoom: {percent}%',
+  'site.fingerprint': 'Fingerprint protection',
+  /** The plan is computed when a tab loads (`applies: 'new-tab'`), so an open tab keeps the old one. */
+  'site.fingerprint.newTabs': 'Applies to tabs opened after a change',
+
   // the question a page's `beforeunload` puts, a native dialog as well; see `browser/unload-guard.ts`
   'unload.closeTab': 'Close this tab?',
   'unload.leavePage': 'Leave this page?',

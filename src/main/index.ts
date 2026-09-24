@@ -1019,7 +1019,7 @@ async function main(): Promise<void> {
     passwords: passwordApi,
     prompt: masterPasswordPrompt,
     autofill,
-    permissions: permissionArbiter,
+    permissions: { arbiter: permissionArbiter, stored: permissionStore },
     media: mediaSessions,
     picker: elementPicker,
     userRules,

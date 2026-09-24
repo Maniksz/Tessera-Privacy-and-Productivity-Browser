@@ -1,5 +1,5 @@
 import type { Session, WebContents, WebContentsView } from 'electron'
-import type { SecurityState, TabState } from '@shared/model.js'
+import type { TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { Rect } from '@shared/split/layout.js'
 import { isHomeUrl } from '@shared/url/omnibox.js'
@@ -20,7 +20,7 @@ import {
 } from '@shared/zoom/model.js'
 import { sequenceOfTabId, tabIdForSequence } from '@shared/session/tab-ids.js'
 import { UNSAVED_INPUT_CHANNEL } from '@shared/session/unload-policy.js'
-import { INTERNAL_SCHEME } from '@shared/product.js'
+import { securityStateOf } from '@shared/site/model.js'
 import { createTabView } from './tab-view.js'
 import type { DiscardedPage } from './tab-unloader.js'
 import { pageKeystrokeOf } from './page-keys.js'
@@ -1029,13 +1029,6 @@ export class Tab {
     }, this.wiring.thumbnailSettleDelayMs)
   }
 
-  #securityState(): SecurityState {
-    const url = this.view.webContents.getURL()
-    if (url === '' || url.startsWith(INTERNAL_SCHEME) || url.startsWith('about:')) return 'internal'
-    if (this.#failure?.certificateRejected === true) return 'invalid-certificate'
-    return url.startsWith('https:') ? 'secure' : 'insecure'
-  }
-
   toState(): TabState {
     const wc = this.view.webContents
     const destroyed = wc.isDestroyed()
@@ -1053,7 +1046,9 @@ export class Tab {
       pinned: this.#pinned,
       muted: destroyed ? false : wc.isAudioMuted(),
       audible: destroyed ? false : wc.isCurrentlyAudible(),
-      security: destroyed ? 'internal' : this.#securityState(),
+      security: destroyed
+        ? 'internal'
+        : securityStateOf(wc.getURL(), this.#failure?.certificateRejected === true),
       blockedRequests: this.#blockedRequests,
       // The stored value, not the effective one: the session slot is filled from this and the file
       // has to be able to say "never zoomed". The number is ours rather than something read back

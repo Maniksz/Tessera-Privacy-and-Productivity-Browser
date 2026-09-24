@@ -23,15 +23,10 @@ import { registerMediaHandlers } from './media-handlers.js'
 import { registerUpdateHandlers } from './update-handlers.js'
 import { registerDownloadHandlers } from './download-handlers.js'
 import { registerPasswordHandlers } from './password-handlers.js'
-import { buildBlockerMenu } from '../menu/blockerMenu.js'
-import { injectableDocumentUrl } from '@shared/filters/injection.js'
-import {
-  exemptionHostOf,
-  filteringExemptFor,
-  withSiteExemption
-} from '@shared/filters/site-exemption.js'
-import { internalUrl } from '@shared/product.js'
+import { registerSiteHandlers } from './site-handlers.js'
+import { popupSiteMenu } from '../menu/siteMenu.js'
 import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
+import type { PermissionStore } from '../data/PermissionStore.js'
 import type { MediaSessions } from '../media/MediaSessions.js'
 import type { ElementPicker } from '../privacy/ElementPicker.js'
 import type { UserRuleStore, UserRuleTextEditor } from '../data/UserRuleStore.js'
@@ -66,8 +61,8 @@ export function registerIpcHandlers(deps: {
   prompt: MasterPasswordPrompt
   /** Autofill's service and account picker, for the picker's answers and the toolbar key. */
   autofill: AutofillParts
-  /** Decides and queues permission prompts; see `PermissionArbiter`. */
-  permissions: PermissionArbiter
+  /** The arbiter decides and queues prompts; the store's answers are what the site menu lists (U19). */
+  permissions: { arbiter: PermissionArbiter; stored: PermissionStore }
   /** One media service per browsing session; see `MediaSessions`. */
   media: MediaSessions
   /** "Block this element": starts and stops the mode for one view. */
@@ -260,7 +255,7 @@ export function registerIpcHandlers(deps: {
     stream — and both would otherwise add sixty lines to a file that is already the longest list of
     channels in the project. The seam also lets each be tested against a fake `handle`.
   */
-  registerPermissionHandlers({ permissions: deps.permissions, windows })
+  registerPermissionHandlers({ permissions: deps.permissions.arbiter, windows })
   registerMediaHandlers({
     handle,
     media: deps.media,
@@ -276,6 +271,18 @@ export function registerIpcHandlers(deps: {
   })
   // The vault's channels and the overlay subscriptions they need are one mechanism; see the module.
   registerPasswordHandlers({ passwords, prompt: deps.prompt, autofill: deps.autofill, windows })
+  // The lock's and the shield's one menu; testable against a fake window there (U19, KTD13).
+  registerSiteHandlers({
+    handle,
+    windows,
+    settings,
+    locale: () => activeLocale(settings.get('appearance.uiLanguage')),
+    permissions: deps.permissions.stored,
+    rulesFor: editorFor,
+    startPicker: (webContentsId) => deps.picker.start(webContentsId),
+    refreshFilters: () => void windows.refreshFilters(),
+    showMenu: (template, window) => popupSiteMenu(template, window.window)
+  })
 
   // --- element picker and the user's own rules ------------------------------
   /*
@@ -371,79 +378,6 @@ export function registerIpcHandlers(deps: {
     if (window !== undefined) {
       findService().step(window, { ...(tabId === undefined ? {} : { tabId }), forward })
     }
-    return OK
-  })
-
-  handle('blocker:menu', (_payload, event) => {
-    const window = windows.resolve(event)
-    const tab = window?.resolveTab()
-    if (window === undefined || tab === undefined) return OK
-    const state = tab.toState()
-    /*
-      The host, and it is `null` for anything the menu's site-scoped items cannot be keyed on.
-
-      `injectableDocumentUrl` decides whether a document may be filtered at all — internal pages and
-      `file:` documents may not — and `exemptionHostOf` reads the host out of it. Going through both
-      rather than parsing the URL here is what keeps the picker, the per-site switch and the request
-      pipeline agreeing about which documents are in scope.
-    */
-    const host = exemptionHostOf(injectableDocumentUrl(state.url, ''))
-    const exemptSites = settings.get('privacy.blockerOffForSites')
-    const editor = editorFor(event)
-
-    buildBlockerMenu({
-      locale: activeLocale(settings.get('appearance.uiLanguage')),
-      blockedOnPage: state.blockedRequests,
-      // Read through the same editor the two items below write through (R16). It used to read the
-      // store: in a private window the menu then offered to switch off rules from the normal
-      // profile while hiding the ones the picker had just written in this window — the list and the
-      // switch disagreeing about what "my rules" are.
-      userRules: editor.list(),
-      blockerEnabled: settings.get('privacy.blockerEnabled'),
-      host,
-      blockerEnabledOnSite: !filteringExemptFor(state.url, exemptSites),
-      onBlockElement: () => {
-        deps.picker.start(tab.view.webContents.id)
-      },
-      /*
-        Opens the tab, rather than asking the renderer to.
-
-        This used to emit `shortcut:triggered` with `action: 'settings'` — and nothing listened. `App.tsx`
-        deliberately removed that case when settings stopped being a panel, and says so in a comment; the
-        two menu items that carry the accelerator call `createTab` directly. So this item was dead, in the
-        one menu that offers to show the user the rules they wrote. Same call as `appMenu.ts` makes.
-      */
-      onOpenSettings: () => {
-        window.createTab({ url: internalUrl('settings') })
-      },
-      onRefreshLists: () => {
-        void windows.refreshFilters()
-      },
-      onSetBlockerEnabled: (enabled) => {
-        settings.set('privacy.blockerEnabled', enabled)
-      },
-      onSetBlockerEnabledOnSite: (menuHost, enabled) => {
-        // `enabled` is "blocking on", so the exemption is its opposite. Written through the pure function
-        // so that removing an exemption also removes a parent-domain one that covers this host — see
-        // `withSiteExemption` for why a narrower answer would look like a switch that does nothing.
-        const next = withSiteExemption(exemptSites, menuHost, !enabled)
-        if (next === exemptSites) return
-        settings.set('privacy.blockerOffForSites', [...next])
-      },
-      // Both through the mode-bound editor, for the reason the handlers below give: a private window must
-      // not alter the rules the normal profile keeps.
-      onSetRuleEnabled: (id, enabled) => {
-        editor.setEnabled(id, enabled)
-      },
-      onRemoveRules: (ids) => {
-        for (const id of ids) editor.remove(id)
-      },
-      // And asked of the same editor, so the menu offers only what it would honour. A private window's
-      // cannot switch off or delete a rule from the normal profile — that rule reaches this window through
-      // the engine's global slot and would go on hiding its element — and refuses if asked anyway.
-      canSetRuleEnabled: (id, enabled) => editor.canSetEnabled(id, enabled),
-      canRemoveRule: (id) => editor.canRemove(id)
-    }).popup({ window: window.window })
     return OK
   })
 

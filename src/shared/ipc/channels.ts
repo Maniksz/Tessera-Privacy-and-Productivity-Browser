@@ -147,7 +147,8 @@ export const INVOKE_CHANNELS = [
    * Reported as a position rather than as "hide the bar", so the decision stays in the core with the geometry.
    */
   'tiles:pointerAt',
-  'blocker:menu',
+  /** The lock and the shield in the address bar open the same native menu (U19, KTD13). */
+  'site:menu',
   'picker:start',
   'picker:stop',
   /**

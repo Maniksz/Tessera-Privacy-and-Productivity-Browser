@@ -763,8 +763,8 @@ export const invokeContract = {
     response: ok
   },
 
-  // --- blocker menu ---------------------------------------------------------
-  'blocker:menu': { request: nothing, response: ok },
+  // --- site menu, behind the lock and the shield -----------------------------
+  'site:menu': { request: nothing, response: ok },
 
   // --- element picker and the user's own rules ------------------------------
   /**

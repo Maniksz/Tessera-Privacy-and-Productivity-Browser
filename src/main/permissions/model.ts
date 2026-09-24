@@ -90,9 +90,21 @@ export function putSitePermission(
   return [entry, ...rest].slice(0, Math.max(1, maxEntries))
 }
 
-/** Everything this site was ever told, gone. What a "forget this site" control runs. */
-export function forgetOrigin(sites: readonly SitePermission[], origin: string): SitePermission[] {
-  return sites.filter((site) => site.origin !== origin)
+/**
+ * What this site was told, gone: every answer, or only the named topics.
+ *
+ * The topics are what the site menu passes (U19). It lists everything except camera, microphone and
+ * screen sharing, whose behaviour stays exactly as it is, so its "forget all" has to be able to leave
+ * those answers standing — forgetting the whole origin would quietly change them.
+ */
+export function forgetOrigin(
+  sites: readonly SitePermission[],
+  origin: string,
+  topics?: readonly PermissionTopic[]
+): SitePermission[] {
+  return sites.filter(
+    (site) => site.origin !== origin || (topics !== undefined && !topics.includes(site.topic))
+  )
 }
 
 /**
@@ -146,6 +158,25 @@ export const forgetfulSitePermissions: SitePermissionRules = {
   recall: () => 'ask',
   // Deliberately empty: a private window's answer exists for the life of the prompt.
   remember: () => {}
+}
+
+/**
+ * The stored answers as a site's own menu sees them: read, and forget.
+ *
+ * Behind the same mode seam as `SitePermissionRules`, and for the same reason: a private window holds
+ * `forgetfulSiteAnswers`, which has no path to the store, so it can neither show the normal profile's
+ * answers nor forget one of them. See `PermissionStore.answersFor`.
+ */
+export interface SiteAnswers {
+  list(): SitePermission[]
+  /** Number of answers removed. */
+  forget(origin: string, topics?: readonly PermissionTopic[]): number
+}
+
+/** What a private window gets: nothing stored to show, and nothing to forget. */
+export const forgetfulSiteAnswers: SiteAnswers = {
+  list: () => [],
+  forget: () => 0
 }
 
 // --- which tab a question belongs to -------------------------------------------
