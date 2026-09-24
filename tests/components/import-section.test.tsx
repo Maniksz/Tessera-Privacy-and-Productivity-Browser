@@ -151,6 +151,32 @@ describe('the import section', () => {
     expect(screen.queryByText('import.historyPreview:1000,3,2')).toBeNull()
   })
 
+  it('does not show a preview that answers after another profile was chosen as that one’s', async () => {
+    const EDGE: ImportSource = { ...CHROME, id: 'edge:Default', browser: 'edge', profile: 'Bob' }
+    const { host: importing, recorded } = host({ sources: [CHROME, EDGE] })
+    let answer: (outcome: HistoryImportOutcome) => void = () => undefined
+    importing.previewHistory = (source) => {
+      recorded.previews.push(source)
+      return new Promise((resolve) => {
+        answer = resolve
+      })
+    }
+    render(<ImportSection host={importing} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'import.history' }))
+    fireEvent.change(screen.getByLabelText('import.source'), { target: { value: 'edge:Default' } })
+    answer({ outcome: 'preview', counts: { added: 7, merged: 0, dropped: 0, skipped: 0 } })
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'import.history' }).disabled
+      ).toBe(false)
+    )
+    // Chrome's counts are not shown for Edge, so there is nothing to confirm for it.
+    expect(screen.queryByText('import.historyPreview:7,0,0')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'import.historyConfirm' })).toBeNull()
+    expect(recorded.previews).toEqual(['chrome:Default'])
+    expect(recorded.imports).toEqual([])
+  })
+
   it('asks to close the other browser when its file is locked, and says every other refusal', async () => {
     const { host: importing } = host({
       preview: { outcome: 'refused', reason: 'locked' },

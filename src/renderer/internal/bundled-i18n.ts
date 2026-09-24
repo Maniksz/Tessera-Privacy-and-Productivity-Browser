@@ -48,12 +48,22 @@ export function bundledLocale(
   return isLocale(requested) ? requested : resolveLocale(language)
 }
 
-/** Loads the chunk `bundledI18n` is about to need; the entry awaits it before the first render. */
+/**
+ * Loads the chunk `bundledI18n` is about to need; the entry awaits it before the first render.
+ *
+ * Never rejects, because the entry renders only once this has settled. A chunk that fails to load leaves
+ * `bundledI18n` with no catalogue, and it already reads that as `messageFor`'s last resort, the key — a page
+ * of keys still has its buttons, where the HTTPS-only interstitial without them is a blank page to be stuck on.
+ */
 export async function prepareBundledI18n(
   search: string = location.search,
   language: string | undefined = navigator.language
 ): Promise<void> {
-  await loadCatalog(bundledLocale(search, language))
+  try {
+    await loadCatalog(bundledLocale(search, language))
+  } catch {
+    // Rendered regardless; see above.
+  }
 }
 
 export function bundledI18n(

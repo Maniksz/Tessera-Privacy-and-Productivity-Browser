@@ -15,9 +15,9 @@ import { unfoldGroupOf } from './tab-unloader.js'
  * | Closing the window                        | yes, tab by tab     | the window stays with the tabs still in it |
  * | Navigating away, reloading                | yes                 | the navigation is called off               |
  * | Quit, panic, OS log-off, update install   | never               | —                                          |
- * | Discarding (tab unloading)                | never               | an objection means "not discarded"         |
+ * | Discarding (tab unloading)                | never               | "not discarded", as is no answer in 5 s    |
  * | Fillers, internal pages                   | no, and at once     | —                                          |
- * | A renderer that does not answer           | forced after 5 s    | —                                          |
+ * | A renderer that does not answer a close   | forced after 5 s    | —                                          |
  *
  * ## Why closing a tab is now two halves
  *
@@ -42,7 +42,12 @@ import { unfoldGroupOf } from './tab-unloader.js'
  * straight to `closed`, whose `dispose` drops every pending request, so no tab of it is finished one by one.
  */
 
-/** How long a renderer may take to answer a close before the view is closed without asking (R12). */
+/**
+ * How long a renderer may take to answer before the guard stops waiting (R12).
+ *
+ * A close the user asked for is then carried out without asking. A discard is not: the browser asked on its own
+ * behalf, and a page too busy to answer is one it cannot know has nothing to lose, so it counts as "stay loaded".
+ */
 export const UNLOAD_HANG_MS = 5_000
 
 /** What a page's objection is put to the user as, and which site it names (R11). */
@@ -91,7 +96,8 @@ function defaultAfter(ms: number, run: () => void): () => void {
 }
 
 interface PendingUnload {
-  readonly mode: 'close' | 'discard'
+  /** Only ever raised, from `discard` to `close`: a close arriving on a pending discard is still a close. */
+  mode: 'close' | 'discard'
   /** Everyone waiting on this request; a second × adds itself here rather than asking twice. */
   readonly settled: Array<(gone: boolean) => void>
   cancelDeadline: () => void
@@ -108,6 +114,8 @@ export class UnloadGuard {
   readonly #confirm: (mode: UnloadPrompt['mode']) => boolean
   readonly #after: After
   #pending: PendingUnload | null = null
+  /** A discard the deadline gave up on, whose renderer still owes Chromium its answer to the close. */
+  #abandoned = false
   readonly #onObjection = (event: unknown): void => this.#objection(event)
   readonly #onDestroyed = (): void => this.#settle(true)
 
@@ -132,10 +140,13 @@ export class UnloadGuard {
   /**
    * Asks the page to go. `settled(true)` once the view is gone, `settled(false)` when it stays.
    *
-   * A request while one is already waiting asks nothing more of the page: it waits on the same answer.
+   * A request while one is already waiting asks nothing more of the page: it waits on the same answer. A close
+   * that joins a discard makes the whole request a close, so an objection is put to the user rather than taken
+   * as "not discarded" — the user asked for this tab to go, and would otherwise see it stay without a word.
    */
   request(mode: 'close' | 'discard', settled: (gone: boolean) => void): void {
     if (this.#pending !== null) {
+      if (mode === 'close') this.#pending.mode = 'close'
       this.#pending.settled.push(settled)
       return
     }
@@ -144,6 +155,7 @@ export class UnloadGuard {
       return
     }
     // Pending before the call: a view with no live renderer may go inside `close` itself.
+    this.#abandoned = false
     this.#pending = { mode, settled: [settled], cancelDeadline: this.#deadline() }
     this.#contents.close({ waitForBeforeUnload: true })
   }
@@ -159,16 +171,31 @@ export class UnloadGuard {
   /** Starts the five seconds; hands back what calls them off. */
   #deadline(): () => void {
     return this.#after(UNLOAD_HANG_MS, () => {
-      // The renderer never answered, so it is not asked again: the view goes without `beforeunload`.
-      if (this.#contents.isDestroyed()) this.#settle(true)
-      else this.#contents.close()
+      if (this.#contents.isDestroyed()) {
+        this.#settle(true)
+        return
+      }
+      /*
+        A discard is not forced: the page may still object, and unloading never goes over an objection (R12).
+        Chromium's close cannot be taken back, so the answer may yet arrive; `#abandoned` keeps a late objection
+        from being mistaken for a navigation's and put to the user.
+      */
+      if (this.#pending?.mode === 'discard') {
+        this.#abandoned = true
+        this.#settle(false)
+        return
+      }
+      // The renderer never answered a close, so it is not asked again: the view goes without `beforeunload`.
+      this.#contents.close()
     })
   }
 
   #objection(event: unknown): void {
     const pending = this.#pending
     if (pending === null) {
-      if (this.#confirm('navigate')) preventDefaultOf(event)
+      // The late answer to an abandoned discard: refused without asking, as the discard's own would have been.
+      if (this.#abandoned) this.#abandoned = false
+      else if (this.#confirm('navigate')) preventDefaultOf(event)
       return
     }
     /*

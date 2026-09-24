@@ -48,7 +48,11 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
   const { t } = host
   const [sources, setSources] = useState<readonly ImportSource[] | null>(null)
   const [chosen, setChosen] = useState('')
-  const [preview, setPreview] = useState<HistoryImportCounts | null>(null)
+  // The counts belong to the profile they were read for: a preview answering after another profile was
+  // chosen is not shown for that one, and the confirmation imports the profile the counts are about.
+  const [preview, setPreview] = useState<{ source: string; counts: HistoryImportCounts } | null>(
+    null
+  )
   const { busy, message, setMessage, run } = useAsyncStatus(t)
   const section = useRef<HTMLElement>(null)
 
@@ -96,7 +100,7 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
     run(async () => {
       const outcome = await host.previewHistory(id)
       if (outcome.outcome === 'refused') return refusal(outcome.reason)
-      setPreview(outcome.counts)
+      setPreview({ source: id, counts: outcome.counts })
       return null
     })
   }
@@ -175,18 +179,18 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
         </div>
       )}
 
-      {preview !== null && (
+      {preview !== null && preview.source === chosen && (
         <div className="backup__preview">
           <p className="field__description">
             {t('import.historyPreview', {
-              added: preview.added,
-              merged: preview.merged,
-              skipped: preview.skipped
+              added: preview.counts.added,
+              merged: preview.counts.merged,
+              skipped: preview.counts.skipped
             })}
           </p>
-          {preview.dropped > 0 && (
+          {preview.counts.dropped > 0 && (
             <p className="field__description">
-              {t('import.historyDropped', { dropped: preview.dropped })}
+              {t('import.historyDropped', { dropped: preview.counts.dropped })}
             </p>
           )}
           <div className="panel__lead">
@@ -194,7 +198,7 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
               type="button"
               className="dialog__button dialog__button--primary"
               disabled={busy}
-              onClick={() => importHistory(chosen)}
+              onClick={() => importHistory(preview.source)}
             >
               {t('import.historyConfirm')}
             </button>

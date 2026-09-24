@@ -60,7 +60,8 @@ import { BackupRefusedError } from './format.js'
  * - While applying: the manifest is still there, and applying again skips what already moved — a
  *   document whose staged copy is gone is done — so the next start finishes the rest. The vault's
  *   key and document are one item and move one after the other; a crash between them is finished by
- *   the next start before the vault is opened.
+ *   the next start before the vault is opened, and a document that fails to move takes its key's
+ *   move back with it, so the start that goes on with the restore kept opens the old pair.
  * - A manifest from a newer version is refused and the staging kept, for that version to finish.
  *
  * ## What the person confirms
@@ -88,11 +89,6 @@ export interface StagingDeps extends RestoreDeps {
 
 /** Every file a restore can write, which is every file whose staged copy a new staging clears. */
 const RESTORABLE_FILES: readonly InventoryPath[] = [...BACKUP_DOCUMENTS, ...VAULT_FILES]
-
-/** The files one item puts in place, in the order they move: the vault's key before its document. */
-function filesOf(item: RestoreItem): readonly InventoryPath[] {
-  return item === 'vault' ? ['passwordVaultKeyFile', 'passwordsFile'] : [item]
-}
 
 // --- reading the archive -------------------------------------------------------------------------
 
@@ -318,12 +314,18 @@ async function mergedSettings(
   return codec.encode({ ...now, ...restored })
 }
 
+/**
+ * What one file's apply did: nothing, because its staged copy was gone and it had moved already; put
+ * a file where there was none; or replaced one, whose contents are now its safety copy.
+ */
+type FileApplied = 'moved-already' | 'placed' | 'replaced'
+
 /** One file: its safety copy, then the move. A file whose staged copy is gone has moved already. */
-async function applyFile(name: InventoryPath, deps: RestoreDeps): Promise<void> {
+async function applyFile(name: InventoryPath, deps: RestoreDeps): Promise<FileApplied> {
   const target = deps.path(name)
   const staged = stagedCopyOf(target)
   const stagedNow = await readIfPresent(staged)
-  if (stagedNow === null) return
+  if (stagedNow === null) return 'moved-already'
   const current = await readIfPresent(target)
   if (current !== null) {
     await writeFileAtomically(safetyCopyOf(target), current, { mode: 0o600 })
@@ -333,6 +335,40 @@ async function applyFile(name: InventoryPath, deps: RestoreDeps): Promise<void> 
     await writeFileAtomically(staged, merged, { mode: 0o600 })
   }
   await rename(staged, target)
+  return current === null ? 'placed' : 'replaced'
+}
+
+/**
+ * Takes one file's move back: the restored file goes back to its staged copy, for the next start to
+ * move again, and the safety copy back onto the file. Both renames within one directory, and in that
+ * order, so a failure halfway leaves the file absent rather than lost: the restored one is staged
+ * again and the old one still in its safety copy.
+ */
+async function undoFile(
+  name: InventoryPath,
+  applied: FileApplied,
+  deps: RestoreDeps
+): Promise<void> {
+  const target = deps.path(name)
+  await rename(target, stagedCopyOf(target))
+  if (applied === 'replaced') await rename(safetyCopyOf(target), target)
+}
+
+/**
+ * The vault's key, then its document, all or nothing within this start. The key is only readable
+ * with its own document, and a thrown move keeps the staging but not the start — the vault opens
+ * right after — so a document that fails to move sends its key back: the old key with the old
+ * document now, and both staged again for the next start. A key moved by an earlier, crashed start
+ * is not taken back; the crash note in the module comment covers that one.
+ */
+async function applyVault(deps: RestoreDeps): Promise<void> {
+  const key = await applyFile('passwordVaultKeyFile', deps)
+  try {
+    await applyFile('passwordsFile', deps)
+  } catch (error) {
+    if (key !== 'moved-already') await undoFile('passwordVaultKeyFile', key, deps)
+    throw error
+  }
 }
 
 async function apply(deps: RestoreDeps): Promise<ApplyOutcome> {
@@ -350,7 +386,8 @@ async function apply(deps: RestoreDeps): Promise<ApplyOutcome> {
     return 'kept'
   }
   for (const item of parsed.data.items) {
-    for (const name of filesOf(item)) await applyFile(name, deps)
+    if (item === 'vault') await applyVault(deps)
+    else await applyFile(item, deps)
   }
   await rm(manifestPath, { force: true })
   return 'applied'

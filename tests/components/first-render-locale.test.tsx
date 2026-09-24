@@ -137,11 +137,25 @@ async function chunksLoaded(): Promise<Locale[]> {
   return (['de', 'en'] as const).filter((locale) => loadedCatalog(locale) !== undefined)
 }
 
+/**
+ * Makes a locale's chunk fail to load, as a missing or blocked chunk would in the running application.
+ *
+ * `load-catalog.ts` imports the catalogue modules only through `import()`, so this is the one import that
+ * rejects and the rest of the graph loads as usual.
+ */
+function failChunk(locale: Locale): void {
+  vi.doMock(`@shared/i18n/catalog.${locale}.js`, () => {
+    throw new Error(`chunk catalog.${locale} failed to load`)
+  })
+}
+
 const MOCKED = [
   '@renderer/App.js',
   '@renderer/surfaces/OverlaySurface.js',
   '@renderer-internal/HistoryPage.js',
-  '@renderer-internal/AboutPage.js'
+  '@renderer-internal/AboutPage.js',
+  '@shared/i18n/catalog.de.js',
+  '@shared/i18n/catalog.en.js'
 ]
 
 beforeEach(() => {
@@ -217,6 +231,30 @@ describe('the chrome UI', () => {
     await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0), FIRST_RENDER)
     expect(frames[0]).toBe(catalogs.en['menu.window'])
     expect(await chunksLoaded()).toEqual(['en'])
+  })
+
+  it('still renders, in keys, when the core cannot be asked and the English chunk fails too', async () => {
+    /*
+      `requestCatalog` promises never to reject, and `main.tsx` renders only once it has settled. The
+      first failure is caught before `withReference`; this is the second one, inside it, which used to
+      reject the request and leave the window blank.
+    */
+    install('tessera', {
+      invoke: () => Promise.reject(new Error('no handler')),
+      on: () => () => {}
+    })
+    failChunk('en')
+    const { requestCatalog } = await import('@renderer/i18n.js')
+    const { NO_ANSWER } = await import('@shared/i18n/load-catalog.js')
+    await expect(requestCatalog()).resolves.toBe(NO_ANSWER)
+
+    recordFirstFrame('@renderer/App.js', 'App', 'root', tabBarLabel)
+    rootElement('root')
+    await import('@renderer/main.js')
+
+    await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0), FIRST_RENDER)
+    expect(frames[0]).toBe('menu.window')
+    expect(await chunksLoaded()).toEqual([])
   })
 })
 
@@ -315,5 +353,22 @@ describe('a page without a bridge', () => {
     await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0), FIRST_RENDER)
     expect(frames[0]).toContain('Free software')
     expect(await chunksLoaded()).toEqual(['en'])
+  })
+
+  it('still renders, in keys, when the chunk its address names fails to load', async () => {
+    // The entry renders once `prepareBundledI18n` has settled; a rejection there was a blank page.
+    vi.stubGlobal('location', new URL('tessera://about?lang=de'))
+    failChunk('de')
+    const { prepareBundledI18n } = await import('@renderer-internal/bundled-i18n.js')
+    await expect(prepareBundledI18n('?lang=de', 'de-DE')).resolves.toBeUndefined()
+
+    recordFirstFrame('@renderer-internal/AboutPage.js', 'AboutPage', 'about-root')
+    rootElement('about-root')
+    await import('@renderer-internal/about.js')
+
+    await vi.waitFor(() => expect(frames.length).toBeGreaterThan(0), FIRST_RENDER)
+    expect(frames[0]).toContain('about.version')
+    expect(frames[0]).not.toContain('Freie Software')
+    expect(await chunksLoaded()).toEqual([])
   })
 })

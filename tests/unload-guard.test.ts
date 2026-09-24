@@ -686,6 +686,121 @@ describe('discarding a tab', () => {
     expect(window.afterTabClosed).toEqual(['news'])
   })
 
+  it('keeps a second discard a discard: it waits on the same answer and asks nobody', () => {
+    const window = new WindowHarness([
+      fakeTab('mail', 'https://mail.example/', { objects: true }),
+      fakeTab('news', 'https://news.example/')
+    ])
+    const outcomes: boolean[] = []
+    const mail = window.tab('mail')
+
+    window.contract.discard('mail', (discarded) => outcomes.push(discarded))
+    window.contract.discard('mail', (discarded) => outcomes.push(discarded))
+    mail.contents.answer()
+
+    expect(mail.contents.closeCalls).toEqual([{ waitForBeforeUnload: true }])
+    expect(outcomes).toEqual([false, false])
+    expect(window.prompts).toEqual([])
+  })
+
+  it('puts the question to the user when a close joins a pending discard', () => {
+    const window = new WindowHarness([
+      fakeTab('mail', 'https://mail.example/compose', { objects: true }),
+      fakeTab('news', 'https://news.example/')
+    ])
+    window.answers = ['leave']
+    const outcomes: boolean[] = []
+    const mail = window.tab('mail')
+
+    window.contract.discard('mail', (discarded) => outcomes.push(discarded))
+    window.contract.closeTab('mail')
+    mail.contents.answer()
+
+    // Asked once, as a close: the user's × is not swallowed as a refused discard.
+    expect(mail.contents.closeCalls).toEqual([{ waitForBeforeUnload: true }])
+    expect(window.prompts).toEqual([{ mode: 'close', site: 'mail.example' }])
+    expect(window.tabs.has('mail')).toBe(false)
+    expect(window.closedStack).toEqual(['https://mail.example/compose'])
+    expect(outcomes).toEqual([true])
+  })
+
+  it('stays loaded when the renderer does not answer, and is not forced after five seconds', () => {
+    const contents = new FakeContents('https://mail.example/')
+    contents.objects = true
+    contents.hung = true
+    const clock = new FakeClock()
+    const settled: boolean[] = []
+    const asked: string[] = []
+    const guard = new UnloadGuard({
+      contents,
+      confirm: (mode) => {
+        asked.push(mode)
+        return true
+      },
+      after: clock.after
+    })
+
+    guard.request('discard', (gone) => settled.push(gone))
+    clock.advance(UNLOAD_HANG_MS)
+
+    expect(settled).toEqual([false])
+    expect(guard.pending).toBe(false)
+    expect(contents.closeCalls).toEqual([{ waitForBeforeUnload: true }])
+    expect(contents.destroyed).toBe(false)
+
+    // The renderer comes back and objects to the close it still owed an answer: refused, and nobody is asked.
+    contents.hung = false
+    contents.answer()
+
+    expect(asked).toEqual([])
+    expect(contents.destroyed).toBe(false)
+    expect(clock.pending).toBe(0)
+  })
+
+  it('still asks about a navigation once the late answer to a given-up discard is in', () => {
+    const contents = new FakeContents('https://mail.example/')
+    contents.objects = true
+    contents.hung = true
+    const clock = new FakeClock()
+    const asked: string[] = []
+    const guard = new UnloadGuard({
+      contents,
+      confirm: (mode) => {
+        asked.push(mode)
+        return false
+      },
+      after: clock.after
+    })
+
+    guard.request('discard', () => undefined)
+    clock.advance(UNLOAD_HANG_MS)
+    contents.hung = false
+    contents.answer()
+    contents.clickLink('https://elsewhere.example/')
+    contents.answer()
+
+    expect(asked).toEqual(['navigate'])
+    expect(contents.url).toBe('https://mail.example/')
+  })
+
+  it('forces a discard a close has joined, as it would the close alone', () => {
+    const contents = new FakeContents('https://slow.example/')
+    contents.hung = true
+    const clock = new FakeClock()
+    const settled: Array<[string, boolean]> = []
+    const guard = new UnloadGuard({ contents, confirm: () => true, after: clock.after })
+
+    guard.request('discard', (gone) => settled.push(['discard', gone]))
+    guard.request('close', (gone) => settled.push(['close', gone]))
+    clock.advance(UNLOAD_HANG_MS)
+
+    expect(contents.closeCalls).toEqual([{ waitForBeforeUnload: true }, undefined])
+    expect(settled).toEqual([
+      ['discard', true],
+      ['close', true]
+    ])
+  })
+
   it('answers "not discarded" for a tab this window does not have', () => {
     const window = new WindowHarness()
     const outcomes: boolean[] = []

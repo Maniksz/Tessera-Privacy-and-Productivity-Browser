@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -561,6 +561,72 @@ describe('the vault (R37, KTD17)', () => {
     await expect(
       openVaultKey({ file: restored!, safeStorage: b.safeStorage, masterPassword: null })
     ).rejects.toBeInstanceOf(MasterPasswordRequiredError)
+  })
+
+  it('sends its key back when the document cannot move, so this start opens the old pair', async () => {
+    const { a } = await vaultProfile(MASTER)
+    const b = await profile('keychain-b')
+    const oldKey = Buffer.from('{"the":"old key"}')
+    const oldDocument = Buffer.from('the old document')
+    await writeFile(b.path('passwordVaultKeyFile'), oldKey)
+    await writeFile(b.path('passwordsFile'), oldDocument)
+    const { service } = await restoreInto(a, b)
+    previewOf(await service.openRestore({ passphrase: PASSPHRASE }))
+    await service.stage({ token: 'token-1', items: ['vault'], settings: [] })
+    const stagedKey = await readFile(stagedCopyOf(b.path('passwordVaultKeyFile')))
+    const stagedDocument = await readFile(stagedCopyOf(b.path('passwordsFile')))
+
+    // The key has moved; the document's safety copy then cannot be written — a full disk, say.
+    await mkdir(safetyCopyOf(b.path('passwordsFile')))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await applyStagedRestore(b.staging)).toBe('kept')
+    expect(warn).toHaveBeenCalled()
+    expect(await readFile(b.path('passwordVaultKeyFile'))).toEqual(oldKey)
+    expect(await readFile(b.path('passwordsFile'))).toEqual(oldDocument)
+    expect(await readFile(stagedCopyOf(b.path('passwordVaultKeyFile')))).toEqual(stagedKey)
+    expect(await pendingRestore(b.path)).toBe(true)
+
+    // The next start moves both, with the old key in its safety copy.
+    await rm(safetyCopyOf(b.path('passwordsFile')), { recursive: true })
+    expect(await applyStagedRestore(b.staging)).toBe('applied')
+    expect(await readFile(b.path('passwordVaultKeyFile'))).toEqual(stagedKey)
+    expect(await readFile(b.path('passwordsFile'))).toEqual(stagedDocument)
+    expect(await readFile(safetyCopyOf(b.path('passwordVaultKeyFile')))).toEqual(oldKey)
+    expect(await readFile(safetyCopyOf(b.path('passwordsFile')))).toEqual(oldDocument)
+  })
+
+  it('stages again a key it placed where there was none, so no key is left without its document', async () => {
+    const { a } = await vaultProfile(MASTER)
+    const b = await profile('keychain-b')
+    await writeFile(b.path('passwordsFile'), 'the old document')
+    const { service } = await restoreInto(a, b)
+    previewOf(await service.openRestore({ passphrase: PASSPHRASE }))
+    await service.stage({ token: 'token-1', items: ['vault'], settings: [] })
+    const stagedKey = await readFile(stagedCopyOf(b.path('passwordVaultKeyFile')))
+
+    await mkdir(safetyCopyOf(b.path('passwordsFile')))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await applyStagedRestore(b.staging)).toBe('kept')
+    await expect(readFile(b.path('passwordVaultKeyFile'))).rejects.toThrow()
+    expect(await readFile(stagedCopyOf(b.path('passwordVaultKeyFile')))).toEqual(stagedKey)
+  })
+
+  it('leaves alone a key an earlier start moved, which the crash note covers', async () => {
+    const { a } = await vaultProfile(MASTER)
+    const b = await profile('keychain-b')
+    await writeFile(b.path('passwordsFile'), 'the old document')
+    const { service } = await restoreInto(a, b)
+    previewOf(await service.openRestore({ passphrase: PASSPHRASE }))
+    await service.stage({ token: 'token-1', items: ['vault'], settings: [] })
+    const key = b.path('passwordVaultKeyFile')
+    const stagedKey = await readFile(stagedCopyOf(key))
+    // A start that crashed right after the key's move.
+    await rename(stagedCopyOf(key), key)
+
+    await mkdir(safetyCopyOf(b.path('passwordsFile')))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await applyStagedRestore(b.staging)).toBe('kept')
+    expect(await readFile(key)).toEqual(stagedKey)
   })
 
   it('is not in the archive without a master password, and the preview says why', async () => {

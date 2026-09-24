@@ -85,8 +85,18 @@ export function messageFor(messages: Readonly<Record<string, string>>, key: Mess
  *
  * Only an empty answer triggers it. The real core never sends one; `NO_ANSWER` is empty, and so is every
  * test double that answers `{}`, and for those the fallback is the whole catalogue.
+ *
+ * Never rejects. A reference chunk that fails to load leaves `messageFor` on its last resort, the key, and
+ * a window of keys is still a window; letting the failure through would reject every `requestCatalog`
+ * built on this, and each entry renders only once that has settled — so the window would stay blank.
  */
 export async function withReference(answer: ResolvedCatalog): Promise<ResolvedCatalog> {
-  if (Object.keys(answer.messages).length === 0) await loadCatalog(DEFAULT_LOCALE)
+  if (Object.keys(answer.messages).length === 0) {
+    try {
+      await loadCatalog(DEFAULT_LOCALE)
+    } catch {
+      // Nothing to add: the answer stands as it is, and `messageFor` shows the key.
+    }
+  }
   return answer
 }
