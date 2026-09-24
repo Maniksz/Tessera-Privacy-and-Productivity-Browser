@@ -151,6 +151,7 @@
     "src/shared/session/unload-policy.ts",
     "src/main/browser/tab-unloader.ts",
     "src/main/browser/permission-tabs.ts",
+    "src/shared/search/rank.ts",
     "!**/*.d.ts"
   ],
   "checkers": ["typescript"],

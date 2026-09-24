@@ -222,6 +222,8 @@ export default defineConfig({
         'src/shared/favicons/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/history/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/tabgroups/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        // The local ranker (U17): pure, and every suggestion row the address bar shows is its answer.
+        'src/shared/search/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         /*
           The arrangement model, entered the moment the directory appeared, which is what the
           paragraph above asks for.
