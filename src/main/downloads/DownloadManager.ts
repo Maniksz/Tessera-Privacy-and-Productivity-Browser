@@ -446,6 +446,26 @@ export class DownloadManager {
   }
 
   /**
+   * Stops every download that has not ended, in every session, for panic (R15).
+   *
+   * Running and paused alike, for the reason `releaseSession` gives. Answers the partial files of
+   * the transfers of our own among them, which panic removes itself: their producer would, once its
+   * abort surfaced, but the process ends before that. A Chromium download's partial file is
+   * Chromium's, and `cancel()` removes it; its save path is not deleted, for the reason above.
+   */
+  cancelUnfinished(): string[] {
+    const partials: string[] = []
+    for (const live of [...this.#live.values()]) {
+      if (isTerminalDownloadState(live.record.state)) continue
+      if (live.item instanceof foreign.ForeignDownloadItem) {
+        partials.push(foreign.partialFileOf(live.item.getSavePath()))
+      }
+      live.item.cancel()
+    }
+    return partials
+  }
+
+  /**
    * A window closed: its claims go to `successor` with its panel's last `seenAt`, or are dropped.
    * Not `releaseSession`: the default session outlives the windows sharing it, so their downloads keep
    * running and only lose a button. The registry names the successor, as it knows the focus order.

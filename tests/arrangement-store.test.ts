@@ -442,6 +442,8 @@ describe('ArrangementStore repairing a damaged file', () => {
     expect(await exists(`${filePath}.unreadable`)).toBe(false)
     const book = store.bookFor('private') as ArrangementStore
     await expect(book.discardCopies()).resolves.toBeUndefined()
+    // Nor a file to give up at panic.
+    await expect(book.abandon()).resolves.toBeUndefined()
     expect(book.loadReport).toEqual({ outcome: { kind: 'missing' }, criticality: 'degradable' })
     warn.mockRestore()
   })

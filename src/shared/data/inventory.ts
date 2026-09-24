@@ -215,18 +215,33 @@ export const PANIC_CATEGORIES: readonly DataCategory[] = DATA_INVENTORY.filter(
   (entry) => entry.panic
 ).map((entry) => entry.category)
 
+/** The categories "Clear Browsing Data…" lets the user choose, in inventory order. */
+export const NOW_CHOOSABLE: readonly DataCategory[] = DATA_INVENTORY.filter(
+  (entry) => entry.clearNow === 'choosable'
+).map((entry) => entry.category)
+
+/** What one way out reaches for the categories chosen: the chosen it can reach, and what goes with the cookies. */
+function dueBy(way: 'clearNow' | 'onExit', chosen: readonly string[]): DataCategory[] {
+  const cookies = chosen.includes('cookies')
+  return DATA_INVENTORY.filter(
+    (entry) =>
+      (entry[way] === 'choosable' && chosen.includes(entry.category)) ||
+      (entry[way] === 'withCookies' && cookies)
+  ).map((entry) => entry.category)
+}
+
 /**
  * What clearing on exit reaches for the categories a user chose: those among them exit can reach,
  * plus what goes with the cookies. In inventory order; names it does not know are ignored, which
  * is what an old note naming `formData` needs.
  */
 export function dueOnExit(chosen: readonly string[]): DataCategory[] {
-  const cookies = chosen.includes('cookies')
-  return DATA_INVENTORY.filter(
-    (entry) =>
-      (entry.onExit === 'choosable' && chosen.includes(entry.category)) ||
-      (entry.onExit === 'withCookies' && cookies)
-  ).map((entry) => entry.category)
+  return dueBy('onExit', chosen)
+}
+
+/** The same for clearing now: never the session or the permissions, which only panic takes. */
+export function dueNow(chosen: readonly string[]): DataCategory[] {
+  return dueBy('clearNow', chosen)
 }
 
 /** What a panic note reaches: the panic categories it names, and nothing it does not. */

@@ -10,6 +10,7 @@ import { HOME_URL } from '@shared/url/omnibox.js'
 import type { WindowRegistry } from '../browser/WindowRegistry.js'
 import type { BrowserWindowController } from '../browser/BrowserWindowController.js'
 import type { SettingsStore } from '../settings/SettingsStore.js'
+import type { CoreMenuActions } from './menu-actions.js'
 import { internalUrl } from '@shared/product.js'
 import { LAYOUT_IDS } from '@shared/split/layout.js'
 import { nextZoomPercent } from '@shared/gestures/zoom.js'
@@ -41,6 +42,8 @@ export interface MenuDeps {
    * process when it rejects.
    */
   checkForUpdates: () => void
+  /** Strg+D, clearing now and panic: run in the core, and with no window focused as well (KTD6). */
+  actions: CoreMenuActions
 }
 
 export function buildApplicationMenu(deps: MenuDeps): Menu {
@@ -291,7 +294,7 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       {
         label: t('menu.bookmarks.add'),
         accelerator: accel('addBookmark'),
-        click: () => focused()?.emit('shortcut:triggered', { action: 'addBookmark' })
+        click: () => void deps.actions.addBookmark()
       },
       {
         label: t('menu.bookmarks.manage'),
@@ -380,11 +383,11 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       {
         label: t('menu.tools.clearData'),
         accelerator: accel('clearData'),
-        click: () => focused()?.emit('shortcut:triggered', { action: 'clearData' })
+        click: () => void deps.actions.clearData()
       },
       {
         label: t('menu.tools.panic'),
-        click: () => focused()?.emit('shortcut:triggered', { action: 'panic' })
+        click: () => void deps.actions.panic()
       }
     ]
   }
@@ -507,11 +510,6 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
 }
 
 export function installApplicationMenu(deps: MenuDeps): void {
-  const menu = buildApplicationMenu(deps)
-  if (deps.platform === 'darwin') {
-    Menu.setApplicationMenu(menu)
-  } else {
-    // In-window menu bar on Windows and Linux (spec 10).
-    Menu.setApplicationMenu(menu)
-  }
+  // The system-wide menu bar on macOS, an in-window one on Windows and Linux (spec 10): one call.
+  Menu.setApplicationMenu(buildApplicationMenu(deps))
 }

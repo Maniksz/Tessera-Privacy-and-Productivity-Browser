@@ -100,7 +100,29 @@ export const en = {
   /** Names the site (R11): with four pages on screen, "this page" alone does not say which. */
   'unload.detail': 'Changes you made on {site} may not be saved.',
   'unload.leave': 'Leave',
-  'unload.stay': 'Stay'
+  'unload.stay': 'Stay',
+
+  // the three menu actions the core runs itself, native dialogs too; see `menu/menu-actions.ts`
+  'bookmarks.readOnly.message': 'This page could not be bookmarked',
+  'bookmarks.readOnly.detail':
+    'The bookmarks file was written by a newer version of {app}, so this version only reads it. Nothing was changed.',
+  'bookmarks.readOnly.ok': 'OK',
+  'clearData.message': 'Clear browsing data now?',
+  /** The categories are the inventory's, named as the settings page names them (KTD7). */
+  'clearData.detail':
+    'Everything clears history (with page pictures and icons), the downloads list, cookies (with network traces, HTTPS exceptions and media finds), site storage and the cache. Downloaded files stay where they are.',
+  'clearData.detailPrivate':
+    'Only this private window’s data is cleared; the normal windows are not touched. Downloaded files stay where they are.',
+  'clearData.everything': 'Clear Everything',
+  'clearData.keepHistory': 'Keep History and Downloads List',
+  'clearData.cacheOnly': 'Only the Cache',
+  'clearData.cancel': 'Cancel',
+  'panic.message': 'Delete all browsing traces and quit {app}?',
+  /** What stays is said as plainly as what goes: panic takes traces, not the profile. */
+  'panic.detail':
+    'History, the downloads list, cookies, site storage, the cache, every open tab and site permissions are deleted, and the next start restores no tabs. Bookmarks, passwords, quick links and settings stay, and so do downloaded files.',
+  'panic.confirm': 'Delete and Quit',
+  'panic.cancel': 'Cancel'
 } as const satisfies Record<string, string>
 
 export type MenuTextKey = keyof typeof en

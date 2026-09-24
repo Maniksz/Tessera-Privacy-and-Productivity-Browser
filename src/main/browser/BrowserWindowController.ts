@@ -144,16 +144,6 @@ export class BrowserWindowController implements PermissionHost {
    */
   #overlayActive = false
   /**
-   * The tab drag in progress, if any.
-   *
-   * Held by the core rather than by a renderer because no single renderer sees the whole
-   * gesture: the pointer leaves the chrome UI the moment it crosses into the content area,
-   * where a native view takes it.
-   *
-   * Public alongside `split`, rather than behind three methods that forwarded to it and decided
-   * nothing. A pass-through layer is a place for the two sides to drift apart.
-   */
-  /**
    * The six controllers this window delegates to.
    *
    * Held as one object rather than six fields: the alternative was six declarations here, six assignments in the
@@ -731,6 +721,11 @@ export class BrowserWindowController implements PermissionHost {
     const url = this.#closedTabUrls.pop()
     if (url === undefined) return null
     return this.createTab({ url }).id
+  }
+
+  /** What "Reopen Closed Tab" would bring back is history kept in memory; clearing it takes it (KTD7). */
+  forgetClosedTabs(): void {
+    this.#closedTabUrls = []
   }
 
   activateTab(tabId: string): void {

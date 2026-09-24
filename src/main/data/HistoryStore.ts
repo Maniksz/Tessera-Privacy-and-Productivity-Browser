@@ -185,6 +185,12 @@ export class HistoryStore {
     return this.#store.discardCopies()
   }
 
+  /** Sealed, and the file given up for good, for panic; see `JsonStore.abandon`. */
+  abandon(): Promise<void> {
+    this.seal()
+    return this.#store.abandon()
+  }
+
   onChange(listener: (visits: HistoryVisit[]) => void): () => void {
     return this.#store.onChange((document) => listener([...document.visits]))
   }

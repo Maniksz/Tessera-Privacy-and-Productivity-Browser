@@ -86,5 +86,24 @@ export const de = {
   'unload.leavePage': 'Seite verlassen?',
   'unload.detail': 'Änderungen auf {site} werden möglicherweise nicht gespeichert.',
   'unload.leave': 'Verlassen',
-  'unload.stay': 'Bleiben'
+  'unload.stay': 'Bleiben',
+
+  'bookmarks.readOnly.message': 'Diese Seite konnte nicht als Lesezeichen gespeichert werden',
+  'bookmarks.readOnly.detail':
+    'Die Lesezeichen-Datei stammt von einer neueren Version von {app}, deshalb liest diese Version sie nur. Es wurde nichts geändert.',
+  'bookmarks.readOnly.ok': 'OK',
+  'clearData.message': 'Browserdaten jetzt löschen?',
+  'clearData.detail':
+    '„Alles löschen“ löscht den Verlauf (mit Seitenbildern und Symbolen), die Downloads-Liste, Cookies (mit Netzwerkspuren, HTTPS-Ausnahmen und Medienfunden), den Seitenspeicher und den Cache. Heruntergeladene Dateien bleiben, wo sie sind.',
+  'clearData.detailPrivate':
+    'Gelöscht werden nur die Daten dieses privaten Fensters; die normalen Fenster bleiben unberührt. Heruntergeladene Dateien bleiben, wo sie sind.',
+  'clearData.everything': 'Alles löschen',
+  'clearData.keepHistory': 'Verlauf und Downloads-Liste behalten',
+  'clearData.cacheOnly': 'Nur den Cache',
+  'clearData.cancel': 'Abbrechen',
+  'panic.message': 'Alle Browsing-Spuren löschen und {app} beenden?',
+  'panic.detail':
+    'Verlauf, Downloads-Liste, Cookies, Seitenspeicher, Cache, alle offenen Tabs und die Website-Berechtigungen werden gelöscht, und der nächste Start stellt keine Tabs wieder her. Lesezeichen, Passwörter, Quick Links und Einstellungen bleiben, ebenso heruntergeladene Dateien.',
+  'panic.confirm': 'Löschen und beenden',
+  'panic.cancel': 'Abbrechen'
 } as const satisfies MenuText

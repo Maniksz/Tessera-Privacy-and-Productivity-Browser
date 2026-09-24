@@ -488,6 +488,23 @@ export default defineConfig({
           statements: 100
         },
         /*
+          Panic and the menu actions behind it (U12). A step out of order is a window written back
+          into the session panic just deleted; an untested branch in the actions is a key that does
+          nothing again, which is what all three were.
+        */
+        'src/main/data/panic.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/menu/menu-actions.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
           The Public Suffix List's download, its checks and the fallbacks at start. A list that is
           accepted wrongly merges sites and offers passwords across them, so each refusal is a branch
           a test has to reach.

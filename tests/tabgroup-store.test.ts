@@ -747,4 +747,14 @@ describe('a private window stores nothing', () => {
     const { store } = await openStore()
     expect(store.bookFor('private').recoveredFromInvalidFile).toBe(false)
   })
+
+  it('has no file to give up at panic, while the store stops writing its own', async () => {
+    const { store, filePath } = await openStore()
+    const book = store.bookFor('private') as TabGroupStore
+    await expect(book.abandon()).resolves.toBeUndefined()
+    await store.abandon()
+    store.create({ tabIds: ['tab-1'], name: 'After panic' })
+    await store.flush()
+    expect(await exists(filePath)).toBe(false)
+  })
 })

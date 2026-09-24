@@ -94,6 +94,18 @@ export function acceptsForeignTarget(request: ForeignTransferRequest): boolean {
   return safeDownloadFileName(onDisk) === onDisk && safeDownloadFileName(fileName) === fileName
 }
 
+/**
+ * Where a transfer of our own writes until it is complete: `<target>.part`, renamed on success.
+ *
+ * Named here, beside the item, because two parties rely on it: the producer writes it
+ * (`MediaDownloader`), and panic removes it when the process will not live long enough for the
+ * producer to clean up after its own abort. Chromium's partial files are Chromium's (`.crdownload`),
+ * and its `cancel()` removes them.
+ */
+export function partialFileOf(targetPath: string): string {
+  return `${targetPath}.part`
+}
+
 type ItemState = ReturnType<DownloadItemLike['getState']>
 type ItemEvent = 'updated' | 'done'
 

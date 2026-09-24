@@ -5,6 +5,7 @@ import {
   PANIC_CATEGORIES,
   chromiumOf,
   dueForPanic,
+  dueNow,
   dueOnExit,
   filesOf,
   type DataCategory,
@@ -124,14 +125,24 @@ function required<T>(store: T | null, name: string): T {
   return store
 }
 
-async function clearOpenStores(due: readonly DataCategory[], stores: OpenStores): Promise<void> {
+/**
+ * Empties the open stores of these categories. `seal` is for the way out: sealed, a store records
+ * nothing more, which a quit wants and a clearing now — after which the browser goes on — must not.
+ */
+async function clearOpenStores(
+  due: readonly DataCategory[],
+  stores: OpenStores,
+  seal: boolean
+): Promise<void> {
   if (due.includes('history')) {
     const history = required(stores.history, 'history')
     const favicons = required(stores.favicons, 'favicons')
     const thumbnails = required(stores.thumbnails, 'thumbnails')
-    history.seal()
-    favicons.seal()
-    thumbnails.seal()
+    if (seal) {
+      history.seal()
+      favicons.seal()
+      thumbnails.seal()
+    }
     history.clear()
     await Promise.all([favicons.clear(), thumbnails.clear()])
     await Promise.all([
@@ -142,7 +153,7 @@ async function clearOpenStores(due: readonly DataCategory[], stores: OpenStores)
   }
   if (due.includes('downloads')) {
     const downloads = required(stores.downloads, 'downloads')
-    downloads.seal()
+    if (seal) downloads.seal()
     // Keeps what is still running: see `DownloadStore.clear`.
     downloads.clear()
     await downloads.discardCopies()
@@ -160,12 +171,41 @@ export async function clearOnExit(
 ): Promise<void> {
   const due = dueOnExit(categories)
   try {
-    await clearOpenStores(due, stores)
+    await clearOpenStores(due, stores, true)
     await clearChromium(session, due)
   } catch (error) {
     console.error('[shutdown] clearing on exit failed:', error)
     throw error
   }
+}
+
+// --- clearing now: the browser goes on ------------------------------------------------------------
+
+export interface NowClearing {
+  /** The session of the window the clearing was asked in. */
+  readonly session: ClearingSession
+  /** The profile's stores; `null` for a private window, which has nothing on disk to clear. */
+  readonly stores: OpenStores | null
+  /** Drops what the due categories keep only in memory: closed tabs, HTTPS exceptions, media finds. */
+  readonly forget: (due: readonly DataCategory[]) => void
+}
+
+/**
+ * "Clear Browsing Data…" (R14): the chosen categories, at once, in one window's session.
+ *
+ * Nothing is sealed, because the browser goes on and the next visit belongs in the emptied history.
+ * A private window has no store of its own, so only its partition is cleared and the normal profile
+ * is not touched at all. Answers what it cleared, which is the chosen plus what goes with the cookies.
+ */
+export async function clearNow(
+  chosen: readonly string[],
+  { session, stores, forget }: NowClearing
+): Promise<DataCategory[]> {
+  const due = dueNow(chosen)
+  if (stores !== null) await clearOpenStores(due, stores, false)
+  forget(due)
+  await clearChromium(session, due)
+  return due
 }
 
 // --- at the next start: the stores are closed -------------------------------------------------
@@ -177,7 +217,7 @@ export interface ClearingFiles {
   readonly removeCopiesOf: (path: string) => Promise<void>
 }
 
-const nodeClearingFiles: ClearingFiles = {
+export const nodeClearingFiles: ClearingFiles = {
   removeFile: (path) => rm(path, { force: true }),
   removeDirectory: (path) => rm(path, { recursive: true, force: true }),
   removeCopiesOf: (path) => removeCopiesOf(path)
@@ -190,21 +230,33 @@ export interface FileClearing {
   readonly files?: ClearingFiles
 }
 
-/** Removes these categories' files with their copies and their directories whole, then Chromium's part. */
+/**
+ * Removes these categories' files with their copies and their directories whole, then Chromium's part.
+ *
+ * Every one is tried, and the first refusal is let out only at the end: a file another process holds
+ * must not keep the rest of the history on disk until the next start. The caller keeps its note either
+ * way, so the one that could not go is tried again then.
+ */
 export async function clearFilesOf(
   due: readonly DataCategory[],
   { session, path, files = nodeClearingFiles }: FileClearing
 ): Promise<void> {
+  const refusals: unknown[] = []
+  const attempt = (work: () => Promise<void>): Promise<void> =>
+    work().catch((error: unknown) => {
+      refusals.push(error)
+    })
   for (const name of filesOf(due)) {
     const target = path(name)
     if (name.endsWith('Dir')) {
-      await files.removeDirectory(target)
+      await attempt(() => files.removeDirectory(target))
       continue
     }
-    await files.removeFile(target)
-    await files.removeCopiesOf(target)
+    await attempt(() => files.removeFile(target))
+    await attempt(() => files.removeCopiesOf(target))
   }
   await clearChromium(session, due)
+  if (refusals.length > 0) throw refusals[0]
 }
 
 /** A note on disk: missing reads as `null`; written owner-only and atomically. */

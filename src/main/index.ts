@@ -23,6 +23,7 @@ import { SettingsStore } from './settings/SettingsStore.js'
 import { WindowRegistry } from './browser/WindowRegistry.js'
 import { registerIpcHandlers } from './ipc/handlers.js'
 import { installApplicationMenu } from './menu/appMenu.js'
+import { installMenuActions } from './menu/menu-actions.js'
 import { applyRuntimeFlags } from './runtime-flags.js'
 import {
   ExternalAddressInbox,
@@ -1071,28 +1072,26 @@ async function main(): Promise<void> {
     parentWindow: () => (windows?.focused() ?? windows?.controllers[0])?.window ?? null
   })
 
-  const locale = uiLocale(settings)
-  installApplicationMenu({
+  // Strg+D, clearing now and panic, in the core (KTD6); the shutdown waits for a panic that runs.
+  const actions = installMenuActions({
     windows,
-    settings,
-    locale,
-    platform: currentPlatform(),
-    checkForUpdates: () => updates.checkNow()
+    electron: { dialog, defaultSession: session.defaultSession, quit: () => app.quit() },
+    bookmarks,
+    stores: { history, downloads, favicons, thumbnails },
+    stopped: [sessionStore, tabGroups, arrangements, permissionStore],
+    downloads: downloadManager,
+    media: mediaSessions,
+    locale: () => uiLocale(settings),
+    path: inventoryPath
   })
-
-  // Rebuild the menu when the language or a shortcut changes, so accelerators
-  // and labels never lag behind the settings (spec 5).
+  flushOnExit.push(() => actions.whenIdle(), 'panic')
+  const menu = { windows, settings, actions, checkForUpdates: () => updates.checkNow() }
+  const installMenu = (): void =>
+    installApplicationMenu({ ...menu, locale: uiLocale(settings), platform: currentPlatform() })
+  installMenu()
+  // Rebuilt when the language or a shortcut changes, so accelerators and labels never lag (spec 5).
   settings.onChange(({ changed }) => {
-    if (!settings || !windows) return
-    if ('appearance.uiLanguage' in changed || 'advanced.customShortcuts' in changed) {
-      installApplicationMenu({
-        windows,
-        settings,
-        locale: uiLocale(settings),
-        platform: currentPlatform(),
-        checkForUpdates: () => updates.checkNow()
-      })
-    }
+    if ('appearance.uiLanguage' in changed || 'advanced.customShortcuts' in changed) installMenu()
   })
 
   /*

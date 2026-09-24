@@ -4,10 +4,12 @@ import {
   EVERY_CLEARED_CATEGORY,
   EXIT_CHOOSABLE,
   NEVER_BACKED_UP,
+  NOW_CHOOSABLE,
   OUTSIDE_INVENTORY,
   PANIC_CATEGORIES,
   chromiumOf,
   dueForPanic,
+  dueNow,
   dueOnExit,
   filesOf,
   rowOf,
@@ -169,6 +171,18 @@ describe('what clearing on exit reaches', () => {
     expect(due).not.toContain('history')
     expect(due).not.toContain('downloads')
     expect(due).not.toContain('session')
+  })
+})
+
+describe('what clearing now reaches', () => {
+  it('offers the same five categories as clearing on exit, in inventory order', () => {
+    expect(NOW_CHOOSABLE).toEqual(['history', 'downloads', 'cookies', 'storage', 'cache'])
+  })
+
+  it('takes the network traces and the in-memory finds with the cookies, and never the session', () => {
+    expect(dueNow(['cookies'])).toEqual(['cookies', 'networkTraces', 'inMemory'])
+    expect(dueNow(['cache', 'session', 'permissions', 'inMemory'])).toEqual(['cache'])
+    expect(dueNow([])).toEqual([])
   })
 })
 

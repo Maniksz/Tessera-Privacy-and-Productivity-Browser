@@ -181,6 +181,7 @@ interface GroupCell {
   write(mutate: (groups: readonly TabGroup[]) => TabGroup[]): void
   onChange(listener: (groups: TabGroup[]) => void): () => void
   flush(): Promise<void>
+  abandon(): Promise<void>
   readonly recoveredFromInvalidFile: boolean
   readonly loadReport: StoreLoadReport
 }
@@ -314,6 +315,11 @@ export class TabGroupStore implements TabGroupBook {
     return this.#cell.flush()
   }
 
+  /** The file given up for good, for panic; see `JsonStore.abandon`. */
+  abandon(): Promise<void> {
+    return this.#cell.abandon()
+  }
+
   get recoveredFromInvalidFile(): boolean {
     return this.#cell.recoveredFromInvalidFile
   }
@@ -333,6 +339,7 @@ function persistedCell(store: JsonStore<TabGroupDocument>): GroupCell {
     },
     onChange: (listener) => store.onChange((document) => listener(snapshot(document.groups))),
     flush: () => store.flush(),
+    abandon: () => store.abandon(),
     // Fixed at open: `JsonStore` decides it while reading the file and never revisits it.
     recoveredFromInvalidFile: store.diagnostics.recoveredFromInvalidFile,
     loadReport: store.loadReport
@@ -371,6 +378,7 @@ function memoryCell(): GroupCell {
     // Nothing to write and nothing to wait for. Present so shutdown can await every
     // book it holds without first asking which kind each one is.
     flush: () => Promise.resolve(),
+    abandon: () => Promise.resolve(),
     recoveredFromInvalidFile: false,
     loadReport: { outcome: { kind: 'missing' }, criticality: 'degradable' }
   }

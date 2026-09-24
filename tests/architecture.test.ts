@@ -901,6 +901,68 @@ describe('IPC discipline', () => {
     expect(registry).not.toMatch(/resolve\([^)]*\)[^{]*\{[^}]*focused\(\)/)
   })
 
+  describe('every action the application menu sends has a receiver (KTD6)', () => {
+    /*
+      Strg+D, "Clear Browsing Data…" and "Delete Everything and Quit" were each an item that emitted
+      `shortcut:triggered` to the focused window's chrome, where the renderer's switch had no case for
+      them and fell into `default`. Three menu entries that did nothing, with no failure anywhere: the
+      emit compiles whatever the action, and the switch accepts any. Computed from the three files, so a
+      fourth such item fails here rather than in somebody's hands.
+    */
+    const read = (path: string): string => withoutComments(readFileSync(join(ROOT, path), 'utf8'))
+
+    function sentBy(menu: string): string[] {
+      const sends = /emit\(\s*'shortcut:triggered',\s*\{\s*action:\s*'(\w+)'\s*\}\s*\)/g
+      return [...new Set([...menu.matchAll(sends)].map((match) => match[1]!))]
+    }
+
+    /** The cases of the renderer's `shortcut:triggered` switch, and the core's `MenuActions` methods. */
+    function receivers(app: string, actions: string): Set<string> {
+      const start = app.indexOf("subscribe('shortcut:triggered'")
+      const handler = start < 0 ? '' : app.slice(start, app.indexOf('\n  }, [', start))
+      const cases = [...handler.matchAll(/case '(\w+)':/g)].map((match) => match[1]!)
+      const body = /export class MenuActions\b[\s\S]*?\n\}/.exec(actions)?.[0] ?? ''
+      const methods = [...body.matchAll(/^ {2}(?:async )?(\w+)\(\): Promise<void>/gm)].map(
+        (match) => match[1]!
+      )
+      return new Set([...cases, ...methods])
+    }
+
+    function unreceived(menu: string, app: string, actions: string): string[] {
+      const known = receivers(app, actions)
+      return sentBy(menu).filter((action) => !known.has(action))
+    }
+
+    const menu = read('src/main/menu/appMenu.ts')
+    const app = read('src/renderer/src/App.tsx')
+    const actions = existsSync(join(ROOT, 'src/main/menu/menu-actions.ts'))
+      ? read('src/main/menu/menu-actions.ts')
+      : ''
+
+    it('finds a receiver for each of them', () => {
+      // Both scans still see what they are aimed at, or an empty list below would prove nothing.
+      expect(sentBy(menu).length).toBeGreaterThan(3)
+      expect(receivers(app, actions)).toContain('focusAddressBar')
+      expect(receivers(app, actions)).toContain('panic')
+      expect(unreceived(menu, app, actions)).toEqual([])
+    })
+
+    it('fails for an action that nobody receives', () => {
+      // What the three were: an item sending an action that no case and no method takes.
+      const orphan = `${menu}\nfocused()?.emit('shortcut:triggered', { action: 'nobodyTakesThis' })\n`
+      expect(unreceived(orphan, app, actions)).toEqual(['nobodyTakesThis'])
+    })
+
+    it('runs the three core actions from the menu handler, not through the focused chrome', () => {
+      for (const action of ['addBookmark', 'clearData', 'panic']) {
+        expect(sentBy(menu), `${action} is still sent to the chrome`).not.toContain(action)
+        expect(menu, `the menu does not call ${action}`).toMatch(
+          new RegExp(`deps\\.actions\\.${action}\\(\\)`)
+        )
+      }
+    })
+  })
+
   it('gives every shortcut action a menu item that carries its accelerator', () => {
     /*
       An accelerator only fires if a menu item declares it.

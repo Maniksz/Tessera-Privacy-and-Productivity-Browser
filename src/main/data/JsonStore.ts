@@ -146,6 +146,8 @@ export class JsonStore<T> {
   #pendingWrite: ReturnType<typeof setTimeout> | null = null
   #unreadable: readonly UnreadableEntry[]
   readonly #readOnly: boolean
+  /** Set by `abandon`: nothing of this store is written again in this run. */
+  #abandoned = false
 
   readonly diagnostics: JsonStoreDiagnostics
 
@@ -384,6 +386,7 @@ export class JsonStore<T> {
   }
 
   #scheduleWrite(): void {
+    if (this.#abandoned) return
     const delay = this.options.debounceMs ?? 250
     if (delay === 0) {
       void this.flush()
@@ -403,7 +406,7 @@ export class JsonStore<T> {
    * waiting on it: a store that will never write has nothing a timeout could be waiting for.
    */
   flush(): Promise<void> {
-    if (this.#readOnly) return Promise.resolve()
+    if (this.#readOnly || this.#abandoned) return Promise.resolve()
     if (this.#pendingWrite !== null) {
       clearTimeout(this.#pendingWrite)
       this.#pendingWrite = null
@@ -440,6 +443,22 @@ export class JsonStore<T> {
     )
     this.#writeQueue = removal.catch(() => undefined)
     return removal
+  }
+
+  /**
+   * Stops writing for good, and settles once the last write already queued has landed.
+   *
+   * For panic, which deletes the file from under the open store (KTD7): a debounced write still
+   * pending, a flush on the way out, a change a closing window makes — any of them would put the file
+   * back. The document stays readable in memory; only the disk is given up.
+   */
+  abandon(): Promise<void> {
+    this.#abandoned = true
+    if (this.#pendingWrite !== null) {
+      clearTimeout(this.#pendingWrite)
+      this.#pendingWrite = null
+    }
+    return this.#writeQueue
   }
 
   /** The document as the file gets it: with the unreadable entries back where they were. */

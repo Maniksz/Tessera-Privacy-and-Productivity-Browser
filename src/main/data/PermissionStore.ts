@@ -171,6 +171,11 @@ export class PermissionStore {
     return this.#replace(() => [])
   }
 
+  /** The file given up for good, for panic; see `JsonStore.abandon`. */
+  abandon(): Promise<void> {
+    return this.#store.abandon()
+  }
+
   onChange(listener: (sites: SitePermission[]) => void): () => void {
     return this.#store.onChange((document) => listener([...document.sites]))
   }

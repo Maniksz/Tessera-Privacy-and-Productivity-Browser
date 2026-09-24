@@ -253,6 +253,17 @@ export class SessionStore {
     }
   }
 
+  /**
+   * Sealed, and the file given up for good: what panic does before it deletes the session (KTD7).
+   *
+   * The seal alone keeps the closing windows out; this also keeps out the shutdown's flush, which
+   * would write every window still open back into the file panic has just removed.
+   */
+  abandon(): Promise<void> {
+    this.seal()
+    return this.#store.abandon()
+  }
+
   flush(): Promise<void> {
     return this.#store.flush()
   }

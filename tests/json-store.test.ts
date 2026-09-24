@@ -963,3 +963,41 @@ describe('QuickLinkStore', () => {
     expect(links.list()[0]?.parentId).toBeNull()
   })
 })
+
+describe('JsonStore abandoned for a deletion', () => {
+  it('drops a pending write, writes nothing more and keeps the document in memory', async () => {
+    const filePath = await tempPath()
+    const store = await JsonStore.open<Doc>({
+      filePath,
+      schema: docSchema,
+      fallback,
+      migrations: [],
+      criticality: 'degradable',
+      debounceMs: 60_000
+    })
+    // Pending behind the debounce when panic arrives.
+    store.update((doc) => ({ ...doc, items: ['pending'] }))
+
+    await store.abandon()
+    store.update((doc) => ({ ...doc, items: ['pending', 'late'] }))
+    await store.flush()
+    await store.discardCopies()
+
+    await expect(stat(filePath)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(store.get().items).toEqual(['pending', 'late'])
+  })
+
+  it('settles only once a write already queued has landed, so a deletion after it is final', async () => {
+    const filePath = await tempPath()
+    const store = await open(filePath)
+    store.update((doc) => ({ ...doc, items: ['queued'] }))
+
+    await store.abandon()
+    // The queued write is on disk now, and nothing can follow it.
+    expect(JSON.parse(await readFile(filePath, 'utf8'))).toEqual({ version: 1, items: ['queued'] })
+    await nodeFs.rm(filePath)
+    store.update((doc) => ({ ...doc, items: ['after'] }))
+    await store.flush()
+    await expect(stat(filePath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})

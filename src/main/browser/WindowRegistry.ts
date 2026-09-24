@@ -655,6 +655,11 @@ export class WindowRegistry {
     return false
   }
 
+  /** The session a window was created with: the default one, or its own private partition. */
+  sessionOf(controller: BrowserWindowController): Session | undefined {
+    return this.#open.get(controller)?.session
+  }
+
   focused(): BrowserWindowController | undefined {
     return [...this.#controllers].find(
       (controller) => !controller.window.isDestroyed() && controller.window.isFocused()

@@ -6,6 +6,7 @@ import {
   catchUpPendingClears,
   clearChromium,
   clearFilesOf,
+  clearNow,
   clearOnExit,
   exitNoteAt,
   noteFileAt,
@@ -296,6 +297,93 @@ describe('clearing on the files, before the stores open', () => {
     await expect(
       clearFilesOf(['history', 'downloads'], { session: fakeSession().session, path })
     ).resolves.toBeUndefined()
+  })
+
+  it('goes on past a file it cannot remove, and fails at the end with the first refusal', async () => {
+    const { path } = await profile()
+    const { session, calls } = fakeSession()
+    const removed: string[] = []
+    const busy = Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+    await expect(
+      clearFilesOf(['history', 'downloads', 'cache'], {
+        session,
+        path,
+        files: {
+          removeFile: (target) =>
+            target === path('historyFile') ? Promise.reject(busy) : Promise.resolve(),
+          removeDirectory: (target) => {
+            removed.push(target)
+            return target === path('thumbnailCacheDir')
+              ? Promise.reject(new Error('second'))
+              : Promise.resolve()
+          },
+          removeCopiesOf: (target) => {
+            removed.push(`${target} copies`)
+            return Promise.resolve()
+          }
+        }
+      })
+    ).rejects.toBe(busy)
+    // The history's own copies, both caches and the downloads list were still tried, and Chromium asked.
+    expect(removed).toEqual([
+      `${path('historyFile')} copies`,
+      path('faviconCacheDir'),
+      path('thumbnailCacheDir'),
+      `${path('downloadsFile')} copies`
+    ])
+    expect(calls).toEqual(['clearCache'])
+  })
+})
+
+describe('clearing now, while the browser goes on', () => {
+  it('empties the chosen stores without sealing them, so the next visit is recorded again', async () => {
+    const { dir } = await profile()
+    const history = await HistoryStore.open({ filePath: join(dir, 'history.json'), debounceMs: 0 })
+    const downloads = await DownloadStore.open({
+      filePath: join(dir, 'downloads.json'),
+      debounceMs: 0
+    })
+    const recorder = history.recorderFor('normal')
+    recorder.recordVisit({ url: 'https://before.example/' })
+    const order: string[] = []
+    const forgotten: string[][] = []
+    const { session, calls } = fakeSession()
+
+    const due = await clearNow(['history', 'downloads', 'cookies'], {
+      session,
+      stores: {
+        history,
+        downloads,
+        favicons: fakeCache('favicons', order),
+        thumbnails: fakeCache('thumbnails', order)
+      },
+      forget: (categories) => forgotten.push([...categories])
+    })
+
+    expect(due).toEqual(['history', 'downloads', 'cookies', 'networkTraces', 'inMemory'])
+    expect(order).toEqual([
+      'favicons.clear',
+      'thumbnails.clear',
+      'favicons.discardCopies',
+      'thumbnails.discardCopies'
+    ])
+    expect(forgotten).toEqual([due])
+    expect(calls).toContain('clearAuthCache')
+    expect(history.query()).toEqual([])
+    recorder.recordVisit({ url: 'https://after.example/' })
+    expect(history.query().map((visit) => visit.url)).toEqual(['https://after.example/'])
+  })
+
+  it('touches no store for a private window, only its session', async () => {
+    const { session, calls } = fakeSession()
+    const forgotten: string[][] = []
+    await clearNow(['history', 'cache'], {
+      session,
+      stores: null,
+      forget: (categories) => forgotten.push([...categories])
+    })
+    expect(calls).toEqual(['clearCache'])
+    expect(forgotten).toEqual([['history', 'cache']])
   })
 })
 
