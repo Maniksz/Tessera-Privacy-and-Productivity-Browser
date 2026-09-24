@@ -22,7 +22,7 @@ import {
 import type { PermissionDecision } from '../session/permission-policy.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 import type { BrowsingMode } from './HistoryStore.js'
 
 /**
@@ -97,6 +97,12 @@ export interface PermissionStoreOptions {
   maxEntries?: number
 }
 
+/**
+ * The steps up to the version this store writes. Version 1 is the only one there has been; see
+ * `StoreMigrations`. Exported for the backup, which refuses a document newer than this (U23, AE8).
+ */
+export const PERMISSION_MIGRATIONS: StoreMigrations = []
+
 export class PermissionStore {
   readonly #store: JsonStore<PermissionDocument>
   readonly #now: () => number
@@ -113,8 +119,7 @@ export class PermissionStore {
       filePath: options.filePath,
       schema: permissionDocumentSchema,
       fallback: emptyPermissionDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: PERMISSION_MIGRATIONS,
       criticality: 'degradable',
       // A file written by an older build, edited by hand or cut short by a crash must not leave
       // two answers for one question: the read path takes the first match, so the duplicate would

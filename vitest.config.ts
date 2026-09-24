@@ -167,6 +167,11 @@ export default defineConfig({
           presentation into a message box.
         */
         'src/main/updates/install-updates.ts',
+        /*
+          The backup's dialogs, key store and version (U23), on the same terms: every decision is in
+          `src/main/backup/`, held at all of it above, and this file is the Electron that feeds it.
+        */
+        'src/main/ipc/backup-handlers.ts',
         '**/*.d.ts'
       ],
       thresholds: {
@@ -226,6 +231,14 @@ export default defineConfig({
         'src/shared/tabgroups/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         // The local ranker (U17): pure, and every suggestion row the address bar shows is its answer.
         'src/shared/search/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        // The address bar's suggestions (U18): which stores a keystroke reads, what it drops as stale.
+        'src/shared/omnibox/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/ipc/omnibox-handlers.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         // Which addresses a media download may fetch (U16, media R25): each branch is a way in.
         'src/shared/media/url-guard.ts': {
           lines: 100,
@@ -516,6 +529,14 @@ export default defineConfig({
           branches: 100,
           statements: 100
         },
+        /*
+          The backup and the restore (U23, KTD17, KTD18), whole. Every branch in the format is a file
+          refused before it costs anything — a KDF parameter off the list, a header past its size, an
+          archive that inflates too far — and every branch in the staging is an order a crash must not
+          break; an untaken one is where a restore that overwrites `local-data.key` would hide.
+        */
+        'src/main/backup/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/shared/backup/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         /*
           Panic and the menu actions behind it (U12). A step out of order is a window written back
           into the session panic just deleted; an untested branch in the actions is a key that does

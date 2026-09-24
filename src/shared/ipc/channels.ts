@@ -149,6 +149,9 @@ export const INVOKE_CHANNELS = [
   'tiles:pointerAt',
   /** The lock and the shield in the address bar open the same native menu (U19, KTD13). */
   'site:menu',
+  /** The address bar's suggestion list: ranked and presented by the core, closed by Escape (U18). */
+  'omnibox:suggest',
+  'omnibox:close',
   'picker:start',
   'picker:stop',
   /**
@@ -385,7 +388,18 @@ export const INVOKE_CHANNELS = [
    * which makes granting it cheaper than granting `tabs:create`, the channel a page would otherwise
    * need and which would let it open anything at all.
    */
-  'passwords:openManager'
+  'passwords:openManager',
+  /**
+   * The encrypted backup and the restore at the next start (U23). For the settings page alone.
+   *
+   * None carries a path or a file in either direction: the core opens both dialogs and reads and
+   * writes the file itself, as `passwords:import` does. What crosses is a passphrase, the preview of a
+   * backup the core has decrypted and keeps, and the choice made from it.
+   */
+  'backup:status',
+  'backup:create',
+  'backup:openRestore',
+  'backup:stageRestore'
 ] as const
 
 export type InvokeChannel = (typeof INVOKE_CHANNELS)[number]
@@ -511,7 +525,17 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
       internal address. What is granted is one fixed destination with no payload — see the channel's
       own comment for why that is strictly less than the `tabs:create` a link would have needed.
     */
-    'passwords:openManager'
+    'passwords:openManager',
+    /*
+      Back up and restore (U23), here and on no other page: the settings screen is where a person
+      decides what their profile is, and a restore rewrites all of it at the next start. Nothing staged
+      takes a security-relevant setting, a permission or a filter rule the person did not tick, and
+      the core opens both files itself, so the page holds a passphrase and a choice and nothing else.
+    */
+    'backup:status',
+    'backup:create',
+    'backup:openRestore',
+    'backup:stageRestore'
   ],
   extensions: ['i18n:getCatalog', 'extensions:list', 'extensions:load', 'extensions:remove'],
   history: [

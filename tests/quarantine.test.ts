@@ -8,6 +8,8 @@ import {
   backupPathOf,
   quarantineCopy,
   removeCopiesOf,
+  safetyCopyOf,
+  stagedCopyOf,
   type CopyFileSystem
 } from '@main/data/quarantine.js'
 
@@ -186,6 +188,31 @@ describe('removeCopiesOf', () => {
       'history.json.v1.bak.old',
       'history.json.unreadable.x',
       'history.json.vx.bak'
+    ]
+    for (const name of [...theirs, ...others]) await writeFile(join(dir, name), name)
+
+    await removeCopiesOf(filePath)
+
+    expect((await readdir(dir)).sort()).toEqual([...others].sort())
+  })
+
+  it('takes a restore’s staged copy and safety copy with the file (U23)', async () => {
+    const filePath = await fileIn('bookmarks.json')
+    const dir = join(filePath, '..')
+    expect(stagedCopyOf(filePath)).toBe(`${filePath}.restore`)
+    expect(safetyCopyOf(filePath)).toBe(`${filePath}.before-restore`)
+    const theirs = [
+      'bookmarks.json.restore',
+      'bookmarks.json.before-restore',
+      'bookmarks.json.restore.4242-0a1b2c.tmp',
+      'bookmarks.json.before-restore.7-ff.tmp'
+    ]
+    const others = [
+      'bookmarks.json',
+      'bookmarks.json.restored',
+      'bookmarks.json.before-restore.old',
+      'bookmarks.json.xrestore',
+      'history.json.restore'
     ]
     for (const name of [...theirs, ...others]) await writeFile(join(dir, name), name)
 

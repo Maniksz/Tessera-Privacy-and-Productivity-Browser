@@ -3,6 +3,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { vaultKeyProtection, type VaultKeyProtection } from '@shared/passwords/vault.js'
 import { removeTempFilesOf, writeFileAtomically } from '../data/atomic-write.js'
+import { removeCopiesOf } from '../data/quarantine.js'
 import { DOCUMENT_KEY_BYTES, isSealedDocument, openDocument, sealDocument } from './envelope.js'
 import type { KeystoreStrength } from './keystore-strength.js'
 import type { SafeStorageLike } from './local-data-key.js'
@@ -318,6 +319,8 @@ export async function writeVaultKeyFile(keyFilePath: string, file: VaultKeyFile)
 export async function deleteVaultKeyFile(keyFilePath: string): Promise<void> {
   await rm(keyFilePath, { force: true })
   await removeTempFilesOf(keyFilePath)
+  // A restore's copies of the key (`quarantine.ts`): a key for a vault that is gone is still a key.
+  await removeCopiesOf(keyFilePath)
 }
 
 export interface WrapVaultKeyOptions {
@@ -403,27 +406,7 @@ export async function openVaultKey(options: OpenVaultKeyOptions): Promise<Uint8A
     throw new MasterPasswordRequiredError()
   }
 
-  let innerText: string
-  if (file.keystore) {
-    if (!options.safeStorage.isEncryptionAvailable()) {
-      throw new VaultKeyUnreadableError(
-        'the password vault key was wrapped by the operating system key store, which is not available now'
-      )
-    }
-    try {
-      innerText = options.safeStorage.decryptString(Buffer.from(file.payload, 'base64'))
-    } catch (error) {
-      // `String` rather than a check for `Error`: whatever a key store throws, this message only has
-      // to name it, and a branch for the other shape would be one nothing can produce.
-      throw new VaultKeyUnreadableError(
-        `the password vault key could not be unwrapped by the key store: ${String(error)}`
-      )
-    }
-  } else {
-    innerText = file.payload
-  }
-
-  const inner = Buffer.from(innerText, 'base64')
+  const inner = Buffer.from(innerTextOf(file, options.safeStorage), 'base64')
   if (file.kdf === null) return checkedKey(inner)
 
   if (!isSealedDocument(inner)) {
@@ -444,6 +427,80 @@ export async function openVaultKey(options: OpenVaultKeyOptions): Promise<Uint8A
     throw new WrongMasterPasswordError()
   }
   return checkedKey(key)
+}
+
+/**
+ * The payload with the key store's layer taken off, when it has one: base64 of the inner layer.
+ *
+ * @throws VaultKeyUnreadableError when the key store is not there or cannot unwrap it
+ */
+function innerTextOf(file: VaultKeyFile, safeStorage: SafeStorageLike): string {
+  if (!file.keystore) return file.payload
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new VaultKeyUnreadableError(
+      'the password vault key was wrapped by the operating system key store, which is not available now'
+    )
+  }
+  try {
+    return safeStorage.decryptString(Buffer.from(file.payload, 'base64'))
+  } catch (error) {
+    // `String` rather than a check for `Error`: whatever a key store throws, this message only has
+    // to name it, and a branch for the other shape would be one nothing can produce.
+    throw new VaultKeyUnreadableError(
+      `the password vault key could not be unwrapped by the key store: ${String(error)}`
+    )
+  }
+}
+
+/**
+ * The vault key under the master password alone, for a backup (R37, KTD17).
+ *
+ * The key store's layer comes off and the master password's stays, so what leaves the machine opens
+ * with the master password and nothing less — and with nothing more, because another machine's key
+ * store could never unwrap this one's. No password is asked for: taking the outer layer off needs
+ * only the key store, which is exactly why the inner one is what the backup keeps.
+ */
+export interface MasterOnlyVaultKey {
+  readonly kdf: VaultKdf
+  /** Base64 of the key sealed under `scrypt(master, kdf)`. */
+  readonly sealed: string
+}
+
+/**
+ * @throws VaultKeyUnreadableError when no master password guards the key — then the vault stays out
+ *   of the backup — or when the key store cannot take its layer off, or the inner layer is not sealed
+ */
+export function masterOnlyVaultKey(
+  file: VaultKeyFile,
+  safeStorage: SafeStorageLike
+): MasterOnlyVaultKey {
+  if (file.kdf === null) {
+    throw new VaultKeyUnreadableError('the password vault key is not behind a master password')
+  }
+  const sealed = innerTextOf(file, safeStorage)
+  if (!isSealedDocument(Buffer.from(sealed, 'base64'))) {
+    throw new VaultKeyUnreadableError(
+      'the password vault key file claims a master password but holds no sealed key'
+    )
+  }
+  return { kdf: file.kdf, sealed }
+}
+
+/**
+ * The key file a restored vault gets on this machine: the master password's layer from the backup,
+ * inside this machine's key store when it has one — the same two layers `wrapVaultKey` writes, so the
+ * restored vault needs the key store *and* the master password, as the original did (KTD17).
+ */
+export function wrapMasterOnlyVaultKey(
+  key: MasterOnlyVaultKey,
+  safeStorage: SafeStorageLike
+): VaultKeyFile {
+  if (!isSealedDocument(Buffer.from(key.sealed, 'base64'))) {
+    throw new VaultKeyUnreadableError('a restored vault key must be sealed under a master password')
+  }
+  const keystore = safeStorage.isEncryptionAvailable()
+  const payload = keystore ? safeStorage.encryptString(key.sealed).toString('base64') : key.sealed
+  return { version: 1, keystore, kdf: key.kdf, payload }
 }
 
 /**

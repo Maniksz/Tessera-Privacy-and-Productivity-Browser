@@ -12,7 +12,7 @@ import {
 } from '@shared/quicklinks/model.js'
 import { quickLinkDocumentSchema } from '@shared/quicklinks/schema.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 
 /**
  * Persistence for the start page's quick links (spec 1).
@@ -30,6 +30,12 @@ export interface QuickLinkStoreOptions {
   now?: () => number
   debounceMs?: number
 }
+
+/**
+ * The steps up to the version this store writes. Version 1 is the only one there has been; see
+ * `StoreMigrations`. Exported for the backup, which refuses a document newer than this (U23, AE8).
+ */
+export const QUICK_LINK_MIGRATIONS: StoreMigrations = []
 
 export class QuickLinkStore {
   readonly #store: JsonStore<QuickLinkDocument>
@@ -51,8 +57,7 @@ export class QuickLinkStore {
       filePath: options.filePath,
       schema: quickLinkDocumentSchema,
       fallback: emptyQuickLinkDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: QUICK_LINK_MIGRATIONS,
       criticality: 'degradable',
       // A hand-edited or partially written file must not leave items orphaned
       // and therefore invisible.

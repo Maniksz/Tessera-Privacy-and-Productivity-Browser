@@ -111,6 +111,8 @@ export const en = {
   'omnibox.blockerOffHere': 'Not filtering this site',
   'omnibox.blockerOff': 'Blocking is switched off',
   'omnibox.siteSettings': 'Site settings',
+  'omnibox.suggestions': 'Suggestions',
+  'omnibox.switchToTab': 'Switch to this tab',
 
   // tabs
   'tab.newTab': 'New tab',
@@ -643,6 +645,39 @@ export const en = {
     'The system setting sends some addresses directly. With the kill switch on, those are stopped.',
   'settings.on': 'On',
   'settings.off': 'Off',
+
+  /*
+    Back up and restore (U23), a section of the settings page. The items reuse the pages' own titles;
+    a refusal is one sentence per reason, and a wrong passphrase is one with a damaged file.
+  */
+  'backup.title': 'Back up and restore',
+  'backup.passphrase': 'Passphrase',
+  'backup.repeat': 'Repeat passphrase',
+  'backup.hint':
+    'At least 12 characters. A forgotten passphrase cannot be recovered, and neither can the backup.',
+  'backup.mismatch': 'The two passphrases differ.',
+  'backup.create': 'Create backup…',
+  'backup.saved': 'Backup saved.',
+  'backup.vaultIncluded': 'The password vault goes in, still locked by its master password.',
+  'backup.vaultNoMasterPassword':
+    'Without a master password the password vault stays out of the backup.',
+  'backup.vaultUnreadable': 'The password vault cannot be read right now and stays out.',
+  'backup.restore': 'Restore…',
+  'backup.restorePassphrase': 'Passphrase of the backup',
+  'backup.from': 'Backup of {date}, version {version}',
+  'backup.userRules': 'Your filter rules',
+  'backup.confirm':
+    'What is ticked is restored at the next start, after a safety copy of the current data. Permissions, filter rules and security settings stay as they are unless ticked.',
+  'backup.securitySettings': 'Security settings that differ',
+  'backup.stage': 'Restore at next start',
+  'backup.staged': 'The restore runs at the next start.',
+  'backup.pending': 'A restore is waiting for the next start.',
+  'backup.notABackup': 'This is not a {app} backup.',
+  'backup.tooLarge': 'This file is too large to be a backup.',
+  'backup.wrongPassphrase': 'Wrong passphrase or damaged file.',
+  'backup.newer': 'This backup is from a newer version of {app} and cannot be restored here.',
+  'backup.tooShort': 'The passphrase needs at least 12 characters.',
+  'backup.failed': 'That did not work. Nothing was changed.',
 
   // extensions
   'extensions.title': 'Extensions',

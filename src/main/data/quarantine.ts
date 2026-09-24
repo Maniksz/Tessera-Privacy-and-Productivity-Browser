@@ -96,6 +96,28 @@ export function backupPathOf(filePath: string, version: number): string {
 }
 
 /**
+ * Where a restore stages the document that will replace `filePath` at the next start (U23, KTD18).
+ *
+ * Beside the file, as a copy of it, rather than in a folder of its own: then every way the data goes
+ * reaches it without knowing about restores — clearing history now, on exit, panic, the catch-up and a
+ * vault reset all remove a file's copies — and a pending restore of a history the user just cleared
+ * cannot bring it back at the next start. The name comes from the inventory's path, never from the
+ * archive, and the move into place is a rename within one directory.
+ */
+export function stagedCopyOf(filePath: string): string {
+  return `${filePath}.restore`
+}
+
+/**
+ * What `filePath` held before a restore replaced it: the safety copy (R38), made when the restore is
+ * applied rather than when it was asked for, so what changed in between is in it. A copy like the
+ * others here, and it goes with the data as they do.
+ */
+export function safetyCopyOf(filePath: string): string {
+  return `${filePath}.before-restore`
+}
+
+/**
  * Keeps the version-`version` original before a migration replaces it, and answers where.
  *
  * At most one per version, and the first one wins: a backup already there is answered as it is. It is
@@ -117,10 +139,12 @@ export async function backupBeforeMigration(
 /**
  * The name of every copy this module makes of `filePath`, and of the temporaries writing one leaves.
  *
- * `<name>.unreadable`, `<name>.unreadable.<n>`, `<name>.v<n>.bak`, each optionally followed by the
- * `.<pid>-<hex>.tmp` the atomic writer uses while it is being written.
+ * `<name>.unreadable`, `<name>.unreadable.<n>`, `<name>.v<n>.bak`, `<name>.restore`,
+ * `<name>.before-restore`, each optionally followed by the `.<pid>-<hex>.tmp` the atomic writer uses
+ * while it is being written.
  */
-const COPY_SUFFIX = /^(?:unreadable(?:\.\d+)?|v\d+\.bak)(?:\.\d+-[0-9a-f]+\.tmp)?$/
+const COPY_SUFFIX =
+  /^(?:unreadable(?:\.\d+)?|v\d+\.bak|restore|before-restore)(?:\.\d+-[0-9a-f]+\.tmp)?$/
 
 /**
  * Removes every copy of `filePath` and every temporary beside it — everything of that data that is

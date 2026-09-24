@@ -394,3 +394,31 @@ body {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/*
+  --- back up and restore (U23) ---------------------------------------------
+
+  Two password fields and a button in a row that wraps, and the preview as a plain list of ticks. The
+  rows reuse `.field`; these rules only let the control column hold more than one control.
+*/
+.backup__inputs {
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 28rem;
+}
+
+.backup__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: 6px;
+}
+
+.backup__choice {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}

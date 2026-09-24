@@ -16,6 +16,7 @@ import {
   type DataCategory
 } from '@shared/data/inventory.js'
 import { settingDefinitions } from '@shared/settings/definitions.js'
+import { BACKUP_DOCUMENTS, VAULT_FILES } from '@shared/backup/model.js'
 
 /**
  * The data inventory (KTD7): one table that says what each category of data is made of, and which
@@ -118,6 +119,21 @@ describe('the inventory', () => {
       ])
     )
     expect(NEVER_BACKED_UP.other).toContain('chromium-caches')
+  })
+
+  it('makes the backup’s documents exactly the backup column’s files, without their directories (U23)', () => {
+    /*
+      The hook for workspaces (U21): a file added to a `yes` row fails here until the backup carries
+      it, and `DOCUMENT_VERSIONS` then asks for its version at compile time.
+    */
+    const column = DATA_INVENTORY.filter((row) => row.backup === 'yes')
+      .flatMap((row) => row.files)
+      .filter((name) => !name.endsWith('Dir'))
+    expect([...BACKUP_DOCUMENTS]).toEqual(column)
+    expect([...VAULT_FILES]).toEqual(rowOf('vault').files)
+    expect(rowOf('vault').backup).toBe('withMasterPassword')
+    // The restore's commit mark names items, never contents, and is no backup's business.
+    expect(NEVER_BACKED_UP.files).toContain('restoreManifestFile')
   })
 
   it('files every path in exactly one place', () => {

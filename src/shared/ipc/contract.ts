@@ -63,18 +63,17 @@ import {
 */
 import { FILL_REFUSALS } from '../passwords/fill-policy.js'
 /*
-  Every password wire shape, and the vault's channels themselves, from that feature's own `schema.ts`.
-
-  The `model.ts` / `schema.ts` split `quicklinks`, `media` and `reader` already use, applied here for a
-  second reason as well: the schemas and then the channels took this file past its line bar, which is
-  where the largest-file metric stops meaning what it was set to mean. The two-way assertions that keep
-  each of them in step with the interface the passwords page renders travel with them.
+  Every password and address-bar suggestion wire shape, and their channels, from each feature's own
+  `schema.ts`: the `model.ts` / `schema.ts` split `quicklinks`, `media` and `reader` use, here also because
+  those schemas took this file past its line bar. The two-way assertions against each model travel along.
 */
 import {
   autofillKeyStateSchema,
   passwordInvokeContract,
   vaultStateResponseSchema
 } from '../passwords/schema.js'
+import { omniboxInvokeContract, omniboxSuggestionsPresentationSchema } from '../omnibox/schema.js'
+import { backupInvokeContract } from '../backup/schema.js'
 
 /**
  * The typing half of the UI <-> core boundary (spec 6).
@@ -387,10 +386,11 @@ const downloadsPanelRequestSchema = z.strictObject({
 
 const overlayPresentationSchema = z.discriminatedUnion('kind', [
   ...overlaySurfaceSchemas,
-  downloadsPanelPresentationSchema
+  downloadsPanelPresentationSchema,
+  omniboxSuggestionsPresentationSchema
 ])
 
-/** What `overlay:present` accepts: every surface as presented, except the panel, asked for bare. */
+/** What `overlay:present` accepts: every surface as presented, the panel asked for bare, no suggestions. */
 const overlayRequestSchema = z.discriminatedUnion('kind', [
   ...overlaySurfaceSchemas,
   downloadsPanelRequestSchema
@@ -1236,11 +1236,12 @@ export const invokeContract = {
   'downloads:summary': { request: nothing, response: downloadButtonSummarySchema },
 
   /*
-    Saved passwords: twenty channels, declared beside their schemas in `shared/passwords/schema.ts`
-    so this file stays under the largest-file bar. Spread in here, so the exhaustiveness check below
-    covers them exactly as it covers everything else.
+    Passwords and the address bar's suggestions, declared beside their schemas so this file stays under
+    its bar. Spread in, so the exhaustiveness check below covers them exactly as everything else.
   */
-  ...passwordInvokeContract
+  ...passwordInvokeContract,
+  ...omniboxInvokeContract,
+  ...backupInvokeContract
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract

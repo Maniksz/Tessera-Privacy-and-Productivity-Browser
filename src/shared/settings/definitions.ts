@@ -423,6 +423,121 @@ export type SettingsSnapshot = {
 
 export const SETTINGS_KEYS = Object.keys(settingDefinitions) as SettingsKey[]
 
+/**
+ * Which settings a restore takes over only after the person confirms each one (R38, KTD18).
+ *
+ * A flag for every setting, and the type makes it one: a key added above without a line here is a
+ * compile error, and `architecture.test.ts` holds the same from the other side. It has to be decided
+ * per setting because the cost of getting one wrong is not symmetric. A backup somebody else prepared
+ * — or one restored from a machine that was compromised — can carry a proxy that reads every request,
+ * a search engine that logs every query, a blocker switched off, a download folder somewhere shared,
+ * an update channel nobody chose. `true` means the value decides where traffic goes, what protects the
+ * user, or where their data ends up; a restore keeps the current value unless it is ticked.
+ *
+ * Here rather than in `SettingDefinition`, so the eighty `def(...)` calls above stay as they read and
+ * the flag for every key can be seen at once.
+ */
+export const SECURITY_RELEVANT_SETTINGS: Readonly<Record<SettingsKey, boolean>> = {
+  'appearance.theme': false,
+  'appearance.uiLanguage': false,
+  'appearance.showBookmarksBar': false,
+  'appearance.defaultZoom': false,
+  'appearance.tabBarPosition': false,
+
+  'search.defaultEngine': true,
+  'search.customEngineUrl': true,
+  'search.suggestFromHistory': false,
+  'search.suggestFromBookmarks': false,
+  'search.suggestFromOpenTabs': false,
+  'search.remoteSuggestions': true,
+
+  'splitView.defaultLayout': false,
+  'splitView.restoreLayoutOnStart': false,
+  'splitView.showTileHeaders': false,
+  'splitView.adaptLayoutToTabs': false,
+  'splitView.fullscreenScope': false,
+  'splitView.onlyActiveTileAudible': false,
+  'splitView.muteAllButActive': false,
+  'splitView.throttleInactiveTiles': false,
+  'splitView.tileBarMode': false,
+  'splitView.autoplayInTiles': false,
+
+  'privacy.blockerEnabled': true,
+  'privacy.blockerLists': true,
+  'privacy.cosmeticFiltering': true,
+  'privacy.scriptletInjection': true,
+  'privacy.blockerOffForSites': true,
+  'privacy.pageOpenedTabs': true,
+  'privacy.pageInitiatedRedirects': true,
+  'privacy.blockRedirectTrackers': true,
+  'privacy.stripTrackingParameters': true,
+  'privacy.blockTelemetryDomains': true,
+  'privacy.httpsOnlyMode': true,
+  'privacy.blockThirdPartyCookies': true,
+  'privacy.referrerPolicy': true,
+  'privacy.sendDoNotTrack': true,
+  'privacy.sendGlobalPrivacyControl': true,
+  'privacy.partitionStatePerSite': true,
+  'privacy.malwareProtection': true,
+
+  'fingerprint.mode': true,
+  'fingerprint.normalizeUserAgent': true,
+  'fingerprint.normalizeClientHints': true,
+  'fingerprint.normalizeAcceptLanguage': true,
+  'fingerprint.maskCanvas': true,
+  'fingerprint.maskWebgl': true,
+  'fingerprint.maskAudio': true,
+  'fingerprint.limitFonts': true,
+  'fingerprint.normalizeScreen': true,
+  'fingerprint.blockDeviceApis': true,
+  'fingerprint.spoofTimezone': true,
+  'fingerprint.spoofLocale': true,
+
+  'passwords.autofill': true,
+  'passwords.lockAfterMinutes': true,
+
+  'permissions.geolocation': true,
+  'permissions.camera': true,
+  'permissions.microphone': true,
+  'permissions.notifications': true,
+  'permissions.clipboard': true,
+  'permissions.displayCapture': true,
+  'permissions.persistentStorage': true,
+  'permissions.midi': true,
+
+  'network.proxyMode': true,
+  'network.proxyUrl': true,
+  'network.killSwitch': true,
+  'network.secureDnsMode': true,
+  'network.secureDnsServers': true,
+  'network.webrtcIpPolicy': true,
+
+  'downloads.directory': true,
+  'downloads.askForEachFile': false,
+
+  'session.startupBehaviour': true,
+  'session.customStartupUrl': true,
+  'session.restoreOnStart': false,
+  'session.restoreAfterCrash': false,
+
+  'clearData.onExit': true,
+  'clearData.onExitCategories': true,
+
+  'advanced.hardwareAcceleration': false,
+  'advanced.spellcheck': false,
+  'advanced.spellcheckLanguages': false,
+  'advanced.unloadInactiveTabs': false,
+  'advanced.unloadAfterMinutes': false,
+  'advanced.customShortcuts': false,
+
+  'updates.checkAutomaticallyOnGithub': true,
+  'updates.channel': true
+}
+
+export function isSecurityRelevant(key: SettingsKey): boolean {
+  return SECURITY_RELEVANT_SETTINGS[key]
+}
+
 export function isSettingsKey(value: unknown): value is SettingsKey {
   return typeof value === 'string' && Object.hasOwn(settingDefinitions, value)
 }

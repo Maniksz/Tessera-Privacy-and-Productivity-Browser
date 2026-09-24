@@ -26,7 +26,7 @@ import {
 import type { StoredCredentialState } from '@shared/passwords/save-policy.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 
 /**
  * Persistence for saved passwords.
@@ -129,6 +129,12 @@ export interface PasswordStoreOptions {
   debounceMs?: number
 }
 
+/**
+ * The steps up to the version this store writes. Version 1 is the only one there has been; see
+ * `StoreMigrations`. Exported for the backup, which refuses a document newer than this (U23, AE8).
+ */
+export const PASSWORD_MIGRATIONS: StoreMigrations = []
+
 export class PasswordStore {
   readonly #store: JsonStore<PasswordDocument>
   readonly #generateId: () => string
@@ -149,8 +155,7 @@ export class PasswordStore {
       filePath: options.filePath,
       schema: passwordDocumentSchema,
       fallback: emptyPasswordDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: PASSWORD_MIGRATIONS,
       // What the user made and cannot get back: a newer file is shown read-only and every write
       // refused, rather than accepted and lost at exit. See `StoreCriticality`.
       criticality: 'critical',

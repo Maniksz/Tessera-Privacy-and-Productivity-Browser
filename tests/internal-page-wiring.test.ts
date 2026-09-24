@@ -134,9 +134,33 @@ describe('internal page privileges', () => {
           like the rest, so granting it and never calling it fails here, and calling any *other*
           `passwords:` channel from this page fails too: the grant list is compared whole.
         */
-        ...invokesMentioned(settingsPage, 'passwords')
+        ...invokesMentioned(settingsPage, 'passwords'),
+        // Back up and restore (U23): a passphrase and a choice out, a status and a preview back.
+        ...invokesMentioned(settingsPage, 'backup')
       ].sort()
     )
+  })
+
+  it('grants the backup channels to the settings page and to no other (U23)', () => {
+    /*
+      A restore rewrites the profile at the next start, and a backup reads all of it; the settings page
+      is where a person decides that. No other page, the start page and the reader above all, has any of
+      the four — and the page holds exactly the four, so none is granted and left uncalled.
+    */
+    const backup = INVOKE_CHANNELS.filter((channel) => channel.startsWith('backup:'))
+    expect([...backup].sort()).toEqual([
+      'backup:create',
+      'backup:openRestore',
+      'backup:stageRestore',
+      'backup:status'
+    ])
+    for (const page of INTERNAL_PAGES) {
+      const granted = backup.filter((channel) => mayInternalPageInvoke(page, channel))
+      expect(granted, page).toEqual(page === 'settings' ? backup : [])
+    }
+    // No path and no file in any request: the core opens the dialogs and the files itself.
+    const page = codeOf('src/renderer/internal/SettingsPage.tsx')
+    expect(page).not.toMatch(/backup:[a-zA-Z]+',\s*\{[^}]*\b(path|file|bytes|content)\b/)
   })
 
   /*

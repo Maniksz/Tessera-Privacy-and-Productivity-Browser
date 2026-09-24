@@ -260,6 +260,18 @@ export function panicPendingFile(): string {
 }
 
 /**
+ * The commit mark of a restore staged for the next start (U23, KTD18).
+ *
+ * Sealed with the profile's codec and written after every staged document, so its presence means the
+ * staging finished; the startup applies the restore only then, and removes this last. It names the
+ * items, not their contents. The staged documents and the safety copies sit beside the files they
+ * replace, as copies of them — see `stagedCopyOf` in `data/quarantine.ts` for why.
+ */
+export function restoreManifestFile(): string {
+  return join(userDataDir(), 'restore-pending.json')
+}
+
+/**
  * The downloaded Public Suffix List and the state that judges the next one.
  *
  * User data rather than cache, though the list itself can be downloaded again, because losing it is
@@ -305,6 +317,7 @@ const INVENTORY_PATHS = {
   extensionsFile,
   pendingClearFile,
   panicPendingFile,
+  restoreManifestFile,
   filterListCacheDir,
   publicSuffixDir
 } satisfies Record<InventoryPath, () => string>

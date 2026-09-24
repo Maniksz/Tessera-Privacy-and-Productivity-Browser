@@ -17,6 +17,11 @@ import {
 } from '@shared/shortcuts/bindings.js'
 import { platformSchema } from '@shared/model.js'
 import { DATA_INVENTORY, NEVER_BACKED_UP, OUTSIDE_INVENTORY } from '@shared/data/inventory.js'
+import {
+  SECURITY_RELEVANT_SETTINGS,
+  SETTINGS_KEYS,
+  isSecurityRelevant
+} from '@shared/settings/definitions.js'
 import { menuTexts } from '@main/menu/menu-text.js'
 import { LOCALES, catalogs } from '@shared/i18n/catalog.js'
 
@@ -990,9 +995,15 @@ describe('IPC discipline', () => {
       Eight stores each spelled out write-then-rename for themselves, none with an fsync and all with a
       fixed `.tmp` name two processes could share. `atomic-write.ts` is now the one place; a ninth
       copy would bring back exactly what it removed. `MediaDownloader.ts` renames a finished `.part`
-      download, which is a transfer, not a store.
+      download, which is a transfer, not a store. `stage-restore.ts` moves a staged copy — itself
+      written through `atomic-write.ts` — onto its file at the next start: that rename is what lets an
+      apply cut short be finished without touching a file twice (U23).
     */
-    const allowed = new Set(['src/main/data/atomic-write.ts', 'src/main/media/MediaDownloader.ts'])
+    const allowed = new Set([
+      'src/main/data/atomic-write.ts',
+      'src/main/media/MediaDownloader.ts',
+      'src/main/backup/stage-restore.ts'
+    ])
     const renameImport =
       /import\s*\{[^}]*\brename(?:Sync)?\b[^}]*\}\s*from\s*'(?:node:)?fs(?:\/promises)?'/
     const renameMember = /\b(?:fs|fsp|promises)\.rename(?:Sync)?\s*\(/
@@ -1420,7 +1431,6 @@ describe('IPC discipline', () => {
     const notYetRead = new Map([
       ['privacy.malwareProtection', 'no reputation check exists'],
       ['advanced.spellcheckLanguages', 'the session’s spellchecker is never told'],
-      ['search.suggestFromOpenTabs', 'the omnibox never consults open tabs'],
       /*
         Six more, found by this test rather than by review.
 
@@ -1430,8 +1440,6 @@ describe('IPC discipline', () => {
         chosen one onto the document element. This test is what says so; the entry leaves the list.
       */
       ['appearance.tabBarPosition', 'the strip is always drawn in one place'],
-      ['search.suggestFromHistory', 'the omnibox draws no suggestions from history'],
-      ['search.suggestFromBookmarks', 'nor from bookmarks'],
       ['search.remoteSuggestions', 'no suggestion is ever fetched, so the switch guards nothing'],
       ['splitView.showTileHeaders', 'tiles have no headers to show or hide'],
       ['privacy.partitionStatePerSite', 'one partition per browsing mode, never per site']
@@ -3499,5 +3507,65 @@ describe('key store strength', () => {
     expect(entry.indexOf('openLocalDataProtection(')).toBeGreaterThan(
       entry.indexOf('app.whenReady()')
     )
+  })
+})
+
+describe('backup and restore (U23)', () => {
+  it('lets every setting declare whether a restore takes it over only when confirmed', () => {
+    /*
+      KTD18: a flag for every setting, so a key added without deciding it cannot slip into a restore
+      unconfirmed. The type already refuses a missing key; this holds the same from the running table,
+      and pins the settings the plan names as security-relevant to `true`.
+    */
+    expect(Object.keys(SECURITY_RELEVANT_SETTINGS).sort()).toEqual([...SETTINGS_KEYS].sort())
+    for (const key of SETTINGS_KEYS) {
+      expect(typeof SECURITY_RELEVANT_SETTINGS[key], key).toBe('boolean')
+    }
+    const named = [
+      'network.proxyMode',
+      'network.proxyUrl',
+      'network.killSwitch',
+      'network.secureDnsMode',
+      'network.secureDnsServers',
+      'privacy.httpsOnlyMode',
+      'privacy.blockerOffForSites',
+      'fingerprint.mode',
+      'search.defaultEngine',
+      'search.customEngineUrl',
+      'session.customStartupUrl',
+      'downloads.directory',
+      'updates.channel'
+    ] as const
+    for (const key of named) expect(isSecurityRelevant(key), key).toBe(true)
+    expect(isSecurityRelevant('appearance.theme')).toBe(false)
+  })
+
+  it('puts a staged restore in place after the catch-up and before any store opens (KTD7)', () => {
+    const entry = withoutComments(readFileSync(join(ROOT, 'src/main/index.ts'), 'utf8'))
+    const catchUp = entry.indexOf('await catchUpPendingClears(')
+    const protection = entry.indexOf('await openLocalDataProtection(')
+    const restore = entry.indexOf('await applyRestoreAtStart(protection)')
+    expect(catchUp, 'the catch-up is gone').toBeGreaterThan(-1)
+    expect(restore, 'the staged restore is never applied').toBeGreaterThan(protection)
+    expect(protection).toBeGreaterThan(catchUp)
+    const firstStore = Math.min(
+      ...[...entry.matchAll(/\b\w+Store\.open\(/g)].map((match) => match.index)
+    )
+    expect(restore).toBeLessThan(firstStore)
+    expect(restore).toBeLessThan(entry.indexOf('PasswordVault.open('))
+    // The channels go up before the check that every channel has a handler.
+    expect(entry.indexOf('installBackup(')).toBeGreaterThan(-1)
+    expect(entry.indexOf('installBackup(')).toBeLessThan(entry.indexOf('registerIpcHandlers({'))
+  })
+
+  it('writes a restore only where the inventory says, never where an archive says', () => {
+    /*
+      KTD18: a target path from a name in the archive is how `../local-data.key` gets overwritten. The
+      staging builds no path of its own: no `node:path`, and every write goes to `path(name)` or one of
+      its two copies.
+    */
+    const staging = readFileSync(join(ROOT, 'src/main/backup/stage-restore.ts'), 'utf8')
+    expect(importsOf(staging).filter((spec) => spec === 'node:path' || spec === 'path')).toEqual([])
+    expect(codeOnly(staging)).not.toMatch(/\bjoin\(|\bresolve\(/)
   })
 })

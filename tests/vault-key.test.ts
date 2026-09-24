@@ -13,10 +13,12 @@ import {
   VaultKeyUnreadableError,
   WrongMasterPasswordError,
   deleteVaultKeyFile,
+  masterOnlyVaultKey,
   newVaultKey,
   openVaultKey,
   readVaultKeyFile,
   vaultKeyProtectionOf,
+  wrapMasterOnlyVaultKey,
   wrapVaultKey,
   writeVaultKeyFile,
   type OpenVaultKeyOptions,
@@ -636,6 +638,73 @@ describe('writing and deleting the key file', () => {
   it('is quiet about a key file that is already gone', async () => {
     // A reset after a reset, or a profile that never had a vault. Neither is an error.
     await expect(deleteVaultKeyFile(await keyPath())).resolves.toBeUndefined()
+  })
+})
+
+describe('the key a backup carries (U23, R37)', () => {
+  it('takes the key store’s layer off and keeps the master password’s, without the password', async () => {
+    const key = newVaultKey()
+    const file = await wrapCheaply({ key, safeStorage: fakeKeystore(), masterPassword: MASTER })
+    const carried = masterOnlyVaultKey(file, fakeKeystore())
+    expect(carried.kdf).toEqual(file.kdf)
+    expect(isSealedDocument(Buffer.from(carried.sealed, 'base64'))).toBe(true)
+    // On another machine, under its key store: both layers again, and the same key inside.
+    const elsewhere = fakeKeystore({ brand: 'keychain-b' })
+    const restored = wrapMasterOnlyVaultKey(carried, elsewhere)
+    expect(restored).toMatchObject({ version: 1, keystore: true, kdf: file.kdf })
+    await expect(
+      openVaultKey({ file: restored, safeStorage: elsewhere, masterPassword: null })
+    ).rejects.toBeInstanceOf(MasterPasswordRequiredError)
+    await expect(
+      openVaultKey({ file: restored, safeStorage: fakeKeystore(), masterPassword: MASTER })
+    ).rejects.toBeInstanceOf(VaultKeyUnreadableError)
+    const opened = await openVaultKey({
+      file: restored,
+      safeStorage: elsewhere,
+      masterPassword: MASTER
+    })
+    expect(hex(opened)).toBe(hex(key))
+  })
+
+  it('reads the inner layer as it is when no key store wrapped it, and writes it so without one', async () => {
+    const key = newVaultKey()
+    const none = fakeKeystore({ available: false })
+    const file = await wrapCheaply({ key, safeStorage: none, masterPassword: MASTER })
+    const carried = masterOnlyVaultKey(file, none)
+    expect(carried.sealed).toBe(file.payload)
+    const restored = wrapMasterOnlyVaultKey(carried, none)
+    expect(restored).toEqual({ version: 1, keystore: false, kdf: file.kdf, payload: file.payload })
+  })
+
+  it('refuses a key with no master password, one the key store cannot unwrap, and one not sealed', async () => {
+    const plain = await wrapCheaply({
+      key: newVaultKey(),
+      safeStorage: fakeKeystore(),
+      masterPassword: null
+    })
+    expect(() => masterOnlyVaultKey(plain, fakeKeystore())).toThrow(/not behind a master password/)
+    const wrapped = await wrapCheaply({
+      key: newVaultKey(),
+      safeStorage: fakeKeystore(),
+      masterPassword: MASTER
+    })
+    expect(() => masterOnlyVaultKey(wrapped, fakeKeystore({ brand: 'other' }))).toThrow(
+      VaultKeyUnreadableError
+    )
+    const hollow = { ...wrapped, keystore: false, payload: 'AAAA' }
+    expect(() => masterOnlyVaultKey(hollow, fakeKeystore())).toThrow(/holds no sealed key/)
+    expect(() =>
+      wrapMasterOnlyVaultKey({ kdf: wrapped.kdf!, sealed: 'AAAA' }, fakeKeystore())
+    ).toThrow(/must be sealed/)
+  })
+
+  it('deletes a restore’s copies of the key with the key', async () => {
+    const path = await keyPath()
+    await writeFile(path, 'key', 'utf8')
+    await writeFile(`${path}.restore`, 'staged', 'utf8')
+    await writeFile(`${path}.before-restore`, 'safety', 'utf8')
+    await deleteVaultKeyFile(path)
+    expect(await readdir(dirname(path))).toEqual([])
   })
 })
 

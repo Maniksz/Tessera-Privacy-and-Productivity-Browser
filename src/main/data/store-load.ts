@@ -316,6 +316,19 @@ export function describeStoreLoad(report: StoreLoadReport): string | null {
   }
 }
 
+/**
+ * The one line about a store's load, when there is one: a newer version's file left alone, an older
+ * one upgraded, a broken one copied aside — and whether this run's changes will be kept.
+ *
+ * Next to every store's own `recoveredFromInvalidFile` warning rather than instead of it: that one says
+ * what the store lost, this one says where the original is and what the run may write. Moved here from
+ * `index.ts` beside the sentence it logs (U23 made room in that file this way).
+ */
+export function warnAboutStoreLoad(label: string, report: StoreLoadReport): void {
+  const message = describeStoreLoad(report)
+  if (message !== null) console.warn(`[${label}] ${message}`)
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

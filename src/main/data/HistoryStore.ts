@@ -19,7 +19,7 @@ import {
 } from '@shared/history/model.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 
 /**
  * Persistence for the browsing history.
@@ -91,6 +91,12 @@ export interface HistoryStoreOptions {
   debounceMs?: number
 }
 
+/**
+ * The steps up to the version this store writes. Version 1 is the only one there has been; see
+ * `StoreMigrations`. Exported for the backup, which refuses a document newer than this (U23, AE8).
+ */
+export const HISTORY_MIGRATIONS: StoreMigrations = []
+
 export class HistoryStore {
   readonly #store: JsonStore<HistoryDocument>
   readonly #now: () => number
@@ -106,8 +112,7 @@ export class HistoryStore {
       filePath: options.filePath,
       schema: historyDocumentSchema,
       fallback: emptyHistoryDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: HISTORY_MIGRATIONS,
       criticality: 'degradable',
       // A file written by an older build, edited by hand, or cut short by a crash
       // must not leave duplicate entries or an unordered list, because the write path

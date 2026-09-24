@@ -239,6 +239,9 @@ function fakeCore(
           return Promise.resolve({ ok: true })
         case 'network:probeSystemProxy':
           return Promise.resolve({ direct: false })
+        // The backup section (U23) asks once on mount; it is not a descriptor and has no stored value.
+        case 'backup:status':
+          return Promise.resolve({ vault: 'no-vault', pendingRestore: false })
         case 'extensions:list':
           return Promise.resolve([...extensions])
         case 'extensions:load':
@@ -256,7 +259,10 @@ function fakeCore(
       const existing = listeners.get(channel) ?? []
       listeners.set(channel, [...existing, listener])
       return () => {
-        listeners.set(channel, (listeners.get(channel) ?? []).filter((entry) => entry !== listener))
+        listeners.set(
+          channel,
+          (listeners.get(channel) ?? []).filter((entry) => entry !== listener)
+        )
       }
     },
     channels: {
@@ -270,7 +276,8 @@ function fakeCore(
   return {
     calls,
     channels: () => calls.map((call) => call.channel),
-    listening: () => [...listeners.keys()].filter((channel) => (listeners.get(channel)?.length ?? 0) > 0),
+    listening: () =>
+      [...listeners.keys()].filter((channel) => (listeners.get(channel)?.length ?? 0) > 0),
     emit: (channel, payload) => {
       for (const listener of listeners.get(channel) ?? []) listener(payload)
     },
@@ -291,7 +298,11 @@ function renderPanel(node: React.ReactNode): ReturnType<typeof render> {
  * attribute React happens to order differently makes the comparison brittle.
  */
 function controlsOf(container: HTMLElement): string[] {
-  return [...container.querySelectorAll('.field')].map((field) => {
+  // Descriptor fields only: the backup section's passphrase fields are the page's own, not settings.
+  const fields = [...container.querySelectorAll('.field')].filter(
+    (field) => field.closest('[aria-labelledby="backup-heading"]') === null
+  )
+  return fields.map((field) => {
     const label = field.querySelector('.field__label')?.textContent ?? ''
     const control = field.querySelector('.field__control > *')
     const rendered =
@@ -327,7 +338,9 @@ describe('the settings surface, which is now only a page', () => {
     const page = render(<SettingsPage />)
     // Waits for the *value*, not just the control: the page fetches its own snapshot, so a premature
     // read would be of a surface whose numbers had not arrived.
-    await waitFor(() => expect(screen.getByLabelText('Kacheln höchstens')).toHaveProperty('value', '4'))
+    await waitFor(() =>
+      expect(screen.getByLabelText('Kacheln höchstens')).toHaveProperty('value', '4')
+    )
 
     // Section order, not descriptor order: the surface groups by section and renders the sections in
     // the order `SETTINGS_SECTIONS` declares, so split view comes before privacy whatever the core
@@ -477,7 +490,9 @@ describe('the settings surface, which is now only a page', () => {
     })
     // And the catalogue with it, or the chrome around the settings would stay in the old language while
     // the settings themselves changed.
-    expect(internal.channels().filter((channel) => channel === 'i18n:getCatalog').length).toBeGreaterThan(1)
+    expect(
+      internal.channels().filter((channel) => channel === 'i18n:getCatalog').length
+    ).toBeGreaterThan(1)
   })
 
   it('asks the core for an update check through the bridge it is granted', async () => {
@@ -539,7 +554,9 @@ describe('the settings surface, which is now only a page', () => {
     await waitFor(() => expect(internal.channels()).toContain('settings:reset'))
     await waitFor(() => expect(internal.channels()).toContain('userrules:apply'))
     const granted: readonly string[] = INTERNAL_PAGE_INVOKE_CHANNELS.settings
-    expect([...new Set(internal.channels())].filter((channel) => !granted.includes(channel))).toEqual([])
+    expect(
+      [...new Set(internal.channels())].filter((channel) => !granted.includes(channel))
+    ).toEqual([])
 
     const heard: readonly string[] = INTERNAL_PAGE_EVENT_CHANNELS.settings
     expect(internal.listening().filter((channel) => !heard.includes(channel))).toEqual([])
@@ -586,7 +603,10 @@ describe('the extensions surface in both entry points', () => {
     await waitFor(() => expect(screen.getByText('Test extension')).toBeTruthy())
     fireEvent.click(screen.getByLabelText('Remove Test extension'))
     await waitFor(() =>
-      expect(internal.calls).toContainEqual({ channel: 'extensions:remove', payload: { id: 'aaaa' } })
+      expect(internal.calls).toContainEqual({
+        channel: 'extensions:remove',
+        payload: { id: 'aaaa' }
+      })
     )
   })
 
@@ -620,7 +640,9 @@ describe('the extensions surface in both entry points', () => {
 
     await waitFor(() => expect(internal.channels()).toContain('extensions:remove'))
     const granted: readonly string[] = INTERNAL_PAGE_INVOKE_CHANNELS.extensions
-    expect([...new Set(internal.channels())].filter((channel) => !granted.includes(channel))).toEqual([])
+    expect(
+      [...new Set(internal.channels())].filter((channel) => !granted.includes(channel))
+    ).toEqual([])
   })
 })
 
@@ -698,7 +720,9 @@ describe('a refused call is shown rather than swallowed', () => {
     define('tesseraInternal', internal.bridge)
     render(<SettingsPage />)
 
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('core is not ready'))
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('core is not ready')
+    )
   })
 
   it('says the extension list could not be fetched rather than claiming there are none', async () => {
@@ -707,7 +731,9 @@ describe('a refused call is shown rather than swallowed', () => {
     define('tesseraInternal', internal.bridge)
     render(<ExtensionsPage />)
 
-    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('core is not ready'))
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('core is not ready')
+    )
   })
 })
 

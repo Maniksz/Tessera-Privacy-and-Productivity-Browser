@@ -25,7 +25,7 @@ import {
 import { graftImportedBookmarks, parseNetscapeBookmarks } from '@shared/bookmarks/import.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 
 /**
  * Persistence for bookmarks.
@@ -138,6 +138,12 @@ export interface BookmarkFileStatus {
   readonly readOnly?: true
 }
 
+/**
+ * The steps up to the version this store writes. Version 1 is the only one there has been; see
+ * `StoreMigrations`. Exported for the backup, which refuses a document newer than this (U23, AE8).
+ */
+export const BOOKMARK_MIGRATIONS: StoreMigrations = []
+
 export class BookmarkStore {
   readonly #store: JsonStore<BookmarkDocument>
   readonly #generateId: () => string
@@ -158,8 +164,7 @@ export class BookmarkStore {
       filePath: options.filePath,
       schema: bookmarkDocumentSchema,
       fallback: emptyBookmarkDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: BOOKMARK_MIGRATIONS,
       // What the user made and cannot get back: a newer file is shown read-only and every write
       // refused, rather than accepted and lost at exit. See `StoreCriticality`.
       criticality: 'critical',

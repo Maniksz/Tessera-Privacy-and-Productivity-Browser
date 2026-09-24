@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
   currentVersionOf,
@@ -7,6 +7,7 @@ import {
   restoreEntries,
   settleStoreDocument,
   splitEntries,
+  warnAboutStoreLoad,
   type StoreLoadSpec,
   type StoreMigration
 } from '@main/data/store-load.js'
@@ -370,5 +371,21 @@ describe('describeStoreLoad', () => {
     ).toBe(
       'the file could not be used (bad) and could not be copied aside; started from defaults, and it is read-only in this run and changes are refused'
     )
+  })
+})
+
+describe('warnAboutStoreLoad', () => {
+  it('logs the one line under the store’s label, and nothing when there is nothing to say', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    warnAboutStoreLoad('bookmarks', { outcome: { kind: 'current' }, criticality: 'critical' })
+    expect(warn).not.toHaveBeenCalled()
+    warnAboutStoreLoad('history', {
+      outcome: { kind: 'newer', version: 3 },
+      criticality: 'degradable'
+    })
+    expect(warn).toHaveBeenCalledWith(
+      '[history] the file was written by a newer version (version 3) and is left untouched; changes made in this run are discarded'
+    )
+    warn.mockRestore()
   })
 })

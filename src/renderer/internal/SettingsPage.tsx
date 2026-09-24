@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { SettingsView, type SettingsHost, type Snapshot } from '@renderer-shared/SettingsView.js'
 import { bridgeAvailable, invoke, subscribe } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
+import { BackupSection, type BackupHost } from './BackupSection.js'
 
 /**
  * `tessera://settings` — the settings surface, and now the only one.
@@ -102,6 +103,22 @@ export function SettingsPage(): React.ReactNode {
     [t]
   )
 
+  /*
+    Back up and restore (U23): a passphrase and a choice go out, a status and a preview come back.
+    The dialogs and both files are the core's; see `backup:create` in `channels.ts`.
+  */
+  const backup = useMemo<BackupHost>(
+    () => ({
+      status: () => invoke('backup:status'),
+      create: (passphrase) => invoke('backup:create', { passphrase }),
+      openRestore: (passphrase) => invoke('backup:openRestore', { passphrase }),
+      stage: ({ token, items, settings: chosen }) =>
+        invoke('backup:stageRestore', { token, items: [...items], settings: [...chosen] }),
+      t
+    }),
+    [t]
+  )
+
   useEffect(() => {
     if (!bridgeAvailable()) return
     let cancelled = false
@@ -130,7 +147,9 @@ export function SettingsPage(): React.ReactNode {
 
   return (
     <main className="panelPage" lang={locale}>
-      <SettingsView host={host} settings={settings} initialQuery={initialQuery} />
+      <SettingsView host={host} settings={settings} initialQuery={initialQuery}>
+        {bridgeAvailable() && <BackupSection host={backup} />}
+      </SettingsView>
     </main>
   )
 }

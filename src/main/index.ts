@@ -22,6 +22,7 @@ import {
 import { SettingsStore } from './settings/SettingsStore.js'
 import { WindowRegistry } from './browser/WindowRegistry.js'
 import { registerIpcHandlers } from './ipc/handlers.js'
+import { applyRestoreAtStart, installBackup } from './ipc/backup-handlers.js'
 import { installApplicationMenu } from './menu/appMenu.js'
 import { installMenuActions } from './menu/menu-actions.js'
 import { installTabUnloading } from './browser/tab-unloader.js'
@@ -38,7 +39,7 @@ import {
   writeStartupFlags
 } from './startup-flags.js'
 import { openLocalDataProtection } from './data/local-data-protection.js'
-import { describeStoreLoad, type StoreLoadReport } from './data/store-load.js'
+import { warnAboutStoreLoad } from './data/store-load.js'
 import { installProxy, networkFetch } from './session/proxy.js'
 import {
   registerAsDefaultBrowser,
@@ -266,7 +267,7 @@ async function main(): Promise<void> {
     The clearing the last run still owes — a panic, or clearing on exit after a crash — done before
     anything can load a page. First thing after `ready`, the earliest `session.defaultSession` exists,
     and before protection, settings or any store opens (KTD7): on the files, so the history is gone
-    before its store could load it. U23's staging goes after this, or the catch-up would delete it.
+    before its store could load it. A staged restore goes in after protection, or this would delete it.
     Never a reason to refuse to start; `catchUpPendingClears` bounds the wait and keeps the note.
   */
   await catchUpPendingClears({
@@ -294,6 +295,8 @@ async function main(): Promise<void> {
   if (protection.mode === 'unencrypted') {
     console.warn('[data] local data is NOT encrypted:', protection.reason)
   }
+  // The restore staged last run, with this profile's codec and before any store opens (KTD7, U23).
+  await applyRestoreAtStart(protection)
 
   settings = await SettingsStore.open(settingsFile(), protection.codec)
   flushOnExit.push(() => settings?.flush() ?? Promise.resolve(), 'settings')
@@ -1007,6 +1010,8 @@ async function main(): Promise<void> {
   */
   let updates: UpdateService | null = null
 
+  // Back up and restore, the settings page's (U23); up before the check that every channel is.
+  installBackup(protection, flushOnExit, () => ({ settings, locale: uiLocale(settings) }))
   registerIpcHandlers({
     settings,
     windows,
@@ -1355,19 +1360,6 @@ function nodeAfter(ms: number, callback: () => void): ReturnType<After> {
   return () => {
     clearTimeout(timer)
   }
-}
-
-/**
- * The one line about a store's load, when there is one: a newer version's file left alone, an older
- * one upgraded, a broken one copied aside — and whether this run's changes will be kept.
- *
- * Next to every store's own `recoveredFromInvalidFile` warning rather than instead of it: that one says
- * what the store lost, this one says where the original is and what the run may write. The wording is
- * `describeStoreLoad`'s, so the dozen stores cannot describe one situation a dozen ways.
- */
-function warnAboutStoreLoad(label: string, report: StoreLoadReport): void {
-  const message = describeStoreLoad(report)
-  if (message !== null) console.warn(`[${label}] ${message}`)
 }
 
 // Only in the instance holding the lock: a second one exits above, and must open nothing.

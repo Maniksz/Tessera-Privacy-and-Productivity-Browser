@@ -25,7 +25,7 @@ import {
 import type { BrowsingMode } from './HistoryStore.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 
 /**
  * Persistence for the rules the user wrote themselves — the element picker's output.
@@ -166,6 +166,12 @@ export interface UserRuleStoreOptions {
   debounceMs?: number
 }
 
+/**
+ * The steps up to the version this store writes. Version 1 is the only one there has been; see
+ * `StoreMigrations`. Exported for the backup, which refuses a document newer than this (U23, AE8).
+ */
+export const USER_RULE_MIGRATIONS: StoreMigrations = []
+
 export class UserRuleStore {
   readonly #store: JsonStore<UserRuleDocument>
   readonly #generateId: () => string
@@ -208,8 +214,7 @@ export class UserRuleStore {
       filePath: options.filePath,
       schema: userRuleDocumentSchema,
       fallback: emptyUserRuleDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: USER_RULE_MIGRATIONS,
       criticality: 'degradable',
       // A line an older build could parse and this one cannot would otherwise sit in
       // the list looking active while blocking nothing.

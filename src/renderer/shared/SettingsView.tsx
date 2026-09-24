@@ -128,12 +128,15 @@ export interface SettingsViewProps {
   settings: Snapshot | null
   /** What the search box starts with: `?q=` of the page's address, so a link can open one section. */
   initialQuery?: string
+  /** Sections the page adds after the generated ones and the filter rules: back up and restore (U23). */
+  children?: React.ReactNode
 }
 
 export function SettingsView({
   host,
   settings,
-  initialQuery = ''
+  initialQuery = '',
+  children
 }: SettingsViewProps): React.ReactNode {
   const { t } = host
   const [descriptors, setDescriptors] = useState<SettingDescriptor[]>([])
@@ -537,6 +540,7 @@ export function SettingsView({
           words to match against and this file does not.
         */}
         <UserRulesEditor host={host.userRules} query={query} />
+        {children}
       </div>
     </div>
   )

@@ -45,6 +45,7 @@ export type InventoryPath =
   | 'extensionsFile'
   | 'pendingClearFile'
   | 'panicPendingFile'
+  | 'restoreManifestFile'
   | 'filterListCacheDir'
   | 'publicSuffixDir'
 
@@ -85,7 +86,14 @@ export type BackupRule = 'yes' | 'no' | 'withMasterPassword'
 
 export interface InventoryRow {
   readonly category: DataCategory
-  /** Files and directories, by the `paths.ts` function that locates them; copies go with a file. */
+  /**
+   * Files and directories, by the `paths.ts` function that locates them; copies go with a file.
+   *
+   * The copies are every name `removeCopiesOf` in `src/main/data/quarantine.ts` knows: a migration's
+   * `.v<N>.bak`, an unreadable file's `.unreadable`, and a restore's staged `.restore` and safety copy
+   * `.before-restore` (U23). So each of those sits under its file's category here, and every way out
+   * that takes the file takes them with it.
+   */
   readonly files: readonly InventoryPath[]
   readonly chromium: readonly ChromiumOperation[]
   /** What exists only while the browser runs; a quit takes it, a clearing now has to. */
@@ -172,6 +180,8 @@ export const NEVER_BACKED_UP: {
     'extensionsFile',
     'pendingClearFile',
     'panicPendingFile',
+    // Which items a staged restore holds, never what they contain (U23).
+    'restoreManifestFile',
     'filterListCacheDir',
     'publicSuffixDir'
   ],
