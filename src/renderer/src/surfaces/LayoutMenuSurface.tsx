@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { LAYOUT_IDS, TILE_COUNT, type LayoutId } from '@shared/split/layout.js'
 import type { LayoutMenuPresentation } from '@shared/overlay/surface.js'
 import { anchorSurface, type Rect } from '@shared/ui/anchor.js'
@@ -8,6 +8,15 @@ import { LAYOUT_LABELS, LayoutIcon } from '../components/LayoutIcon.js'
 import { LAYOUT_SHORTCUTS } from '@shared/split/labels.js'
 import { shortcutKey } from '@shared/shortcuts/format.js'
 import type { Platform } from '@shared/model.js'
+
+/*
+  The saved workspaces and "Save as…" (U21), in a chunk of their own for the reason `OverlaySurface`
+  gives its rarer surfaces: this layer's main chunk has a 20 kB budget it sits just under. The seven
+  layouts are drawn at once; the list follows a frame later, and the menu measures itself again then.
+*/
+const WorkspacesMenu = lazy(() =>
+  import('./WorkspacesMenu.js').then((module) => ({ default: module.WorkspacesMenu }))
+)
 
 /**
  * The split-layout menu, drawn on the overlay surface.
@@ -30,6 +39,10 @@ export function LayoutMenuSurface({
   const { t } = useI18n()
   const menuRef = useRef<HTMLDivElement>(null)
   const [rect, setRect] = useState<Rect | null>(null)
+  // Bumped when the workspaces below the layouts change height; a new measuring pass follows.
+  const [contentVersion, setContentVersion] = useState(0)
+  const focused = useRef(false)
+  const remeasure = useCallback(() => setContentVersion((version) => version + 1), [])
 
   /**
    * Measure, then place.
@@ -37,24 +50,32 @@ export function LayoutMenuSurface({
    * The list's height depends on the translated labels and the platform's font, so a
    * hard-coded number would put the menu in the wrong place in some locales and on some
    * machines. `useLayoutEffect` runs before paint, so the unpositioned first pass is never
-   * shown.
+   * shown. A later pass (the workspaces arrived or changed) runs under the height the last one
+   * set, so the content's own height is read as well: `scrollHeight` plus the borders.
    */
   useLayoutEffect(() => {
     const element = menuRef.current
     if (element === null) return
     const natural = element.getBoundingClientRect()
+    const content = element.scrollHeight + element.offsetHeight - element.clientHeight
     const placed = anchorSurface(
       presentation.anchor,
-      { width: natural.width, height: natural.height },
+      { width: natural.width, height: Math.max(natural.height, content) },
       { width: window.innerWidth, height: window.innerHeight }
     )
     setRect(placed.rect)
+  }, [presentation, contentVersion])
+
+  useEffect(() => {
+    focused.current = false
   }, [presentation])
 
   // Opens with the active arrangement focused, so the keyboard user starts from where they
-  // are rather than from the top of the list.
+  // are rather than from the top of the list — once: a later measuring pass must not take the
+  // focus off a workspace's name field.
   useEffect(() => {
-    if (rect === null) return
+    if (rect === null || focused.current) return
+    focused.current = true
     menuRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()
   }, [rect])
 
@@ -88,7 +109,9 @@ export function LayoutMenuSurface({
     event.preventDefault()
 
     const items = [
-      ...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])
+      ...(menuRef.current?.querySelectorAll<HTMLElement>(
+        '[role="menuitemradio"], [role="menuitem"]:not(:disabled)'
+      ) ?? [])
     ]
     if (items.length === 0) return
     const index = items.findIndex((item) => item === document.activeElement)
@@ -138,6 +161,9 @@ export function LayoutMenuSurface({
           </button>
         )
       })}
+      <Suspense fallback={null}>
+        <WorkspacesMenu onResize={remeasure} />
+      </Suspense>
     </div>
   )
 }

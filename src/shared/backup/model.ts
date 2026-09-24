@@ -15,9 +15,9 @@ import type { InventoryPath } from '../data/inventory.js'
  * entry may say about where it goes: the restore resolves it through the inventory, never through a
  * path in the file (KTD18). Tab groups are not here; they hang on the tab ids of one run (R36).
  *
- * Workspaces join `BACKUP_DOCUMENTS` when U21 gives them a file in the profile row. The inventory test
- * that derives this list from the backup column fails until they do, and `DOCUMENT_VERSIONS` in
- * `src/main/backup/documents.ts` is then a compile error until their version is named.
+ * Workspaces (U21) are the transferable form of a tiling, and the profile row's last file. The inventory
+ * test derives this list from the backup column, so a file added to a `yes` row fails there until it is
+ * here, and `DOCUMENT_VERSIONS` in `src/main/backup/documents.ts` asks for its version at compile time.
  */
 export const BACKUP_DOCUMENTS = [
   'historyFile',
@@ -25,7 +25,8 @@ export const BACKUP_DOCUMENTS = [
   'bookmarksFile',
   'quickLinksFile',
   'settingsFile',
-  'userRulesFile'
+  'userRulesFile',
+  'workspacesFile'
 ] as const satisfies readonly InventoryPath[]
 
 export type BackupDocument = (typeof BACKUP_DOCUMENTS)[number]

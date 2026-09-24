@@ -6,6 +6,7 @@ import { PASSWORD_MIGRATIONS } from '../data/PasswordStore.js'
 import { PERMISSION_MIGRATIONS } from '../data/PermissionStore.js'
 import { QUICK_LINK_MIGRATIONS } from '../data/QuickLinkStore.js'
 import { USER_RULE_MIGRATIONS } from '../data/UserRuleStore.js'
+import { WORKSPACE_MIGRATIONS } from '../data/WorkspaceStore.js'
 import { currentVersionOf } from '../data/store-load.js'
 import { compareVersions, parseVersion } from '../updates/version.js'
 
@@ -27,8 +28,8 @@ export const SETTINGS_DOCUMENT_VERSION = 1
 /**
  * Every document a backup carries, and the vault's.
  *
- * A `Record` over `BackupDocument`, so a document added to the backup (workspaces, with U21) is a
- * compile error here until its version is named.
+ * A `Record` over `BackupDocument`, so a document added to the backup (as workspaces were, with U21)
+ * is a compile error here until its version is named.
  */
 export const DOCUMENT_VERSIONS: Readonly<Record<BackupDocument | 'passwordsFile', number>> = {
   historyFile: currentVersionOf(HISTORY_MIGRATIONS),
@@ -37,6 +38,7 @@ export const DOCUMENT_VERSIONS: Readonly<Record<BackupDocument | 'passwordsFile'
   quickLinksFile: currentVersionOf(QUICK_LINK_MIGRATIONS),
   settingsFile: SETTINGS_DOCUMENT_VERSION,
   userRulesFile: currentVersionOf(USER_RULE_MIGRATIONS),
+  workspacesFile: currentVersionOf(WORKSPACE_MIGRATIONS),
   passwordsFile: currentVersionOf(PASSWORD_MIGRATIONS)
 }
 

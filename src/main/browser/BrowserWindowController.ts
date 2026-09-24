@@ -1102,7 +1102,6 @@ export class BrowserWindowController implements PermissionHost {
 
   /**
    * The panel again, with the rows of a coalesced download change — if, and only if, it is up.
-   *
    * Called for every change, with the snapshot the downloads page and the button are sent, so the three
    * views describe one moment (R9). A closed panel stays closed and a replaced one is not brought back
    * (`downloadsPanelUpdate`); what goes up is an update, with no second grab of the keyboard (KTD8).
@@ -1132,13 +1131,17 @@ export class BrowserWindowController implements PermissionHost {
     return this.#seams.groups
   }
 
+  /** The tiles' occupancy: a workspace opens the way a recorded arrangement is put back (U21). */
+  get occupancy(): WindowSeams['occupancy'] {
+    return this.#seams.occupancy
+  }
+
   dismissOverlay(): void {
     this.#overlay.dismiss()
   }
 
   /**
    * Takes the layer down only if it is showing the kind named; `false` means it was not.
-   *
    * What anything acting on one particular surface has to use. `dismissOverlay` takes down whatever
    * happens to be up, which is right for a click on a surface's own close button — the surface is on
    * screen, or the button could not have been pressed — and wrong for everything that arrives a moment
@@ -1151,13 +1154,11 @@ export class BrowserWindowController implements PermissionHost {
 
   /**
    * Drops every surface whose rectangle belongs to a tile, because the tiles have moved.
-   *
    * Called from each site that changes the geometry: a `tile` surface's bounds are captured when it is
    * presented, so a bar kept across a layout change, a dragged divider or a maximised tile ends up over a
    * page it has nothing to do with. Dropped rather than recomputed, because each comes back cheaply: the
    * tile bar on the next pointer move, the find bar's term from the core, and a picking session through
    * the layer's vacancy report, which takes its preview back off the page.
-   *
    * By kind, never wholesale, and derived from the region table rather than written out here; see
    * `TILE_BOUND_KINDS`.
    */
@@ -1167,7 +1168,6 @@ export class BrowserWindowController implements PermissionHost {
 
   /**
    * Input that belongs to a tile: a hovering pointer, the bar's shortcut, a thumb button, a swipe.
-   *
    * All of it behind `TileInputController`, because all of it shares one question — which tile did the user
    * mean — and the answer is geometry rather than focus. See that file.
    */

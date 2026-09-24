@@ -36,6 +36,7 @@ export type InventoryPath =
   | 'quickLinksFile'
   | 'settingsFile'
   | 'userRulesFile'
+  | 'workspacesFile'
   | 'passwordsFile'
   | 'passwordVaultKeyFile'
   | 'localDataKeyFile'
@@ -153,8 +154,11 @@ export const DATA_INVENTORY: readonly InventoryRow[] = [
   ),
   row(
     'profile',
-    // Workspaces join this row when they get a file (U21).
-    { ...none, files: ['bookmarksFile', 'quickLinksFile', 'settingsFile', 'userRulesFile'] },
+    // Workspaces are made by hand like bookmarks: panic keeps them, the backup carries them (U21).
+    {
+      ...none,
+      files: ['bookmarksFile', 'quickLinksFile', 'settingsFile', 'userRulesFile', 'workspacesFile']
+    },
     { clearNow: 'no', onExit: 'no', panic: false, backup: 'yes' }
   ),
   row(

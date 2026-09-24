@@ -13,6 +13,7 @@
  */
 
 import { IMPORT_CARD_CHANNELS, IMPORT_SECTION_CHANNELS } from '../import/model.js'
+import { WORKSPACE_CHANNELS } from '../workspaces/model.js'
 
 /** Renderer -> main, request/response. */
 export const INVOKE_CHANNELS = [
@@ -214,10 +215,8 @@ export const INVOKE_CHANNELS = [
    */
   'zoom:step',
   /*
-    Find in page, for the tile the bar was opened over.
-
-    Chrome-only and on no internal page's allowlist: a page that could reach these could search — and
-    highlight — another tab.
+    Find in page, for the tile the bar was opened over. Chrome-only and on no internal page's
+    allowlist: a page that could reach these could search — and highlight — another tab.
   */
   /**
    * The article the reader page was opened for.
@@ -230,13 +229,14 @@ export const INVOKE_CHANNELS = [
   'find:open',
   'find:query',
   'find:step',
-  // split view
+  // split view, and the layout menu's workspaces (U21), chrome-only: see `workspaces/model.ts`
   'split:setLayout',
   'split:setFractions',
   'split:setActiveTile',
   'split:assignTab',
   'split:toggleTileMaximized',
   'split:escape',
+  ...WORKSPACE_CHANNELS,
   // per-tile media
   'media:setTileMuted',
   // developer tools

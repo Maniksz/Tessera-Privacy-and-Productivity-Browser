@@ -48,6 +48,7 @@ import {
 } from './protocol.js'
 import {
   arrangementsFile,
+  workspacesFile,
   currentPlatform,
   extensionsFile,
   bookmarksFile,
@@ -80,6 +81,7 @@ import { FaviconStore } from './data/FaviconStore.js'
 import { ThumbnailStore } from './data/ThumbnailStore.js'
 import { TabGroupStore } from './data/TabGroupStore.js'
 import { ArrangementStore } from './data/ArrangementStore.js'
+import { WorkspaceStore } from './data/WorkspaceStore.js'
 import { SessionStore } from './data/SessionStore.js'
 import { WindowPlacementStore } from './data/WindowPlacementStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
@@ -438,13 +440,9 @@ async function main(): Promise<void> {
     console.warn('[history] file could not be used; started from an empty history')
   }
 
-  /*
-    Written now and on every change, so the next launch reads current values.
-
-    Writing it here as well as on change matters for an existing profile: without it the file would
-    not exist until the user happened to change something, and the switches would stay at their
-    defaults in the meantime.
-  */
+  // Written now and on every change, so the next launch reads current values. Writing it here as well
+  // as on change matters for an existing profile: without it the file would not exist until the user
+  // happened to change something, and the switches would stay at their defaults in the meantime.
   const persistStartupFlags = (snapshot: SettingsSnapshot): void => {
     void writeStartupFlags(startupFlagsFile(), startupFlagsFrom(snapshot)).catch(
       (error: unknown) => {
@@ -454,11 +452,9 @@ async function main(): Promise<void> {
       }
     )
   }
-  /*
-    Leftovers a crash left beside the flags file, removed once before the first write. Not inside
-    `writeStartupFlags`: its calls are not serialised, and a cleanup there would delete the temporary
-    another call is about to rename.
-  */
+  // Leftovers a crash left beside the flags file, removed once before the first write. Not inside
+  // `writeStartupFlags`: its calls are not serialised, and a cleanup there would delete the temporary
+  // another call is about to rename.
   await removeTempFilesOf(startupFlagsFile()).catch((error: unknown) => {
     console.warn('[startup-flags] could not remove leftover temporaries:', String(error))
   })
@@ -477,13 +473,14 @@ async function main(): Promise<void> {
   })
   flushOnExit.push(() => arrangements?.flush() ?? Promise.resolve(), 'arrangements')
   warnAboutStoreLoad('arrangements', arrangements.loadReport)
-  /*
-    Bookmarks, downloads and saved passwords.
-
-    Registered for shutdown at the point of opening, which is the discipline the architecture test
-    enforces: four stores once had a `flush()` and none of them reached `before-quit`, so a visit
-    from thirty seconds before Quit was simply missing from the file.
-  */
+  // Workspaces (U21), bookmarks, downloads and saved passwords, each registered for shutdown where it
+  // opens: four stores once had a `flush()` that never reached `before-quit` (the architecture test).
+  const workspaces = await WorkspaceStore.open({
+    filePath: workspacesFile(),
+    codec: protection.codec
+  })
+  flushOnExit.push(() => workspaces.flush(), 'workspaces')
+  warnAboutStoreLoad('workspaces', workspaces.loadReport)
   bookmarks = await BookmarkStore.open({ filePath: bookmarksFile(), codec: protection.codec })
   flushOnExit.push(() => bookmarks?.flush() ?? Promise.resolve(), 'bookmarks')
   warnAboutStoreLoad('bookmarks', bookmarks.loadReport)
@@ -1028,6 +1025,7 @@ async function main(): Promise<void> {
     media: mediaSessions,
     picker: elementPicker,
     userRules,
+    workspaces,
     checkForUpdates: async () => {
       if (updates === null) throw new Error('The update checker has not started yet')
       await updates.checkOnDemand()

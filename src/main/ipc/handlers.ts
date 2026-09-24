@@ -26,6 +26,7 @@ import { registerPasswordHandlers } from './password-handlers.js'
 import { registerSiteHandlers } from './site-handlers.js'
 import { registerOmniboxHandlers } from './omnibox-handlers.js'
 import { registerImportHandlers } from './import-handlers.js'
+import { registerWorkspaceHandlers, type WorkspaceHandlerDeps } from './workspace-handlers.js'
 import { popupSiteMenu } from '../menu/siteMenu.js'
 import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
 import type { PermissionStore } from '../data/PermissionStore.js'
@@ -71,6 +72,7 @@ export function registerIpcHandlers(deps: {
   picker: ElementPicker
   /** The user's own rules. */
   userRules: UserRuleStore
+  workspaces: WorkspaceHandlerDeps['workspaces']
   /**
    * Runs an update check the user asked for, and resolves when it is finished.
    *
@@ -254,13 +256,8 @@ export function registerIpcHandlers(deps: {
   // permission answer matched against the prompt on screen, a media request resolved to the session
   // that fetched the stream, U24's profiles), kept out of this list and testable with a fake `handle`.
   registerPermissionHandlers({ permissions: deps.permissions.arbiter, windows })
-  registerMediaHandlers({
-    handle,
-    media: deps.media,
-    windows,
-    // Read per call, so a language change reaches the next refusal rather than the next restart.
-    locale: () => activeLocale(settings.get('appearance.uiLanguage'))
-  })
+  // The language is read per call, so a change reaches the next refusal rather than the next restart.
+  registerMediaHandlers({ handle, media: deps.media, windows, locale: uiLocale })
   registerDownloadHandlers({
     handle,
     downloads: deps.downloads,
@@ -283,6 +280,7 @@ export function registerIpcHandlers(deps: {
   })
   registerOmniboxHandlers({ handle, windows, settings, history, bookmarks, quickLinks })
   registerImportHandlers({ handle, windows, history, bookmarks, quickLinks, locale: uiLocale })
+  registerWorkspaceHandlers({ handle, windows, workspaces: deps.workspaces })
 
   // --- element picker and the user's own rules ------------------------------
   /*

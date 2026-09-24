@@ -83,6 +83,7 @@ async function fullProfile(): Promise<Profile> {
   await p.write('quickLinksFile', { version: 1, links: [] })
   await p.write('permissionsFile', { version: 1, sites: {} })
   await p.write('userRulesFile', { version: 1, rules: [] })
+  await p.write('workspacesFile', { version: 1, workspaces: [] })
   await p.write('settingsFile', { 'appearance.theme': 'dark', 'network.proxyMode': 'direct' })
   for (const secret of [
     'localDataKeyFile',
@@ -129,7 +130,8 @@ describe('what a backup carries', () => {
       bookmarksFile: 1,
       quickLinksFile: 1,
       settingsFile: 1,
-      userRulesFile: 1
+      userRulesFile: 1,
+      workspacesFile: 1
     })
     expect(collected.archive).toMatchObject({ format: 1, createdAt: 1_000 })
     expect(backupArchiveSchema.safeParse(collected.archive).success).toBe(true)
@@ -242,13 +244,16 @@ describe('the header’s versions, before any key is derived (AE8)', () => {
 
   it('lets through this version and older ones, with documents this build reads', () => {
     expect(admitBackup(header('0.21.0-ALPHA', { bookmarksFile: 1 }), '0.21.0-ALPHA')).toBeNull()
+    expect(admitBackup(header('0.21.0-ALPHA', { workspacesFile: 1 }), '0.21.0-ALPHA')).toBeNull()
     expect(admitBackup(header('0.20.0-ALPHA', {}), '0.21.0-ALPHA')).toBeNull()
   })
 
   it('refuses a newer app, a newer document, and a document this build does not know', () => {
     expect(admitBackup(header('0.22.0', {}), '0.21.0-ALPHA')).toBe('newer')
     expect(admitBackup(header('0.21.0-ALPHA', { bookmarksFile: 2 }), '0.21.0-ALPHA')).toBe('newer')
-    expect(admitBackup(header('0.21.0-ALPHA', { workspacesFile: 1 }), '0.21.0-ALPHA')).toBe('newer')
+    // A document no backup of this build carries; workspaces were the example until U21 carried them.
+    expect(admitBackup(header('0.21.0-ALPHA', { tabGroupsFile: 1 }), '0.21.0-ALPHA')).toBe('newer')
+    expect(admitBackup(header('0.21.0-ALPHA', { workspacesFile: 2 }), '0.21.0-ALPHA')).toBe('newer')
     expect(admitBackup(header('0.21.0-ALPHA', { toString: 1 }), '0.21.0-ALPHA')).toBe('newer')
     expect(admitBackup(header('not a version', {}), '0.21.0-ALPHA')).toBe('not-a-backup')
   })

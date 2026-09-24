@@ -237,6 +237,7 @@ export default defineConfig({
         'src/shared/history/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/tabgroups/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         // The local ranker (U17): pure, and every suggestion row the address bar shows is its answer.
+        // The tab search's list (U22, `tab-search.ts`) is held here with it.
         'src/shared/search/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         // The address bar's suggestions (U18): which stores a keystroke reads, what it drops as stale.
         'src/shared/omnibox/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
@@ -552,6 +553,23 @@ export default defineConfig({
         'src/shared/import/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/main/import/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/main/ipc/import-handlers.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        /*
+          Workspaces (U21), whole: the model that seats a tab once and never closes one, the critical
+          store that answers read-only for a newer file, and the channels that refuse a private save.
+        */
+        'src/shared/workspaces/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/data/WorkspaceStore.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/ipc/workspace-handlers.ts': {
           lines: 100,
           functions: 100,
           branches: 100,

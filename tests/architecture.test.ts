@@ -1198,6 +1198,29 @@ describe('IPC discipline', () => {
     }
   })
 
+  it('opens the tab search from a Window menu item every platform has, and the chrome takes it (U22)', () => {
+    /*
+      The two general scans above would each pass with the tab search half-wired: one finds the
+      `accel('searchTabs')` anywhere in the file, the other finds a receiver for whatever is emitted.
+      This holds the one route end to end — the item sits in the Window menu, which is pushed on every
+      platform, it sends the action to the focused chrome, and the chrome's switch opens the panel —
+      because a key that works on a Mac only would pass both of them.
+    */
+    const menu = withoutComments(readFileSync(join(ROOT, 'src/main/menu/appMenu.ts'), 'utf8'))
+    const windowMenu =
+      /const windowMenu: MenuItemConstructorOptions = \{[\s\S]*?\n {2}\}/.exec(menu)?.[0] ?? ''
+    expect(windowMenu).toContain("accel('searchTabs')")
+    expect(windowMenu).toMatch(
+      /emit\(\s*'shortcut:triggered',\s*\{\s*action:\s*'searchTabs'\s*\}\s*\)/
+    )
+    expect(menu).toMatch(/\n {2}template\.push\(windowMenu\)/)
+
+    const app = withoutComments(readFileSync(join(ROOT, 'src/renderer/src/App.tsx'), 'utf8'))
+    const start = app.indexOf("subscribe('shortcut:triggered'")
+    const handler = start < 0 ? '' : app.slice(start, app.indexOf('\n  }, [', start))
+    expect(handler).toMatch(/case 'searchTabs':\s*setPanel\('tabSearch'\)/)
+  })
+
   /** Narrows a name scraped out of the menu source to the union the binding table is keyed by. */
   const isShortcutAction = (name: string): name is ShortcutAction =>
     (SHORTCUT_ACTIONS as readonly string[]).includes(name)
@@ -2657,7 +2680,9 @@ describe('privacy invariants', () => {
     expect(checked.length, 'expected to have checked several stores').toBeGreaterThan(3)
     // Named, because the newest store is the one most likely to be missing and least likely to be
     // noticed: a rename that took it out of this loop would leave the count above still passing.
-    expect(checked).toEqual(expect.arrayContaining(['ArrangementStore', 'TabGroupStore']))
+    expect(checked).toEqual(
+      expect.arrayContaining(['ArrangementStore', 'TabGroupStore', 'WorkspaceStore'])
+    )
   })
 
   it('never starts the crash reporter', async () => {
@@ -3277,7 +3302,7 @@ describe('store loading', () => {
     file from a newer version counted as failed. `store-load.ts` decides what a file is before
     anything is written; these keep every store on it and every deletion path taking the copies too.
   */
-  it('classes every JSON store as critical or degradable, and only bookmarks and passwords as critical', async () => {
+  it('classes every JSON store as critical or degradable, and only bookmarks, passwords and workspaces as critical', async () => {
     const critical: string[] = []
     const unclassed: string[] = []
     const classed: string[] = []
@@ -3296,9 +3321,16 @@ describe('store loading', () => {
         'src/main/data/TabGroupStore.ts'
       ])
     )
+    /*
+      Workspaces joined on purpose (U21). They are made by hand and named, like bookmarks, and nothing
+      else can recreate one; a `degradable` store would run a newer version's file on defaults and drop
+      every save at exit while the menu reported it saved. Critical means the file is listed read-only
+      instead and a save answers that it cannot. A store is added here only with a reason as good.
+    */
     expect(critical.sort()).toEqual([
       'src/main/data/BookmarkStore.ts',
-      'src/main/data/PasswordStore.ts'
+      'src/main/data/PasswordStore.ts',
+      'src/main/data/WorkspaceStore.ts'
     ])
   })
 

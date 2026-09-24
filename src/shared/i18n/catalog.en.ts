@@ -69,6 +69,12 @@ export const en = {
   'toolbar.home': 'Home',
   'toolbar.layout': 'Split layout: {current}',
   'toolbar.layoutTileCount': '{count} tiles',
+  'workspaces.title': 'Workspaces',
+  'workspaces.saveAs': 'Save as…',
+  'workspaces.name': 'Workspace name',
+  'workspaces.replace': 'Replace “{name}”?',
+  'workspaces.readOnly': 'Saved by a newer version: read only.',
+  'workspaces.remove': 'Remove {name}',
   'toolbar.settings': 'Settings',
   'toolbar.extensions': 'Extensions',
   'toolbar.menu': 'Main menu',
@@ -126,6 +132,11 @@ export const en = {
   'tab.inTile': 'In tile {index}',
   'tab.unassigned': 'Not shown in any tile',
   'tab.unloaded': 'Unloaded to save memory; loads again when opened',
+  // the tab search (U22)
+  'tabsearch.title': 'Search tabs',
+  'tabsearch.placeholder': 'Title or address',
+  'tabsearch.empty': 'No tab matches',
+  'tabsearch.close': 'Close tab search',
 
   // tab groups
   /** What an unnamed group is called when it needs a name — in a label, never on screen. */

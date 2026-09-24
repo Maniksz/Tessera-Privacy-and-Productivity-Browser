@@ -87,6 +87,8 @@ describe('the inventory', () => {
     ])
     expect(rowOf('profile').panic).toBe(false)
     expect(rowOf('vault').panic).toBe(false)
+    // Workspaces are made by hand (U21), so they are the profile's and panic leaves them.
+    expect(rowOf('profile').files).toContain('workspacesFile')
   })
 
   it('backs up what the user made and only that, and the vault only under the master password', () => {

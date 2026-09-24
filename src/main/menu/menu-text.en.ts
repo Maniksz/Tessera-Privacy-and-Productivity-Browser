@@ -72,6 +72,7 @@ export const en = {
   'menu.window.zoom': 'Zoom',
   'menu.window.nextTab': 'Next Tab',
   'menu.window.previousTab': 'Previous Tab',
+  'menu.window.searchTabs': 'Search Tabs…',
 
   'menu.help': 'Help',
   'menu.help.about': 'About {app}',

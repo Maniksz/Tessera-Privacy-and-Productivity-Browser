@@ -29,7 +29,8 @@ const FLUSHED_FIRST = [
   'bookmarks',
   'passwords',
   'user-rules',
-  'permissions'
+  'permissions',
+  'workspaces'
 ]
 
 const EXTENSION = 'tessera-backup'

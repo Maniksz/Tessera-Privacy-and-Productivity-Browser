@@ -42,6 +42,7 @@ const ITEM_LABELS: Readonly<Record<RestoreItem, MessageKey>> = {
   quickLinksFile: 'start.quickLinks',
   settingsFile: 'settings.title',
   userRulesFile: 'backup.userRules',
+  workspacesFile: 'workspaces.title',
   vault: 'passwords.title'
 }
 

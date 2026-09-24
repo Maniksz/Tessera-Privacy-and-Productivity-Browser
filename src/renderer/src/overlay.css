@@ -324,6 +324,74 @@ body {
   white-space: nowrap;
 }
 
+/* --- workspaces, below the layouts (U21) ---------------------------------- */
+
+.menu__separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+/* A saved workspace and its remove button on one line; the entry takes the room. */
+.menu__row {
+  display: flex;
+  align-items: center;
+}
+
+.menu__remove {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-dim);
+  font: inherit;
+}
+
+.menu__remove:hover {
+  color: var(--fg);
+}
+
+/* "Save as…" in a private window, or over a newer version's file: there, and plainly not pressable. */
+.menu__item:disabled,
+.menu__item:disabled:hover {
+  background: none;
+  color: var(--fg-dim);
+}
+
+/* The name field and the overwrite question stand where "Save as…" was. */
+.menu__form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.menu__form input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--fg);
+  font: inherit;
+}
+
+.menu__form button {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+}
+
+.menu__note {
+  margin: 4px 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
 /* --- downloads panel ------------------------------------------------------ */
 
 /*

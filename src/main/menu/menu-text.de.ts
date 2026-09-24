@@ -69,6 +69,7 @@ export const de = {
   'menu.window.zoom': 'Zoomen',
   'menu.window.nextTab': 'Nächster Tab',
   'menu.window.previousTab': 'Vorheriger Tab',
+  'menu.window.searchTabs': 'Tabs durchsuchen…',
 
   'menu.help': 'Hilfe',
   'menu.help.about': 'Über {app}',

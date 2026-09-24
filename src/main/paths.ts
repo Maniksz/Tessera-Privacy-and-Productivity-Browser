@@ -136,6 +136,15 @@ export function arrangementsFile(): string {
 }
 
 /**
+ * Workspaces: layouts with a page per tile, saved by name (U21). User data, like the bookmarks: made by
+ * hand and kept by panic, and in the backup. Its own file rather than the arrangements', which hang on
+ * the tab ids of one run and are evicted (KTD15).
+ */
+export function workspacesFile(): string {
+  return join(userDataDir(), 'workspaces.json')
+}
+
+/**
  * Per-site permission answers.
  *
  * User data, not cache. A disk cleaner emptying this would mean every site asking for the camera again —
@@ -303,6 +312,7 @@ const INVENTORY_PATHS = {
   sessionStateFile,
   tabGroupsFile,
   arrangementsFile,
+  workspacesFile,
   permissionsFile,
   bookmarksFile,
   quickLinksFile,

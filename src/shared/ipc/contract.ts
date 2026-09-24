@@ -75,6 +75,7 @@ import {
 import { omniboxInvokeContract, omniboxSuggestionsPresentationSchema } from '../omnibox/schema.js'
 import { backupInvokeContract } from '../backup/schema.js'
 import { importInvokeContract } from '../import/schema.js'
+import { workspaceInvokeContract } from '../workspaces/schema.js'
 
 /**
  * The typing half of the UI <-> core boundary (spec 6).
@@ -1222,11 +1223,9 @@ export const invokeContract = {
   'downloads:clear': { request: nothing, response: removedCount },
   'downloads:pause': { request: downloadIdRequest, response: downloadChanged },
   /**
-   * Resumes a paused download, or reports that it cannot be resumed.
-   *
-   * `changed: false` when the server does not support range requests. Electron would otherwise
-   * discard what has arrived and start again — so a button that silently restarted a
-   * nine-tenths-finished file would be worse than one that says it cannot.
+   * Resumes a paused download, or reports that it cannot: `changed: false` when the server does
+   * not support range requests. Electron would otherwise discard what has arrived and start again,
+   * and a silent restart of a nine-tenths-finished file is worse than a button saying it cannot.
    */
   'downloads:resume': { request: downloadIdRequest, response: downloadChanged },
   'downloads:cancel': { request: downloadIdRequest, response: downloadChanged },
@@ -1240,7 +1239,8 @@ export const invokeContract = {
   ...passwordInvokeContract,
   ...omniboxInvokeContract,
   ...backupInvokeContract,
-  ...importInvokeContract
+  ...importInvokeContract,
+  ...workspaceInvokeContract
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract
