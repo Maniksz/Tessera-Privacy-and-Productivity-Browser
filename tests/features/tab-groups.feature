@@ -25,3 +25,17 @@ Feature: Tab groups belong to the user
     And the window settles
     Then the tab strip shows no group chip
     And the tab strip still shows tabs "research, notes"
+
+  Scenario: A tab found by the tab search comes out of its folded group
+    # R31. A folded group is drawn as its chip alone, so the tab search is the
+    # one list that still has its members — and a tab brought to the front from
+    # there must not stay behind the chip, where nothing on screen says where
+    # the page came from.
+    Given a window tiling tabs "mail, news" side by side
+    And the tabs "news" are grouped as "Later"
+    And the group "Later" is folded
+    When I search the tabs for "news"
+    Then the tab search lists "news" first
+    When I activate the first tab the search lists
+    Then the group "Later" is open
+    And the tab strip still shows tabs "mail, news"

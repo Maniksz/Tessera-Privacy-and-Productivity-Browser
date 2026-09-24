@@ -424,6 +424,17 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
         click: () => focused()?.emit('shortcut:triggered', { action: 'previousTab' })
       },
       /*
+        The tab search (U22): a panel the chrome draws, so the item only tells the focused chrome to open
+        it, the way the address-bar item does. Beside next and previous tab because it is the third way
+        to the same place — by name instead of by step — and in this menu because it is pushed on every
+        platform.
+      */
+      {
+        label: t('menu.window.searchTabs'),
+        accelerator: accel('searchTabs'),
+        click: () => focused()?.emit('shortcut:triggered', { action: 'searchTabs' })
+      },
+      /*
         `Ctrl+1`…`Ctrl+8` and `Ctrl+9`, as nine hidden items.
 
         Here rather than nowhere because an accelerator only fires where a menu item declares it, and

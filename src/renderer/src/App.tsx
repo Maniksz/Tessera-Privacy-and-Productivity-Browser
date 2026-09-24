@@ -41,12 +41,20 @@ const MediaPanel = lazy(() =>
   import('./components/MediaPanel.js').then((module) => ({ default: module.MediaPanel }))
 )
 
+/**
+ * The tab search (U22), fetched the first time its key is pressed, for the media panel's reason: the
+ * ranker and the list are code every window would otherwise parse before its first paint.
+ */
+const TabSearchPanel = lazy(() =>
+  import('./components/TabSearchPanel.js').then((module) => ({ default: module.TabSearchPanel }))
+)
+
 export function App(): React.ReactNode {
   const { t } = useI18n()
   const state = useBrowserState()
   const chromeRef = useRef<HTMLDivElement>(null)
   const [chromeHeight, setChromeHeight] = useState(88)
-  const [panel, setPanel] = useState<'none' | 'extensions' | 'media'>('none')
+  const [panel, setPanel] = useState<'none' | 'extensions' | 'media' | 'tabSearch'>('none')
   /** Bumped when the user asks for the address bar; see `Omnibox`. */
   const [focusRequest, setFocusRequest] = useState(0)
   /**
@@ -186,6 +194,10 @@ export function App(): React.ReactNode {
           */
           setFocusRequest((previous) => previous + 1)
           break
+        case 'searchTabs':
+          // A panel over the window rather than the overlay layer, which stays the address bar's (KTD16).
+          setPanel('tabSearch')
+          break
         case 'findInPage':
           /*
             No payload, and nothing rendered here. The find bar lives on the overlay layer because a bar drawn
@@ -241,7 +253,7 @@ export function App(): React.ReactNode {
    * open. Without this the panel would be drawn beneath the native views and receive
    * no pointer events — the same layering that forces the tile gutter.
    *
-   * The extensions and media panels need it. Settings is a tab now, and a tab is
+   * The extensions, media and tab-search panels need it. Settings is a tab now, and a tab is
    * content: it is drawn *by* one of those native views rather than over them, so it
    * suspends nothing and stays usable beside a page in a split tile.
    */
@@ -334,6 +346,13 @@ export function App(): React.ReactNode {
             {...(activeTab === undefined ? {} : { tabId: activeTab.id })}
             onClose={() => setPanel('none')}
           />
+        </Suspense>
+      )}
+
+      {/* This window's tabs, folded groups' members included: `state.tabs` is `displayOrder()`. */}
+      {panel === 'tabSearch' && (
+        <Suspense fallback={null}>
+          <TabSearchPanel tabs={state.tabs} onClose={() => setPanel('none')} />
         </Suspense>
       )}
 

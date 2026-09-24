@@ -11,7 +11,10 @@ import { ArrangementStore } from '@main/data/ArrangementStore.js'
 import { TabGroupStore } from '@main/data/TabGroupStore.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
 import { stripItems } from '@shared/tabgroups/strip.js'
+import { tabSearchRows } from '@shared/search/tab-search.js'
+import { TabDiscards, type DiscardableTab } from '@main/browser/tab-unloader.js'
 import type { Rect } from '@shared/split/layout.js'
+import type { TabGroup } from '@shared/tabgroups/model.js'
 import { scope, tempFile } from './world.js'
 
 /**
@@ -54,6 +57,23 @@ function groupedWindow(state: unknown): GroupedWindow {
   const held = scope(state).scratch[KEY]
   if (held === undefined) throw new Error('this scenario has no window; add a Given for it')
   return held as GroupedWindow
+}
+
+/** Where `I search the tabs for` leaves the ids it listed, in its order. */
+const SEARCH_KEY = 'tabSearchResults'
+
+function searchResults(state: unknown): readonly string[] {
+  const held = scope(state).scratch[SEARCH_KEY]
+  if (held === undefined) throw new Error('this scenario has searched nothing; add a When for it')
+  return held as readonly string[]
+}
+
+function groupNamed(state: unknown, name: string): TabGroup {
+  const group = groupedWindow(state)
+    .seams.groups.groups()
+    .find((held) => held.name === name)
+  if (group === undefined) throw new Error(`no group called ${name}`)
+  return group
 }
 
 function tabList(list: string): string[] {
@@ -157,6 +177,11 @@ Given('the tabs {string} are grouped as {string}', (state: unknown, list: string
   groupedWindow(state).seams.groups.create({ tabIds: tabList(list), name })
 })
 
+Given('the group {string} is folded', (state: unknown, name: string) => {
+  const groups = groupedWindow(state).seams.groups
+  groups.setCollapsed(groupNamed(state, name).id, true)
+})
+
 // --- when --------------------------------------------------------------------
 
 /** One coalesced broadcast round — the `arrangements.keep()` in `BrowserWindowController`. */
@@ -165,10 +190,55 @@ When('the window settles', (state: unknown) => {
 })
 
 When('I dissolve the group {string}', (state: unknown, name: string) => {
-  const groups = groupedWindow(state).seams.groups
-  const group = groups.groups().find((held) => held.name === name)
-  if (group === undefined) throw new Error(`no group called ${name}`)
-  groups.dissolve(group.id)
+  groupedWindow(state).seams.groups.dissolve(groupNamed(state, name).id)
+})
+
+/**
+ * The tab search's own list over this window's tabs, in the strip's order (U22).
+ *
+ * Each tab is titled with its name and given an address of its own, so a search for a name finds that
+ * tab by title and by address alike.
+ */
+When('I search the tabs for {string}', (state: unknown, text: string) => {
+  const tabs = groupedWindow(state)
+    .order()
+    .map((id) => ({ id, title: id, url: `https://${id}.example/` }))
+  scope(state).scratch[SEARCH_KEY] = tabSearchRows(tabs, text).map((row) => row.id)
+})
+
+/**
+ * What `BrowserWindowController.activateTab` does to a tab's group, and nothing it does to tiles.
+ *
+ * The window itself needs a browser process (see the top of this file), so the step runs the one call of
+ * `activateTab` that decides about groups — `TabDiscards.wake`, over the window's real group controller.
+ * The tab is loaded and nobody's discard, so waking it only unfolds its group and asks it to load if it
+ * was deferred.
+ */
+When('I activate the first tab the search lists', (state: unknown) => {
+  const tabId = searchResults(state)[0]
+  if (tabId === undefined) throw new Error('the search listed nothing to activate')
+  const noop = (): void => {}
+  // Never read: waking a tab that was not discarded touches no view.
+  const noContents: unknown = {}
+  const loaded: DiscardableTab = {
+    id: tabId,
+    view: { webContents: noContents as DiscardableTab['view']['webContents'] },
+    currentUrl: `https://${tabId}.example/`,
+    tileIndex: null,
+    markActive: noop,
+    beginDiscard: noop,
+    endDiscard: noop,
+    revive: noop,
+    loadIfDeferred: noop,
+    loadUrl: noop
+  }
+  new TabDiscards({
+    tab: (id) => (id === tabId ? loaded : undefined),
+    contract: { discard: noop, track: noop },
+    contentView: { addChildView: noop, removeChildView: noop },
+    groups: groupedWindow(state).seams.groups,
+    onViewReplaced: noop
+  }).wake(tabId)
 })
 
 // --- then --------------------------------------------------------------------
@@ -179,6 +249,14 @@ Then('the tab strip shows no group chip', (state: unknown) => {
     (item) => item.kind === 'group'
   )
   expect(chips, 'the strip still draws a group chip').toEqual([])
+})
+
+Then('the tab search lists {string} first', (state: unknown, name: string) => {
+  expect(searchResults(state)[0]).toBe(name)
+})
+
+Then('the group {string} is open', (state: unknown, name: string) => {
+  expect(groupNamed(state, name).collapsed, `${name} is still folded`).toBe(false)
 })
 
 Then('the tab strip still shows tabs {string}', (state: unknown, list: string) => {

@@ -67,10 +67,40 @@ body {
   padding: 4px 4px 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* The width of the fade at an end with more tabs past it; see below. */
+  --tabbar-fade: 24px;
+  scroll-padding-inline: var(--tabbar-fade);
 }
 
 .tabbar__strip::-webkit-scrollbar {
   display: none;
+}
+
+/*
+  More tabs past an end (U22, R32): that end fades out, and only while there really is more there —
+  `TabBar` sets the classes from the strip's own scroll geometry. A mask rather than a gradient drawn
+  over the tabs, so nothing is painted on top of them and the fade follows any theme. The mask belongs to
+  the strip's box, not to its scrolled content, so it stays at the edge while the tabs move under it.
+
+  `scroll-padding-inline`, on the strip above, is the other half: a tab scrolled into view stops clear
+  of the fade rather than under it.
+*/
+.tabbar__strip--more-left {
+  mask-image: linear-gradient(to right, transparent, #000 var(--tabbar-fade));
+}
+
+.tabbar__strip--more-right {
+  mask-image: linear-gradient(to left, transparent, #000 var(--tabbar-fade));
+}
+
+.tabbar__strip--more-left.tabbar__strip--more-right {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 var(--tabbar-fade),
+    #000 calc(100% - var(--tabbar-fade)),
+    transparent
+  );
 }
 
 .tab {
@@ -828,6 +858,54 @@ body {
   font: inherit;
   font-size: 12px;
   user-select: text;
+}
+
+/* --- tab search (U22) ------------------------------------------------------ */
+
+/*
+  One row per tab, drawn like the address bar's suggestions: the row Enter would open is filled, because
+  the arrows move it while the caret stays in the field.
+*/
+.tabsearch__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tabsearch__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.tabsearch__row:hover {
+  background: var(--bg-input);
+}
+
+.tabsearch__row[aria-selected='true'] {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.tabsearch__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabsearch__url {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
 }
 
 /* --- extension list -------------------------------------------------------- */

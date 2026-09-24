@@ -106,7 +106,7 @@ export function rankCandidates(
 
   const groups = new Map<string, RankCandidate[]>()
   for (const candidate of candidates) {
-    const key = historyUrlOf(candidate.url) ?? candidate.url
+    const key = mergeKeyOf(candidate.url)
     const group = groups.get(key)
     if (group === undefined) groups.set(key, [candidate])
     else group.push(candidate)
@@ -149,6 +149,15 @@ export function rankCandidates(
       compareCodeUnits(a.row.url, b.row.url)
   )
   return scored.slice(0, MAX_RANKED_ROWS).map((entry) => entry.row)
+}
+
+/**
+ * The key rows are merged by: the address history would store, or the address itself where history
+ * would store none (`tessera://`, `about:`). Exported for the tab search, which has to find every tab
+ * a merged row stands for (U22).
+ */
+export function mergeKeyOf(url: string): string {
+  return historyUrlOf(url) ?? url
 }
 
 /**

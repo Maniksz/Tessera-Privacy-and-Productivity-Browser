@@ -1,4 +1,13 @@
-import { useRef, useState, type CSSProperties, type MouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+  type WheelEvent
+} from 'react'
 import type { SplitState, TabState } from '@shared/model.js'
 import { stripItems } from '@shared/tabgroups/strip.js'
 import { MAX_TAB_GROUP_NAME_LENGTH, type TabGroup } from '@shared/tabgroups/model.js'
@@ -60,6 +69,25 @@ function groupColorStyle(color: TabGroupColor): CSSProperties {
   */
   const style: Record<string, string> = { '--tab-group-current': tabGroupColorToken(color) }
   return style
+}
+
+/** Which ends of the strip have tabs scrolled past them. */
+interface StripOverflow {
+  left: boolean
+  right: boolean
+}
+
+/**
+ * Whether there is more to either side (U22, R32).
+ *
+ * A pixel of slack at each end, because Chromium reports a fractional scroll position as a rounded one
+ * at some zoom levels, and a strip scrolled exactly to its end would otherwise keep its fade.
+ */
+function overflowOf(strip: HTMLElement): StripOverflow {
+  return {
+    left: strip.scrollLeft > 1,
+    right: strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1
+  }
 }
 
 /**
@@ -161,6 +189,7 @@ export function TabBar({
   const { t } = useI18n()
   const stripRef = useRef<HTMLDivElement>(null)
   const drag = useTabDrag(stripRef)
+  const [overflow, setOverflow] = useState<StripOverflow>({ left: false, right: false })
 
   const tileCount = split?.tileTabIds.length ?? 1
 
@@ -178,6 +207,61 @@ export function TabBar({
   )
   const stateOf = new Map(tabs.map((tab) => [tab.id, tab]))
   const indexOf = new Map(tabs.map((tab, index) => [tab.id, index]))
+  const activeDrawn = items.some((item) => item.kind === 'tab' && item.tabId === activeTabId)
+
+  /*
+    The active tab stays in sight (R32): whenever it changes, and when a folded group that hid it opens.
+
+    Only then, and not on every change to the strip — a tab opened in the background or a title arriving
+    must not pull the strip back while somebody has scrolled away to look at other tabs. `nearest` on
+    both axes, so a tab already in view does not move at all and the page itself never scrolls; the
+    strip's `scroll-padding-inline` keeps the tab clear of the edge fade.
+  */
+  useEffect(() => {
+    if (!activeDrawn) return
+    const strip = stripRef.current
+    const element = [...(strip?.querySelectorAll<HTMLElement>('[data-tab-id]') ?? [])].find(
+      (candidate) => candidate.dataset.tabId === activeTabId
+    )
+    element?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  }, [activeTabId, activeDrawn])
+
+  /*
+    Whether to fade either end: measured after every render, on every scroll, and when the window
+    resizes the strip. After every render because a tab opening, closing or taking a longer title all
+    change the width, and a list of what might is longer than the read is expensive. The state only
+    changes when an answer does, so the render this can cause is the one that draws the fade.
+  */
+  const measure = useCallback((): void => {
+    const strip = stripRef.current
+    if (strip === null) return
+    const next = overflowOf(strip)
+    setOverflow((previous) =>
+      previous.left === next.left && previous.right === next.right ? previous : next
+    )
+  }, [])
+
+  useLayoutEffect(measure)
+
+  useEffect(() => {
+    const strip = stripRef.current
+    if (strip === null) return
+    const observer = new ResizeObserver(measure)
+    observer.observe(strip)
+    return () => observer.disconnect()
+  }, [measure])
+
+  /*
+    A vertical wheel scrolls the strip sideways, which is the only way along it for a mouse without a
+    tilt wheel. A mostly-sideways gesture — a trackpad, a tilt wheel — is Chromium's already, and a strip
+    that fits has nowhere to go, so both are left alone.
+  */
+  const onWheel = (event: WheelEvent<HTMLDivElement>): void => {
+    const strip = event.currentTarget
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+    if (strip.scrollWidth <= strip.clientWidth) return
+    strip.scrollLeft += event.deltaY
+  }
 
   const onAuxClick = (event: MouseEvent, tabId: string): void => {
     // Middle-click closes (spec 1).
@@ -195,7 +279,18 @@ export function TabBar({
       // Leaves the OS window controls uncovered (spec 10).
       style={{ paddingLeft: leftInset, paddingRight: rightInset }}
     >
-      <div className="tabbar__strip" ref={stripRef}>
+      <div
+        className={[
+          'tabbar__strip',
+          overflow.left ? 'tabbar__strip--more-left' : '',
+          overflow.right ? 'tabbar__strip--more-right' : ''
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        ref={stripRef}
+        onScroll={measure}
+        onWheel={onWheel}
+      >
         {items.map((item) => {
           if (item.kind === 'group') {
             return (

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TabBar } from '@renderer/components/TabBar.js'
+import { edgeScrollStep } from '@renderer/useTabDrag.js'
 import type { TabState } from '@shared/model.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
 import { shortcutTitles } from '@shared/shortcuts/format.js'
@@ -86,6 +87,7 @@ function renderBar(tabs: TabState[], groups: TabGroup[]): void {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('a group in the strip', () => {
@@ -273,5 +275,251 @@ describe('an unloaded tab in the strip (U15)', () => {
     )
     expect(document.querySelector('[data-tab-id="t2"]')).toBeNull()
     expect(screen.getByRole('button', { name: /Expand group Later/i }).textContent).toContain('1')
+  })
+})
+
+// --- a strip with more tabs than room (U22, R32) ------------------------------------------------------
+
+function bar(tabs: TabState[], groups: TabGroup[], activeTabId: string | null): React.ReactElement {
+  return (
+    <TabBar
+      tabs={tabs}
+      groups={groups}
+      activeTabId={activeTabId}
+      split={null}
+      leftInset={0}
+      rightInset={0}
+      titleWithShortcut={shortcutTitles('win32')}
+    />
+  )
+}
+
+function strip(): HTMLElement {
+  const element = document.querySelector<HTMLElement>('.tabbar__strip')
+  if (element === null) throw new Error('no strip rendered')
+  return element
+}
+
+/**
+ * The strip's scroll geometry, which happy-dom does not lay out: every element is zero wide there.
+ *
+ * On the prototype rather than on the element, so the numbers are already true for the measurement the
+ * strip takes as it mounts. Only the strip is given a size; every other element keeps happy-dom's own.
+ */
+function stripGeometry(geometry: { scrollWidth: number; clientWidth: number }): void {
+  const isStrip = (element: Element): boolean => element.classList.contains('tabbar__strip')
+  const scrollWidth = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollWidth')
+  const clientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+  vi.spyOn(Element.prototype, 'scrollWidth', 'get').mockImplementation(function (this: Element) {
+    return isStrip(this) ? geometry.scrollWidth : (scrollWidth?.get?.call(this) as number)
+  })
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    return isStrip(this) ? geometry.clientWidth : (clientWidth?.get?.call(this) as number)
+  })
+}
+
+const edges = (): string[] =>
+  ['tabbar__strip--more-left', 'tabbar__strip--more-right'].filter((name) =>
+    strip().classList.contains(name)
+  )
+
+describe('keeping the active tab in sight', () => {
+  it('scrolls the tab that becomes active into view, along the strip only', () => {
+    installBridge()
+    const scrolled = vi.spyOn(Element.prototype, 'scrollIntoView')
+    const tabs = [tab('t1'), tab('t2'), tab('t3')]
+    const { rerender } = render(bar(tabs, [], 't1'))
+    scrolled.mockClear()
+
+    rerender(bar(tabs, [], 't3'))
+
+    expect(scrolled).toHaveBeenCalledTimes(1)
+    expect(scrolled).toHaveBeenCalledWith({ inline: 'nearest', block: 'nearest' })
+    expect(scrolled.mock.contexts[0]).toBe(document.querySelector('[data-tab-id="t3"]'))
+  })
+
+  it('does not scroll the strip back while the active tab stays the same', () => {
+    installBridge()
+    const scrolled = vi.spyOn(Element.prototype, 'scrollIntoView')
+    const { rerender } = render(bar([tab('t1'), tab('t2')], [], 't1'))
+    scrolled.mockClear()
+
+    // A tab opened in the background, or a title arriving: the user may be looking elsewhere.
+    rerender(bar([tab('t1'), tab('t2', { title: 'Loaded' }), tab('t3')], [], 't1'))
+
+    expect(scrolled).not.toHaveBeenCalled()
+  })
+
+  it('scrolls to the active tab once the folded group that hid it opens', () => {
+    installBridge()
+    const scrolled = vi.spyOn(Element.prototype, 'scrollIntoView')
+    const tabs = [tab('t1'), tab('t2')]
+    const folded = group({ id: 'g1', tabIds: ['t2'], collapsed: true })
+    const { rerender } = render(bar(tabs, [folded], 't2'))
+    // Not drawn, so there is nothing to scroll to yet.
+    expect(scrolled).not.toHaveBeenCalled()
+
+    rerender(bar(tabs, [{ ...folded, collapsed: false }], 't2'))
+
+    expect(scrolled).toHaveBeenCalledTimes(1)
+    expect(scrolled.mock.contexts[0]).toBe(document.querySelector('[data-tab-id="t2"]'))
+  })
+})
+
+describe('showing that the strip goes on', () => {
+  it('shows no edge while every tab fits', () => {
+    installBridge()
+    stripGeometry({ scrollWidth: 400, clientWidth: 400 })
+    render(bar([tab('t1'), tab('t2')], [], 't1'))
+    expect(edges()).toEqual([])
+  })
+
+  it('shows the right edge when the tabs are wider than the strip', () => {
+    installBridge()
+    stripGeometry({ scrollWidth: 900, clientWidth: 400 })
+    render(bar([tab('t1'), tab('t2')], [], 't1'))
+    expect(edges()).toEqual(['tabbar__strip--more-right'])
+  })
+
+  it('follows the scroll position: both edges in the middle, only the left at the end', () => {
+    installBridge()
+    stripGeometry({ scrollWidth: 900, clientWidth: 400 })
+    render(bar([tab('t1'), tab('t2')], [], 't1'))
+
+    strip().scrollLeft = 200
+    fireEvent.scroll(strip())
+    expect(edges()).toEqual(['tabbar__strip--more-left', 'tabbar__strip--more-right'])
+
+    strip().scrollLeft = 500
+    fireEvent.scroll(strip())
+    expect(edges()).toEqual(['tabbar__strip--more-left'])
+  })
+
+  it('measures again when the tabs change, not only when the strip is scrolled', () => {
+    installBridge()
+    const geometry = { scrollWidth: 400, clientWidth: 400 }
+    stripGeometry(geometry)
+    const { rerender } = render(bar([tab('t1')], [], 't1'))
+    expect(edges()).toEqual([])
+
+    geometry.scrollWidth = 700
+    rerender(bar([tab('t1'), tab('t2'), tab('t3')], [], 't1'))
+
+    expect(edges()).toEqual(['tabbar__strip--more-right'])
+  })
+})
+
+describe('scrolling the strip with a mouse wheel', () => {
+  /*
+    A wheel turns vertically and the strip only scrolls sideways, so without this a mouse user could
+    reach the hidden tabs only by dragging one there. A trackpad's sideways swipe is left to Chromium,
+    which scrolls an overflowing strip along its own axis already.
+  */
+  it('turns a vertical wheel into a sideways scroll when the tabs do not fit', () => {
+    installBridge()
+    stripGeometry({ scrollWidth: 900, clientWidth: 400 })
+    render(bar([tab('t1'), tab('t2')], [], 't1'))
+    fireEvent.wheel(strip(), { deltaY: 120, deltaX: 0 })
+    expect(strip().scrollLeft).toBe(120)
+    fireEvent.wheel(strip(), { deltaY: -40, deltaX: 0 })
+    expect(strip().scrollLeft).toBe(80)
+  })
+
+  it('leaves a sideways gesture, and a strip where everything fits, alone', () => {
+    installBridge()
+    const geometry = { scrollWidth: 900, clientWidth: 400 }
+    stripGeometry(geometry)
+    render(bar([tab('t1'), tab('t2')], [], 't1'))
+    fireEvent.wheel(strip(), { deltaY: 10, deltaX: 60 })
+    expect(strip().scrollLeft).toBe(0)
+    geometry.scrollWidth = 400
+    fireEvent.wheel(strip(), { deltaY: 120, deltaX: 0 })
+    expect(strip().scrollLeft).toBe(0)
+  })
+})
+
+describe('scrolling the strip while a tab is dragged to its edge', () => {
+  const BOX = { left: 0, right: 400, top: 0, bottom: 36 }
+  const stripBox = (): DOMRect => ({
+    ...BOX,
+    x: 0,
+    y: 0,
+    width: 400,
+    height: 36,
+    toJSON: () => ({})
+  })
+
+  it('scrolls toward an edge the pointer is near, faster the nearer it is', () => {
+    expect(edgeScrollStep(BOX, 200, 10)).toBe(0)
+    const near = edgeScrollStep(BOX, 390, 10)
+    const nearer = edgeScrollStep(BOX, 399, 10)
+    expect(near).toBeGreaterThan(0)
+    expect(nearer).toBeGreaterThan(near)
+    expect(edgeScrollStep(BOX, 10, 10)).toBeLessThan(0)
+    expect(edgeScrollStep(BOX, 10, 10)).toBe(-near)
+  })
+
+  it('scrolls at full speed past the edge, and not at all above or below the strip', () => {
+    expect(edgeScrollStep(BOX, 460, 10)).toBe(edgeScrollStep(BOX, 400, 10))
+    expect(edgeScrollStep(BOX, -60, 10)).toBe(-edgeScrollStep(BOX, 400, 10))
+    expect(edgeScrollStep(BOX, 399, 80)).toBe(0)
+    expect(edgeScrollStep(BOX, 399, -5)).toBe(0)
+  })
+
+  it('keeps scrolling while the pointer rests at the edge, and stops when it leaves or lets go', () => {
+    installBridge()
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    const runFrames = (): void => {
+      for (const callback of frames.splice(0)) callback(0)
+    }
+
+    render(bar([tab('t1'), tab('t2')], [], 't1'))
+    vi.spyOn(strip(), 'getBoundingClientRect').mockReturnValue(stripBox())
+
+    const first = document.querySelector('[data-tab-id="t1"]') as HTMLElement
+    fireEvent.pointerDown(first, { button: 0, clientX: 20, clientY: 10 })
+    fireEvent.pointerMove(window, { clientX: 398, clientY: 10 })
+
+    runFrames()
+    const once = strip().scrollLeft
+    expect(once).toBeGreaterThan(0)
+    // No further pointer movement: the pointer is resting at the edge, and the strip keeps going.
+    runFrames()
+    expect(strip().scrollLeft).toBeGreaterThan(once)
+
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 10 })
+    const resting = strip().scrollLeft
+    runFrames()
+    runFrames()
+    expect(strip().scrollLeft).toBe(resting)
+
+    fireEvent.pointerMove(window, { clientX: 2, clientY: 10 })
+    fireEvent.pointerUp(window, { clientX: 2, clientY: 10 })
+    runFrames()
+    expect(strip().scrollLeft).toBe(resting)
+  })
+
+  it('does not scroll for a press that never became a drag', () => {
+    installBridge()
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    render(bar([tab('t1')], [], 't1'))
+    vi.spyOn(strip(), 'getBoundingClientRect').mockReturnValue(stripBox())
+    const first = document.querySelector('[data-tab-id="t1"]') as HTMLElement
+    fireEvent.pointerDown(first, { button: 0, clientX: 398, clientY: 10 })
+    fireEvent.pointerMove(window, { clientX: 399, clientY: 10 })
+    for (const callback of frames.splice(0)) callback(0)
+    expect(frames).toEqual([])
+    expect(strip().scrollLeft).toBe(0)
   })
 })

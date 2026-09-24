@@ -219,6 +219,8 @@ describe('what the formatter is held to across the whole binding table', () => {
       '7',
       '8',
       '9',
+      // The tab search (U22): a plain letter, which the formatter upper-cases on every platform.
+      'A',
       'Alt',
       'B',
       'Backspace',
@@ -363,4 +365,38 @@ describe('joining a label to its key', () => {
       }
     }
   })
+})
+
+describe('the tab search key (U22)', () => {
+  /*
+    Ctrl+Shift+A, and Cmd+Shift+A on macOS: what Chrome and Edge use for the same list, so it is the key
+    people arriving from them already have in their hands. It fires only because a Window menu item
+    declares it — `tests/architecture.test.ts` holds that for every action — so what is asserted here is
+    the table: bound on all three platforms, printed the way each writes it, and on no key the OS takes
+    first or another action already holds.
+  */
+  const expected: Record<Platform, { accelerator: string; printed: string }> = {
+    win32: { accelerator: 'Control+Shift+A', printed: 'Ctrl+Shift+A' },
+    linux: { accelerator: 'Control+Shift+A', printed: 'Ctrl+Shift+A' },
+    darwin: { accelerator: 'Command+Shift+A', printed: '⇧⌘A' }
+  }
+
+  for (const platform of PLATFORMS) {
+    it(`is bound on ${platform} and printed as the platform writes it`, () => {
+      const accelerator = acceleratorFor(platform, 'searchTabs')
+      expect(accelerator).toBe(expected[platform].accelerator)
+      expect(formatAccelerator(platform, accelerator)).toBe(expected[platform].printed)
+    })
+
+    it(`sits on no key ${platform} is known to take, and on no other action's`, () => {
+      const accelerator = acceleratorFor(platform, 'searchTabs')
+      expect(KNOWN_CONFLICTS[platform].map((conflict) => conflict.accelerator)).not.toContain(
+        accelerator
+      )
+      const holders = SHORTCUT_ACTIONS.filter((action) =>
+        allAcceleratorsFor(platform, action).includes(accelerator)
+      )
+      expect(holders).toEqual(['searchTabs'])
+    })
+  }
 })

@@ -24,6 +24,11 @@ export const SHORTCUT_ACTIONS = [
   'nextTab',
   'previousTab',
   'lastTab',
+  /**
+   * Opens the tab search over this window's tabs (U22, R31). Ctrl+Shift+A / Cmd+Shift+A, as in Chrome
+   * and Edge, and checked against `KNOWN_CONFLICTS`: no desktop this ships to takes it first.
+   */
+  'searchTabs',
   // navigation
   'back',
   'forward',
@@ -122,6 +127,7 @@ const windowsTable = {
   nextTab: ['Control+Tab', 'Control+PageDown'],
   previousTab: ['Control+Shift+Tab', 'Control+PageUp'],
   lastTab: ['Control+9'],
+  searchTabs: ['Control+Shift+A'],
 
   back: ['Alt+Left'],
   forward: ['Alt+Right'],
@@ -192,6 +198,7 @@ const macTable = {
   nextTab: ['Control+Tab', 'Command+Alt+Right'],
   previousTab: ['Control+Shift+Tab', 'Command+Alt+Left'],
   lastTab: ['Command+9'],
+  searchTabs: ['Command+Shift+A'],
 
   back: ['Command+['],
   forward: ['Command+]'],
