@@ -2,7 +2,14 @@ import { readFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_LOCALE, resolveLocale } from '@shared/i18n/catalog.js'
+import { DEFAULT_LOCALE, LOCALES, catalogs, resolveLocale } from '@shared/i18n/catalog.js'
+import {
+  NO_ANSWER,
+  loadCatalog,
+  loadedCatalog,
+  messageFor,
+  withReference
+} from '@shared/i18n/load-catalog.js'
 
 /**
  * One question, asked in one way: which language is the interface in?
@@ -96,5 +103,59 @@ describe('locale resolution in the core', () => {
 
     expect(index).toMatch(/function uiLocale\([\s\S]*?app\.getLocale\(\)/)
     expect(handlers).toMatch(/function activeLocale\([\s\S]*?app\.getLocale\(\)/)
+  })
+})
+
+/*
+  The renderer side of the question: once the language is known, which messages arrive, and from where.
+
+  `load-catalog.ts` is what split the renderer catalogue into one chunk per locale. What a renderer
+  loads is asserted through the real entries in `tests/components/first-render-locale.test.tsx`; this
+  pins the loader's own rules, in a module graph where nothing has been loaded yet.
+*/
+describe('the per-locale catalogues', () => {
+  it('loads nothing until a locale is asked for, and then that locale alone', async () => {
+    expect(loadedCatalog('de')).toBeUndefined()
+    expect(loadedCatalog('en')).toBeUndefined()
+    // With no reference loaded, the key is all a lookup has left.
+    expect(messageFor({}, 'history.title')).toBe('history.title')
+
+    const german = await loadCatalog('de')
+
+    expect(german).toEqual(catalogs.de)
+    expect(loadedCatalog('de')).toBe(german)
+    expect(loadedCatalog('en')).toBeUndefined()
+  })
+
+  it('answers every later request for a locale with the same load', async () => {
+    const first = loadCatalog('en')
+    expect(loadCatalog('en')).toBe(first)
+    expect(await first).toEqual(catalogs.en)
+  })
+
+  it('has a loader for every locale, each answering its own catalogue', async () => {
+    for (const locale of LOCALES) expect(await loadCatalog(locale)).toEqual(catalogs[locale])
+  })
+})
+
+describe('the fallback for a key the answer lacks', () => {
+  it("takes the core's message first", () => {
+    expect(messageFor({ 'history.title': 'Verlauf' }, 'history.title')).toBe('Verlauf')
+  })
+
+  it('takes the reference catalogue next, once it is loaded', async () => {
+    await loadCatalog(DEFAULT_LOCALE)
+    expect(messageFor({}, 'history.title')).toBe(catalogs[DEFAULT_LOCALE]['history.title'])
+  })
+
+  it('loads the reference behind an answer with nothing in it', async () => {
+    const answer = await withReference(NO_ANSWER)
+    expect(answer).toBe(NO_ANSWER)
+    expect(loadedCatalog(DEFAULT_LOCALE)).toEqual(catalogs[DEFAULT_LOCALE])
+  })
+
+  it('passes a real answer through untouched', async () => {
+    const answer = { locale: 'de' as const, messages: { ...catalogs.de } }
+    expect(await withReference(answer)).toBe(answer)
   })
 })

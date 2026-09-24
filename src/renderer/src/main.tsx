@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App.js'
-import { I18nProvider } from './i18n.js'
+import { I18nProvider, requestCatalog } from './i18n.js'
 import './styles.css'
 
 /*
@@ -25,10 +25,20 @@ window.addEventListener('drop', (event) => {
 const container = document.getElementById('root')
 if (container === null) throw new Error('chrome UI root element is missing')
 
-createRoot(container).render(
-  <StrictMode>
-    <I18nProvider>
-      <App />
-    </I18nProvider>
-  </StrictMode>
-)
+/*
+  The language first, then the first render.
+
+  Rendering at once and translating when the core answered meant one frame in English for every German
+  user, since the answer lands after the first paint. Waiting is safe here and not in the overlay: nothing
+  this document shows depends on an event it could miss in the meantime — `useBrowserState` asks the core
+  for the window's state when it mounts rather than relying on the push at `did-finish-load`.
+*/
+void requestCatalog().then((initial) => {
+  createRoot(container).render(
+    <StrictMode>
+      <I18nProvider initial={initial}>
+        <App />
+      </I18nProvider>
+    </StrictMode>
+  )
+})

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
+import { interpolate, type Locale, type MessageKey } from '@shared/i18n/locale.js'
 import {
-  DEFAULT_LOCALE,
-  catalogs,
-  interpolate,
-  type Locale,
-  type MessageKey
-} from '@shared/i18n/catalog.js'
+  NO_ANSWER,
+  messageFor,
+  withReference,
+  type ResolvedCatalog
+} from '@shared/i18n/load-catalog.js'
 import { bridgeAvailable, invoke, subscribe } from './bridge.js'
 
 /**
@@ -20,9 +20,14 @@ import { bridgeAvailable, invoke, subscribe } from './bridge.js'
  * already had a subtlety worth keeping in one place: `t` changes identity when the catalogue
  * arrives, so an effect that depends on it re-runs on every language change.
  *
- * The bundled catalogue is the initial value rather than a loading state. A page that renders its
- * own message keys for one frame looks broken; the default locale's text is at worst the wrong
- * language for a moment.
+ * ## The first render already speaks the page's language
+ *
+ * The bundled English catalogue used to be the initial value, on the argument that a page rendering its
+ * own message keys for one frame looks broken and the wrong language for a moment does not. It was that
+ * moment for every German user on every internal page — and it cost each page both languages' chunk for
+ * it. Each page's entry now calls `primeInternalI18n` and renders once it has settled, so the hook starts
+ * from the core's answer. Without a prime — a component test rendering a page on its own — the hook starts
+ * from no answer and asks on mount, as it always did.
  */
 
 export interface InternalI18n {
@@ -32,12 +37,27 @@ export interface InternalI18n {
   ready: boolean
 }
 
+function requestCatalog(): Promise<ResolvedCatalog> {
+  const answer = bridgeAvailable()
+    ? invoke('i18n:getCatalog').catch(() => NO_ANSWER)
+    : Promise.resolve(NO_ANSWER)
+  return answer.then(withReference)
+}
+
+/** What the entry learned before the first render; every hook on the page starts from it. */
+let primed: ResolvedCatalog | undefined
+
+/**
+ * Asks the core for the page's language before anything renders. Never rejects: a page that could not
+ * ask renders in the default locale rather than not at all.
+ */
+export async function primeInternalI18n(): Promise<void> {
+  primed = await requestCatalog()
+}
+
 export function useInternalI18n(): InternalI18n {
-  const [locale, setLocale] = useState<Locale>(DEFAULT_LOCALE)
-  const [messages, setMessages] = useState<Record<string, string>>(() => ({
-    ...catalogs[DEFAULT_LOCALE]
-  }))
-  const [ready, setReady] = useState(false)
+  const [catalog, setCatalog] = useState<ResolvedCatalog>(() => primed ?? NO_ANSWER)
+  const [ready, setReady] = useState(primed !== undefined)
 
   useEffect(() => {
     let cancelled = false
@@ -54,17 +74,20 @@ export function useInternalI18n(): InternalI18n {
 
     const load = (): void => {
       void invoke('i18n:getCatalog')
-        .then((catalog) => {
-          if (cancelled) return
-          setLocale(catalog.locale)
-          setMessages(catalog.messages)
+        .then(withReference)
+        .then((next) => {
+          // Kept current, so a hook that mounts after a language change starts in the new language
+          // rather than in the one the page loaded with.
+          if (primed !== undefined) primed = next
+          if (!cancelled) setCatalog(next)
         })
         .finally(() => {
           if (!cancelled) setReady(true)
         })
     }
 
-    load()
+    // The entry's answer is this page's answer; it is not asked for again per hook.
+    if (primed === undefined) load()
 
     /*
       Re-read when the language changes, which the chrome UI's `I18nProvider` has always done and
@@ -90,9 +113,9 @@ export function useInternalI18n(): InternalI18n {
     (key: MessageKey, params?: Record<string, string | number>): string =>
       // The shared interpolator, so `{app}` and every other placeholder mean the same thing here
       // as in the core.
-      interpolate(messages[key] ?? catalogs[DEFAULT_LOCALE][key] ?? key, params),
-    [messages]
+      interpolate(messageFor(catalog.messages, key), params),
+    [catalog]
   )
 
-  return { locale, t, ready }
+  return { locale: catalog.locale, t, ready }
 }

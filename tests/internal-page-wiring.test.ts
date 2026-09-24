@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  INTERNAL_PAGES,
   INTERNAL_PAGE_EVENT_CHANNELS,
   INTERNAL_PAGE_INVOKE_CHANNELS,
   INVOKE_CHANNELS,
@@ -328,6 +329,40 @@ describe('internal page messages', () => {
       for (const key of keys) {
         expect(catalog[key], `${locale} is missing ${key}`).toBeDefined()
       }
+    }
+  })
+})
+
+describe('the language before the first render', () => {
+  /*
+    Every internal page's entry settles its language and only then calls `createRoot`.
+
+    Since the catalogue was split per locale, nothing a page imports holds a language: a privileged page
+    starts from the answer `primeInternalI18n` got from the core, a page without a bridge from the chunk
+    `prepareBundledI18n` loaded for its `lang=`. An entry that rendered straight away would draw its first
+    frame in no language at all — message keys, or the reference English a moment before the core's
+    answer — which is the frame the step exists to remove. `tests/components/first-render-locale.test.tsx`
+    runs two of these entries for real; this holds all of them to the shape, including every page added
+    later, since a new page is a new entry copied from an old one.
+  */
+  const entries = readdirSync(join(ROOT, 'src/renderer/internal'))
+    .filter((name) => /^[a-z-]+\.tsx$/.test(name))
+    .map((name) => name.replace(/\.tsx$/, ''))
+
+  it('finds one entry per page', () => {
+    expect([...entries].sort()).toEqual([...INTERNAL_PAGES, 'about', 'https-only'].sort())
+  })
+
+  it('renders every entry only once its language has settled', () => {
+    for (const page of entries) {
+      const code = codeOf(`src/renderer/internal/${page}.tsx`)
+      const step = (INTERNAL_PAGES as readonly string[]).includes(page)
+        ? 'primeInternalI18n'
+        : 'prepareBundledI18n'
+      expect(code, `${page}.tsx renders before ${step} settles`).toMatch(
+        new RegExp(`${step}\\(\\)\\.then\\(\\(\\) => \\{\\s*createRoot\\(`)
+      )
+      expect(code.match(/createRoot\(/g), `${page}.tsx`).toHaveLength(1)
     }
   })
 })

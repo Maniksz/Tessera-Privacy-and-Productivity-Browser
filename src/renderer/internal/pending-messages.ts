@@ -1,4 +1,4 @@
-import { DEFAULT_LOCALE, interpolate, type Locale } from '@shared/i18n/catalog.js'
+import { DEFAULT_LOCALE, interpolate, type Locale } from '@shared/i18n/locale.js'
 
 /**
  * Messages for the two new pages, until they are in the catalogue.

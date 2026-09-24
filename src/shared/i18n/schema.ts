@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { LOCALES } from './catalog.js'
+import { LOCALES } from './locale.js'
 
 /**
  * Runtime validation for locales.

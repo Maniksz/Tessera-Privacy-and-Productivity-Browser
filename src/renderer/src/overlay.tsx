@@ -1,7 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { OverlaySurface } from './surfaces/OverlaySurface.js'
-import { I18nProvider } from './i18n.js'
+import { I18nProvider, requestCatalog } from './i18n.js'
 import './overlay.css'
 
 /**
@@ -23,9 +23,19 @@ window.addEventListener('drop', (event) => {
 const container = document.getElementById('root')
 if (container === null) throw new Error('overlay surface root element is missing')
 
+/*
+  Asked for now, rendered at once, and not awaited — the one renderer that must not wait.
+
+  The overlay's view is created for its first presentation, and the core sends that presentation at
+  `did-finish-load`, once, to whoever is subscribed. The subscription is an effect of the first render; a
+  render held back behind a round trip would subscribe after the load had finished and the prompt had been
+  sent into nothing. So the request goes out here, while the document is still loading, and the provider
+  applies the answer when it lands: it reaches the core before the load can finish, so it is answered
+  before the presentation is sent, and until a presentation arrives the surface draws nothing to translate.
+*/
 createRoot(container).render(
   <StrictMode>
-    <I18nProvider>
+    <I18nProvider initial={requestCatalog()}>
       <OverlaySurface />
     </I18nProvider>
   </StrictMode>

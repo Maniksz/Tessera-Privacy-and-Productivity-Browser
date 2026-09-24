@@ -18,6 +18,7 @@ import {
 import { platformSchema } from '@shared/model.js'
 import { DATA_INVENTORY, NEVER_BACKED_UP, OUTSIDE_INVENTORY } from '@shared/data/inventory.js'
 import { menuTexts } from '@main/menu/menu-text.js'
+import { LOCALES, catalogs } from '@shared/i18n/catalog.js'
 
 /**
  * Architecture tests — fitness functions.
@@ -650,8 +651,30 @@ describe('bundle weight', () => {
         already. What stayed (`menu.view.zoom*`, `menu.window`, `menu.tools.downloads`, `menu.split.layout*`)
         stayed because a renderer draws it; the test below keeps the moved keys out of every bundle. The
         per-locale split named above is the structural fix still left.
+
+        ## Split per locale, and held per locale
+
+        At 47.18 kB, with Phase D's text still to come and KTD20 ruling out a raise, the split was done
+        (`shared/i18n/load-catalog.ts`): one `import()` per locale, so the bundler emits `catalog.en-….js`
+        and `catalog.de-….js`, measured at 22.08 and 24.53 kB. And it went further than halving what a
+        renderer loads. The chrome UI, the overlay and every privileged page get their language from the
+        core over `i18n:getCatalog`, as they always did, so they now load no catalogue chunk at all; only
+        the two pages without a bridge load one, the one their `lang=` names. The test after next checks
+        the source cannot reach a catalogue statically, and the one after that that the built chunks hold
+        one language each.
+
+        So each chunk is held to 30 kB, and that is a cut rather than a raise. The 48 kB was what every
+        renderer paid before its first paint; 30 kB is the most the one renderer that loads a catalogue at
+        all can pay now. It leaves about 5.5 kB for German, the longer of the two and the one that reaches
+        the line first — room for Phase D's sentences, and not so much that a third locale's worth of
+        prose could slip in unremarked. Whoever reaches it next has the lever `settings-text.*`,
+        `update-text.*` and `menu-text.*` already use: text only the core shows goes to the core.
       */
-      { match: /^catalog-.*\.js$/, maxKb: 48, note: 'message catalogue, both locales' },
+      {
+        match: new RegExp(`^catalog\\.(${LOCALES.join('|')})-.*\\.js$`),
+        maxKb: 30,
+        note: 'message catalogue, one locale'
+      },
       { match: /\.js$/, maxKb: 40, note: 'shared chunk' }
     ]
 
@@ -666,6 +689,15 @@ describe('bundle weight', () => {
     walk(assets)
     expect(files.length, 'a build with no assets is a broken build').toBeGreaterThan(0)
 
+    // One chunk per locale, so the per-locale budget cannot pass by measuring nothing: a catalogue
+    // merged back into one chunk, or into another, would leave a locale here without its file.
+    const catalogueChunks = files
+      .map((file) => file.split('/').pop() ?? '')
+      .filter((name) => name.startsWith('catalog'))
+      .map((name) => name.replace(/-[^-]+\.js$/, ''))
+      .sort()
+    expect(catalogueChunks).toEqual(LOCALES.map((locale) => `catalog.${locale}`).sort())
+
     for (const file of files) {
       const name = file.split('/').pop() ?? ''
       const budget = budgets.find((candidate) => candidate.match.test(name))
@@ -677,6 +709,130 @@ describe('bundle weight', () => {
       // Decimal kB, same unit as the Vite build log and scripts/metrics.mjs.
       const kb = statSync(file).size / 1000
       expect(kb, `${budget.note}: ${name} is ${kb.toFixed(0)} kB`).toBeLessThan(budget.maxKb)
+    }
+  })
+
+  it('lets no renderer reach a catalogue except through the per-locale loader', () => {
+    /*
+      What the per-locale split rests on, checked in the source where it would be undone.
+
+      Rollup emits a module as a chunk of its own only while every path to it is an `import()`. One static
+      import of `catalog.ts` — which names both locales eagerly, for the core — from anything a renderer
+      reaches would put both languages back into a chunk every renderer loads before it paints, and the
+      build would say nothing. A renderer imports `locale.ts` for the machinery and `load-catalog.ts` for
+      the messages; type imports are erased and do not count.
+
+      Followed through relative specifiers and re-exports as well as the aliases, because the path back to
+      a catalogue would most likely run through a shared module, not a renderer file.
+    */
+    const aliases: Array<[string, string]> = [
+      ['@shared/', 'src/shared/'],
+      ['@renderer/', 'src/renderer/src/'],
+      ['@renderer-shared/', 'src/renderer/shared/'],
+      ['@renderer-internal/', 'src/renderer/internal/']
+    ]
+    const resolveFrom = (from: string, specifier: string): string | null => {
+      const alias = aliases.find(([prefix]) => specifier.startsWith(prefix))
+      const base =
+        alias !== undefined
+          ? join(ROOT, alias[1], specifier.slice(alias[0].length))
+          : specifier.startsWith('.')
+            ? join(from, '..', specifier)
+            : null
+      if (base === null) return null
+      for (const candidate of [
+        base.replace(/\.js$/, '.ts'),
+        base.replace(/\.js$/, '.tsx'),
+        `${base}.ts`,
+        `${base}.tsx`
+      ]) {
+        if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
+      }
+      return null
+    }
+    // Value imports, bare imports and value re-exports; an `import()` has no `from` and is not an edge.
+    const staticEdges = (text: string): string[] => {
+      const code = withoutComments(text)
+      const reExports = [
+        ...code.matchAll(/(?:^|\n)\s*export\s+(?!type\s)([^;]*?)from\s+['"]([^'"]+)['"]/g)
+      ]
+        .filter((match) => {
+          // `export { type A } from` is erased exactly like its import twin; `export *` is not.
+          const named = (/\{([^}]*)\}/.exec(match[1] ?? '')?.[1] ?? '')
+            .split(',')
+            .map((part) => part.trim())
+            .filter((part) => part !== '')
+          return named.length === 0 || !named.every((part) => part.startsWith('type '))
+        })
+        .map((match) => match[2]!)
+      const bare = [...code.matchAll(/(?:^|\n)\s*import\s+['"]([^'"]+)['"]/g)].map(
+        (match) => match[1]!
+      )
+      return [...valueImportsOf(code), ...reExports, ...bare]
+    }
+
+    const reached = new Set<string>()
+    const visit = (file: string): void => {
+      for (const specifier of staticEdges(readFileSync(file, 'utf8'))) {
+        const target = resolveFrom(file, specifier)
+        if (target === null || reached.has(target)) continue
+        reached.add(target)
+        visit(target)
+      }
+    }
+    for (const file of filesUnder(join(ROOT, 'src/renderer'))) {
+      if (/\.tsx?$/.test(file) && !file.endsWith('.d.ts')) visit(file)
+    }
+
+    const i18n = [...reached]
+      .filter((file) => file.includes(`${sep}shared${sep}i18n${sep}`))
+      .map((file) => relative(ROOT, file).split(sep).join('/'))
+      .sort()
+    // Not vacuous: the renderers do reach the machinery and the loader.
+    expect(i18n).toContain('src/shared/i18n/locale.ts')
+    expect(i18n).toContain('src/shared/i18n/load-catalog.ts')
+    expect(
+      i18n.filter((file) => /\/catalog(\.\w+)?\.ts$/.test(file)),
+      'a renderer imports a catalogue statically'
+    ).toEqual([])
+
+    // And the loader reaches each locale the way that makes it a chunk: through `import()`, by name.
+    const loader = readFileSync(join(ROOT, 'src/shared/i18n/load-catalog.ts'), 'utf8')
+    for (const locale of LOCALES) expect(loader).toContain(`import('./catalog.${locale}.js')`)
+  })
+
+  it('builds each locale into its own chunk and no other', (context) => {
+    /*
+      The same claim, read off the build: every message a locale does not share with another is in that
+      locale's chunk, and no other file carries even half of them. Not none: the bookmarks and downloads
+      pages' sentences are still staged in `pending-messages.ts` in both languages although the catalogue
+      has them word for word — 73 of German's 396 at the split, a leftover that module's own header says
+      should go — and the media panel names a few. A catalogue that crept into another chunk would bring
+      all of them.
+    */
+    requireFreshBuild('out/renderer/assets', context.skip)
+    const files = filesUnder(join(ROOT, 'out/renderer')).filter((file) => file.endsWith('.js'))
+
+    for (const locale of LOCALES) {
+      const others = new Set(
+        LOCALES.filter((other) => other !== locale).flatMap((other) =>
+          Object.values(catalogs[other])
+        )
+      )
+      const own = Object.values(catalogs[locale]).filter((message) => !others.has(message))
+      expect(own.length, `${locale} has no message of its own`).toBeGreaterThan(100)
+
+      const carriers = files
+        .map((file) => {
+          const text = readFileSync(file, 'utf8')
+          const found = own.filter((message) => text.includes(JSON.stringify(message))).length
+          return { name: relative(join(ROOT, 'out/renderer'), file), found }
+        })
+        .filter(({ found }) => found > own.length / 2)
+      expect(carriers.map(({ name }) => name.replace(/-[^-]+\.js$/, ''))).toEqual([
+        `assets/catalog.${locale}`
+      ])
+      expect(carriers[0]?.found, `${locale}'s chunk is missing its own messages`).toBe(own.length)
     }
   })
 

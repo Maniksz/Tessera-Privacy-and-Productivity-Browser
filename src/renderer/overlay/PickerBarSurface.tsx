@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { PickerBarPresentation } from '@shared/overlay/surface.js'
 import type { PickerBarAction } from '@shared/overlay/picker-bar.js'
-import { interpolate } from '@shared/i18n/catalog.js'
+import { interpolate } from '@shared/i18n/locale.js'
 import { invoke } from '@renderer/bridge.js'
 import './picker-bar.css'
 
