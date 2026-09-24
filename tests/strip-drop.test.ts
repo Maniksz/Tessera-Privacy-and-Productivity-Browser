@@ -131,6 +131,44 @@ describe('joining a group (R12, KTD7)', () => {
       index: 0
     })
   })
+
+  it('takes a tab dropped behind a tiled view in a group into the group behind the whole view', () => {
+    // Counted behind the view's last member, not its first: `index` is what the book writes, and a
+    // place between the two would leave the group's own order disagreeing with the strip's.
+    const G = group({ id: 'G', tabIds: ['a', 'A1', 'A2'] })
+    expect(
+      drop(['X', 'a', 'A1', 'A2'], [G], tab('X'), split('A'), 'after', [view('A', ['A1', 'A2'])])
+    ).toEqual({ tabIds: ['X'], order: ['a', 'A1', 'A2', 'X'], groupId: 'G', index: 3 })
+  })
+
+  it.each([
+    ['two', ['a', 'b']],
+    ['one', ['a']]
+  ])(
+    'pulls a tab from before a folded group of %s in behind it, and leaves the group where it stands',
+    (_label, members) => {
+      // The tab joins at the far end of the chip; were it placed anywhere before the group, the group
+      // would be gathered at its new earliest member and jump in front of Y.
+      const G = group({ id: 'G', tabIds: members, collapsed: true })
+      expect(drop(['X', 'Y', ...members, 'Z'], [G], tab('X'), chip('G'), 'after')).toEqual({
+        tabIds: ['X'],
+        order: ['Y', ...members, 'X', 'Z'],
+        groupId: 'G',
+        index: members.length
+      })
+    }
+  )
+
+  it('counts the place behind a folded chip among the members that stay', () => {
+    // A member dropped back onto its own folded chip is last among the other two, not among three.
+    const G = group({ id: 'G', tabIds: ['a', 'b', 'X'], collapsed: true })
+    expect(drop(['a', 'b', 'X', 'Y'], [G], tab('X'), chip('G'), 'after')).toEqual({
+      tabIds: ['X'],
+      order: ['a', 'b', 'X', 'Y'],
+      groupId: 'G',
+      index: 2
+    })
+  })
 })
 
 describe('leaving a group (R12, KTD7)', () => {
@@ -139,6 +177,17 @@ describe('leaving a group (R12, KTD7)', () => {
     expect(drop(['Y', 'a', 'b'], [G], tab('b'), chip('G'), 'before')).toEqual({
       tabIds: ['b'],
       order: ['Y', 'b', 'a'],
+      groupId: null,
+      index: 0
+    })
+  })
+
+  it('takes a member dropped before its chip out of the group when the group opens the strip', () => {
+    // The chip stands where the members that stay begin — the moving one has no seat to count.
+    const G = group({ id: 'G', tabIds: ['a', 'b'] })
+    expect(drop(['a', 'b', 'Y'], [G], tab('b'), chip('G'), 'before')).toEqual({
+      tabIds: ['b'],
+      order: ['b', 'a', 'Y'],
       groupId: null,
       index: 0
     })
@@ -189,6 +238,38 @@ describe('leaving a group (R12, KTD7)', () => {
       index: 0
     })
     // Behind its own chip it is first in the group it is already the whole of.
+    expect(drop(['Y', 'X', 'Z'], [G], tab('X'), chip('G'), 'after')).toEqual({
+      tabIds: ['X'],
+      order: ['Y', 'X', 'Z'],
+      groupId: 'G',
+      index: 0
+    })
+  })
+})
+
+describe('a group whose every member is moving', () => {
+  it.each([
+    ['at the start of the strip', ['X', 'Y', 'Z']],
+    ['at the end of the strip', ['Y', 'Z', 'X']]
+  ])('leaves the only member of a group where it stood, %s', (_label, order) => {
+    // Its chip has no member left to stand beside, so the place is the one the member had.
+    const G = group({ id: 'G', tabIds: ['X'] })
+    expect(drop(order, [G], tab('X'), chip('G'), 'before')).toEqual({
+      tabIds: ['X'],
+      order,
+      groupId: null,
+      index: 0
+    })
+    expect(drop(order, [G], tab('X'), chip('G'), 'after')).toEqual({
+      tabIds: ['X'],
+      order,
+      groupId: 'G',
+      index: 0
+    })
+  })
+
+  it('leaves the only member of a folded group where it stood when it is dropped onto its chip', () => {
+    const G = group({ id: 'G', tabIds: ['X'], collapsed: true })
     expect(drop(['Y', 'X', 'Z'], [G], tab('X'), chip('G'), 'after')).toEqual({
       tabIds: ['X'],
       order: ['Y', 'X', 'Z'],
@@ -276,6 +357,35 @@ describe('what a folded group does to the place (the index bug, KTD7)', () => {
       drop(['A1', 'X', 'A2', 'Y'], [], tab('Y'), split('A'), 'after', [view('A', ['A1', 'A2'])])
         ?.order
     ).toEqual(['A1', 'A2', 'Y', 'X'])
+  })
+})
+
+describe('a view whose members straddle a group (a document from before U8)', () => {
+  /*
+    R10 keeps a view's members in one group or none, and the day that does not hold the group's run
+    wins (`stripOrder`): the view's entry holds the members in its first member's group, and a member
+    outside it stands as a plain tab. A drop against such a view has to agree with what is drawn.
+  */
+  const A = view('A', ['A1', 'A2'])
+
+  it("joins the group at the member the view's entry holds, not at the one outside it", () => {
+    const G = group({ id: 'G', tabIds: ['a', 'b', 'A1'] })
+    expect(drop(['a', 'b', 'A1', 'A2', 'X'], [G], tab('X'), split('A'), 'before', [A])).toEqual({
+      tabIds: ['X'],
+      order: ['a', 'b', 'X', 'A1', 'A2'],
+      groupId: 'G',
+      index: 2
+    })
+  })
+
+  it("settles the order with the groups the drop leaves, so the group's run still wins", () => {
+    const G = group({ id: 'G', tabIds: ['a', 'A2'] })
+    expect(drop(['A1', 'X', 'a', 'A2', 'Y'], [G], tab('X'), END, 'after', [A])).toEqual({
+      tabIds: ['X'],
+      order: ['A1', 'a', 'A2', 'Y', 'X'],
+      groupId: null,
+      index: 0
+    })
   })
 })
 
