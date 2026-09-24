@@ -18,6 +18,10 @@ import type { Catalog } from './catalog.en.js'
 export const de = {
   'app.name': '{app}',
 
+  'about.title': 'Über {app}',
+  'about.version': 'Version {version}',
+  'about.licence': 'Freie Software unter der Lizenz {licence}.',
+
   'menu.view.zoomIn': 'Vergrößern',
   'menu.view.zoomOut': 'Verkleinern',
   'menu.view.zoomReset': 'Zoom zurücksetzen',

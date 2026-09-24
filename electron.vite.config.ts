@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 import { build, type BuildEnvironmentOptions, type Plugin } from 'vite'
@@ -8,6 +9,16 @@ import react from '@vitejs/plugin-react'
 // `import.meta`. The config always runs from the project root.
 const projectRoot = process.cwd()
 const shared = resolve(projectRoot, 'src/shared')
+
+/**
+ * What `tessera://about` states about the build, read from `package.json` so the page cannot drift from
+ * the version the installer is stamped with. Replaced at build time by `define` below; the declarations
+ * are in `src/renderer/internal/build-constants.d.ts`.
+ */
+const packageJson = JSON.parse(readFileSync(resolve(projectRoot, 'package.json'), 'utf8')) as {
+  version: string
+  license: string
+}
 
 /**
  * Build targets are pinned to what ships in the box.
@@ -166,6 +177,10 @@ export default defineConfig({
   renderer: {
     root: resolve(projectRoot, 'src/renderer'),
     plugins: [react(), directDynamicImports()],
+    define: {
+      __TESSERA_VERSION__: JSON.stringify(packageJson.version),
+      __TESSERA_LICENSE__: JSON.stringify(packageJson.license)
+    },
     resolve: {
       alias: {
         '@shared': shared,
@@ -209,7 +224,9 @@ export default defineConfig({
           'internal/extensions': resolve(projectRoot, 'src/renderer/internal/extensions.html'),
           'internal/bookmarks': resolve(projectRoot, 'src/renderer/internal/bookmarks.html'),
           'internal/downloads': resolve(projectRoot, 'src/renderer/internal/downloads.html'),
-          'internal/passwords': resolve(projectRoot, 'src/renderer/internal/passwords.html')
+          'internal/passwords': resolve(projectRoot, 'src/renderer/internal/passwords.html'),
+          // Served without privileges: not in `INTERNAL_PAGES`, so the preload gives it no bridge.
+          'internal/about': resolve(projectRoot, 'src/renderer/internal/about.html')
         },
         output: {
           /**

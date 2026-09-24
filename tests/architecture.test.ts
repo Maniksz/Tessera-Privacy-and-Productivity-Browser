@@ -2017,6 +2017,142 @@ describe('content security', () => {
     }
   })
 
+  describe('a build entry for every served address', () => {
+    /*
+      The reverse of the check above, and the gap that let `tessera://about` answer with a 404.
+
+      `KNOWN_PAGES` says an address is served; the protocol handler then reads `internal/<page>.html`
+      out of the built renderer. That file exists only if `electron.vite.config.ts` names the page as a
+      Rollup input. `about` and `https-only` were in the first list and not the second, so the Help menu
+      opened a page the build never produced — and nothing but a person clicking could see it.
+    */
+
+    /**
+     * Served, but allowed to have no page yet. **U8 must empty this list** when it builds the HTTPS-only
+     * interstitial; the second test below fails the moment an entry here gets its page, so the
+     * allowance cannot outlive the gap it excuses.
+     */
+    const PENDING_PAGES: readonly string[] = ['https-only']
+
+    const quotedNames = (block: string): string[] =>
+      (block.match(/'([a-z-]+)'/g) ?? []).map((quoted) => quoted.slice(1, -1))
+
+    const servedPages = (): string[] => {
+      const protocol = readFileSync(join(ROOT, 'src/main/protocol.ts'), 'utf8')
+      const block = /const KNOWN_PAGES = new Set\(\[([\s\S]*?)\]\)/.exec(protocol)?.[1]
+      expect(block, 'could not find KNOWN_PAGES').toBeDefined()
+      return quotedNames(withoutComments(block ?? ''))
+    }
+
+    /** The pages the renderer build emits: every `src/renderer/internal/<page>.html` Rollup input. */
+    const builtPages = (): string[] => {
+      // The whole file, comments removed: the renderer's inputs are the only place it names an
+      // internal page's HTML, and a narrower parse would be one more thing to keep in step with it.
+      const config = withoutComments(readFileSync(join(ROOT, 'electron.vite.config.ts'), 'utf8'))
+      return [
+        ...config.matchAll(/resolve\(projectRoot, 'src\/renderer\/internal\/([a-z-]+)\.html'\)/g)
+      ].map((match) => match[1]!)
+    }
+
+    /** Served pages the build does not produce, apart from the ones explicitly still pending. */
+    const withoutEntry = (
+      served: readonly string[],
+      built: readonly string[],
+      pending: readonly string[]
+    ): string[] => served.filter((page) => !built.includes(page) && !pending.includes(page))
+
+    it('notices a served page with no build entry', () => {
+      // The rule itself, on lists small enough to read: without this, a parser that found nothing
+      // would make the real check below pass by comparing two empty lists.
+      expect(withoutEntry(['start', 'about'], ['start'], [])).toEqual(['about'])
+      expect(withoutEntry(['start', 'about'], ['start', 'about'], [])).toEqual([])
+      expect(withoutEntry(['start', 'https-only'], ['start'], ['https-only'])).toEqual([])
+    })
+
+    it('builds every page KNOWN_PAGES serves', () => {
+      const served = servedPages()
+      const built = builtPages()
+      expect(served.length, 'KNOWN_PAGES parsed as empty').toBeGreaterThan(5)
+      expect(built.length, 'no internal page inputs found').toBeGreaterThan(5)
+
+      expect(withoutEntry(served, built, PENDING_PAGES), 'served with no page to serve').toEqual([])
+      for (const page of built) {
+        expect(
+          existsSync(join(ROOT, 'src/renderer/internal', `${page}.html`)),
+          `${page}.html is a build input and does not exist`
+        ).toBe(true)
+      }
+    })
+
+    it('keeps the pending allowance down to pages that are really still missing', () => {
+      const served = servedPages()
+      const built = builtPages()
+      for (const page of PENDING_PAGES) {
+        expect(served, `${page} is pending but no longer served; drop it`).toContain(page)
+        expect(
+          built,
+          `${page} has its build entry now; remove it from PENDING_PAGES`
+        ).not.toContain(page)
+      }
+    })
+  })
+
+  describe('the about page', () => {
+    /*
+      `tessera://about` is served without privileges, deliberately (U7, and KTD3 for the HTTPS-only page
+      that follows the same path). It says who the application is; it has nothing to ask the core. So it
+      stays out of `INTERNAL_PAGES` — which also keeps `decideTabNavigation` letting the core open it — and
+      takes its text from the bundled catalogue chosen by `navigator.language` instead of the bridge.
+    */
+    const ABOUT_SOURCES = [
+      'src/renderer/internal/about.tsx',
+      'src/renderer/internal/AboutPage.tsx',
+      'src/renderer/internal/bundled-i18n.ts'
+    ]
+
+    it('is not a privileged page', () => {
+      expect(INTERNAL_PAGES as readonly string[]).not.toContain('about')
+      expect(INTERNAL_PAGE_INVOKE_CHANNELS).not.toHaveProperty('about')
+    })
+
+    it('reaches for no bridge', () => {
+      for (const file of ABOUT_SOURCES) {
+        const imports = valueImportsOf(readFileSync(join(ROOT, file), 'utf8'))
+        for (const bridge of ['./bridge.js', './internal-calls.js', './useInternalI18n.js']) {
+          expect(imports, `${file} imports ${bridge}`).not.toContain(bridge)
+        }
+        expect(codeOnly(readFileSync(join(ROOT, file), 'utf8')), file).not.toMatch(
+          /tesseraInternal/
+        )
+      }
+    })
+
+    it('has a policy that allows no remote origin and no connection', () => {
+      const about = readFileSync(join(ROOT, 'src/renderer/internal/about.html'), 'utf8')
+      expect(about).toMatch(/default-src 'none'/)
+      expect(about).toMatch(/connect-src 'none'/)
+      expect(about).toMatch(/form-action 'none'/)
+      expect(about).not.toMatch(/https?:/)
+    })
+
+    it('carries the version package.json declares, from the build constant', (context) => {
+      requireFreshBuild('out/renderer', context.skip)
+      const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
+        version: string
+        license: string
+      }
+      const chunks = filesUnder(join(ROOT, 'out/renderer/assets')).filter((file) =>
+        /\/about-[^/]*\.js$/.test(file)
+      )
+      expect(chunks.length, 'no about chunk in the build').toBe(1)
+      const text = readFileSync(chunks[0]!, 'utf8')
+      expect(text).toContain(JSON.stringify(pkg.version))
+      expect(text).toContain(JSON.stringify(pkg.license))
+      // Replaced at build time: an identifier left in the bundle is a ReferenceError on the page.
+      expect(text).not.toMatch(/__TESSERA_(VERSION|LICENSE)__/)
+    })
+  })
+
   it('lets the start page reach no remote origin at all', () => {
     // Spec 1: favicons come from the local cache, never from a service on every
     // visit. A policy that permits no external origin makes that structural.

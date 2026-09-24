@@ -27,6 +27,15 @@ export const en = {
   'app.name': '{app}',
 
   /*
+    `tessera://about`, which is served without a bridge and so reads these from the bundled catalogue.
+    `{version}` and `{licence}` are the build constants from `package.json`; the licence is its SPDX
+    identifier, which is not translated.
+  */
+  'about.title': 'About {app}',
+  'about.version': 'Version {version}',
+  'about.licence': 'Free software under the {licence} licence.',
+
+  /*
     Menu labels that a renderer draws as well.
 
     The native menus are built by the core, and their own labels live in `main/menu/menu-text.*`, so

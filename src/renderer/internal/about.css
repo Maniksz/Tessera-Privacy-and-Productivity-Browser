@@ -1,0 +1,43 @@
+@import '../src/tokens.css';
+
+/*
+  The about page: three lines, centred in the tab.
+
+  Its own stylesheet, importing only the palette. `tokens.css` clips the body for the chrome UI; this
+  page scrolls its own document instead, so a narrow tile or a large zoom can still reach every line.
+*/
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  user-select: text;
+  overflow-y: auto;
+}
+
+.about {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 100vh;
+  padding: 32px 24px;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.about__name {
+  margin: 0 0 6px;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.about__version,
+.about__licence {
+  margin: 0;
+  font-size: 14px;
+}
+
+.about__licence {
+  color: var(--fg-dim);
+}
