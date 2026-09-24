@@ -184,7 +184,7 @@ export function historyUrlOf(rawUrl: string): string | null {
  * Both consumers show a single line, so the whitespace is collapsed once here rather
  * than in every view.
  */
-function cleanHistoryTitle(title: string): string {
+export function cleanHistoryTitle(title: string): string {
   return title.replace(/\s+/g, ' ').trim().slice(0, MAX_HISTORY_TITLE_LENGTH)
 }
 

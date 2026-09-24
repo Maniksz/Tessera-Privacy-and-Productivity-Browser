@@ -17,7 +17,9 @@ import {
   type TitleInput,
   type VisitInput
 } from '@shared/history/model.js'
-import { JsonStore, type DocumentCodec } from './JsonStore.js'
+import { planHistoryImport, type ImportedVisit } from '@shared/import/visits.js'
+import type { HistoryImportCounts } from '@shared/import/model.js'
+import { JsonStore, ReadOnlyStoreError, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
 import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 
@@ -151,6 +153,31 @@ export class HistoryStore {
   /** Matching entries, most recent first. Everything when asked for nothing. */
   query(criteria: HistoryQuery = {}): HistoryVisit[] {
     return queryHistory(this.#store.get().visits, criteria)
+  }
+
+  /**
+   * True when nothing written now would be kept: the file is read-only in this run, or the history was
+   * sealed by clearing on exit. The store is degradable, so it would take an import into memory and
+   * lose it at exit; an import asks this first and refuses instead (U24).
+   */
+  get readOnly(): boolean {
+    return this.#sealed || this.#store.readOnly
+  }
+
+  /** What importing `visits` would do, without doing it. The same plan `importVisits` applies. */
+  previewImport(visits: readonly ImportedVisit[]): HistoryImportCounts {
+    return planHistoryImport(this.#store.get().visits, visits, this.#now()).counts
+  }
+
+  /**
+   * Takes another browser's visits into free room only, merged by address; see `planHistoryImport`.
+   * Throws `ReadOnlyStoreError` rather than accepting what the file would never receive.
+   */
+  importVisits(visits: readonly ImportedVisit[]): HistoryImportCounts {
+    if (this.readOnly) throw new ReadOnlyStoreError('history')
+    const plan = planHistoryImport(this.#store.get().visits, visits, this.#now())
+    this.#store.update((document) => ({ ...document, visits: plan.visits }))
+    return plan.counts
   }
 
   /** Number of entries removed, so a caller can report what happened. */

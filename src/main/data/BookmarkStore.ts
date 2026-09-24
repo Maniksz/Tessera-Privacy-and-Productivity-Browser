@@ -22,7 +22,12 @@ import {
   type CreateBookmarkInput,
   type UpdateBookmarkPatch
 } from '@shared/bookmarks/model.js'
-import { graftImportedBookmarks, parseNetscapeBookmarks } from '@shared/bookmarks/import.js'
+import {
+  graftImportedBookmarks,
+  importCapacity,
+  parseNetscapeBookmarks,
+  type ImportReport
+} from '@shared/bookmarks/import.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
 import type { StoreLoadReport, StoreMigrations } from './store-load.js'
@@ -282,6 +287,18 @@ export class BookmarkStore {
    * text may contain is settled in `@shared/bookmarks/import.ts`.
    */
   import(html: string, folderTitle: string): BookmarkImportSummary {
+    const { imported, skipped } = this.importTree(parseNetscapeBookmarks(html), folderTitle)
+    return { imported, skipped }
+  }
+
+  /**
+   * Grafts a tree another browser's profile was read into (U24): Chrome's JSON, Firefox's places.
+   * The same graft as the HTML import, so the same rules; a repeated import adds no duplicates.
+   */
+  importTree(
+    report: ImportReport,
+    folderTitle: string
+  ): BookmarkImportSummary & { duplicates: number } {
     /*
       Grafted before the update rather than inside its mutator, so the counts are available
       to return.
@@ -292,13 +309,18 @@ export class BookmarkStore {
       the mutator might run later — and would be wrong the day it does.
     */
     const taken = this.#takenIds()
-    const result = graftImportedBookmarks(this.#store.get().nodes, parseNetscapeBookmarks(html), {
+    const result = graftImportedBookmarks(this.#store.get().nodes, report, {
       nextId: () => this.#nextId(taken),
       now: this.#now(),
       folderTitle
     })
     this.#store.update((document) => ({ ...document, nodes: result.nodes }))
-    return { imported: result.imported, skipped: result.skipped }
+    return { imported: result.imported, skipped: result.skipped, duplicates: result.duplicates }
+  }
+
+  /** Room left under the cap; none means an import is refused before a file is read. */
+  get importCapacity(): number {
+    return importCapacity(this.#store.get().nodes)
   }
 
   onChange(listener: (nodes: Bookmark[]) => void): () => void {

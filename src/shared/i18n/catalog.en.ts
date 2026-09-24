@@ -165,6 +165,7 @@ export const en = {
   'split.dropTile': 'Open in tile {index}',
   'split.dragging': 'Moving “{title}”',
   'split.emptyTile': 'Drag a tab here',
+  'split.muted': 'Muted',
 
   // history
   'history.title': 'History',
@@ -678,6 +679,36 @@ export const en = {
   'backup.newer': 'This backup is from a newer version of {app} and cannot be restored here.',
   'backup.tooShort': 'The passphrase needs at least 12 characters.',
   'backup.failed': 'That did not work. Nothing was changed.',
+
+  /*
+    Import from other browsers (U24), a section of the settings page, and the start page's card. The
+    browser names are product names and come from the model; passwords come over as a CSV only.
+  */
+  'import.title': 'Import from other browsers',
+  'import.source': 'Browser profile',
+  'import.none': 'No Chrome, Edge, Chromium or Firefox profile was found on this computer.',
+  'import.bookmarks': 'Import bookmarks',
+  'import.history': 'Import history…',
+  'import.bookmarksDone': '{imported} imported, {duplicates} already there, {skipped} skipped.',
+  'import.historyPreview':
+    '{added} entries are added, {merged} merged with yours, {skipped} skipped.',
+  'import.historyDropped':
+    '{dropped} more do not fit under the history’s limit of 10,000 entries and are left out. Your own history stays complete.',
+  'import.historyConfirm': 'Import history',
+  'import.historyDone': '{added} entries added, {merged} merged.',
+  'import.missing': 'The profile is gone. Is the browser still installed?',
+  'import.locked': '{browser} is using the file. Close {browser} and try again.',
+  'import.unreadable': 'The file could not be read. For bookmarks, an HTML file works instead.',
+  'import.readOnly': 'This data is read-only in this run, so nothing was imported.',
+  'import.full': 'The bookmarks are full, so nothing was imported.',
+  'import.htmlTitle': 'Bookmarks from an HTML file',
+  'import.htmlHint':
+    'In Firefox: Bookmarks › Manage bookmarks › Import and Backup › Export Bookmarks to HTML.',
+  'import.passwords':
+    'Passwords come over as a CSV file only: export them in the other browser, then import the file in the password manager.',
+  'start.importOffer': 'Coming from another browser? Take your bookmarks and history with you.',
+  'start.importOpen': 'Import…',
+  'start.importClose': 'Close',
 
   // extensions
   'extensions.title': 'Extensions',

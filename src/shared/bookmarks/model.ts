@@ -384,7 +384,7 @@ function cleanTitle(title: string, url: string): string {
 }
 
 /** Folders keep a name of their own; there is no address to fall back to. */
-function cleanFolderTitle(title: string): string {
+export function cleanFolderTitle(title: string): string {
   return title.replace(/\s+/g, ' ').trim().slice(0, MAX_BOOKMARK_TITLE_LENGTH)
 }
 

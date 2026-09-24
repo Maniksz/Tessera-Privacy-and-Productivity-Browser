@@ -1441,7 +1441,6 @@ describe('IPC discipline', () => {
       */
       ['appearance.tabBarPosition', 'the strip is always drawn in one place'],
       ['search.remoteSuggestions', 'no suggestion is ever fetched, so the switch guards nothing'],
-      ['splitView.showTileHeaders', 'tiles have no headers to show or hide'],
       ['privacy.partitionStatePerSite', 'one partition per browsing mode, never per site']
     ])
 

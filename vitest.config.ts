@@ -200,6 +200,13 @@ export default defineConfig({
           statements: 98
         },
         'src/shared/split/**': { lines: 100, functions: 100, branches: 95, statements: 100 },
+        // U20's view geometry, which the core and the renderer both place from: every branch, not 95 %.
+        'src/shared/split/tile-header.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         'src/shared/quicklinks/**': { lines: 100, functions: 100, branches: 97, statements: 100 },
 
         /*
@@ -537,6 +544,19 @@ export default defineConfig({
         */
         'src/main/backup/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/backup/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          The import from other browsers (U24, KTD19), whole: the two epochs, the three readers of files
+          another program wrote, the plan that keeps the history under its cap without displacing any of
+          it, the profile paths per platform, and the channels that name a profile by id only.
+        */
+        'src/shared/import/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/import/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/ipc/import-handlers.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         /*
           Panic and the menu actions behind it (U12). A step out of order is a window written back
           into the session panic just deleted; an untested branch in the actions is a key that does

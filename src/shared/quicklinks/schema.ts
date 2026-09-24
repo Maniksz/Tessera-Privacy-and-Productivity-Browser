@@ -48,7 +48,8 @@ export const quickLinkCardSchema = quickLinkSchema.extend({
  */
 export const quickLinkDocumentSchema = z.looseObject({
   version: z.literal(1),
-  links: z.array(quickLinkSchema.loose()).max(MAX_QUICK_LINKS)
+  links: z.array(quickLinkSchema.loose()).max(MAX_QUICK_LINKS),
+  importOfferClosed: z.boolean().optional()
 })
 
 // Keeps the schema and the interface from drifting apart in either direction.

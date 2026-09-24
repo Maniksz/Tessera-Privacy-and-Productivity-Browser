@@ -3,6 +3,7 @@ import { SettingsView, type SettingsHost, type Snapshot } from '@renderer-shared
 import { bridgeAvailable, invoke, subscribe } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
 import { BackupSection, type BackupHost } from './BackupSection.js'
+import { ImportSection, type ImportHost } from './ImportSection.js'
 
 /**
  * `tessera://settings` — the settings surface, and now the only one.
@@ -119,6 +120,23 @@ export function SettingsPage(): React.ReactNode {
     [t]
   )
 
+  /*
+    Import from other browsers (U24): a profile id out, counts back; the core finds and reads the files.
+    The HTML file goes through the bookmarks page's own import, the picker in the core.
+  */
+  const importing = useMemo<ImportHost>(
+    () => ({
+      sources: () => invoke('import:sources'),
+      importBookmarks: (source) => invoke('import:bookmarks', { source }),
+      previewHistory: (source) => invoke('import:previewHistory', { source }),
+      importHistory: (source) => invoke('import:history', { source }),
+      importHtml: () => invoke('bookmarks:import'),
+      openPasswordManager: () => invoke('passwords:openManager'),
+      t
+    }),
+    [t]
+  )
+
   useEffect(() => {
     if (!bridgeAvailable()) return
     let cancelled = false
@@ -149,6 +167,7 @@ export function SettingsPage(): React.ReactNode {
     <main className="panelPage" lang={locale}>
       <SettingsView host={host} settings={settings} initialQuery={initialQuery}>
         {bridgeAvailable() && <BackupSection host={backup} />}
+        {bridgeAvailable() && <ImportSection host={importing} />}
       </SettingsView>
     </main>
   )

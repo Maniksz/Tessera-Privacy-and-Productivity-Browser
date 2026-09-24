@@ -25,6 +25,7 @@ import { registerDownloadHandlers } from './download-handlers.js'
 import { registerPasswordHandlers } from './password-handlers.js'
 import { registerSiteHandlers } from './site-handlers.js'
 import { registerOmniboxHandlers } from './omnibox-handlers.js'
+import { registerImportHandlers } from './import-handlers.js'
 import { popupSiteMenu } from '../menu/siteMenu.js'
 import type { PermissionArbiter } from '../permissions/PermissionArbiter.js'
 import type { PermissionStore } from '../data/PermissionStore.js'
@@ -83,6 +84,7 @@ export function registerIpcHandlers(deps: {
   checkForUpdates: () => Promise<void>
 }): void {
   const { settings, windows, quickLinks, extensions, history, bookmarks, passwords } = deps
+  const uiLocale = (): Locale => activeLocale(settings.get('appearance.uiLanguage'))
 
   /**
    * The rule editor for the sending window's browsing mode.
@@ -248,11 +250,9 @@ export function registerIpcHandlers(deps: {
     return { tabId: windows.resolve(event)?.reopenClosedTab() ?? null }
   })
 
-  /*
-    Areas registered from their own modules: wiring whose *shape* is the interesting part (a permission
-    answer matched against the prompt on screen, a media request resolved to the session that fetched the
-    stream), kept out of this file's list of channels and testable against a fake `handle`.
-  */
+  // Areas registered from their own modules: wiring whose *shape* is the interesting part (a
+  // permission answer matched against the prompt on screen, a media request resolved to the session
+  // that fetched the stream, U24's profiles), kept out of this list and testable with a fake `handle`.
   registerPermissionHandlers({ permissions: deps.permissions.arbiter, windows })
   registerMediaHandlers({
     handle,
@@ -282,6 +282,7 @@ export function registerIpcHandlers(deps: {
     showMenu: (template, window) => popupSiteMenu(template, window.window)
   })
   registerOmniboxHandlers({ handle, windows, settings, history, bookmarks, quickLinks })
+  registerImportHandlers({ handle, windows, history, bookmarks, quickLinks, locale: uiLocale })
 
   // --- element picker and the user's own rules ------------------------------
   /*
@@ -858,11 +859,9 @@ export function registerIpcHandlers(deps: {
   })
 
   /**
-   * Reads an exported bookmark file into the tree.
-   *
-   * The path comes from the OS picker rather than from the request, exactly as `extensions:load` does,
-   * and the store is handed the file's *text* — so a compromised renderer cannot ask the core to read
-   * an arbitrary file and hand back its contents, and cannot sidestep that one layer down either.
+   * An exported bookmark file, for the bookmarks page and the settings page's import (U24). The
+   * path comes from the OS picker, never from the request, as for `extensions:load`, and the store
+   * gets the file's text, so a compromised renderer cannot have the core read and return any file.
    */
   handle('bookmarks:import', async (_payload, event) => {
     const controller = windows.resolve(event)

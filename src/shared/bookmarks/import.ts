@@ -4,6 +4,7 @@ import {
   BookmarkLimitError,
   MAX_BOOKMARKS,
   bookmarkUrlOf,
+  cleanFolderTitle,
   createBookmark,
   type Bookmark
 } from './model.js'
@@ -290,6 +291,14 @@ export interface GraftResult {
   imported: number
   /** Refused by the parser, plus anything that did not fit under `MAX_BOOKMARKS`. */
   skipped: number
+  /** Bookmarks whose address the folder they were bound for already held (U24). */
+  duplicates: number
+}
+
+/** What one folder already holds: its subfolders by name, its bookmarks by address. */
+interface FolderContents {
+  folders: Map<string, string>
+  urls: Set<string>
 }
 
 /**
@@ -310,6 +319,12 @@ export interface GraftResult {
  *   - Everything else lands inside one new folder under "other bookmarks", named by the
  *     caller. A flat merge into the existing tree would be unreviewable and unundoable: the
  *     user could not tell afterwards which rows arrived and which were theirs.
+ *
+ * Importing the same file twice adds nothing the second time (U24): a folder whose parent already
+ * has a folder of that name is entered rather than created again — the caller's import folder too —
+ * and a bookmark whose address its target folder already holds is counted as a duplicate instead.
+ * Matched per folder, never across the tree: the same page filed in two places is two bookmarks the
+ * user made, and only the one in the folder being filled is the one this import would repeat.
  */
 export function graftImportedBookmarks(
   nodes: readonly Bookmark[],
@@ -319,6 +334,22 @@ export function graftImportedBookmarks(
   let current = [...nodes]
   let imported = 0
   let skipped = report.skipped
+  let duplicates = 0
+
+  const contents = new Map<string, FolderContents>()
+  /** A folder's contents, read from the document the first time it is filled. */
+  const contentsOf = (parentId: string): FolderContents => {
+    const known = contents.get(parentId)
+    if (known !== undefined) return known
+    const found: FolderContents = { folders: new Map(), urls: new Set() }
+    for (const node of current) {
+      if (node.parentId !== parentId) continue
+      if (node.kind === 'folder') found.folders.set(node.title, node.id)
+      else found.urls.add(node.url)
+    }
+    contents.set(parentId, found)
+    return found
+  }
 
   const toolbar = report.nodes.find((node) => node.onToolbar)
   const rest = report.nodes.filter((node) => node !== toolbar)
@@ -340,7 +371,10 @@ export function graftImportedBookmarks(
 
   if (toolbar !== undefined) pushChildren(toolbar.children, BOOKMARK_BAR_ID)
 
-  if (rest.length > 0) {
+  // The import folder of an earlier import under the same name is filled again, not repeated.
+  const earlier = contentsOf(BOOKMARK_OTHER_ID).folders.get(cleanFolderTitle(context.folderTitle))
+  if (rest.length > 0 && earlier !== undefined) pushChildren(rest, earlier)
+  else if (rest.length > 0) {
     const folderId = context.nextId()
     try {
       current = createBookmark(
@@ -359,6 +393,17 @@ export function graftImportedBookmarks(
   while (pending.length > 0) {
     const [work] = pending.splice(-1)
     if (work === undefined) continue
+    const target = contentsOf(work.parentId)
+    if (work.node.kind === 'folder') {
+      const reused = target.folders.get(cleanFolderTitle(work.node.title))
+      if (reused !== undefined) {
+        pushChildren(work.node.children, reused)
+        continue
+      }
+    } else if (target.urls.has(work.node.url)) {
+      duplicates += 1
+      continue
+    }
     const id = context.nextId()
     try {
       current = createBookmark(
@@ -386,10 +431,16 @@ export function graftImportedBookmarks(
       continue
     }
     imported += 1
+    if (work.node.kind === 'folder') {
+      target.folders.set(cleanFolderTitle(work.node.title), id)
+      contents.set(id, { folders: new Map(), urls: new Set() })
+    } else {
+      target.urls.add(work.node.url)
+    }
     pushChildren(work.node.children, id)
   }
 
-  return { nodes: current, imported, skipped }
+  return { nodes: current, imported, skipped, duplicates }
 }
 
 /** How many nodes a subtree would contribute, for an accurate "skipped" count. */

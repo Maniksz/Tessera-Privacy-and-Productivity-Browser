@@ -48,6 +48,12 @@ export interface QuickLink {
 export interface QuickLinkDocument {
   version: 1
   links: QuickLink[]
+  /**
+   * The start page's import card was closed, or an import succeeded (U24, Q3), so it is not shown
+   * again. Absent in every file written before, which is what "show it once" needs; an older build
+   * keeps the field, since the file keeps what it does not know.
+   */
+  importOfferClosed?: boolean | undefined
 }
 
 export function emptyQuickLinkDocument(): QuickLinkDocument {

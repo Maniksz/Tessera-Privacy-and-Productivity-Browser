@@ -327,3 +327,69 @@ describe('grafting a parsed tree into a document', () => {
     expect(() => graft(html)).not.toThrow()
   })
 })
+
+describe('importing the same file twice (U24)', () => {
+  it('adds nothing the second time: folders are reused by name, bookmarks matched by address', () => {
+    const first = graft(CHROME_EXPORT)
+    let counter = 100
+    const second = graftImportedBookmarks(first.nodes, parseNetscapeBookmarks(CHROME_EXPORT), {
+      nextId: () => {
+        counter += 1
+        return `j${counter}`
+      },
+      now: T0,
+      folderTitle: 'Imported bookmarks'
+    })
+    expect(second.nodes).toEqual(first.nodes)
+    expect(second.imported).toBe(0)
+    // News, Tickets and Elsewhere; the two folders are reused, which is not a duplicate of anything.
+    expect(second.duplicates).toBe(3)
+    expect(first.duplicates).toBe(0)
+  })
+
+  it('still adds what is new, into the folder already there', () => {
+    const first = graft(CHROME_EXPORT)
+    const grown = CHROME_EXPORT.replace(
+      '<DT><A HREF="https://tickets.example/board">Tickets</A>',
+      '<DT><A HREF="https://tickets.example/board">Tickets</A><DT><A HREF="https://wiki.example/">Wiki</A>'
+    )
+    const second = graft(grown, first.nodes)
+    const work = second.nodes.filter((node) => node.title === 'Work')
+    expect(work).toHaveLength(1)
+    expect(childrenOf(second.nodes, work[0]?.id ?? '').map((node) => node.title)).toEqual([
+      'Tickets',
+      'Wiki'
+    ])
+    expect(second.imported).toBe(1)
+  })
+
+  it('takes one address only once into one folder, even from one file', () => {
+    const result = graft(`<DL>
+      <DT><A HREF="https://same.example/">A</A>
+      <DT><A HREF="https://same.example/">B</A>
+      <DT><H3>Sub</H3><DL><DT><A HREF="https://same.example/">C</A></DL>
+    </DL>`)
+    const titles = result.nodes.filter((node) => node.kind === 'bookmark').map((node) => node.title)
+    // The second one is dropped; the same address in another folder is another target.
+    expect(titles).toEqual(['A', 'C'])
+    expect(result.duplicates).toBe(1)
+  })
+
+  it('does not merge into a bookmark that happens to share a folder’s name', () => {
+    const own: Bookmark[] = [
+      {
+        id: 'mine',
+        kind: 'bookmark',
+        title: 'Imported bookmarks',
+        url: 'https://mine.example/',
+        parentId: BOOKMARK_OTHER_ID,
+        createdAt: T0
+      }
+    ]
+    const result = graft('<DL><DT><A HREF="https://x.example/">X</A></DL>', own)
+    const folders = childrenOf(result.nodes, BOOKMARK_OTHER_ID).filter(
+      (node) => node.kind === 'folder'
+    )
+    expect(folders.map((node) => node.title)).toEqual(['Imported bookmarks'])
+  })
+})

@@ -12,6 +12,8 @@
  * drift a build failure instead of a runtime surprise.
  */
 
+import { IMPORT_CARD_CHANNELS, IMPORT_SECTION_CHANNELS } from '../import/model.js'
+
 /** Renderer -> main, request/response. */
 export const INVOKE_CHANNELS = [
   // settings
@@ -399,7 +401,10 @@ export const INVOKE_CHANNELS = [
   'backup:status',
   'backup:create',
   'backup:openRestore',
-  'backup:stageRestore'
+  'backup:stageRestore',
+  // Import from other browsers (U24): a profile id crosses, never a path; see `import/model.ts`.
+  ...IMPORT_SECTION_CHANNELS,
+  ...IMPORT_CARD_CHANNELS
 ] as const
 
 export type InvokeChannel = (typeof INVOKE_CHANNELS)[number]
@@ -455,7 +460,9 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'quicklinks:update',
     'quicklinks:remove',
     'quicklinks:move',
-    'quicklinks:open'
+    'quicklinks:open',
+    // The import card on first start (U24, Q3): show, close for good, open settings. No import.
+    ...IMPORT_CARD_CHANNELS
   ],
   /*
     `settings:get` and `settings:resetAll` were granted and never called.
@@ -535,7 +542,10 @@ export const INTERNAL_PAGE_INVOKE_CHANNELS = {
     'backup:status',
     'backup:create',
     'backup:openRestore',
-    'backup:stageRestore'
+    'backup:stageRestore',
+    // Import (U24): the four of the section, and the HTML file with the picker in the core.
+    ...IMPORT_SECTION_CHANNELS,
+    'bookmarks:import'
   ],
   extensions: ['i18n:getCatalog', 'extensions:list', 'extensions:load', 'extensions:remove'],
   history: [

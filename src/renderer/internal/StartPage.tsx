@@ -6,6 +6,7 @@ import { bridgeAvailable, invoke, subscribe } from './bridge.js'
 import { useInternalI18n } from './useInternalI18n.js'
 import { QuickLinkTile } from './QuickLinkTile.js'
 import { QuickLinkDialog, type DialogState } from './QuickLinkDialog.js'
+import { ImportOfferCard, type ImportOfferHost } from './ImportOfferCard.js'
 import { Icon } from '../shared/Icon.js'
 
 /**
@@ -142,12 +143,25 @@ export function StartPage(): React.ReactNode {
 
   const gridRef = useRef<HTMLDivElement>(null)
 
+  // The import card on first start (U24, Q3): whether to show it, closing it, the way to settings.
+  const importOffer = useMemo<ImportOfferHost>(
+    () => ({
+      offer: () => invoke('import:offer'),
+      close: () => invoke('import:closeOffer'),
+      openSettings: () => invoke('import:openSettings'),
+      t
+    }),
+    [t]
+  )
+
   return (
     <main className="start" lang={locale}>
       <header className="start__header">
         <h1 className="start__title">{t('app.name')}</h1>
         <p className="start__subtitle">{t('start.tagline')}</p>
       </header>
+
+      {bridgeAvailable() && <ImportOfferCard host={importOffer} />}
 
       {openFolder !== null && (
         <nav className="start__breadcrumb" aria-label={t('start.breadcrumb')}>

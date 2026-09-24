@@ -116,6 +116,7 @@ export const de = {
   'split.dropTile': 'In Kachel {index} öffnen',
   'split.dragging': '„{title}“ wird verschoben',
   'split.emptyTile': 'Tab hierher ziehen',
+  'split.muted': 'Stumm',
 
   // history
   'history.title': 'Verlauf',
@@ -501,6 +502,35 @@ export const de = {
     'Dieses Backup stammt aus einer neueren {app}-Version und lässt sich hier nicht einspielen.',
   'backup.tooShort': 'Die Passphrase braucht mindestens 12 Zeichen.',
   'backup.failed': 'Das hat nicht geklappt. Nichts wurde geändert.',
+
+  'import.title': 'Aus anderen Browsern importieren',
+  'import.source': 'Browser-Profil',
+  'import.none':
+    'Auf diesem Computer wurde kein Profil von Chrome, Edge, Chromium oder Firefox gefunden.',
+  'import.bookmarks': 'Lesezeichen übernehmen',
+  'import.history': 'Verlauf übernehmen…',
+  'import.bookmarksDone':
+    '{imported} übernommen, {duplicates} schon vorhanden, {skipped} übersprungen.',
+  'import.historyPreview':
+    '{added} Einträge kommen hinzu, {merged} werden mit deinen zusammengeführt, {skipped} übersprungen.',
+  'import.historyDropped':
+    'Weitere {dropped} passen nicht unter die Grenze von 10.000 Einträgen und bleiben draußen. Dein eigener Verlauf bleibt vollständig.',
+  'import.historyConfirm': 'Verlauf übernehmen',
+  'import.historyDone': '{added} Einträge hinzugefügt, {merged} zusammengeführt.',
+  'import.missing': 'Das Profil ist weg. Ist der Browser noch installiert?',
+  'import.locked': '{browser} benutzt die Datei. Schließ {browser} und versuch es noch einmal.',
+  'import.unreadable':
+    'Die Datei ließ sich nicht lesen. Für Lesezeichen geht stattdessen eine HTML-Datei.',
+  'import.readOnly': 'Diese Daten sind in diesem Lauf schreibgeschützt, nichts wurde übernommen.',
+  'import.full': 'Die Lesezeichen sind voll, nichts wurde übernommen.',
+  'import.htmlTitle': 'Lesezeichen aus einer HTML-Datei',
+  'import.htmlHint':
+    'In Firefox: Lesezeichen › Lesezeichen verwalten › Importieren und Sichern › Lesezeichen nach HTML exportieren.',
+  'import.passwords':
+    'Passwörter kommen nur als CSV-Datei: im anderen Browser exportieren, dann die Datei in der Passwortverwaltung importieren.',
+  'start.importOffer': 'Du kommst von einem anderen Browser? Nimm Lesezeichen und Verlauf mit.',
+  'start.importOpen': 'Importieren…',
+  'start.importClose': 'Schließen',
 
   'extensions.title': 'Erweiterungen',
   'extensions.close': 'Erweiterungen schließen',

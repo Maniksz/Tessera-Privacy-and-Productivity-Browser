@@ -136,9 +136,39 @@ describe('internal page privileges', () => {
         */
         ...invokesMentioned(settingsPage, 'passwords'),
         // Back up and restore (U23): a passphrase and a choice out, a status and a preview back.
-        ...invokesMentioned(settingsPage, 'backup')
+        ...invokesMentioned(settingsPage, 'backup'),
+        // Import (U24): a profile id out, counts back; and the HTML file through `bookmarks:import`.
+        ...invokesMentioned(settingsPage, 'import'),
+        ...invokesMentioned(settingsPage, 'bookmarks')
       ].sort()
     )
+  })
+
+  it('grants the import to the settings page and the card’s three channels to the start page (U24)', () => {
+    /*
+      Reading another browser's profile into this one is the settings page's to decide; the start page's
+      card asks whether to show, closes itself and opens that page, and can import nothing. No other
+      page, the reader above all, holds any of the seven. Each page holds exactly what it calls.
+    */
+    const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('import:'))
+    const card = ['import:closeOffer', 'import:offer', 'import:openSettings']
+    const section = [
+      'import:bookmarks',
+      'import:history',
+      'import:previewHistory',
+      'import:sources'
+    ]
+    expect([...channels].sort()).toEqual([...card, ...section].sort())
+    for (const page of INTERNAL_PAGES) {
+      const granted = channels.filter((channel) => mayInternalPageInvoke(page, channel)).sort()
+      const expected = page === 'settings' ? section : page === 'start' ? card : []
+      expect(granted, page).toEqual(expected)
+    }
+    expect(invokesMentioned(codeOf('src/renderer/internal/StartPage.tsx'), 'import')).toEqual(card)
+    expect(grantedTo('start').filter((channel) => !channel.startsWith('quicklinks:'))).toEqual(card)
+    // A profile id and nothing else: no path, no file in any request.
+    const page = codeOf('src/renderer/internal/SettingsPage.tsx')
+    expect(page).not.toMatch(/import:[a-zA-Z]+',\s*\{[^}]*\b(path|file|dir|bytes|content)\b/)
   })
 
   it('grants the backup channels to the settings page and to no other (U23)', () => {

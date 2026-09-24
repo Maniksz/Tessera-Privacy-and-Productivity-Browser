@@ -62,6 +62,7 @@
     "src/shared/split/dropzones.ts",
     "src/shared/split/tile-fill.ts",
     "src/shared/split/tile-bar.ts",
+    "src/shared/split/tile-header.ts",
     "src/shared/filters/**/*.ts",
     "src/shared/product.ts",
     "src/shared/overlay/surface.ts",
@@ -162,6 +163,9 @@
     "src/shared/search/rank.ts",
     "src/shared/omnibox/**/*.ts",
     "src/main/ipc/omnibox-handlers.ts",
+    "src/shared/import/**/*.ts",
+    "src/main/import/**/*.ts",
+    "src/main/ipc/import-handlers.ts",
     "!**/*.d.ts"
   ],
   "checkers": ["typescript"],

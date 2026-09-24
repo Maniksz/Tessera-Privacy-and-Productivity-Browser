@@ -74,6 +74,7 @@ import {
 } from '../passwords/schema.js'
 import { omniboxInvokeContract, omniboxSuggestionsPresentationSchema } from '../omnibox/schema.js'
 import { backupInvokeContract } from '../backup/schema.js'
+import { importInvokeContract } from '../import/schema.js'
 
 /**
  * The typing half of the UI <-> core boundary (spec 6).
@@ -1235,13 +1236,11 @@ export const invokeContract = {
    */
   'downloads:summary': { request: nothing, response: downloadButtonSummarySchema },
 
-  /*
-    Passwords and the address bar's suggestions, declared beside their schemas so this file stays under
-    its bar. Spread in, so the exhaustiveness check below covers them exactly as everything else.
-  */
+  // Declared beside their schemas so this file stays under its bar; the check below covers them too.
   ...passwordInvokeContract,
   ...omniboxInvokeContract,
-  ...backupInvokeContract
+  ...backupInvokeContract,
+  ...importInvokeContract
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract

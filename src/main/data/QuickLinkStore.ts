@@ -114,6 +114,17 @@ export class QuickLinkStore {
     }))
   }
 
+  /** Whether the start page's import card was closed, or made redundant by an import (U24). */
+  get importOfferClosed(): boolean {
+    return this.#store.get().importOfferClosed === true
+  }
+
+  /** Closes the card for good. A second close writes nothing. */
+  closeImportOffer(): void {
+    if (this.importOfferClosed) return
+    this.#store.update((document) => ({ ...document, importOfferClosed: true }))
+  }
+
   onChange(listener: (links: QuickLink[]) => void): () => void {
     return this.#store.onChange((document) => listener([...document.links]))
   }

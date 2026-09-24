@@ -168,6 +168,54 @@ body {
   color: var(--fg);
 }
 
+/* --- the import card on first start (U24) ------------------------------------ */
+
+.start__offer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 1.5rem;
+  padding: 0.7rem 0.6rem 0.7rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+}
+
+.start__offerText {
+  flex: 1;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.start__offerButton,
+.start__offerClose {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.start__offerButton {
+  padding: 0.35rem 0.8rem;
+}
+
+.start__offerClose {
+  padding: 0.35rem;
+  border-color: transparent;
+  color: var(--fg-dim);
+}
+
+.start__offerButton:hover,
+.start__offerClose:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
 /* --- tiles ----------------------------------------------------------------- */
 
 .tile {

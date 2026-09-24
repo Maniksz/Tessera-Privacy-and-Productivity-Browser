@@ -242,6 +242,9 @@ function fakeCore(
         // The backup section (U23) asks once on mount; it is not a descriptor and has no stored value.
         case 'backup:status':
           return Promise.resolve({ vault: 'no-vault', pendingRestore: false })
+        // So does the import section (U24): no other browser on this machine.
+        case 'import:sources':
+          return Promise.resolve([])
         case 'extensions:list':
           return Promise.resolve([...extensions])
         case 'extensions:load':
@@ -298,9 +301,11 @@ function renderPanel(node: React.ReactNode): ReturnType<typeof render> {
  * attribute React happens to order differently makes the comparison brittle.
  */
 function controlsOf(container: HTMLElement): string[] {
-  // Descriptor fields only: the backup section's passphrase fields are the page's own, not settings.
+  // Descriptor fields only: the backup and import sections' fields are the page's own, not settings.
   const fields = [...container.querySelectorAll('.field')].filter(
-    (field) => field.closest('[aria-labelledby="backup-heading"]') === null
+    (field) =>
+      field.closest('[aria-labelledby="backup-heading"], [aria-labelledby="import-heading"]') ===
+      null
   )
   return fields.map((field) => {
     const label = field.querySelector('.field__label')?.textContent ?? ''
