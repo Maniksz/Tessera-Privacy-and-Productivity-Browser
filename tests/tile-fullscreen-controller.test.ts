@@ -619,6 +619,23 @@ describe('escape', () => {
     expect(h.split.fullscreenTile).toBeNull()
   })
 
+  it('still leaves the tile when its tab has gone from the grid', () => {
+    /*
+      The tile arrives with the verdict, but the tab in it is read afterwards and can be missing:
+      `forgetTab` drops a closed tab without clearing the tile's fullscreen. The rung must still come
+      off — a tile stuck in fullscreen with nothing in it would eat every later press — and there is
+      no page to ask.
+    */
+    const h = harness('2x2')
+    h.split.assignTab('tab-b', 1)
+    h.controller.onPageEnter('tab-b')
+    h.split.forgetTab('tab-b')
+
+    h.controller.escape()
+    expect(h.split.fullscreenTile).toBeNull()
+    expect(h.askedPages).toEqual([])
+  })
+
   it("leaves the window's own fullscreen when that is the rung it is on", () => {
     const h = harness('1x1')
     h.split.setWindowFullscreen(true)

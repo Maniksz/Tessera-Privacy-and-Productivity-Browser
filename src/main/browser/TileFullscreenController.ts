@@ -358,30 +358,33 @@ export class TileFullscreenController {
    * step rather than a second copy of the priority, so there is one place the order can be wrong.
    */
   escape(): void {
-    const step = this.host.split.escape()
-    switch (step) {
+    const taken = this.host.split.escape()
+    switch (taken.step) {
       case 'exit-window-fullscreen':
         this.#userLeaving = true
         this.host.exitWindowFullscreen()
         break
       case 'exit-tile-fullscreen': {
-        const tile = this.host.split.fullscreenTile
+        // The tile comes with the verdict, so there is no second read of `fullscreenTile` that
+        // could disagree with it — and no null to guard against that the verdict already ruled out.
         this.host.split.leaveTileFullscreen()
-        if (tile !== null) {
-          /*
-            Now the *first* rung, which is the point — and it is also the rung most likely to be
-            asking a page for something it has already done. The press that got here reached the
-            page too, and a player that handles `Escape` itself has left fullscreen before this
-            runs. `askPageToExitFullscreen` is safe either way: it is a request, `document
-            .exitFullscreen()` on a document that is not fullscreen rejects rather than throwing,
-            and the seam swallows that on purpose (see `window-seams.ts`). Skipping the ask when the
-            page "looks" already out was rejected — the main process cannot see
-            `document.fullscreenElement`, so the check would be a guess, and the case it gets wrong
-            is the player that ignored the key and stays fullscreen with no way back.
-          */
-          const tabId = this.host.split.tabIdAt(tile)
-          if (tabId !== null) this.host.askPageToExitFullscreen(tabId)
-        }
+        /*
+          Now the *first* rung, which is the point — and it is also the rung most likely to be
+          asking a page for something it has already done. The press that got here reached the
+          page too, and a player that handles `Escape` itself has left fullscreen before this
+          runs. `askPageToExitFullscreen` is safe either way: it is a request, `document
+          .exitFullscreen()` on a document that is not fullscreen rejects rather than throwing,
+          and the seam swallows that on purpose (see `window-seams.ts`). Skipping the ask when the
+          page "looks" already out was rejected — the main process cannot see
+          `document.fullscreenElement`, so the check would be a guess, and the case it gets wrong
+          is the player that ignored the key and stays fullscreen with no way back.
+
+          The tab, unlike the tile, can be gone: `SplitController.forgetTab` drops a closed tab out
+          of the grid without clearing the tile's fullscreen, so the rung still comes off and there
+          is simply no page left to ask.
+        */
+        const tabId = this.host.split.tabIdAt(taken.tile)
+        if (tabId !== null) this.host.askPageToExitFullscreen(tabId)
         break
       }
       case 'restore-tile':

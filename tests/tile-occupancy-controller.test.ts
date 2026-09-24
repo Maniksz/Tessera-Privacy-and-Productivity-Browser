@@ -43,6 +43,8 @@ interface Harness {
    * Whether the recording is worth keeping belongs to `@shared/arrangements/model.ts`.
    */
   kept: Array<{ id: LayoutId; tiles: Array<string | null> }>
+  /** The same snapshot for `endTiling()`, taken at the call for the same reason. */
+  ended: Array<{ id: LayoutId; tiles: Array<string | null> }>
   /**
    * What `closeTab` does to the window once a tab has gone, and where a test may route it through first.
    * Unset, `closeTab` is `forget` directly, which is what every test here assumed before the close contract.
@@ -64,6 +66,7 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     adapt: true,
     collapsed: new Set<string>(),
     kept: [],
+    ended: [],
     routeClose: null
   }
   state.forget = (tabId) => {
@@ -106,6 +109,9 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     },
     keepTiling: () => {
       state.kept!.push({ id: split.layout, tiles: split.toState().tileTabIds })
+    },
+    endTiling: () => {
+      state.ended!.push({ id: split.layout, tiles: split.toState().tileTabIds })
     }
   }
 
@@ -139,6 +145,48 @@ describe('filling a layout the user chose', () => {
     h.adapt = false
     h.occupancy.fillEmptyTiles()
     expect(h.fillers).toEqual([])
+  })
+})
+
+describe('a layout the user chose', () => {
+  it('fills and rehomes, which no layout the browser changes on its own does', () => {
+    const h = harness('1x1', ['a', 'b', 'c'])
+    seed(h, ['a'])
+
+    h.occupancy.chooseLayout('2x2')
+
+    // The two loaded pages come in first, and only the tile left over gets a start page.
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'b', 'c', 'filler-1'])
+    expect(h.fillers).toEqual([3])
+  })
+
+  it('ends the tiling on screen before it goes, when the choice is a single page', () => {
+    /*
+      Before, and with the seating that was there: read after the change the split names one tab, and
+      the recording that tied the others to it would survive — the next click on one of them would put
+      the split straight back.
+    */
+    const h = harness('1x2', ['a', 'b'])
+    seed(h, ['a', 'b'])
+
+    h.occupancy.chooseLayout('1x1')
+
+    expect(h.ended).toEqual([{ id: '1x2', tiles: ['a', 'b'] }])
+    expect(h.split.layout).toBe('1x1')
+    // Ended is not closed: the page that lost its pane stays in the strip (spec 2).
+    expect(h.closed).toEqual([])
+    expect(h.order).toEqual(['a', 'b'])
+  })
+
+  it('ends nothing when the choice is another split', () => {
+    // The settle after it records the new tiling, which supersedes the old one on its own.
+    const h = harness('2x2', ['a', 'b', 'c', 'd'])
+    seed(h, ['a', 'b', 'c', 'd'])
+
+    h.occupancy.chooseLayout('1x2')
+
+    expect(h.ended).toEqual([])
+    expect(h.split.layout).toBe('1x2')
   })
 })
 

@@ -78,6 +78,25 @@ export function hostOf(url: string): string {
   }
 }
 
+/** The longest address a native dialogue names; a longer one keeps its start and its end. */
+export const SITE_MAX = 80
+
+/**
+ * The site a question names: the host, or the address cut in the middle when there is no host.
+ *
+ * Only the fallback is ever cut. A `file:` or `data:` address can run to thousands of characters, and a native
+ * message box can neither scroll nor show the rest, so a long one would push its buttons off the screen. The
+ * start says what kind of address it is and the end which file, which is what is left to recognise it by. A
+ * host is never cut: it is the fact the answer turns on.
+ */
+export function siteOf(url: string): string {
+  const host = hostOf(url)
+  if (host !== '') return host
+  if (url.length <= SITE_MAX) return url
+  const end = 24
+  return `${url.slice(0, SITE_MAX - end - 1)}…${url.slice(-end)}`
+}
+
 /**
  * `preventDefault` on an Electron event that arrived as `unknown`.
  *
@@ -303,8 +322,7 @@ export class CloseContract {
     const contents = tab.view.webContents
     const confirm = (mode: UnloadPrompt['mode']): boolean => {
       this.#reveal(tabId)
-      const url = contents.getURL()
-      return this.#host.confirm({ mode, site: hostOf(url) || url })
+      return this.#host.confirm({ mode, site: siteOf(contents.getURL()) })
     }
     this.#guards.set(
       tabId,

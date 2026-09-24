@@ -406,11 +406,11 @@ export default defineConfig({
           branch in both is now reachable from a unit test with no window, which is the only reason
           a floor is honest here.
 
-          `TileFullscreenController.ts` is deliberately absent. It sits at 85.7 % branches on one
-          unreachable null-guard — `escape()` reads `fullscreenTile` after the verdict that already
-          proves it non-null — and pinning it at that number would ratify the guard instead of
-          removing it. Removing it means letting `SplitController.escape()` hand back the tile with
-          the verdict, which is a change to an API this round has already moved once.
+          `TileFullscreenController.ts`, which carries the ladder's steps out, joined them late. It
+          sat below 100 % branches on one unreachable null-guard — `escape()` read `fullscreenTile`
+          after the verdict that had already proved it non-null — and pinning it at that number
+          would have ratified the guard instead of removing it. `SplitController.escape()` now hands
+          the tile back with the verdict, so the guard is gone rather than excused.
         */
         'src/main/browser/page-keys.ts': {
           lines: 100,
@@ -419,6 +419,12 @@ export default defineConfig({
           statements: 100
         },
         'src/main/browser/SplitController.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/main/browser/TileFullscreenController.ts': {
           lines: 100,
           functions: 100,
           branches: 100,

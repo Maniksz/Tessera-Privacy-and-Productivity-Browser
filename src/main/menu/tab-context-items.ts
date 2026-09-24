@@ -1,6 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import { translate, type Locale, type MessageKey } from '@shared/i18n/catalog.js'
-import { groupOfTab, type TabGroup } from '@shared/tabgroups/model.js'
+import { findGroup, groupOfTab, type TabGroup } from '@shared/tabgroups/model.js'
 import { TAB_GROUP_COLORS, type TabGroupColor } from '@shared/tabgroups/palette.js'
 
 /**
@@ -28,7 +28,7 @@ import { TAB_GROUP_COLORS, type TabGroupColor } from '@shared/tabgroups/palette.
  * not, which colour shows as checked, how an unnamed group is identified — and each of those can be
  * wrong in a way that still produces a perfectly ordinary-looking menu. Kept in this file they are
  * ordinary unit tests; kept next to the `Menu` import they would be unreachable from a test at all.
- * `tabContextMenu.ts` is the four-line wrapper.
+ * `tabContextMenu.ts` is the four-line wrapper, for this menu and the chip's.
  */
 
 export interface TabContextMenuDeps {
@@ -86,18 +86,7 @@ export function tabContextMenuTemplate(deps: TabContextMenuDeps): MenuItemConstr
   if (own !== undefined) {
     template.push(
       { label: t('tabgroup.removeTab'), click: () => deps.onRemoveFromGroup(deps.tabId) },
-      {
-        label: t('tabgroup.recolor'),
-        submenu: TAB_GROUP_COLORS.map((color) => ({
-          label: t(COLOR_LABELS[color]),
-          // A radio rather than a plain item, so the group's current colour is visible without
-          // having to remember it.
-          type: 'radio' as const,
-          checked: own.color === color,
-          click: () => deps.onRecolor(own.id, color)
-        }))
-      },
-      { label: t('tabgroup.dissolve'), click: () => deps.onDissolve(own.id) }
+      ...groupItems(t, own, deps)
     )
   }
 
@@ -112,4 +101,59 @@ export function tabContextMenuTemplate(deps: TabContextMenuDeps): MenuItemConstr
   )
 
   return template
+}
+
+/** What the chip's menu needs: the group it was opened on, and the two things it can do to one. */
+export interface TabGroupMenuDeps {
+  locale: Locale
+  groupId: string
+  groups: readonly TabGroup[]
+  onRecolor(groupId: string, color: TabGroupColor): void
+  onDissolve(groupId: string): void
+}
+
+/**
+ * What a right-click on a group's chip opens: the group's colour and the way to end it.
+ *
+ * The chip had no menu, and ending a group was reachable only through a member's menu. That is fine
+ * for an open group and not for a **folded** one: its members are not drawn, so there is no tab to
+ * right-click, and "Ungroup" was two steps away — unfold first — for someone who knew to take the
+ * first. The chip is the one control every group has, open or folded, so it is where ending one has
+ * to be reachable.
+ *
+ * The same two items a member's menu has, from the same builder, so the two menus cannot come to
+ * disagree about what recolouring or dissolving means. Nothing about a single tab is here — "remove
+ * from group" or "close tab" would have to pick a member, and a chip is not one.
+ *
+ * Renaming is absent for the reason given at the top of this file; double-clicking the chip is the
+ * way. Answers an empty template for a group that is gone — the chip was drawn from a
+ * `tabgroups:changed` that may be a moment old — so the caller opens nothing rather than a menu whose
+ * every item acts on a group that no longer exists.
+ */
+export function tabGroupMenuTemplate(deps: TabGroupMenuDeps): MenuItemConstructorOptions[] {
+  const group = findGroup(deps.groups, deps.groupId)
+  if (group === undefined) return []
+  return groupItems((key) => translate(deps.locale, key), group, deps)
+}
+
+/** The group's own items, shared by a member's menu and the chip's. */
+function groupItems(
+  t: (key: MessageKey) => string,
+  group: TabGroup,
+  deps: Pick<TabGroupMenuDeps, 'onRecolor' | 'onDissolve'>
+): MenuItemConstructorOptions[] {
+  return [
+    {
+      label: t('tabgroup.recolor'),
+      submenu: TAB_GROUP_COLORS.map((color) => ({
+        label: t(COLOR_LABELS[color]),
+        // A radio rather than a plain item, so the group's current colour is visible without
+        // having to remember it.
+        type: 'radio' as const,
+        checked: group.color === color,
+        click: () => deps.onRecolor(group.id, color)
+      }))
+    },
+    { label: t('tabgroup.dissolve'), click: () => deps.onDissolve(group.id) }
+  ]
 }

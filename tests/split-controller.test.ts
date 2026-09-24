@@ -371,12 +371,12 @@ describe('escalation ladder', () => {
     split.toggleTileMaximized(0)
     split.setWindowFullscreen(true)
 
-    expect(split.escape()).toBe('exit-tile-fullscreen')
+    expect(split.escape()).toEqual({ step: 'exit-tile-fullscreen', tile: 0 })
     split.leaveTileFullscreen()
-    expect(split.escape()).toBe('restore-tile')
-    expect(split.escape()).toBe('exit-window-fullscreen')
+    expect(split.escape()).toEqual({ step: 'restore-tile' })
+    expect(split.escape()).toEqual({ step: 'exit-window-fullscreen' })
     split.setWindowFullscreen(false)
-    expect(split.escape()).toBe('none')
+    expect(split.escape()).toEqual({ step: 'none' })
   })
 
   it('keeps the window in fullscreen while an inner rung is still there', () => {
@@ -386,7 +386,7 @@ describe('escalation ladder', () => {
     split.setWindowFullscreen(true)
     split.enterTileFullscreen(0)
 
-    expect(split.escape()).toBe('exit-tile-fullscreen')
+    expect(split.escape()).toEqual({ step: 'exit-tile-fullscreen', tile: 0 })
     expect(split.isWindowFullscreen).toBe(true)
     expect(split.escalation).toBe('window-fullscreen')
   })
@@ -403,7 +403,7 @@ describe('escalation ladder', () => {
     split.toggleTileMaximized(0)
 
     expect(split.escalation).toBe('tile-maximized')
-    expect(split.escape()).toBe('exit-tile-fullscreen')
+    expect(split.escape()).toEqual({ step: 'exit-tile-fullscreen', tile: 0 })
     split.leaveTileFullscreen()
     expect(split.escalation).toBe('tile-maximized')
   })

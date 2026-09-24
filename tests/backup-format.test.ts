@@ -334,8 +334,7 @@ describe('inflating, after final() and never before', () => {
   })
 
   it('reports an authentic ciphertext that is not deflate as damaged', async () => {
-    const { createCipheriv, randomBytes, scryptSync } =
-      await vi.importActual<typeof NodeCrypto>('node:crypto')
+    const { createCipheriv, scryptSync } = await vi.importActual<typeof NodeCrypto>('node:crypto')
     // A file sealed correctly around bytes that are not a deflate stream: the tag passes, inflate fails.
     const original = await sealed()
     const { headerStart, headerEnd } = layout(original)
@@ -350,7 +349,11 @@ describe('inflating, after final() and never before', () => {
     })
     const cipher = createCipheriv('aes-256-gcm', key, Buffer.from(header.iv, 'base64'))
     cipher.setAAD(original.subarray(0, headerEnd))
-    const body = Buffer.concat([cipher.update(randomBytes(64)), cipher.final()])
+    /*
+      Not random bytes: 64 of them are a valid deflate stream often enough to fail a run now and then.
+      0xff opens with block type 3, which deflate reserves, so inflate refuses it every time.
+    */
+    const body = Buffer.concat([cipher.update(Buffer.alloc(64, 0xff)), cipher.final()])
     const forged = Buffer.concat([original.subarray(0, headerEnd), body, cipher.getAuthTag()])
     expect(
       await refusal(openBackup({ bytes: forged, passphrase: PASSPHRASE, allowedCost: CHEAP }))

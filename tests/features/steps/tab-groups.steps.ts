@@ -43,6 +43,8 @@ interface GroupedWindow {
   split: SplitController
   /** The strip's order, which the fake window rewrites as a real one does. */
   order: () => readonly string[]
+  /** A click on a tab in the strip: `BrowserWindowController.activateTab`, tiles and all. */
+  activate: (tabId: string) => void
 }
 
 /**
@@ -135,10 +137,18 @@ async function openWindow(state: unknown, tabIds: readonly string[]): Promise<vo
       order = order.filter((id) => id !== tabId)
       split.forgetTab(tabId)
     },
+    // Both ways back `BrowserWindowController.activateTab` has for a tab with no tile: a recording
+    // that seats it, or else the window, the way a new tab gets it.
     activateTab: (tabId) => {
       const tile = split.tileOfTab(tabId)
-      if (tile !== null) split.setActiveTile(tile)
-      else seams?.arrangements.restoreFor(tabId)
+      if (tile !== null) {
+        split.setActiveTile(tile)
+        return
+      }
+      seams?.arrangements.restoreFor(tabId)
+      if (seams !== null && split.tileOfTab(tabId) === null) {
+        split.assignTab(tabId, seams.occupancy.claimTileForNewTab())
+      }
     },
     setActiveTile: (tileIndex) => split.setActiveTile(tileIndex),
     openFiller: (tileIndex) => {
@@ -160,7 +170,12 @@ async function openWindow(state: unknown, tabIds: readonly string[]): Promise<vo
   seams = createWindowSeams(internals)
   tabIds.forEach((tabId, index) => split.assignTab(tabId, index))
 
-  scope(state).scratch[KEY] = { seams, split, order: () => order } satisfies GroupedWindow
+  scope(state).scratch[KEY] = {
+    seams,
+    split,
+    order: () => order,
+    activate: (tabId) => internals.activateTab(tabId)
+  } satisfies GroupedWindow
 }
 
 // --- given -------------------------------------------------------------------
@@ -177,6 +192,10 @@ Given('the tabs {string} are grouped as {string}', (state: unknown, list: string
   groupedWindow(state).seams.groups.create({ tabIds: tabList(list), name })
 })
 
+Given('the tabs {string} are grouped without a name', (state: unknown, list: string) => {
+  groupedWindow(state).seams.groups.create({ tabIds: tabList(list) })
+})
+
 Given('the group {string} is folded', (state: unknown, name: string) => {
   const groups = groupedWindow(state).seams.groups
   groups.setCollapsed(groupNamed(state, name).id, true)
@@ -191,6 +210,27 @@ When('the window settles', (state: unknown) => {
 
 When('I dissolve the group {string}', (state: unknown, name: string) => {
   groupedWindow(state).seams.groups.dissolve(groupNamed(state, name).id)
+})
+
+When('I take {string} out of its group', (state: unknown, tabId: string) => {
+  groupedWindow(state).seams.groups.removeTab(tabId)
+})
+
+/**
+ * The layout menu's choice — `BrowserWindowController.setLayout` — which is `chooseLayout` on the
+ * occupancy seam and nothing else. Worded apart from `split-view.feature`'s "I switch to the … layout",
+ * which drives a bare split with no seams behind it.
+ */
+When('I choose the single layout for the window', (state: unknown) => {
+  groupedWindow(state).seams.occupancy.chooseLayout('1x1')
+})
+
+When('I choose the side-by-side layout for the window', (state: unknown) => {
+  groupedWindow(state).seams.occupancy.chooseLayout('1x2')
+})
+
+When('I click the tab {string}', (state: unknown, tabId: string) => {
+  groupedWindow(state).activate(tabId)
 })
 
 /**
@@ -249,6 +289,30 @@ Then('the tab strip shows no group chip', (state: unknown) => {
     (item) => item.kind === 'group'
   )
   expect(chips, 'the strip still draws a group chip').toEqual([])
+})
+
+Then('the window shows only {string}', (state: unknown, tabId: string) => {
+  const { split } = groupedWindow(state)
+  expect(split.layout, 'the window is still split').toBe('1x1')
+  expect(split.toState().tileTabIds).toEqual([tabId])
+})
+
+Then('the window shows {string} side by side', (state: unknown, list: string) => {
+  const { split } = groupedWindow(state)
+  expect(split.layout).toBe('1x2')
+  expect(split.toState().tileTabIds).toEqual(tabList(list))
+})
+
+Then('the group {string} still holds {string}', (state: unknown, name: string, list: string) => {
+  expect(groupNamed(state, name).tabIds).toEqual(tabList(list))
+})
+
+Then('the tab strip shows one unnamed group chip', (state: unknown) => {
+  const window = groupedWindow(state)
+  const names = stripItems(window.order(), window.seams.groups.groups()).flatMap((item) =>
+    item.kind === 'group' ? [item.group.name] : []
+  )
+  expect(names).toEqual([''])
 })
 
 Then('the tab search lists {string} first', (state: unknown, name: string) => {

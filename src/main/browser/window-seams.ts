@@ -243,7 +243,8 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     setActiveTile: (tileIndex) => internals.setActiveTile(tileIndex),
     openFiller: (tileIndex) => internals.openFiller(tileIndex),
     applyLayout: (layout, options) => internals.applyLayout(layout, options),
-    keepTiling: () => arrangements.keep()
+    keepTiling: () => arrangements.keep(),
+    endTiling: () => arrangements.endTiling()
   })
 
   const audio = new TileAudioController({

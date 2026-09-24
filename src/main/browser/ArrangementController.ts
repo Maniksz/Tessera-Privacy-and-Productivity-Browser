@@ -1,6 +1,7 @@
 import {
   MIN_ARRANGED_TILES,
   arrangementIsCurrent,
+  arrangementsEndedBy,
   seatedTabs,
   type WindowTabs
 } from '@shared/arrangements/model.js'
@@ -202,6 +203,32 @@ export class ArrangementController {
     }
 
     this.#host.applyArrangement(arrangement.layoutId, arrangement.seats, tabId)
+  }
+
+  /**
+   * Forgets the tiling on screen, because the user is about to put it down for a single page.
+   *
+   * The counterpart of `keep()` for the one layout change that is a decision about the panes rather
+   * than room being made: choosing the single layout. Called *before* the layout changes, for the
+   * reason `TileOccupancyHost.keepTiling` gives — afterwards the seating is one page and names only
+   * the tab that stayed.
+   *
+   * Which recordings go is `arrangementsEndedBy`: every one this seating would supersede, and none a
+   * collapsed group is holding on to. Nothing here closes, moves or regroups a tab, and nothing
+   * touches a tab group — there is no group to reach (KTD1) — so a group the user made outlives
+   * the single layout exactly as it outlives every other layout change (R2). Tiling again later
+   * starts from nothing, and the next settle records it afresh.
+   *
+   * One `forget` per recording, and none at all in the usual case: the gate is the same refusal to
+   * reach the store for nothing that `keep()` makes.
+   */
+  endTiling(): void {
+    const ended = arrangementsEndedBy(
+      this.#host.book.list(),
+      this.#host.tileTabIds(),
+      this.#windowTabs()
+    )
+    for (const arrangement of ended) this.#host.book.forget(arrangement.id)
   }
 
   /**

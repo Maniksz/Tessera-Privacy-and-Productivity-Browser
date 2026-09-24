@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
-import { tabContextMenuTemplate, type TabContextMenuDeps } from '@main/menu/tab-context-items.js'
+import {
+  tabContextMenuTemplate,
+  tabGroupMenuTemplate,
+  type TabContextMenuDeps,
+  type TabGroupMenuDeps
+} from '@main/menu/tab-context-items.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
 
 /**
@@ -168,5 +173,55 @@ describe('translation', () => {
     const german = labels(tabContextMenuTemplate(deps({ locale: 'de' })))
     expect(german).toContain('Diese Tabs gruppieren')
     expect(german).not.toContain('Group these tabs')
+  })
+})
+
+describe("a group chip's own menu", () => {
+  function chipDeps(overrides: Partial<TabGroupMenuDeps> = {}): TabGroupMenuDeps {
+    return {
+      locale: 'en',
+      groupId: 'g1',
+      groups: [group({ id: 'g1', tabIds: ['t1', 't2'], color: 'green', collapsed: true })],
+      onRecolor: vi.fn(),
+      onDissolve: vi.fn(),
+      ...overrides
+    }
+  }
+
+  it("offers the group's colour and ungrouping, and nothing about a single tab", () => {
+    // A chip is not a member: "remove from group" or "close tab" would have to guess which one.
+    expect(labels(tabGroupMenuTemplate(chipDeps()))).toEqual(['Group colour', 'Ungroup'])
+  })
+
+  it('ungroups the group it was opened on, folded or not', () => {
+    // The folded case is the reason this menu exists: its members are not drawn to be right-clicked.
+    const onDissolve = vi.fn()
+    const items = tabGroupMenuTemplate(chipDeps({ onDissolve }))
+    ;(find(items, 'Ungroup')?.click as () => void)()
+    expect(onDissolve).toHaveBeenCalledWith('g1')
+  })
+
+  it("checks the group's current colour and recolours through the same call a member's menu makes", () => {
+    const onRecolor = vi.fn()
+    const submenu = (find(tabGroupMenuTemplate(chipDeps({ onRecolor })), 'Group colour')?.submenu ??
+      []) as MenuItemConstructorOptions[]
+    expect(submenu.filter((item) => item.checked === true).map((item) => item.label)).toEqual([
+      'Green'
+    ])
+    ;(find(submenu, 'Red')?.click as () => void)()
+    expect(onRecolor).toHaveBeenCalledWith('g1', 'red')
+  })
+
+  it('is empty for a group that went before the right-click arrived', () => {
+    // The chip was drawn from a broadcast a moment old. An empty template opens nothing; a full one
+    // would be a menu whose every item fails.
+    expect(tabGroupMenuTemplate(chipDeps({ groupId: 'gone' }))).toEqual([])
+  })
+
+  it('is translated', () => {
+    expect(labels(tabGroupMenuTemplate(chipDeps({ locale: 'de' })))).toEqual([
+      'Gruppenfarbe',
+      'Gruppierung auflösen'
+    ])
   })
 })

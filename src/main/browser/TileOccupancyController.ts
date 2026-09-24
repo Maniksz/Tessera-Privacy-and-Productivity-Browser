@@ -108,6 +108,14 @@ export interface TileOccupancyHost {
    * in every other case the write is refused as already-current and costs a comparison.
    */
   keepTiling(): void
+  /**
+   * Forget the tiling that is on screen, because the user is putting it down for a single page.
+   *
+   * `keepTiling`'s opposite, and called at the same moment for the same reason: *before*
+   * `applyLayout`, while the seating still names every pane. Reached only from `chooseLayout`, which
+   * says why a chosen single layout is the one change that ends a tiling instead of putting it away.
+   */
+  endTiling(): void
 }
 
 export class TileOccupancyController {
@@ -115,6 +123,37 @@ export class TileOccupancyController {
 
   constructor(host: TileOccupancyHost) {
     this.host = host
+  }
+
+  /**
+   * The layout the user picked, from the layout menu or its accelerator.
+   *
+   * The one explicit layout change there is, and therefore the only one that fills — a layout the user
+   * picked gets its empty tiles filled, first from whatever is already loaded and hidden, then with
+   * start pages. Every other route to `applyLayout` is the browser changing the layout on its way to
+   * something else: a shrink after a close, a drop, a new tab taking the window. Filling those would
+   * conjure a replacement for the very tab that was just closed, or open pages nobody asked for
+   * alongside a page somebody did.
+   *
+   * ## Choosing the single layout ends the tiling
+   *
+   * Every other way to one pane puts the tiling away and keeps the way back: clicking a page that was
+   * beside the one left on screen brings the panes back (R7). Choosing "single" is the user saying the
+   * panes are done, and keeping the way back would undo that at the next click. So the tiling on screen
+   * is forgotten first — see `ArrangementController.endTiling` for what goes and what is spared — and
+   * then the layout changes. No tab closes and no tab group changes: a group the user made is theirs
+   * and outlives this like any other layout change (R2), and the tabs that lose their pane stay loaded
+   * in the strip (spec 2).
+   *
+   * Only for `1x1`. A smaller split needs no such step: the settle after it records the new tiling,
+   * and that recording supersedes the old one because they share tabs. One pane records nothing
+   * (`MIN_ARRANGED_TILES`), so without this the old tiling would be the only one left standing.
+   * Re-choosing `1x1` in a window already showing one page ends nothing — its seating shares no tab
+   * with a tiling put away earlier, which keeps its way back.
+   */
+  chooseLayout(layout: LayoutId): void {
+    if (layout === '1x1') this.host.endTiling()
+    this.host.applyLayout(layout, { fill: true, rehome: true })
   }
 
   /**

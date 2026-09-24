@@ -274,13 +274,7 @@ export function recordArrangement(
   if (seats === null) return cloneArrangements(arrangements)
 
   const seated = new Set(seatedTabs(seats))
-  let kept = arrangements.filter(
-    (arrangement) =>
-      !(
-        isUnobstructed(arrangement, sets) &&
-        seatedTabs(arrangement.seats).some((tabId) => seated.has(tabId))
-      )
-  )
+  let kept = arrangements.filter((arrangement) => !isSupersededBy(arrangement, seated, sets))
 
   while (kept.length >= MAX_ARRANGEMENTS) {
     const victim = oldestEvictable(kept, sets)
@@ -292,6 +286,42 @@ export function recordArrangement(
     ...cloneArrangements(kept),
     { id: draft.id, layoutId: draft.layoutId, seats, recordedAt: draft.recordedAt }
   ]
+}
+
+/**
+ * The recordings that end with a tiling the user has put down, as opposed to one the browser put away.
+ *
+ * Choosing the single layout is a statement about the panes on screen: *these* are not to be tiled
+ * any more. Every other way a tiling leaves the screen — a new tab taking the window, a fold, a close
+ * that shrinks the grid — is the browser making room, and there the recording is the way back (R7).
+ * Here it would be the opposite of what was asked: the next click on a page that had been beside the
+ * one kept would put the split straight back, and "einzeln" would last exactly until the user touched
+ * another tab. This is what the tiling automation used to express by leaving a group standing, and it
+ * is ended the way that group should have been: every tab stays open and in the strip, and only the
+ * recording that tied them together goes.
+ *
+ * Exactly the set a new recording of `seats` would supersede, and read through the same predicate
+ * (`isSupersededBy`), so "the tiling ends" and "the tiling is replaced" cannot come to disagree about
+ * which recordings a seating owns. Two refusals follow from that, and both are deliberate:
+ *
+ *   - **A recording a collapsed group still needs is kept** (R15). It is not the tiling on screen —
+ *     its hidden members are in no pane — and it is the only way back the fold left the user.
+ *   - **Another window's recording is kept** (R16), even if a tab id happens to coincide.
+ *
+ * Answers the recordings rather than a new document, because the caller forgets them one by one
+ * through the store and the usual answer — nothing to end — must not reach the store at all; see
+ * `ArrangementController.keep` for why a write that changes nothing still costs a publish.
+ */
+export function arrangementsEndedBy(
+  arrangements: readonly Arrangement[],
+  seats: ReadonlyArray<string | null>,
+  window: WindowTabs
+): Arrangement[] {
+  const sets = tabSetsOf(window)
+  const seated = new Set(seatedTabs(seats))
+  return cloneArrangements(
+    arrangements.filter((arrangement) => isSupersededBy(arrangement, seated, sets))
+  )
 }
 
 /**
@@ -405,6 +435,21 @@ export function cloneArrangements(arrangements: readonly Arrangement[]): Arrange
 function isUnobstructed(arrangement: Arrangement, sets: WindowTabSets): boolean {
   if (!seatedTabs(arrangement.seats).every((tabId) => sets.live.has(tabId))) return false
   return !isProtectedBy(arrangement, sets.hidden)
+}
+
+/**
+ * True when a seating of `seated` tabs owns this recording: it is free to act on and shares a tab.
+ *
+ * What a new recording supersedes and what choosing the single layout ends. A tab that has just been
+ * re-tiled — or untiled on purpose — is not in the arrangement it used to be in any more.
+ */
+function isSupersededBy(
+  arrangement: Arrangement,
+  seated: ReadonlySet<string>,
+  sets: WindowTabSets
+): boolean {
+  if (!isUnobstructed(arrangement, sets)) return false
+  return seatedTabs(arrangement.seats).some((tabId) => seated.has(tabId))
 }
 
 /** `arrangementIsProtected` against a set built once by the caller. */

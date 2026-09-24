@@ -334,6 +334,48 @@ describe('the way back to a tiling that was put away', () => {
   })
 })
 
+describe('choosing the single layout', () => {
+  it('ends the tiling, so the page that lost its pane takes the window rather than the split', async () => {
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+
+    h.seams.occupancy.chooseLayout('1x1')
+    h.round()
+    h.activate('t2')
+
+    expect(h.recordings()).toEqual([])
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['t2'])
+  })
+
+  it('leaves a group the user made alone, members and all (R2)', async () => {
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    const group = h.seams.groups.create({ tabIds: ['t1', 't2'], name: 'Reading' })
+    h.round()
+
+    h.seams.occupancy.chooseLayout('1x1')
+    h.round()
+
+    expect(h.seams.groups.groups()).toEqual([group])
+  })
+
+  it('records the next split afresh', async () => {
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+    h.seams.occupancy.chooseLayout('1x1')
+    h.round()
+
+    h.seams.occupancy.chooseLayout('1x2')
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['t1', 't2'])
+    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'] }])
+  })
+})
+
 describe('a private window', () => {
   it('writes no arrangements file however often it settles (R8, spec 4)', async () => {
     /*
@@ -354,5 +396,17 @@ describe('a private window', () => {
     // nothing about a store that writes lazily.
     expect(h.recordings().length).toBeGreaterThan(0)
     expect(h.persistedRecordings()).toEqual([])
+  })
+
+  it('ends a tiling for the single layout the way an ordinary window does', async () => {
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2', mode: 'private' })
+    h.seat(['t1', 't2'])
+    h.round()
+
+    h.seams.occupancy.chooseLayout('1x1')
+    h.activate('t2')
+
+    expect(h.recordings()).toEqual([])
+    expect(h.split.toState().tileTabIds).toEqual(['t2'])
   })
 })
