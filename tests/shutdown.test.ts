@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   CLEAR_TIMEOUT_MS,
   ExitNote,
@@ -6,6 +6,7 @@ import {
   FlushRegistry,
   ShutdownSequence,
   catchUpPendingClear,
+  nodeAfter,
   pendingClearText,
   readPendingClear,
   type NoteFile,
@@ -499,6 +500,24 @@ describe('the flush registry', () => {
     registry.push(first, 'late')
     expect(entries).toHaveLength(2)
     expect(registry.entries()).toHaveLength(3)
+  })
+})
+
+describe("Node's timers in the sequence's shape", () => {
+  it('runs the callback after the time given, and not once it has been called off', () => {
+    vi.useFakeTimers()
+    try {
+      const fired: string[] = []
+      nodeAfter(10, () => fired.push('kept'))
+      const cancel = nodeAfter(10, () => fired.push('called off'))
+      cancel()
+      vi.advanceTimersByTime(9)
+      expect(fired).toEqual([])
+      vi.advanceTimersByTime(1)
+      expect(fired).toEqual(['kept'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

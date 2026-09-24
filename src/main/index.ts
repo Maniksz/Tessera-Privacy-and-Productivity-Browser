@@ -26,6 +26,7 @@ import { applyRestoreAtStart, installBackup } from './ipc/backup-handlers.js'
 import { installApplicationMenu } from './menu/appMenu.js'
 import { installMenuActions } from './menu/menu-actions.js'
 import { installTabUnloading } from './browser/tab-unloader.js'
+import { liveContentsOf } from './browser/view-contents.js'
 import { applyRuntimeFlags } from './runtime-flags.js'
 import {
   ExternalAddressInbox,
@@ -117,7 +118,7 @@ import {
   FLUSH_TIMEOUT_MS,
   FlushRegistry,
   ShutdownSequence,
-  type After,
+  nodeAfter,
   type ShutdownWork
 } from './shutdown.js'
 
@@ -797,10 +798,10 @@ async function main(): Promise<void> {
     for (const controller of windows?.controllers ?? []) {
       if (!controller.privateMode) continue
       for (const tab of controller.tabs) {
-        // A snapshot of the tabs can outlive one of them by a tick, and a destroyed view has no id to
-        // ask for.
-        if (tab.view.webContents.isDestroyed()) continue
-        cosmeticInjector.refreshView(tab.view.webContents.id)
+        // A snapshot of the tabs can outlive one of them by a tick, and a view with no live page has no
+        // id to ask for — a discarded tab's has no contents at all (`view-contents.ts`).
+        const page = liveContentsOf(tab.view)
+        if (page !== null) cosmeticInjector.refreshView(page.id)
       }
     }
   })
@@ -957,17 +958,23 @@ async function main(): Promise<void> {
     */
     onPageContextMenu: (controller, tab, target) => {
       const snapshot = settings?.snapshot() ?? defaultSettings()
+      /*
+        The page is live now, since it asked for this menu. An item runs later, after the menu has been up
+        for as long as the user likes, and by then the page may have closed itself or been discarded — so
+        each item asks the tab again rather than holding on to these contents (`view-contents.ts`).
+      */
+      const page = liveContentsOf(tab.view)
       buildPageContextMenu({
         locale: uiLocale(settings),
         target,
-        canGoBack: tab.view.webContents.navigationHistory.canGoBack(),
-        canGoForward: tab.view.webContents.navigationHistory.canGoForward(),
+        canGoBack: page?.navigationHistory.canGoBack() === true,
+        canGoForward: page?.navigationHistory.canGoForward() === true,
         blockerEnabled: snapshot['privacy.blockerEnabled'],
-        canFillPassword: autofill.service.hasFillableFocus(tab.view.webContents.id),
-        onFillPassword: () => autofill.suggest.requestFromChrome(tab.view.webContents, null),
-        onBack: () => tab.view.webContents.navigationHistory.goBack(),
-        onForward: () => tab.view.webContents.navigationHistory.goForward(),
-        onReload: () => tab.view.webContents.reload(),
+        canFillPassword: page !== null && autofill.service.hasFillableFocus(page.id),
+        onFillPassword: () => autofill.suggest.requestFromChrome(liveContentsOf(tab.view), null),
+        onBack: () => tab.goBack(),
+        onForward: () => tab.goForward(),
+        onReload: () => tab.reload(false),
         onOpenLinkInNewTab: (url) => controller.createTab({ url, background: true }),
         onCopy: (text) => clipboard.writeText(text),
         onSearchFor: (text) => {
@@ -983,9 +990,10 @@ async function main(): Promise<void> {
           controller.navigateFromInput(text, opened.id)
         },
         onBlockElement: () => {
-          elementPicker?.start(tab.view.webContents.id)
+          const live = liveContentsOf(tab.view)
+          if (live !== null) elementPicker?.start(live.id)
         },
-        onInspect: () => tab.view.webContents.openDevTools({ mode: 'detach' })
+        onInspect: () => liveContentsOf(tab.view)?.openDevTools({ mode: 'detach' })
       }).popup({ window: controller.window })
     }
   })
@@ -1344,19 +1352,6 @@ function beginShutdown(): ShutdownWork {
     // Anything written after the process exits is lost, so everything registered is flushed and
     // awaited rather than left to a debounce timer.
     flushes: flushOnExit.entries()
-  }
-}
-
-/**
- * `setTimeout` in the shape `shutdown.ts` asks for.
- *
- * A function declaration, not a constant: `shutdown` above is built with it while this file is still
- * being evaluated, and a `const` down here would not exist yet.
- */
-function nodeAfter(ms: number, callback: () => void): ReturnType<After> {
-  const timer = setTimeout(callback, ms)
-  return () => {
-    clearTimeout(timer)
   }
 }
 

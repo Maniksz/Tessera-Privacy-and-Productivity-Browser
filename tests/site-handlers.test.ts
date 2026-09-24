@@ -53,7 +53,7 @@ function fakeTab(url: string, security: SecurityState = 'secure'): FakeTab {
     toState: () => ({ url, blockedRequests: 2, security }),
     setZoomPercent: (percent) => zoomCalls.push(percent),
     resetZoom: () => zoomCalls.push('reset'),
-    view: { webContents: { id: 7 } }
+    view: { webContents: { id: 7, isDestroyed: () => false } }
   }
 }
 
@@ -236,6 +236,36 @@ describe('site:menu', () => {
     expect(startPicker).toHaveBeenCalledWith(7)
     expect(refreshFilters).toHaveBeenCalledOnce()
     expect(window.createTab).toHaveBeenCalledWith({ url: 'tessera://settings' })
+    await permissions.flush()
+  })
+
+  it('starts no picker on a page that went while the menu was up', async () => {
+    const permissions = await store()
+    const window = fakeWindow()
+    const startPicker = vi.fn()
+    let registered: ((payload: undefined, event: IpcMainInvokeEvent) => unknown) | undefined
+    let shown: MenuItemConstructorOptions[] = []
+    registerSiteHandlers<FakeWindow>({
+      handle: ((_channel: string, handler: typeof registered) => {
+        registered = handler
+      }) as unknown as SiteHandle,
+      windows: { resolve: () => window },
+      settings: fakeSettings(),
+      locale: () => 'en',
+      permissions,
+      rulesFor: () => editor,
+      startPicker,
+      refreshFilters: vi.fn(),
+      showMenu: (template) => {
+        shown = template
+      }
+    })
+    registered?.(undefined, EVENT)
+    // What Electron's getter gives once the page has gone.
+    Object.assign(window.tabs[0]!, { view: { webContents: undefined } })
+
+    click(find(shown, 'Block element…'))
+    expect(startPicker).not.toHaveBeenCalled()
     await permissions.flush()
   })
 

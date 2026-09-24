@@ -15,6 +15,7 @@ import type { UserRuleTextEditor } from '../data/UserRuleStore.js'
 import type { BrowsingMode } from '../data/HistoryStore.js'
 import type { SiteAnswers } from '../permissions/model.js'
 import { permissionOriginOf, siteMenuTemplate } from '../menu/site-menu-items.js'
+import { liveContentsOf } from '../browser/view-contents.js'
 
 /**
  * `site:menu`: the native menu behind the lock and the shield in the address bar (U19, KTD13).
@@ -59,7 +60,10 @@ export interface SiteMenuTab {
   readonly zoomPercent: number
   setZoomPercent(percent: number): void
   resetZoom(): void
-  readonly view: { readonly webContents: { readonly id: number } }
+  /** `undefined` once the page has gone, which is what Electron's getter gives (`view-contents.ts`). */
+  readonly view: {
+    readonly webContents: { readonly id: number; isDestroyed(): boolean } | undefined
+  }
 }
 
 /** One window. `BrowserWindowController` satisfies this. */
@@ -122,7 +126,11 @@ export function registerSiteHandlers<W extends SiteMenuWindow>(deps: SiteHandler
       blockerEnabled: settings.get('privacy.blockerEnabled'),
       host,
       blockerEnabledOnSite: !filteringExemptFor(state.url, exemptSites),
-      onBlockElement: () => deps.startPicker(tab.view.webContents.id),
+      // Read when chosen rather than when the menu opened: the page may have gone while it was up.
+      onBlockElement: () => {
+        const page = liveContentsOf(tab.view)
+        if (page !== null) deps.startPicker(page.id)
+      },
       // Opens the tab rather than asking the renderer to: nothing in the chrome listens for that any more.
       onOpenSettings: () => window.createTab({ url: internalUrl('settings') }),
       onRefreshLists: () => deps.refreshFilters(),

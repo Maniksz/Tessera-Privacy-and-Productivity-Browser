@@ -15,6 +15,7 @@ import { TileAudioController } from './TileAudioController.js'
 import { TileFullscreenController } from './TileFullscreenController.js'
 import { TileInputController } from './TileInputController.js'
 import { TileOccupancyController, type LayoutChangeOptions } from './TileOccupancyController.js'
+import { liveContentsOf } from './view-contents.js'
 
 /**
  * Builds the seven controllers a window delegates to, and — the actual point — writes down what each of them
@@ -162,9 +163,8 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
         stopped, simply will not answer — and the tile has already left fullscreen from the browser's side, so
         there is nothing here for a caller to do about it.
       */
-      internals
-        .tab(tabId)
-        ?.view.webContents.executeJavaScript('document.exitFullscreen?.()', true)
+      liveContentsOf(internals.tab(tabId)?.view)
+        ?.executeJavaScript('document.exitFullscreen?.()', true)
         .catch(() => {})
     },
     changed: () => {

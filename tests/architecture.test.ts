@@ -408,6 +408,73 @@ describe('layer boundaries', () => {
   })
 })
 
+/**
+ * Where a piece of main-process code asks a view whether it still has a page, other than through
+ * `liveContentsOf` (`src/main/browser/view-contents.ts`).
+ *
+ * Two shapes. Straight off the property — `view.webContents.isDestroyed()` — and off a name that was
+ * just read from a view's `webContents` and is asked `isDestroyed()` within the next few lines, which is
+ * how `Tab` wrote it six times. Code only, so the helper's own docblock naming the pattern is no
+ * finding.
+ */
+function emptiedViewReads(text: string): string[] {
+  const code = codeOnly(text)
+  const found = [...code.matchAll(/\.webContents\s*\??\.\s*isDestroyed\s*\(/g)].map((m) => m[0])
+  const lines = code.split('\n')
+  for (const [index, line] of lines.entries()) {
+    const read = /(?:const|let)\s+(\w+)\s*=\s*[\w.#?()]*[vV]iew\s*\??\.\s*webContents\s*$/.exec(
+      line
+    )
+    if (read === null) continue
+    const asked = new RegExp(`\\b${read[1] ?? ''}\\s*\\??\\.\\s*isDestroyed\\s*\\(`)
+    const next = lines.slice(index + 1, index + 13)
+    if (next.some((later) => asked.test(later))) found.push(line.trim())
+  }
+  return found
+}
+
+describe('views Electron has emptied', () => {
+  /*
+    A view's `webContents` is `undefined` once its page has gone, whatever Electron's typings say — the getter
+    reads a weak pointer, and the pointer is gone before `destroyed` is emitted. A guard written as
+    `view.webContents.isDestroyed()` therefore never gets to say "gone": by then there is nothing to ask, and
+    the guard is the exception. Closing a tile from its bar met it first, because the close contract finishes
+    a tab from inside `destroyed` and `Tab.destroy` asked the view once more (v0.22.0-ALPHA, a main-process
+    error dialogue). A discarded tab holds such a view until it is woken, so relayouts, broadcasts and the
+    unloading sweep would have met it too.
+
+    `liveContentsOf` answers both cases, and this keeps it the only thing that asks. The rule covers the
+    window's own `webContents` as well: nothing here needs to ask it, `window.isDestroyed()` is the question.
+  */
+  it('asks whether a view still has a page only through liveContentsOf', async () => {
+    const helper = join('src', 'main', 'browser', 'view-contents.ts')
+    const offenders: string[] = []
+    for (const file of await collect('src/main')) {
+      if (file.relative === helper) continue
+      for (const read of emptiedViewReads(file.text)) offenders.push(`${file.relative}: ${read}`)
+    }
+    expect(offenders, 'use liveContentsOf(view) from view-contents.ts').toEqual([])
+  })
+
+  it('would notice either shape, and not the helper or a captured contents', () => {
+    expect(emptiedViewReads('if (tab.view.webContents.isDestroyed()) return')).toHaveLength(1)
+    expect(emptiedViewReads('if (view.webContents?.isDestroyed()) return')).toHaveLength(1)
+    expect(
+      emptiedViewReads('const wc = this.view.webContents\n    if (wc.isDestroyed()) return')
+    ).toHaveLength(1)
+    expect(
+      emptiedViewReads('const page = host.tab(id)?.view.webContents\nif (page.isDestroyed()) {}')
+    ).toHaveLength(1)
+    expect(
+      emptiedViewReads('const wc = liveContentsOf(this.view)\nif (wc === null) return')
+    ).toEqual([])
+    // A contents captured while it was live stays safe to ask: `isDestroyed` is the one call a destroyed
+    // `WebContents` answers.
+    expect(emptiedViewReads('setTimeout(() => {\n  if (wc.isDestroyed()) return\n})')).toEqual([])
+    expect(emptiedViewReads('// view.webContents.isDestroyed() is the shape refused')).toEqual([])
+  })
+})
+
 describe('ownership of tab groups', () => {
   /*
     The two rules that stand in for the test that cannot be written.

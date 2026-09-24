@@ -30,6 +30,7 @@ import { BrowserWindowController } from './BrowserWindowController.js'
 import { WindowRecency, downloadWindowFor } from './window-recency.js'
 import { windowOfSender, windowOfTab } from './sender-window.js'
 import { noteBlockedNavigation } from './tab-failure-watch.js'
+import { liveContentsOf } from './view-contents.js'
 
 /**
  * Owns every window and every session.
@@ -543,7 +544,7 @@ export class WindowRegistry {
    */
   #speaksFor(controller: BrowserWindowController, webContentsId: number): boolean {
     if (controller.ownsChromeWebContents(webContentsId)) return true
-    return controller.tabs.some((tab) => tab.view.webContents.id === webContentsId)
+    return controller.tabs.some((tab) => liveContentsOf(tab.view)?.id === webContentsId)
   }
 
   /**

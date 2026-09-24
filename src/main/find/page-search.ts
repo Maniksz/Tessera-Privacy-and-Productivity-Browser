@@ -49,7 +49,8 @@ export interface FindTarget {
 export interface FindTargetView {
   /** The tile's rectangle in window coordinates, which is the space the bar's bounds are in. */
   getBounds(): Rect
-  readonly webContents: SearchablePage
+  /** `undefined` once the page has gone, which is what Electron's getter gives (`view-contents.ts`). */
+  readonly webContents: SearchablePage | undefined
 }
 
 /**

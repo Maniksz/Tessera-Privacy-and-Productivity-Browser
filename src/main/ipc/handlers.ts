@@ -39,6 +39,7 @@ import type { DownloadManager } from '../downloads/DownloadManager.js'
 import type { PasswordApi } from '../passwords/PasswordApi.js'
 import type { MasterPasswordPrompt } from '../passwords/MasterPasswordPrompt.js'
 import type { AutofillParts } from '../passwords/install-autofill.js'
+import { liveContentsOf } from '../browser/view-contents.js'
 
 /**
  * Wires every contract channel to the core.
@@ -292,15 +293,13 @@ export function registerIpcHandlers(deps: {
     profile's rules, because that is where the editor would have come from.
   */
   handle('picker:start', (payload, event) => {
-    const window = windows.resolve(event)
-    const tab = window?.resolveTab(payload.tabId)
-    if (tab === undefined) return { started: false }
-    return { started: deps.picker.start(tab.view.webContents.id) }
+    const page = liveContentsOf(windows.resolve(event)?.resolveTab(payload.tabId)?.view)
+    if (page === null) return { started: false }
+    return { started: deps.picker.start(page.id) }
   })
   handle('picker:stop', (payload, event) => {
-    const window = windows.resolve(event)
-    const tab = window?.resolveTab(payload.tabId)
-    if (tab !== undefined) deps.picker.stop(tab.view.webContents.id)
+    const page = liveContentsOf(windows.resolve(event)?.resolveTab(payload.tabId)?.view)
+    if (page !== null) deps.picker.stop(page.id)
     return OK
   })
 
@@ -526,10 +525,10 @@ export function registerIpcHandlers(deps: {
   })
 
   handle('nav:getBackForwardList', ({ tabId }, event) => {
-    const tab = windows.resolve(event)?.resolveTab(tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) return []
+    const page = liveContentsOf(windows.resolve(event)?.resolveTab(tabId)?.view)
+    if (page === null) return []
 
-    const history = tab.view.webContents.navigationHistory
+    const history = page.navigationHistory
     const active = history.getActiveIndex()
     return history.getAllEntries().map((entry, index) => ({
       url: entry.url,

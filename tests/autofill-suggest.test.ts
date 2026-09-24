@@ -677,6 +677,16 @@ describe('a fill asked for from browser chrome', () => {
     expect(describes(held.view)).toBe(0)
   })
 
+  it('asks nothing for a tab with no live page, which hands over no view at all', () => {
+    const { suggest, view, window } = harness()
+
+    suggest.requestFromChrome(null, KEY)
+    suggest.press(view, frame(), pressPayload())
+
+    expect(describes(view)).toBe(0)
+    expect(picker(window), 'a press counted as the chrome consent').toBeUndefined()
+  })
+
   it('sends nothing into a view that is already gone', () => {
     const { suggest, window } = harness()
     const gone: FakeView = { ...fakeView(), isDestroyed: () => true }

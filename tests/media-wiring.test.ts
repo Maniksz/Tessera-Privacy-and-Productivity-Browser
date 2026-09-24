@@ -1102,7 +1102,10 @@ describe('a media download in the downloads list (media R19, R23)', () => {
     const handle: MediaHandle = (channel, handler) => {
       handlers.set(channel, handler)
     }
-    const tabOf = { id: 'tab-1', view: { webContents: { session: world.session } } }
+    const tabOf = {
+      id: 'tab-1',
+      view: { webContents: { session: world.session, isDestroyed: () => false } }
+    }
     registerMediaHandlers({
       handle,
       media: world.media,

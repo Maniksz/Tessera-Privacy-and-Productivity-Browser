@@ -37,7 +37,7 @@ function spySession(body: string, contentType: string): MediaSession & { calls: 
 }
 
 function tab(id: string, session: MediaSession): MediaHandlerTab {
-  return { id, view: { webContents: { session } } }
+  return { id, view: { webContents: { session, isDestroyed: () => false } } }
 }
 
 interface FakeWindow extends MediaHandlerWindow {

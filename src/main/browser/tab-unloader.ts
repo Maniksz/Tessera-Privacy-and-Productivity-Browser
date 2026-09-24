@@ -4,6 +4,7 @@ import {
   unloadSettingsOf,
   type UnloadFacts
 } from '@shared/session/unload-policy.js'
+import { liveContentsOf } from './view-contents.js'
 
 /**
  * Tab unloading, carried out (U15, KTD9): one timer for the program, and per window the discard and the way back.
@@ -63,7 +64,8 @@ export interface DiscardedPage {
 /** A tab as the discard reads it. `Tab` satisfies it. */
 export interface DiscardableTab {
   readonly id: string
-  readonly view: { readonly webContents: UnloadContents }
+  /** `undefined` once the page has gone — a discarded tab's until it is woken (`view-contents.ts`). */
+  readonly view: { readonly webContents: UnloadContents | undefined }
   /** The committed address, which is also where a tab goes when its history cannot be restored. */
   readonly currentUrl: string
   readonly tileIndex: number | null
@@ -108,8 +110,8 @@ export function unloadFactsOf(
   tab: UnloadableTab,
   context: { asking: boolean; waiting: ReadonlyArray<ViewWaiter | null> }
 ): UnloadFacts {
-  const contents = tab.view.webContents
-  const live = !contents.isDestroyed()
+  const contents = liveContentsOf(tab.view)
+  const live = contents !== null
   const waited = live && context.waiting.some((waiter) => waiter?.waitsOn(contents.id) === true)
   return {
     tabId: tab.id,
@@ -270,8 +272,8 @@ export class TabDiscards<T extends DiscardableTab> {
     const tab = this.#host.tab(tabId)
     if (tab === undefined) return
     const view = tab.view
-    const contents = view.webContents
-    if (contents.isDestroyed()) return
+    const contents = liveContentsOf(view)
+    if (contents === null) return
     const history = contents.navigationHistory
     const held: HeldHistory = {
       entries: history.getAllEntries(),
@@ -313,7 +315,9 @@ export class TabDiscards<T extends DiscardableTab> {
     this.#held.delete(tabId)
     const url = tab.currentUrl
     tab.revive()
-    const contents = tab.view.webContents
+    // A new view is a live one; a revive that built none leaves nothing to attach or restore.
+    const contents = liveContentsOf(tab.view)
+    if (contents === null) return
     this.#host.contentView.addChildView(tab.view, 0)
     this.#host.contract.track(tabId)
     this.#host.onViewReplaced(tab, held.webContentsId, contents.id)

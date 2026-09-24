@@ -12,6 +12,7 @@ import type { BrowserWindowController } from '../browser/BrowserWindowController
 import type { SettingsStore } from '../settings/SettingsStore.js'
 import type { CoreMenuActions } from './menu-actions.js'
 import type { AutofillParts } from '../passwords/install-autofill.js'
+import { liveContentsOf } from '../browser/view-contents.js'
 import { internalUrl } from '@shared/product.js'
 import { LAYOUT_IDS } from '@shared/split/layout.js'
 import { nextZoomPercent } from '@shared/gestures/zoom.js'
@@ -101,7 +102,7 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       {
         label: t('menu.file.print'),
         accelerator: accel('print'),
-        click: () => focused()?.activeTab()?.view.webContents.print()
+        click: () => liveContentsOf(focused()?.activeTab()?.view)?.print()
       },
       { type: 'separator' },
       isMac

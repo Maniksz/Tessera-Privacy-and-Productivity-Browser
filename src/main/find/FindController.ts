@@ -16,6 +16,7 @@ import {
   type OverlayState
 } from '@shared/overlay/surface.js'
 import { findInPageOptions, type FindTarget } from './page-search.js'
+import { liveContentsOf } from '../browser/view-contents.js'
 
 /**
  * Find in page, wired to real pages (Ctrl+F, spec 9).
@@ -231,10 +232,10 @@ export class FindController {
   }
 
   #perform(host: FindHost, action: FindPageAction, live: LiveFind | null): void {
-    const page = host.tab(action.tabId)?.view.webContents
+    const page = liveContentsOf(host.tab(action.tabId)?.view)
     // A tab closed under the bar needs nothing done to it: its document, its find session and its
     // highlight went together.
-    if (page === undefined || page.isDestroyed()) return
+    if (page === null) return
 
     if (action.do === 'clear') {
       page.stopFindInPage(FIND_STOP_ACTION)
@@ -299,8 +300,8 @@ export class FindController {
    *    searched is still the old one.
    */
   #bind(host: FindHost, tabId: string): () => void {
-    const page = host.tab(tabId)?.view.webContents
-    if (page === undefined || page.isDestroyed()) {
+    const page = liveContentsOf(host.tab(tabId)?.view)
+    if (page === null) {
       // Nothing to subscribe to. A no-op keeps every caller's teardown unconditional, which is what
       // stops a release from being skipped on the one path that has nothing to undo.
       return () => undefined

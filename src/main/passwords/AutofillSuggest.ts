@@ -149,9 +149,11 @@ export class AutofillSuggest {
    * list from the field as a badge would.
    *
    * Nothing is asked for when the layer cannot be had, for `press`'s reason: a request nothing can
-   * answer visibly must leave nothing open behind it.
+   * answer visibly must leave nothing open behind it. Nor for no view, which is what a tab whose page
+   * has gone hands over (`liveContentsOf`): there is no form to describe and no id to key the ask by.
    */
-  requestFromChrome(view: AutofillView, anchor: Rect | null): void {
+  requestFromChrome(view: AutofillView | null, anchor: Rect | null): void {
+    if (view === null) return
     const target = this.#options.targetFor(view.id)
     if (target === null) return
     if (!mayPresentOver('autofill-suggest', target.window.overlayPresentation())) return

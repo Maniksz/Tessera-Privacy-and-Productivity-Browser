@@ -17,13 +17,15 @@ import {
   type DiscardContract,
   type HistoryEntry,
   type TabDiscardsHost,
+  type UnloadContents,
   type UnloadWindow,
   type UnloadableTab
 } from '@main/browser/tab-unloader.js'
 import { PermissionTabs } from '@main/browser/permission-tabs.js'
 import { PermissionArbiter, type PermissionHost } from '@main/permissions/PermissionArbiter.js'
 import { forgetfulSitePermissions } from '@main/permissions/model.js'
-import { CloseContract, type CloseContractHost } from '@main/browser/unload-guard.js'
+import { CloseContract, closesAtOnce, type CloseContractHost } from '@main/browser/unload-guard.js'
+import { windowOfTab } from '@main/browser/sender-window.js'
 import { Tab, type TabCallbacks, type TabWiring } from '@main/browser/Tab.js'
 
 /**
@@ -127,10 +129,23 @@ const electron = await vi.hoisted(async () => {
 
   const views: FakeView[] = []
 
+  /**
+   * A view as Electron 43 has one: its `webContents` getter reads a weak pointer, and gives `undefined`
+   * once the contents are destroyed — already while `destroyed` is being emitted. A fake that went on
+   * handing back the destroyed contents is what let every `view.webContents.isDestroyed()` pass here and
+   * throw in the browser (`view-contents.ts`).
+   */
   class FakeView {
-    readonly webContents = new FakeContents()
+    readonly #contents = new FakeContents()
     constructor(readonly options: { webPreferences: Record<string, unknown> }) {
       views.push(this)
+    }
+    get webContents(): FakeContents | undefined {
+      return this.#contents.destroyed ? undefined : this.#contents
+    }
+    /** The contents the view had, gone or not; what a test reads a closed page's state off. */
+    get heldContents(): FakeContents {
+      return this.#contents
     }
     setBounds(): void {}
     setVisible(): void {}
@@ -148,7 +163,7 @@ const electron = await vi.hoisted(async () => {
 vi.mock('electron', () => electron)
 
 type FakeView = (typeof electron.views)[number]
-type FakeContents = FakeView['webContents']
+type FakeContents = FakeView['heldContents']
 
 // --- fakes for the two upper layers ---------------------------------------------------------------------
 
@@ -176,7 +191,7 @@ function fakeContents(overrides: Partial<FakeTabContents> = {}): FakeTabContents
   isAudioMuted(): boolean
   isCurrentlyAudible(): boolean
   isDevToolsOpened(): boolean
-  navigationHistory: UnloadableTab['view']['webContents']['navigationHistory']
+  navigationHistory: UnloadContents['navigationHistory']
 } {
   const state: FakeTabContents = {
     id: fakeId++,
@@ -636,6 +651,19 @@ describe('TabDiscards', () => {
     await vi.waitFor(() => expect(tab.loadedUrls).toEqual(['https://a.example/2']))
   })
 
+  it('attaches, guards and restores nothing when the revived tab has no live page', () => {
+    const tab = fakeTab('a')
+    const { discards, contract, children, replaced } = harness([tab])
+    discards.discard('a')
+    contract.answer(true)
+    // A view whose getter already gives no contents, as Electron's does for a page that has gone.
+    tab.revive = () => Object.assign(tab, { view: { webContents: undefined } })
+    discards.wake('a')
+    expect(children.filter((child) => child.op === 'add')).toEqual([])
+    expect(contract.tracked).toEqual([])
+    expect(replaced).toEqual([])
+  })
+
   it('lets a tab restored as deferred load into the view it has', () => {
     const tab = fakeTab('a', { unloaded: true })
     const { discards, children, contract } = harness([tab])
@@ -743,8 +771,9 @@ function realTab(settings: Partial<SettingsSnapshot> = {}): {
   return { tab, calls }
 }
 
+/** The contents of the tab's current view, gone or not: the test's view of it, not the tab's. */
 function contentsOf(tab: Tab): FakeContents {
-  return tab.view.webContents as unknown as FakeContents
+  return (tab.view as unknown as FakeView).heldContents
 }
 
 /** Every event a view is subscribed to, with how many listeners each has. */
@@ -1012,6 +1041,94 @@ describe('a real tab, discarded and brought back', () => {
       tab.destroy()
     }).not.toThrow()
     expect(tab.loading).toBe(false)
+  })
+})
+
+// --- the view Electron has emptied ---------------------------------------------------------------------
+
+/*
+  Electron's getter gives `undefined` for the contents of a view whose page has gone, and it does so before
+  `destroyed` reaches anybody (`view-contents.ts`). These are the two ways a tab gets there: a close that is
+  finished from that very listener, and a discard that leaves the tab holding the empty view until it is woken.
+  Each is driven the way the window drives it, with the real `Tab` and the real contract.
+*/
+describe('a real tab whose view Electron has emptied', () => {
+  it("closes from the tile bar's ×, finished from `destroyed`, without reading the emptied view", () => {
+    // The tile bar sends `tabs:close`, the window's `closeTab` hands it to the contract, and the page is
+    // asked: a web page in a split, which is what the bar is on and what does not close at once.
+    const { tab } = realTab()
+    visit(tab)
+    const { tab: neighbour } = realTab()
+    visit(neighbour, 'https://b.example/')
+    const tabs = [tab, neighbour]
+    const host = closeHost(tabs)
+    const close = new CloseContract(host)
+    for (const each of tabs) close.track(each.id)
+    const laidOut: string[] = []
+    // `#finishClose`, reduced to what it asks of the tabs: the closed one destroyed, the rest laid out anew.
+    host.finish = (tabId) => {
+      host.finished.push(tabId)
+      const [closed] = tabs.splice(
+        tabs.findIndex((candidate) => candidate.id === tabId),
+        1
+      )
+      closed?.destroy()
+      for (const kept of tabs) {
+        kept.setBounds({ x: 0, y: 0, width: 800, height: 600 })
+        kept.setVisible(true)
+        laidOut.push(kept.toState().url)
+      }
+    }
+
+    expect(() => close.closeTab(tab.id)).not.toThrow()
+
+    expect(contentsOf(tab).destroyed).toBe(true)
+    expect(tab.view.webContents).toBeUndefined()
+    expect(host.finished).toEqual([tab.id])
+    expect(laidOut).toEqual(['https://b.example/'])
+    // Whatever still holds the closed tab gets an answer rather than an exception.
+    expect(tab.toState()).toMatchObject({ url: '', title: '', muted: false, security: 'internal' })
+    expect(tab.loading).toBe(false)
+  })
+
+  it('answers for a discarded tab in every pass the window and the sweep make over it', () => {
+    const { tab } = realTab()
+    visit(tab)
+    const { discards, close, host } = realHarness(tab)
+    const gone = contentsOf(tab)
+    discards.discard(tab.id)
+    expect(tab.view.webContents).toBeUndefined()
+
+    expect(() => {
+      tab.setBounds({ x: 0, y: 0, width: 800, height: 600 })
+      tab.setVisible(false)
+      tab.applyZoom()
+      tab.applyVisualZoomLimits()
+      tab.setZoomPercent(120)
+    }).not.toThrow()
+    expect(tab.toState()).toMatchObject({
+      url: 'https://a.example/2',
+      unloaded: true,
+      muted: false
+    })
+    expect(unloadFactsOf(tab, { asking: false, waiting: [{ waitsOn: () => true }] })).toMatchObject(
+      { unloaded: true, prompt: false, audible: false, devtools: false }
+    )
+    expect(closesAtOnce(tab)).toBe(true)
+    const window = {
+      window: { isDestroyed: () => false },
+      ownsChromeWebContents: () => false,
+      tabs: [tab]
+    }
+    expect(windowOfTab([window], gone.id)).toBeUndefined()
+
+    // The strip's × on it: at once, with nothing to ask, and the tab destroyed in the same pass.
+    host.finish = (tabId) => {
+      host.finished.push(tabId)
+      tab.destroy()
+    }
+    expect(() => close.closeTab(tab.id)).not.toThrow()
+    expect(host.finished).toEqual([tab.id])
   })
 })
 

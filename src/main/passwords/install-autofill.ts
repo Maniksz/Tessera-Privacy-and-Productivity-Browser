@@ -7,6 +7,7 @@ import { AutofillService, type AutofillFrame, type AutofillVault } from './Autof
 import { AutofillSuggest } from './AutofillSuggest.js'
 import type { MasterPasswordPrompt } from './MasterPasswordPrompt.js'
 import { wireAutofillView, type AutofillHost } from './autofill-wiring.js'
+import { liveContentsOf } from '../browser/view-contents.js'
 
 /**
  * The Electron half of autofill's wiring, and only that.
@@ -200,8 +201,7 @@ export function installAutofill(deps: {
     suggest,
     keyStateFor,
     fillActiveTab: (window, anchor) => {
-      const tab = window?.activeTab()
-      if (tab !== undefined) suggest.requestFromChrome(tab.view.webContents, anchor)
+      suggest.requestFromChrome(liveContentsOf(window?.activeTab()?.view), anchor)
     }
   }
 }

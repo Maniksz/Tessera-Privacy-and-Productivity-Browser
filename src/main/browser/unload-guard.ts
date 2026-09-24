@@ -5,6 +5,7 @@ import { menuLabel } from '../menu/menu-text.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
 import type { After } from '../shutdown.js'
 import { unfoldGroupOf } from './tab-unloader.js'
+import { liveContentsOf } from './view-contents.js'
 
 /**
  * The close contract (KTD5): which ways out of a page ask the page first, and what follows either answer.
@@ -244,7 +245,8 @@ export class UnloadGuard {
 /** A tab as the contract reads it. `Tab` satisfies this as it stands. */
 export interface ClosingTab {
   readonly ephemeral: boolean
-  readonly view: { readonly webContents: UnloadContents }
+  /** `undefined` once the page has gone: what Electron's getter gives then (`view-contents.ts`). */
+  readonly view: { readonly webContents: UnloadContents | undefined }
   toState(): { readonly url: string; readonly unloaded: boolean }
 }
 
@@ -256,7 +258,7 @@ export interface ClosingTab {
  * them and redistributes the rest in the same pass, which only works while their close is synchronous.
  */
 export function closesAtOnce(tab: ClosingTab): boolean {
-  if (tab.ephemeral || tab.view.webContents.isDestroyed()) return true
+  if (tab.ephemeral || liveContentsOf(tab.view) === null) return true
   const { url, unloaded } = tab.toState()
   return unloaded || url === '' || isInternalPageUrl(url)
 }
@@ -317,9 +319,9 @@ export class CloseContract {
 
   /** Starts listening to a new tab's page, which may object to a navigation from its first commit. */
   track(tabId: string): void {
-    const tab = this.#host.tab(tabId)
-    if (tab === undefined) return
-    const contents = tab.view.webContents
+    // A view with no live page has nothing to object with, and nothing to listen on: it closes at once.
+    const contents = liveContentsOf(this.#host.tab(tabId)?.view)
+    if (contents === null) return
     const confirm = (mode: UnloadPrompt['mode']): boolean => {
       this.#reveal(tabId)
       return this.#host.confirm({ mode, site: siteOf(contents.getURL()) })

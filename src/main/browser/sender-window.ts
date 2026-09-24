@@ -1,3 +1,5 @@
+import { liveContentsOf } from './view-contents.js'
+
 /**
  * Which window an IPC call acts for.
  *
@@ -38,7 +40,8 @@ export interface SenderWindowCandidate {
   readonly window: { isDestroyed(): boolean }
   /** True for the window's chrome renderer and its overlay surface — its own trusted UI. */
   ownsChromeWebContents(webContentsId: number): boolean
-  readonly tabs: Iterable<{ readonly view: { readonly webContents: SenderContents } }>
+  /** A view's `webContents` is `undefined` once its page has gone (`view-contents.ts`). */
+  readonly tabs: Iterable<{ readonly view: { readonly webContents: SenderContents | undefined } }>
 }
 
 /**
@@ -47,8 +50,8 @@ export interface SenderWindowCandidate {
  * Only tabs count; a chrome renderer's id finds nothing here. The element picker and the password
  * manager act on a *page*, and a window matched through its chrome would hand them one that is not.
  *
- * Destroyed windows and destroyed tabs are stepped over before their ids are read, because reading
- * them is what throws.
+ * Destroyed windows and tabs with no live page are stepped over before their ids are read, because
+ * reading them is what throws.
  */
 export function windowOfTab<C extends SenderWindowCandidate>(
   windows: Iterable<C>,
@@ -57,8 +60,8 @@ export function windowOfTab<C extends SenderWindowCandidate>(
   for (const candidate of windows) {
     if (candidate.window.isDestroyed()) continue
     for (const tab of candidate.tabs) {
-      const contents = tab.view.webContents
-      if (contents.isDestroyed()) continue
+      const contents = liveContentsOf(tab.view)
+      if (contents === null) continue
       if (contents.id === webContentsId) return candidate
     }
   }

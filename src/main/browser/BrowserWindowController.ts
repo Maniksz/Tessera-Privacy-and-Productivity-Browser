@@ -52,6 +52,7 @@ import { tabForStripPosition, type StripPosition } from './tab-strip-position.js
 import { CloseTabFallback, pageKeyAction, type PageKeystroke } from './page-keys.js'
 import { CloseContract, askToLeave, hostOf, preventDefaultOf } from './unload-guard.js'
 import { TabDiscards } from './tab-unloader.js'
+import { liveContentsOf } from './view-contents.js'
 import { PermissionTabs } from './permission-tabs.js'
 import { loadAfterProxyRule } from '../session/proxy.js'
 
@@ -699,6 +700,7 @@ export class BrowserWindowController implements PermissionHost {
     this.options.tabGroups.removeTab(tabId)
     this.#tabs.delete(tabId)
     this.window.contentView.removeChildView(tab.view)
+    // Usually inside the page's `destroyed`, where its view already has no contents (`view-contents.ts`).
     tab.destroy()
     this.#discards.forget(tabId)
     // After the tab has left `#tabs` and the split, so the arbiter, reacting, cannot find it in front.
@@ -815,8 +817,7 @@ export class BrowserWindowController implements PermissionHost {
    */
   tabForWebContents(webContentsId: number): Tab | undefined {
     for (const tab of this.#tabs.values()) {
-      if (tab.view.webContents.isDestroyed()) continue
-      if (tab.view.webContents.id === webContentsId) return tab
+      if (liveContentsOf(tab.view)?.id === webContentsId) return tab
     }
     return undefined
   }
@@ -1282,8 +1283,7 @@ export class BrowserWindowController implements PermissionHost {
   }
 
   #focusActiveTab(): void {
-    const tab = this.activeTab()
-    if (tab && !tab.view.webContents.isDestroyed()) tab.view.webContents.focus()
+    liveContentsOf(this.activeTab()?.view)?.focus()
   }
 
   /** Re-applies settings that take effect live (spec 5). */
@@ -1332,8 +1332,8 @@ export class BrowserWindowController implements PermissionHost {
    */
   emitToInternalPages<C extends EventChannel>(channel: C, payload: EventPayload<C>): void {
     for (const tab of this.#tabs.values()) {
-      const contents = tab.view.webContents
-      if (contents.isDestroyed()) continue
+      const contents = liveContentsOf(tab.view)
+      if (contents === null) continue
       if (!isInternalPageUrl(contents.getURL())) continue
       contents.send(channel, payload)
     }

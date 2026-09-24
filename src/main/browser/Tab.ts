@@ -22,6 +22,7 @@ import { sequenceOfTabId, tabIdForSequence } from '@shared/session/tab-ids.js'
 import { UNSAVED_INPUT_CHANNEL } from '@shared/session/unload-policy.js'
 import { securityStateOf } from '@shared/site/model.js'
 import { createTabView } from './tab-view.js'
+import { liveContentsOf } from './view-contents.js'
 import type { DiscardedPage } from './tab-unloader.js'
 import { pageKeystrokeOf } from './page-keys.js'
 import {
@@ -220,10 +221,9 @@ export class Tab {
     return this.#view
   }
 
-  /** The view's contents while it is there; `null` once closed or discarded, so a command does nothing. */
+  /** The view's live contents; `null` once closed or discarded, so a command does nothing. */
   get #live(): WebContents | null {
-    const wc = this.#view.webContents
-    return wc.isDestroyed() ? null : wc
+    return liveContentsOf(this.#view)
   }
 
   /**
@@ -623,7 +623,7 @@ export class Tab {
       this.callbacks.onAutomaticNavigation(this, target, (permitted) => {
         // Guarded because the answer arrives later: the tab may have been closed, or navigated
         // elsewhere by the user, while the prompt was on screen.
-        if (!permitted || this.view.webContents.isDestroyed()) return
+        if (!permitted || this.#live === null) return
         this.loadUrl(target)
       })
     })
@@ -675,12 +675,12 @@ export class Tab {
     which would leave every tab after it where the *previous* layout put it.
   */
   setBounds(rect: Rect): void {
-    if (this.view.webContents.isDestroyed()) return
+    if (this.#live === null) return
     this.view.setBounds(rect)
   }
 
   setVisible(visible: boolean): void {
-    if (this.view.webContents.isDestroyed()) return
+    if (this.#live === null) return
     this.view.setVisible(visible)
   }
 
@@ -769,8 +769,8 @@ export class Tab {
    * pane in the window.
    */
   applyZoom(): void {
-    const wc = this.view.webContents
-    if (wc.isDestroyed()) return
+    const wc = this.#live
+    if (wc === null) return
     wc.setZoomFactor(this.zoomPercent / 100)
   }
 
@@ -801,8 +801,8 @@ export class Tab {
    * which is where every Electron application starts and is not a reason to fail a navigation.
    */
   applyVisualZoomLimits(): void {
-    const wc = this.view.webContents
-    if (wc.isDestroyed()) return
+    const wc = this.#live
+    if (wc === null) return
     void wc.setVisualZoomLevelLimits(MIN_VISUAL_ZOOM, MAX_VISUAL_ZOOM).catch(() => {
       // A view torn down between the commit and this call. Nothing to do and nothing to say.
     })
@@ -887,8 +887,8 @@ export class Tab {
     const outcome = await this.wiring.favicons.ensure(pageUrl, candidates)
     if (outcome.kind === 'rejected') return
 
-    const wc = this.view.webContents
-    if (wc.isDestroyed()) return
+    const wc = this.#live
+    if (wc === null) return
     // The tab moved on while this was in flight.
     if (faviconDomainOf(wc.getURL()) !== site) return
 
@@ -965,7 +965,7 @@ export class Tab {
     this.#unloaded = null
     this.#view = this.#createView()
     this.applyVisualZoomLimits()
-    if (discarded?.muted === true) this.#view.webContents.setAudioMuted(true)
+    if (discarded?.muted === true) this.#live?.setAudioMuted(true)
     // The address bar shows where the tab is going while the history comes back.
     this.#pendingInput = discarded?.url ?? null
     this.callbacks.onStateChanged(this)
@@ -1006,8 +1006,8 @@ export class Tab {
   #scheduleCapture(): void {
     this.#cancelCapture()
 
-    const wc = this.view.webContents
-    if (wc.isDestroyed()) return
+    const wc = this.#live
+    if (wc === null) return
     const url = wc.getURL()
     if (!this.wiring.thumbnails.shouldCapture(url)) return
 
@@ -1030,8 +1030,8 @@ export class Tab {
   }
 
   toState(): TabState {
-    const wc = this.view.webContents
-    const destroyed = wc.isDestroyed()
+    const wc = this.#live
+    const destroyed = wc === null
     const history = destroyed ? null : wc.navigationHistory
 
     return {

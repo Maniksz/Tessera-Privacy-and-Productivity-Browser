@@ -4,6 +4,7 @@ import type { InvokeHandlerArg, InvokeResponse } from '@shared/ipc/contract.js'
 import type { MediaFindingList } from '@shared/media/wire.js'
 import type { MediaService } from '../media/MediaService.js'
 import type { MediaSession, MediaSessions } from '../media/MediaSessions.js'
+import { liveContentsOf } from '../browser/view-contents.js'
 
 /**
  * The `media:*` channels.
@@ -69,10 +70,17 @@ export type MediaHandle = <C extends MediaInvokeChannel>(
   ) => Promise<MediaChannelContract[C]['response']> | MediaChannelContract[C]['response']
 ) => void
 
-/** A tab, as far as this file needs one: an identity and the session it browses in. */
+/**
+ * A tab, as far as this file needs one: an identity and the session it browses in.
+ *
+ * Read off its page, and a page can be gone while the tab stays: a discarded tab's view has no contents
+ * at all until it is woken, which is what Electron's getter says with `undefined` (`view-contents.ts`).
+ */
 export interface MediaHandlerTab {
   readonly id: string
-  readonly view: { readonly webContents: { readonly session: MediaSession } }
+  readonly view: {
+    readonly webContents: { readonly session: MediaSession; isDestroyed(): boolean } | undefined
+  }
 }
 
 /** One window. `BrowserWindowController` satisfies this. */
@@ -119,8 +127,10 @@ export function registerMediaHandlers(deps: MediaHandlerDeps): void {
     if (window === undefined) throw new Error('No window for this request')
     const tab = window.resolveTab(tabId)
     if (tab === undefined) throw new Error(`No tab for this request: ${tabId ?? '(active tile)'}`)
+    const page = liveContentsOf(tab.view)
+    if (page === null) throw new Error(`No page in this tab: ${tab.id}`)
     return {
-      service: media.forSession(tab.view.webContents.session),
+      service: media.forSession(page.session),
       tabId: tab.id,
       windowId: window.window?.id
     }

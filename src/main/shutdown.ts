@@ -52,6 +52,19 @@ export const CLEAR_TIMEOUT_MS = 30_000
  */
 export type After = (ms: number, callback: () => void) => () => void
 
+/**
+ * `After` on Node's own timers: what `index.ts` hands the sequence outside a test.
+ *
+ * Here rather than there, beside the shape it fills, and a function declaration so that nothing depends on
+ * the order this module is evaluated in: `index.ts` builds its `ShutdownSequence` at the top level.
+ */
+export function nodeAfter(ms: number, callback: () => void): ReturnType<After> {
+  const timer = setTimeout(callback, ms)
+  return () => {
+    clearTimeout(timer)
+  }
+}
+
 /** One store's write, under the name the log uses when it does not finish. */
 export interface NamedFlush {
   readonly name: string

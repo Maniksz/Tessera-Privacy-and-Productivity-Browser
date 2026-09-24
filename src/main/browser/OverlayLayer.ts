@@ -16,6 +16,7 @@ import type { Rect, Size } from '@shared/ui/anchor.js'
 import { preloadFile, preloadRoleArgument } from '../paths.js'
 import { devServerUrl } from '../startup-flags.js'
 import { decideChromeNavigation, pendingNavigationOf } from './navigation-policy.js'
+import { liveContentsOf } from './view-contents.js'
 import { notifyOverlayKey } from '../passwords/overlay-keys.js'
 import { notifyOverlayVacancy, type OverlayVacancyReason } from '../permissions/vacancy.js'
 
@@ -109,9 +110,7 @@ export class OverlayLayer {
    * enough to accept that would accept a visited page too.
    */
   owns(webContentsId: number): boolean {
-    const view = this.#view
-    if (view === null || view.webContents.isDestroyed()) return false
-    return view.webContents.id === webContentsId
+    return liveContentsOf(this.#view)?.id === webContentsId
   }
 
   /**
@@ -143,9 +142,7 @@ export class OverlayLayer {
       the keyboard again would be the core moving focus four times a second; see
       `OVERLAY_REFOCUSES_ON_UPDATE`, where every other kind keeps doing what it did.
     */
-    if (movesFocus(presentation, outgoing) && !view.webContents.isDestroyed()) {
-      view.webContents.focus()
-    }
+    if (movesFocus(presentation, outgoing)) liveContentsOf(view)?.focus()
     this.#send(presentation)
     this.options.onPresentationChanged(presentation)
     this.#vacated(outgoing, 'replaced', presentation)
@@ -159,8 +156,7 @@ export class OverlayLayer {
     this.#presentation = null
     const view = this.#view
     // Read before hiding: a hidden view is not asked whether it had the keyboard.
-    const holdsKeyboard =
-      view !== null && !view.webContents.isDestroyed() && view.webContents.isFocused()
+    const holdsKeyboard = liveContentsOf(view)?.isFocused() === true
     if (view !== null) view.setVisible(false)
     /*
       Focus goes back to the chrome UI, where the button that opened the surface is, so a keyboard
@@ -217,7 +213,7 @@ export class OverlayLayer {
     if (!this.options.window.isDestroyed()) {
       this.options.window.contentView.removeChildView(view)
     }
-    if (!view.webContents.isDestroyed()) view.webContents.close()
+    liveContentsOf(view)?.close()
   }
 
   // --- internals -----------------------------------------------------------
@@ -251,7 +247,7 @@ export class OverlayLayer {
 
   #ensureView(): WebContentsView {
     const existing = this.#view
-    if (existing !== null && !existing.webContents.isDestroyed()) return existing
+    if (existing !== null && liveContentsOf(existing) !== null) return existing
 
     const view = new WebContentsView({
       webPreferences: {
@@ -359,12 +355,12 @@ export class OverlayLayer {
   }
 
   #send(state: OverlayState): void {
-    const view = this.#view
-    if (view === null || view.webContents.isDestroyed()) return
+    const contents = liveContentsOf(this.#view)
+    if (contents === null) return
     if (!this.#loaded) {
       this.#deferred = state
       return
     }
-    view.webContents.send('overlay:presented', { presentation: state })
+    contents.send('overlay:presented', { presentation: state })
   }
 }

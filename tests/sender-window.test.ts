@@ -35,7 +35,8 @@ function contents(id: number, destroyed = false): SenderContents {
 function fakeWindow(options: {
   name: string
   chrome: readonly number[]
-  tabs?: readonly SenderContents[]
+  /** `undefined` is a view Electron has emptied: its getter gives no contents once the page has gone. */
+  tabs?: ReadonlyArray<SenderContents | undefined>
   destroyed?: boolean
   focused?: boolean
 }): FakeWindow {
@@ -137,6 +138,14 @@ describe('windowOfTab', () => {
     const second = fakeWindow({ name: 'second', chrome: [2], tabs: [contents(30)] })
 
     expect(windowOfTab([first, second], 30)?.name).toBe('second')
+  })
+
+  it('steps over a tab whose view Electron has emptied, and keeps looking', () => {
+    const first = fakeWindow({ name: 'first', chrome: [1], tabs: [undefined] })
+    const second = fakeWindow({ name: 'second', chrome: [2], tabs: [contents(30)] })
+
+    expect(windowOfTab([first, second], 30)?.name).toBe('second')
+    expect(windowOfSender([first], contents(99))).toBeUndefined()
   })
 
   it('steps over a destroyed window without asking its tabs', () => {

@@ -644,6 +644,14 @@ export default defineConfig({
           branches: 100,
           statements: 100
         },
+        // The one answer to "is there a live page in this view", which the architecture test makes every
+        // caller ask here. Four ways to have no page, and each is a branch a shortfall would leave unread.
+        'src/main/browser/view-contents.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         /*
           Held at all of it because it was carved out of a file that is excluded.
 

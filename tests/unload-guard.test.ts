@@ -178,7 +178,7 @@ interface FakeTab extends ClosingTab {
 function fakeTab(
   id: string,
   url: string,
-  options: { objects?: boolean; ephemeral?: boolean } = {}
+  options: { objects?: boolean; ephemeral?: boolean; emptied?: boolean } = {}
 ): FakeTab {
   const contents = new FakeContents(url)
   contents.objects = options.objects ?? false
@@ -187,7 +187,8 @@ function fakeTab(
     contents,
     unloaded: false,
     ephemeral: options.ephemeral ?? false,
-    view: { webContents: contents },
+    // `emptied` is a view whose getter already gives `undefined`, as Electron's does once the page has gone.
+    view: { webContents: options.emptied === true ? undefined : contents },
     toState: () => ({ url: contents.destroyed ? '' : contents.url, unloaded: tab.unloaded })
   }
   return tab
@@ -504,6 +505,19 @@ describe('closing what has nothing to ask', () => {
 
     expect([...window.tabs.keys()]).toEqual(['keep'])
     expect(window.prompts).toEqual([])
+  })
+
+  it('closes a tab whose view Electron has emptied at once, and guards nothing it cannot reach', () => {
+    const emptied = fakeTab('emptied', 'https://mail.example/', { objects: true, emptied: true })
+    expect(closesAtOnce(emptied)).toBe(true)
+    const window = new WindowHarness([emptied, fakeTab('keep', HOME_URL)])
+
+    window.contract.closeTab('emptied')
+
+    expect([...window.tabs.keys()]).toEqual(['keep'])
+    expect(window.prompts).toEqual([])
+    expect(emptied.contents.closeCalls).toEqual([])
+    expect(emptied.contents.listenerCount('destroyed')).toBe(0)
   })
 
   it('names which tabs close at once', () => {
