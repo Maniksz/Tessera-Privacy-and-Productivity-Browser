@@ -15,7 +15,7 @@ import { localeSchema } from '../i18n/schema.js'
 import { isInternalScheme } from '../product.js'
 import { quickLinkCardSchema, quickLinkKindSchema, quickLinkSchema } from '../quicklinks/schema.js'
 import { tabGroupInvokeContract, tabGroupSchema } from '../tabgroups/schema.js'
-import { arrangementsChangedSchema } from '../arrangements/schema.js'
+import { arrangementInvokeContract, arrangementsChangedSchema } from '../arrangements/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
@@ -1198,7 +1198,8 @@ export const invokeContract = {
   ...backupInvokeContract,
   ...importInvokeContract,
   ...workspaceInvokeContract,
-  ...tabGroupInvokeContract
+  ...tabGroupInvokeContract,
+  ...arrangementInvokeContract
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract

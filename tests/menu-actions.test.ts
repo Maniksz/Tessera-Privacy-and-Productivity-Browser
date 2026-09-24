@@ -475,6 +475,38 @@ describe('the application menu', () => {
     }
   })
 
+  it('ends the tiled view on screen in the focused window, and nothing without one (KTD12)', () => {
+    const layouts: string[] = []
+    let liveId: string | null = 'a1'
+    const window = {
+      arrangements: {
+        get liveId() {
+          return liveId
+        }
+      },
+      setLayout: (layout: string) => layouts.push(layout)
+    }
+    const deps = {
+      windows: { focused: () => window, controllers: [window] },
+      settings: { get: () => ({}) },
+      locale: 'en',
+      platform: 'linux',
+      checkForUpdates: () => undefined,
+      actions: {}
+    } as unknown as MenuDeps
+    const split = itemsOf(buildApplicationMenu(deps) as unknown as MenuItemConstructorOptions[])
+    const item = split.find((entry) => entry.label === 'End Tiled View')
+    const end = item?.click as (() => void) | undefined
+
+    end?.()
+    liveId = null
+    end?.()
+
+    // Ending is choosing the single layout, which closes the view's start pages (R8) — once, for
+    // the window that had a view on screen; a window without one keeps its page and its layout.
+    expect(layouts).toEqual(['1x1'])
+  })
+
   it('fills from browser chrome with its own key on every platform (autofill U7)', () => {
     const keys: Record<Platform, string> = {
       darwin: 'Command+Shift+K',

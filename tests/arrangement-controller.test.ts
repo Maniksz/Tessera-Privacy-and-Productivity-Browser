@@ -1010,3 +1010,132 @@ describe('ending a put-away arrangement (KTD12, R8)', () => {
     await h.cleanup()
   })
 })
+
+describe('dissolving one by its id before its tabs close (KTD13, R5)', () => {
+  /** `a1` = t1 | t2 put away, `a2` = t3 | t4 on screen. */
+  async function withOneOnScreen(): Promise<Harness> {
+    const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x2', ['t3', 't4'])
+    h.controller.keep()
+    return h
+  }
+
+  it('forgets a put-away one and answers its tabs in tile order, moving nothing on screen', async () => {
+    const h = await withOneOnScreen()
+    const before = h.events().length
+
+    expect(h.controller.dissolve('a1')).toEqual(['t1', 't2'])
+
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a2'])
+    expect(h.events().slice(before)).toEqual([])
+    expect(h.controller.liveId).toBe('a2')
+
+    await h.cleanup()
+  })
+
+  it('puts the visible one away first, with what the screen shows now, and lets go of the id', async () => {
+    const h = await withOneOnScreen()
+    // A tab dropped in since the last round: the dissolve reads the screen, not the stale record.
+    h.setLiveTabs(['t1', 't2', 't3', 't4', 't5'])
+    h.showing('1x3', ['t3', 't4', 't5'])
+    const before = h.events().length
+
+    expect(h.controller.dissolve('a2')).toEqual(['t3', 't4', 't5'])
+
+    expect(h.events().slice(before)).toEqual(['stow'])
+    expect(h.controller.liveId).toBeNull()
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a1'])
+
+    await h.cleanup()
+  })
+
+  it('dissolves one a fold is hiding, because closing puts nothing on screen', async () => {
+    const h = await withOneOnScreen()
+    h.setHidden(['t1', 't2'])
+
+    expect(h.controller.dissolve('a1')).toEqual(['t1', 't2'])
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a2'])
+
+    await h.cleanup()
+  })
+
+  it('answers nothing and forgets nothing for an unknown id or another window’s', async () => {
+    const h = await withOneOnScreen()
+
+    expect(h.controller.dissolve('nope')).toEqual([])
+    h.setLiveTabs(['t2', 't3', 't4'])
+    expect(h.controller.dissolve('a1')).toEqual([])
+
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a1', 'a2'])
+
+    await h.cleanup()
+  })
+})
+
+describe('muting a put-away one (KTD11, R6)', () => {
+  async function withOneOnScreen(): Promise<Harness> {
+    const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.setView({
+      activeTile: 1,
+      fractions: { v: 0.3 },
+      tileAudio: [
+        { muted: false, volume: 0.5 },
+        { muted: true, volume: 1 }
+      ]
+    })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x2', ['t3', 't4'])
+    h.controller.keep()
+    return h
+  }
+
+  it('writes every tile’s mute into its record, keeps the volumes, and answers its tabs', async () => {
+    const h = await withOneOnScreen()
+
+    expect(h.controller.setMuted('a1', true)).toEqual(['t1', 't2'])
+
+    expect(h.book.list().find((arrangement) => arrangement.id === 'a1')?.tileAudio).toEqual([
+      { muted: true, volume: 0.5 },
+      { muted: true, volume: 1 }
+    ])
+
+    expect(h.controller.setMuted('a1', false)).toEqual(['t1', 't2'])
+    expect(h.book.list().find((arrangement) => arrangement.id === 'a1')?.tileAudio).toEqual([
+      { muted: false, volume: 0.5 },
+      { muted: false, volume: 1 }
+    ])
+
+    await h.cleanup()
+  })
+
+  it('brings the mute back with the view', async () => {
+    const h = await withOneOnScreen()
+    h.controller.setMuted('a1', true)
+
+    h.controller.restore('a1')
+
+    expect(h.views().at(-1)?.tileAudio).toEqual([
+      { muted: true, volume: 0.5 },
+      { muted: true, volume: 1 }
+    ])
+
+    await h.cleanup()
+  })
+
+  it('leaves the visible one to its tiles, and an unknown id or another window’s alone', async () => {
+    const h = await withOneOnScreen()
+    const writes = h.writes()
+
+    expect(h.controller.setMuted('a2', true)).toEqual([])
+    expect(h.controller.setMuted('nope', true)).toEqual([])
+    h.setLiveTabs(['t2', 't3', 't4'])
+    expect(h.controller.setMuted('a1', true)).toEqual([])
+
+    expect(h.writes()).toBe(writes)
+
+    await h.cleanup()
+  })
+})

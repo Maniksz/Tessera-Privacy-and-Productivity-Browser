@@ -96,6 +96,16 @@ export const INVOKE_CHANNELS = [
   */
   'tabs:contextMenu',
   /*
+    A tiled view's entry in the strip (U6): bringing it back, closing its tabs, its menu, its speaker.
+
+    Chrome-only for the reason the group channels are, and more so: these close tabs and rearrange the
+    panes, which no `tessera://` document may do. See `arrangementInvokeContract`.
+  */
+  'arrangements:activate',
+  'arrangements:close',
+  'arrangements:contextMenu',
+  'arrangements:setMuted',
+  /*
     What the blocker made of the user's lists.
 
     Not a nicety. A hand-written filter engine understands a subset of the syntax, and without a way

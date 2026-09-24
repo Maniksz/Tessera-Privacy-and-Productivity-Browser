@@ -797,6 +797,11 @@ export class BrowserWindowController implements PermissionHost {
     return this.#tabs.get(tabId)
   }
 
+  /** Schedules the broadcast round for a change that moved nothing on screen (`arrangement-handlers.ts`). */
+  publish(): void {
+    this.#scheduleBroadcast()
+  }
+
   /** Unloads a tab the one timer picked (U15). Nothing happens if its page objects. */
   discardTab(tabId: string): void {
     this.#discards.discard(tabId)

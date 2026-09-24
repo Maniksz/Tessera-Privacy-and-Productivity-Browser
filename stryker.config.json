@@ -119,6 +119,7 @@
     "src/main/data/SessionStore.ts",
     "src/main/session-restore/apply.ts",
     "src/main/menu/tab-context-items.ts",
+    "src/main/menu/arrangement-items.ts",
     "src/main/menu/page-context-items.ts",
     "src/main/menu/blocker-menu-items.ts",
     "src/main/menu/site-menu-items.ts",

@@ -74,6 +74,10 @@ export const de = {
   'menu.help': 'Hilfe',
   'menu.help.about': 'Über {app}',
 
+  'arrangement.changeLayout': 'Layout ändern',
+  'arrangement.end': 'Kachelansicht beenden',
+  'arrangement.closeAll': 'Alle Tabs schließen',
+
   'blocker.blockedOnPage': '{count} Anfragen auf dieser Seite blockiert',
   'blocker.myRules': 'Meine Regeln ({count})',
   'blocker.updateLists': 'Filterlisten jetzt aktualisieren',

@@ -96,6 +96,39 @@ export const arrangementsChangedSchema = z.object({
   arrangements: z.array(arrangementSummarySchema)
 })
 
+const ok = z.object({ ok: z.literal(true) })
+const byId = z.object({ id: z.string().min(1) })
+
+/**
+ * The `arrangements:*` channels a tiled view's entry in the strip is driven through (U6), spread into
+ * `invokeContract` the way `tabGroupInvokeContract` is — `contract.ts` is over its line bar and gains
+ * the spread alone.
+ *
+ * Each names the entry by its id, the one thing about a tiled view that survives every change to it
+ * (KTD1), and each acts on the *sending* window: an id another window holds is one nothing here may
+ * act on (R16). Chrome-only, like every channel that rearranges the panes or closes tabs; see the
+ * note in `channels.ts`.
+ *
+ * Changing the layout and ending the view are not channels: they are reached through the entry's
+ * native menu (`arrangements:contextMenu`), whose clicks run in the core (KTD12).
+ */
+export const arrangementInvokeContract = {
+  /** A click on the entry: the view comes back with its last active tile (R4). */
+  'arrangements:activate': { request: byId, response: ok },
+  /**
+   * The entry's ✕: every tab of the view closes, and one whose page asks to stay becomes an ordinary
+   * tab (R5, KTD13).
+   */
+  'arrangements:close': { request: byId, response: ok },
+  /** A right-click on the entry: its native menu (R7). An unknown id opens nothing. */
+  'arrangements:contextMenu': { request: byId, response: ok },
+  /** The entry's speaker: every member muted or loud, on screen or put away (R6, KTD11). */
+  'arrangements:setMuted': {
+    request: z.object({ id: z.string().min(1), muted: z.boolean() }),
+    response: ok
+  }
+}
+
 /**
  * Keeps the schemas and the interfaces from drifting apart, in both directions at once.
  *

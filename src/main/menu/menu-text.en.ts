@@ -77,6 +77,12 @@ export const en = {
   'menu.help': 'Help',
   'menu.help.about': 'About {app}',
 
+  // a tiled view's entry in the tab strip; see `menu/arrangement-items.ts`
+  'arrangement.changeLayout': 'Change Layout',
+  /** Also the Split View menu's item for the view on screen. */
+  'arrangement.end': 'End Tiled View',
+  'arrangement.closeAll': 'Close All Tabs',
+
   // blocker menu, behind the badge in the address bar
   'blocker.blockedOnPage': '{count} requests blocked on this page',
   'blocker.myRules': 'My rules ({count})',

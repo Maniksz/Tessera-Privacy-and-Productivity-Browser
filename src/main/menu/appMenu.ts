@@ -327,6 +327,18 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
           click: () => focused()?.setLayout(layout)
         }
       }),
+      /*
+        The entry's "End Tiled View", for the view on screen (KTD12). The single layout above does the
+        same to a window showing one, and this is the name the entry's menu gives it; without a view
+        on screen there is nothing to end, and the page on screen keeps its layout.
+      */
+      {
+        label: t('arrangement.end'),
+        click: () => {
+          const window = focused()
+          if (window !== undefined && window.arrangements.liveId !== null) window.setLayout('1x1')
+        }
+      },
       { type: 'separator' },
       {
         label: t('menu.split.tileLeft'),

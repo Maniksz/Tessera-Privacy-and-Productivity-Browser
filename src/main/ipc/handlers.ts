@@ -25,6 +25,7 @@ import { registerDownloadHandlers } from './download-handlers.js'
 import { registerPasswordHandlers } from './password-handlers.js'
 import { registerSiteHandlers } from './site-handlers.js'
 import { registerTabGroupHandlers } from './tabgroup-handlers.js'
+import { registerArrangementHandlers } from './arrangement-handlers.js'
 import { registerOmniboxHandlers } from './omnibox-handlers.js'
 import { registerImportHandlers } from './import-handlers.js'
 import { registerWorkspaceHandlers, type WorkspaceHandlerDeps } from './workspace-handlers.js'
@@ -463,6 +464,13 @@ export function registerIpcHandlers(deps: {
   // --- tab groups ----------------------------------------------------------
   // Their channels and both menus — a tab's and a group chip's; testable against a fake window there.
   registerTabGroupHandlers({
+    handle,
+    windows,
+    locale: uiLocale,
+    showMenu: (template, window) => popupTabMenu(template, window.window)
+  })
+  // A tiled view's entry in the strip, and its menu (U6).
+  registerArrangementHandlers({
     handle,
     windows,
     locale: uiLocale,

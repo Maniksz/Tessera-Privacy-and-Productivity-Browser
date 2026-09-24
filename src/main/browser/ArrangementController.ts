@@ -395,11 +395,52 @@ export class ArrangementController {
    */
   endArrangement(id: string): void {
     if (id === this.#liveId) return
-    const window: WindowTabs = { liveTabIds: this.#host.liveTabIds(), hiddenTabIds: [] }
-    const arrangement = restorableArrangement(this.#host.book.list(), id, window)
+    const arrangement = this.#heldWhole(id)
     if (arrangement === undefined) return
     this.#host.book.forget(id)
     this.#host.dissolveOffScreen(arrangement.seats)
+  }
+
+  /**
+   * Dissolves an arrangement by its id and answers its tabs in tile order — the first half of "Close
+   * All Tabs" on an entry (KTD13, R5).
+   *
+   * Dissolved *before* the first tab is asked to close, which is the whole reason this is a step of
+   * its own. `CloseContract` brings a page that asks "Leave this page?" to the front with
+   * `activateTab`, and for a tab an arrangement still seats that is `restoreFor`: the view would come
+   * back on screen in the middle of being closed. Forgotten first, every tab is an ordinary one by the
+   * time it is asked, and one that stays is already what R5 says it becomes.
+   *
+   * The view on screen is put away first — kept, so a tab dropped in since the last round is among the
+   * tabs answered, and stowed, so no close vacates a pane and nothing closes ranks between the closes.
+   * The pane left empty is the caller's to fill once the tabs are gone. Nothing for an id this window
+   * does not hold whole (R16); one a fold hides is dissolved like any other, as `endArrangement` ends
+   * one, because closing puts nothing on screen.
+   */
+  dissolve(id: string): string[] {
+    if (id === this.#liveId) this.putAway()
+    const arrangement = this.#heldWhole(id)
+    if (arrangement === undefined) return []
+    this.#host.book.forget(id)
+    return seatedTabs(arrangement.seats)
+  }
+
+  /**
+   * Mutes or unmutes every tile of a put-away arrangement, in its record, and answers the tabs the
+   * caller has to mute now (KTD11, R6).
+   *
+   * In the record because that is what `restore` puts back: a mute written only onto the tabs would be
+   * undone by the first `applyView`, which applies the stored tile sounds. Each tile keeps its volume.
+   * Nothing for the view on screen — its sound is the tiles' (`TileAudioController.setMutedByUser`),
+   * and the next `keep()` writes that down — and nothing for an id this window does not hold whole.
+   */
+  setMuted(id: string, muted: boolean): string[] {
+    if (id === this.#liveId) return []
+    const arrangement = this.#heldWhole(id)
+    if (arrangement === undefined) return []
+    const tileAudio = arrangement.tileAudio.map((tile) => ({ ...tile, muted }))
+    this.#host.book.update(id, { tileAudio }, this.#windowTabs())
+    return seatedTabs(arrangement.seats)
   }
 
   /**
@@ -445,6 +486,18 @@ export class ArrangementController {
   /** The visible arrangement as the book holds it, or `undefined` for none or one that has gone. */
   #live(held: readonly Arrangement[]): Arrangement | undefined {
     return held.find((arrangement) => arrangement.id === this.#liveId)
+  }
+
+  /**
+   * The arrangement by this id, if this window holds every one of its tabs — hidden by a fold or not.
+   *
+   * What the operations on an entry that put nothing on screen ask: ending, dissolving and muting one.
+   * A tab of another window is not this window's to close, move or mute (R16); a folded one is, because
+   * none of them shows a page.
+   */
+  #heldWhole(id: string): Arrangement | undefined {
+    const window: WindowTabs = { liveTabIds: this.#host.liveTabIds(), hiddenTabIds: [] }
+    return restorableArrangement(this.#host.book.list(), id, window)
   }
 
   /**
