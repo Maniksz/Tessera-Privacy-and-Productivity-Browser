@@ -33,7 +33,7 @@
   "testRunner": "vitest",
   "testRunnerNodeArgs": [],
   "vitest": {
-    "configFile": "vitest.config.ts"
+    "configFile": "vitest.stryker.config.ts"
   },
   "reporters": ["progress", "clear-text", "html", "json"],
   "htmlReporter": {
