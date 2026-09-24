@@ -153,7 +153,8 @@ export type SeatPlan = { tabId: string } | { url: string } | null
 /**
  * Which tab each seat gets. An open tab showing the seat's address is taken before a new one is
  * opened, in strip order, and no tab is taken twice. The caller passes only tabs it may put in a
- * tile (not those a collapsed group hides); every tab that gets no seat stays open.
+ * tile: not those a collapsed group hides, and not the members of any tiled view, which would leave
+ * their view's entry for the workspace's (KTD10). Every tab that gets no seat stays open.
  */
 export function planOpening(
   seats: ReadonlyArray<string | null>,

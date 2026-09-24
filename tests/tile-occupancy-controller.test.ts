@@ -34,6 +34,13 @@ interface Harness {
   /** Tabs whose group is folded away. The controller must leave these off the grid. */
   collapsed: Set<string>
   /**
+   * Tabs that belong to a tiled view, put away or on screen (KTD4). Nothing automatic may seat one
+   * of these in a pane; the controller only asks, and `window-seams.ts` answers from the book.
+   */
+  members: Set<string>
+  /** How often the controller asked for the first tiled view in strip order to come back (KTD10). */
+  restoredFirst: number
+  /**
    * The tiling as it stood each time this controller said "put it away now", newest last.
    *
    * `putAway()` carries no arguments — `ArrangementController.putAway` reads the layout and the
@@ -65,6 +72,8 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     activated: [],
     adapt: true,
     collapsed: new Set<string>(),
+    members: new Set<string>(),
+    restoredFirst: 0,
     kept: [],
     ended: [],
     routeClose: null
@@ -84,6 +93,10 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     tabOrder: () => state.order!,
     isEphemeral: (tabId) => state.ephemeral!.has(tabId),
     isHiddenByCollapse: (tabId) => state.collapsed!.has(tabId),
+    isArrangementMember: (tabId) => state.members!.has(tabId),
+    restoreFirstArrangement: () => {
+      state.restoredFirst! += 1
+    },
     unassign: (tabId) => {
       state.unassigned!.push(tabId)
     },
@@ -119,7 +132,7 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
         state.unassigned!.push(tabId)
         split.assignTab(tabId, null)
       }
-      state.occupancy!.afterLayoutChange(split.setLayout('1x1'), { fill: false, rehome: false })
+      state.occupancy!.afterLayoutChange(split.setLayout('1x1'), { fill: false })
     },
     endTiling: () => {
       state.ended!.push({ id: split.layout, tiles: split.toState().tileTabIds })
@@ -160,15 +173,42 @@ describe('filling a layout the user chose', () => {
 })
 
 describe('a layout the user chose', () => {
-  it('fills and rehomes, which no layout the browser changes on its own does', () => {
+  it('fills its new tiles with start pages and pulls no loaded tab in (KTD10)', () => {
+    /*
+      It used to seat the two loaded pages first and give only the tile left over a start page. With
+      a tiled view as an entry in the strip, every loaded page is either an ordinary tab or a member of
+      another view, and moving either into these panes is a tab leaving its place in the strip
+      unasked (R16). Start pages are the one thing a new tile can be given without taking anything.
+    */
     const h = harness('1x1', ['a', 'b', 'c'])
     seed(h, ['a'])
 
     h.occupancy.chooseLayout('2x2')
 
-    // The two loaded pages come in first, and only the tile left over gets a start page.
-    expect(h.split.toState().tileTabIds).toEqual(['a', 'b', 'c', 'filler-1'])
-    expect(h.fillers).toEqual([3])
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'filler-1', 'filler-2', 'filler-3'])
+    expect(h.fillers).toEqual([1, 2, 3])
+    expect(h.split.tileOfTab('b')).toBeNull()
+    expect(h.split.tileOfTab('c')).toBeNull()
+  })
+
+  it('grows 1x2 into 2x2 with two start pages and no loose tab (KTD10)', () => {
+    const h = harness('1x2', ['a', 'b', 'loose'])
+    seed(h, ['a', 'b'])
+
+    h.occupancy.chooseLayout('2x2')
+
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'b', 'filler-1', 'filler-2'])
+    expect(h.split.tileOfTab('loose')).toBeNull()
+  })
+
+  it('leaves the new tiles empty with adaptation off, and still pulls nothing in', () => {
+    const h = harness('1x2', ['a', 'b', 'loose'])
+    seed(h, ['a', 'b'])
+    h.adapt = false
+
+    h.occupancy.chooseLayout('2x2')
+
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'b', null, null])
   })
 
   it('ends the tiling on screen before it goes, when the choice is a single page', () => {
@@ -205,7 +245,7 @@ describe('after the layout changed', () => {
   it('unassigns the tabs that lost their tile rather than closing them', () => {
     const h = harness('2x2', ['tab-1', 'tab-2', 'tab-3', 'tab-4'])
     seed(h, ['tab-1', 'tab-2', 'tab-3', 'tab-4'])
-    h.occupancy.afterLayoutChange(['tab-3', 'tab-4'], { fill: false, rehome: true })
+    h.occupancy.afterLayoutChange(['tab-3', 'tab-4'], { fill: false })
     expect(h.unassigned).toEqual(['tab-3', 'tab-4'])
     expect(h.closed).toEqual([])
   })
@@ -213,22 +253,22 @@ describe('after the layout changed', () => {
   it('closes an untouched filler that lost its tile', () => {
     const h = harness('2x2', ['tab-1', 'filler-x'])
     h.ephemeral.add('filler-x')
-    h.occupancy.afterLayoutChange(['filler-x'], { fill: false, rehome: true })
+    h.occupancy.afterLayoutChange(['filler-x'], { fill: false })
     expect(h.closed).toEqual(['filler-x'])
   })
 
   it('keeps a filler the user navigated, because it left the set', () => {
     const h = harness('2x2', ['tab-1', 'was-a-filler'])
-    h.occupancy.afterLayoutChange(['was-a-filler'], { fill: false, rehome: true })
+    h.occupancy.afterLayoutChange(['was-a-filler'], { fill: false })
     expect(h.closed).toEqual([])
     expect(h.unassigned).toEqual(['was-a-filler'])
   })
 
-  it('moves a hidden tab into a tile that has nothing in it', () => {
+  it('moves no loaded tab into a tile that has nothing in it (KTD10)', () => {
     const h = harness('1x2', ['tab-1', 'tab-hidden'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: false, rehome: true })
-    expect(h.split.tabIdAt(1)).toBe('tab-hidden')
+    h.occupancy.afterLayoutChange([], { fill: false })
+    expect(h.split.tabIdAt(1)).toBeNull()
   })
 
   it('opens a new tab rather than unfolding a collapsed one into the empty tile', () => {
@@ -242,32 +282,35 @@ describe('after the layout changed', () => {
     const h = harness('1x2', ['tab-1', 'tab-folded'])
     h.split.assignTab('tab-1', 0)
     h.collapsed.add('tab-folded')
-    h.occupancy.afterLayoutChange([], { fill: true, rehome: true })
+    h.occupancy.afterLayoutChange([], { fill: true })
     expect(h.split.tileOfTab('tab-folded')).toBeNull()
     expect(h.fillers).toEqual([1])
   })
 
-  it('prefers a hidden tab over opening a new one', () => {
-    // Reusing what is already loaded costs nothing; a new tab costs a renderer process.
+  it('opens a start page rather than reusing a loaded tab (KTD10)', () => {
+    /*
+      Reusing what was loaded saved a renderer process, and that was the whole argument for it. It
+      does not survive the strip showing tiled views as entries: the loaded tab is somebody's — an
+      ordinary tab where the user left it, or a member of another view — and a start page is nobody's.
+    */
     const h = harness('1x2', ['tab-1', 'tab-hidden'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: true, rehome: true })
-    expect(h.fillers).toEqual([])
-    expect(h.split.tabIdAt(1)).toBe('tab-hidden')
+    h.occupancy.afterLayoutChange([], { fill: true })
+    expect(h.fillers).toEqual([1])
+    expect(h.split.tileOfTab('tab-hidden')).toBeNull()
   })
 
-  it('fills what is still empty after the hidden tabs run out', () => {
+  it('fills every empty tile with a start page', () => {
     const h = harness('2x2', ['tab-1', 'tab-hidden'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: true, rehome: true })
-    expect(h.split.tabIdAt(1)).toBe('tab-hidden')
-    expect(h.fillers).toEqual([2, 3])
+    h.occupancy.afterLayoutChange([], { fill: true })
+    expect(h.fillers).toEqual([1, 2, 3])
   })
 
   it('leaves tiles empty when asked not to fill', () => {
     const h = harness('2x2', ['tab-1'])
     h.split.assignTab('tab-1', 0)
-    h.occupancy.afterLayoutChange([], { fill: false, rehome: true })
+    h.occupancy.afterLayoutChange([], { fill: false })
     expect(h.fillers).toEqual([])
     expect(h.split.tabIdAt(1)).toBeNull()
   })
@@ -283,7 +326,7 @@ describe('after the layout changed', () => {
     h.split.assignTab('tab-1', 0)
     h.adapt = false
 
-    h.occupancy.afterLayoutChange([], { fill: true, rehome: true })
+    h.occupancy.afterLayoutChange([], { fill: true })
 
     expect(h.split.toState().tileTabIds).toEqual(['tab-1', null, null, null])
     expect(h.fillers).toEqual([])
@@ -297,28 +340,55 @@ describe('after the layout changed', () => {
     seed(h, ['tab-1', 'tab-2'])
     h.adapt = false
 
-    h.occupancy.afterLayoutChange(['tab-2'], { fill: true, rehome: true })
+    h.occupancy.afterLayoutChange(['tab-2'], { fill: true })
 
     expect(h.unassigned).toEqual(['tab-2'])
   })
 })
 
 describe('after a tab closed', () => {
-  it('moves a hidden tab into the pane that opened up', () => {
-    // The hidden one moves in; the tab already on screen stays where it is rather than being
-    // shuffled across the window because a neighbour closed.
-    const h = harness('1x2', ['tab-2', 'tab-hidden'])
-    h.split.assignTab('tab-2', 1)
-    h.occupancy.afterTabClosed(0)
-    expect(h.split.tabIdAt(0)).toBe('tab-hidden')
-    expect(h.split.tabIdAt(1)).toBe('tab-2')
+  it('closes ranks rather than moving a loaded tab into the pane that opened up (KTD10, AE7)', () => {
+    /*
+      The pull-in is gone. It kept the layout the user chose by seating the first loaded tab that had
+      no pane — which, once a tiled view is an entry in the strip, is a member of another view or an
+      ordinary tab leaving its place unasked (R16). The view closes ranks instead: the pages after
+      the gap move up one tile each and the layout loses the pane that is left over.
+    */
+    const h = harness('1x3', ['a', 'c', 'loose'])
+    h.split.assignTab('c', 2)
+    h.split.assignTab('a', 0)
+    h.occupancy.afterTabClosed(1)
+    expect(h.split.layout).toBe('1x2')
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'c'])
+    expect(h.split.tileOfTab('loose')).toBeNull()
   })
 
-  it('takes the pane away when there is nothing left to show there', () => {
+  it('takes the pane away and keeps the page beside it on screen', () => {
+    // A shrink alone kept tile 0 and dropped tile 1 — the gap stayed and the page left the screen.
     const h = harness('1x2', ['tab-2'])
     h.split.assignTab('tab-2', 1)
     h.occupancy.afterTabClosed(0)
     expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['tab-2'])
+  })
+
+  it('keeps the page that was active the active one after closing ranks', () => {
+    const h = harness('1x3', ['a', 'c'])
+    h.split.assignTab('a', 0)
+    h.split.assignTab('c', 2)
+    h.split.setActiveTile(2)
+    h.occupancy.afterTabClosed(1)
+    expect(h.split.activeTabId()).toBe('c')
+  })
+
+  it('closes no start page on the way, because nothing is left off the end (R8)', () => {
+    const h = harness('2x2', ['a', 'b', 'filler'])
+    h.ephemeral.add('filler')
+    seed(h, ['a', 'b'])
+    h.split.assignTab('filler', 3)
+    h.occupancy.afterTabClosed(2)
+    expect(h.closed).toEqual([])
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'b', 'filler'])
   })
 
   it('leaves a folded-away tab folded away rather than seating it in the freed pane', () => {
@@ -350,11 +420,31 @@ describe('after a tab closed', () => {
     expect(h.fillers).toEqual([])
   })
 
-  it('steps down one arrangement at a time', () => {
+  it('steps down one arrangement for one closed tab', () => {
+    const h = harness('2x2', ['a', 'b', 'c'])
+    seed(h, ['a', 'b', 'c'])
+    h.occupancy.afterTabClosed(3)
+    expect(h.split.layout).toBe('1+2')
+  })
+
+  it('steps down as far as the pages left need, not leaving empty panes standing', () => {
+    /*
+      One step used to be enough because the pull-in filled any gap a closed tab left. Without it, a
+      pane that was empty before the close — a seat whose tab closed while the view was put away —
+      would stand empty for good. The shrink goes down the same chain, as far as the pages left need.
+    */
     const h = harness('2x2', ['tab-1'])
     h.split.assignTab('tab-1', 0)
     h.occupancy.afterTabClosed(3)
-    expect(h.split.layout).toBe('1+2')
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['tab-1'])
+  })
+
+  it('keeps a row a row while it shrinks', () => {
+    const h = harness('1x4', ['a', 'b'])
+    seed(h, ['a', 'b'])
+    h.occupancy.afterTabClosed(3)
+    expect(h.split.layout).toBe('1x2')
   })
 
   it('leaves the layout alone at a single view', () => {
@@ -402,12 +492,83 @@ describe('after a tab closed', () => {
     expect(h.order).toContain('tab-hidden')
   })
 
+  it('pulls no tab in from outside when adaptation is on and the gap cannot be closed', () => {
+    // The last of the pull-in: nothing is seated from off the grid, however many loaded tabs wait.
+    const h = harness('1x2', ['a', 'b', 'loose'])
+    seed(h, ['a', 'b'])
+    h.split.forgetTab('a')
+    h.order = h.order.filter((tabId) => tabId !== 'a')
+    h.occupancy.afterTabClosed(0)
+    expect(h.split.toState().tileTabIds).toEqual(['b'])
+    expect(h.split.tileOfTab('loose')).toBeNull()
+  })
+
   it('does nothing for a tab that was not in a tile', () => {
     const h = harness('1x2', ['tab-1', 'tab-2'])
     seed(h, ['tab-1', 'tab-2'])
     h.occupancy.afterTabClosed(null)
     expect(h.split.layout).toBe('1x2')
     expect(h.closed).toEqual([])
+  })
+})
+
+/**
+ * The one tab of a single view closing (KTD10).
+ *
+ * The one place a page is still chosen for a pane, because the alternative is a window showing
+ * nothing while its strip is full of tabs. What may be chosen is the narrow part: an ordinary tab
+ * the strip is drawing — never a folded one and never a member of a tiled view, which would stand
+ * alone on screen while its entry claims it. Only when nothing else is left does a whole view come
+ * back, and then as the view it is.
+ */
+describe('the only tab of a single view closing', () => {
+  it('shows the first ordinary tab, passing over the members of a tiled view', () => {
+    const h = harness('1x1', ['member-1', 'member-2', 'folded', 'ordinary'])
+    h.members.add('member-1')
+    h.members.add('member-2')
+    h.collapsed.add('folded')
+    h.occupancy.afterTabClosed(0)
+    expect(h.split.toState().tileTabIds).toEqual(['ordinary'])
+    expect(h.restoredFirst).toBe(0)
+  })
+
+  it('brings back the first tiled view when only members are left', () => {
+    const h = harness('1x1', ['member-1', 'member-2', 'folded'])
+    h.members.add('member-1')
+    h.members.add('member-2')
+    h.collapsed.add('folded')
+    h.occupancy.afterTabClosed(0)
+    expect(h.restoredFirst).toBe(1)
+    expect(h.split.toState().tileTabIds).toEqual([null])
+  })
+
+  it('does so with adaptation off too, because no layout changes', () => {
+    /*
+      The switch governs the browser reshaping the panes: filling new ones, closing ranks. Here there
+      is one pane before and one after, and leaving it blank would leave a toolbar acting on nothing
+      — the state the window's own "a window always keeps a tab" rule exists to prevent (KTD9).
+    */
+    const h = harness('1x1', ['ordinary'])
+    h.adapt = false
+    h.occupancy.afterTabClosed(0)
+    expect(h.split.toState().tileTabIds).toEqual(['ordinary'])
+  })
+
+  it('applies after a split closed its ranks down to one empty pane', () => {
+    const h = harness('1x2', ['member', 'ordinary'])
+    h.members.add('member')
+    h.occupancy.afterTabClosed(0)
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['ordinary'])
+  })
+
+  it('opens nothing itself when the window has no other tab', () => {
+    // The host finds no view to bring back, and the window's own "always keep a tab" rule opens a
+    // start page — a filler from here would be a second one.
+    const h = harness('1x1', [])
+    h.occupancy.afterTabClosed(0)
+    expect(h.split.toState().tileTabIds).toEqual([null])
+    expect(h.fillers).toEqual([])
   })
 })
 
@@ -465,23 +626,39 @@ describe('where a new tab goes', () => {
     expect(h.split.layout).toBe('2x2')
   })
 
-  it('takes an empty pane rather than an occupied one when adaptation is off', () => {
-    // With the layout the user's own business, the earlier rule stands unchanged: a new tab must
-    // not replace the page in front of them while an empty pane sits beside it.
+  it('takes the whole window with adaptation off as well, rather than an empty pane (KTD9)', () => {
+    /*
+      The switch used to keep the panes and give the new tab the first empty one. That made a tiled
+      view the one thing a new tab could join without being asked — and with the view an entry in the
+      strip, a tab slipping into it is a membership nobody chose (R3). The switch now governs only
+      filling new panes and closing ranks; a new tab puts the view away either way.
+    */
     const h = harness('1x2', ['tab-1'])
     h.split.assignTab('tab-1', 0)
     h.split.setActiveTile(0)
     h.adapt = false
-    expect(h.occupancy.claimTileForNewTab()).toBe(1)
-    expect(h.split.layout).toBe('1x2')
+    expect(h.occupancy.claimTileForNewTab()).toBe(0)
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual([null])
   })
 
-  it('falls back to the active pane when every pane is taken and adaptation is off', () => {
+  it('replaces no page in a full view with adaptation off (KTD9)', () => {
+    // The old fallback was the active pane, which replaced the page in front of the user.
     const h = harness('1x2', ['tab-1', 'tab-2'])
     seed(h, ['tab-1', 'tab-2'])
     h.split.setActiveTile(1)
     h.adapt = false
-    expect(h.occupancy.claimTileForNewTab()).toBe(1)
+    expect(h.occupancy.claimTileForNewTab()).toBe(0)
+    expect(h.split.layout).toBe('1x1')
+    expect(h.unassigned).toEqual(['tab-1', 'tab-2'])
+    expect(h.closed).toEqual([])
+  })
+
+  it('leaves a fresh window in its layout with adaptation off, too', () => {
+    const h = harness('2x2', [])
+    h.adapt = false
+    expect(h.occupancy.claimTileForNewTab()).toBe(0)
+    expect(h.split.layout).toBe('2x2')
   })
 
   it('does nothing to a window already showing one tile', () => {
@@ -544,14 +721,12 @@ describe('the arrangement a new tab displaces', () => {
     expect(h.kept[0]?.tiles).toEqual(['a', null, 'c'])
   })
 
-  it('writes nothing down when the user turned adaptation off', () => {
-    // That branch does not collapse anything, so nothing is displaced. Recording here would invent an
-    // arrangement to go back to for a layout that never left.
-    const h = harness('1x2', ['a'])
-    h.split.assignTab('a', 0)
+  it('is written down with adaptation off as well, because it is put away all the same (KTD9)', () => {
+    const h = harness('1x2', ['a', 'b'])
+    seed(h, ['a', 'b'])
     h.adapt = false
     h.occupancy.claimTileForNewTab()
-    expect(h.kept).toEqual([])
+    expect(h.kept).toEqual([{ id: '1x2', tiles: ['a', 'b'] }])
   })
 
   it('writes nothing down for a window whose panes are all empty', () => {
@@ -826,6 +1001,21 @@ describe('applying a drop', () => {
     expect(h.split.toState().tileTabIds).toEqual(['dragged', 'a', null, null])
   })
 
+  it('seats no tab but the dragged one and the one it displaced, with adaptation on (KTD10)', () => {
+    /*
+      The same line as the test above, and the switch no longer moves it. With adaptation on the drop
+      used to seat the two hidden tabs in the tiles nobody aimed at; each of them is somebody's —
+      an ordinary tab or a member of another tiled view — and none of them was part of the gesture.
+    */
+    const h = harness('2x2', ['a', 'hidden-1', 'hidden-2', 'dragged'])
+    seed(h, ['a'])
+    const firstTile = dropZonesFor('2x2', CONTENT).find((zone) => zone.id === '0-centre')!
+
+    h.occupancy.applyDrop('dragged', firstTile)
+
+    expect(h.split.toState().tileTabIds).toEqual(['dragged', 'a', null, null])
+  })
+
   it('survives a zone the layout has since outgrown', () => {
     /*
       The zones are computed once, at the start of the drag, and a layout change does not cancel it —
@@ -884,11 +1074,12 @@ describe('every drag possibility, in every layout', () => {
 describe('fillers closing through the close contract', () => {
   /*
     `BrowserWindowController.closeTab` now asks a page before it finishes closing its tab, which makes the
-    close asynchronous — except where nothing could object. A filler is that exception, and it has to be: the
-    pass below closes it and then seats a hidden tab, and a filler still waiting on its page would still be
-    "loaded but in no tile" when the seating runs, so it would take the pane the hidden tab was meant for.
+    close asynchronous — except where nothing could object. A filler is that exception. The pass below
+    used to seat a hidden tab straight after the close, which is what made the synchronous close
+    load-bearing; that seating is gone (KTD10), and what is left is that a shrink sweeping up the
+    browser's own filler asks its page nothing and leaves the tab that lost its tile off the grid.
   */
-  it('closes the filler and seats the hidden tab in the same pass, without asking the filler', () => {
+  it('closes the filler without asking it, and seats nobody in its place', () => {
     const h = harness('2x2', ['tab-1', 'filler-b', 'tab-2'])
     h.split.assignTab('tab-1', 1)
     h.split.assignTab('filler-b', 2)
@@ -925,10 +1116,11 @@ describe('fillers closing through the close contract', () => {
     })
     h.routeClose = (tabId) => contract.closeTab(tabId)
 
-    h.occupancy.afterLayoutChange(h.split.setLayout('1x2'), { fill: false, rehome: true })
+    h.occupancy.afterLayoutChange(h.split.setLayout('1x2'), { fill: false })
 
     expect(h.closed).toEqual(['filler-b'])
     expect(pages.get('filler-b')?.closes ?? 0).toBe(0)
-    expect(h.split.toState().tileTabIds).toEqual(['tab-2', 'tab-1'])
+    expect(h.split.toState().tileTabIds).toEqual([null, 'tab-1'])
+    expect(h.order).toContain('tab-2')
   })
 })

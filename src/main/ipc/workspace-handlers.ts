@@ -29,8 +29,16 @@ import type { WorkspaceStore } from '../data/WorkspaceStore.js'
  * that gets no seat leaves the grid and stays in the strip (spec 2). Tiles are cleared *before* the
  * layout changes, so a shrink orphans no tab — which is what keeps `afterLayoutChange` from closing a
  * start page the browser opened as a filler. The layout is then put up through the same path a
- * recorded arrangement takes (`restoreArrangement`: no filling, no rehoming), and the dividers last,
- * because they belong to that layout.
+ * recorded arrangement takes (`restoreArrangement`: no filling), and the dividers last, because they
+ * belong to that layout.
+ *
+ * ## It takes no tab out of a tiled view
+ *
+ * An open tab is reused only when it is an ordinary one: a member of a tiled view — including the one
+ * just put away — gets a new tab for its address instead (KTD10). Reusing it would move a page out of
+ * its view's entry into the workspace's tiling unasked (R16), and it would cost the workspace its own
+ * entry as well, because the settle after it can neither adopt a view for a seating that mixes a
+ * member with other tabs nor create one over a tab another view holds.
  *
  * ## Private windows open and never save
  *
@@ -66,9 +74,10 @@ export interface WorkspaceWindow {
   /**
    * The window's tiled views. Opening a workspace puts the visible one away first (U2), as bringing
    * another tiled view back does: its entry stays in the strip, unchanged, and none of its panes is
-   * left for the workspace's seating to be read as a change to it.
+   * left for the workspace's seating to be read as a change to it. `isMember` is what keeps every
+   * view's tabs out of the seating (KTD10).
    */
-  readonly arrangements: { putAway(): void }
+  readonly arrangements: { putAway(): void; isMember(tabId: string): boolean }
   readonly occupancy: {
     restoreArrangement(
       layoutId: LayoutId,
@@ -118,7 +127,7 @@ export function registerWorkspaceHandlers(deps: WorkspaceHandlerDeps): void {
 
     window.arrangements.putAway()
     const candidates = window.tabs
-      .filter((tab) => !window.groups.isHidden(tab.id))
+      .filter((tab) => !window.groups.isHidden(tab.id) && !window.arrangements.isMember(tab.id))
       .map((tab) => ({ id: tab.id, url: tab.toState().url }))
     const seats = planOpening(workspace.seats, candidates).map((seat) => {
       if (seat === null) return null

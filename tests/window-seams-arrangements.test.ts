@@ -108,6 +108,8 @@ async function harness(options: {
   mode?: BrowsingMode
   /** An `arrangements.json` another window, or the last run, already wrote to. */
   store?: ArrangementStore
+  /** `splitView.adaptLayoutToTabs`, on unless a test says otherwise. */
+  adaptLayoutToTabs?: boolean
 }): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), 'tessera-window-seams-'))
   directories.push(directory)
@@ -174,7 +176,10 @@ async function harness(options: {
     split,
     overlay,
     isDestroyed: () => false,
-    getSettings: () => defaultSettings(),
+    getSettings: () => ({
+      ...defaultSettings(),
+      'splitView.adaptLayoutToTabs': options.adaptLayoutToTabs ?? true
+    }),
     contentBounds: () => CONTENT,
     cursorScreenPoint: () => ({ x: 0, y: 0 }),
     contentRect: () => CONTENT,
@@ -371,19 +376,25 @@ describe('the broadcast round and tab groups', () => {
     expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'] }])
   })
 
-  it('records the tiling it is losing when the layout shrinks, and touches no group (R6)', async () => {
-    // A shrink is the moment a recording earns its keep, and the group list is the thing that must
-    // not move while it happens.
-    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
-    h.seat(['t1', 't2'])
+  it('writes the smaller tiling into the same entry when a closed tab shrinks it, and touches no group (R6)', async () => {
+    /*
+      A shrink is the moment the entry has to follow the panes, and the group list is the thing that
+      must not move while it happens. It used to call `afterTabClosed` with the tab still seated,
+      which only the pull-in's one-step shrink could answer; a close forgets the tab first.
+    */
+    const h = await harness({ tabs: ['t1', 't2', 't3'], layout: '1x3' })
+    h.seat(['t1', 't2', 't3'])
+    h.round()
+    const id = h.seams.arrangements.liveId
+
+    h.close('t3')
     h.round()
 
-    h.seams.occupancy.afterTabClosed(1)
-    h.round()
-
-    expect(h.split.layout).toBe('1x1')
+    expect(h.split.layout).toBe('1x2')
     expect(h.seams.groups.groups()).toEqual([])
-    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'] }])
+    expect(h.book.list().map((held) => [held.id, held.layoutId, held.seats])).toEqual([
+      [id, '1x2', ['t1', 't2']]
+    ])
   })
 })
 
@@ -443,7 +454,12 @@ describe('choosing the single layout', () => {
     expect(h.seams.groups.groups()).toEqual([group])
   })
 
-  it('records the next split afresh', async () => {
+  it('records the next split afresh, its new pane a start page rather than the page that left (KTD10)', async () => {
+    /*
+      Choosing the split again used to pull `t2` back into the pane it had left. The page that lost
+      its pane is an ordinary tab from the moment the tiling ended, and a layout the user chooses
+      gives its new panes start pages — not whichever loaded tab comes first in the strip.
+    */
     const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
     h.seat(['t1', 't2'])
     h.round()
@@ -453,8 +469,9 @@ describe('choosing the single layout', () => {
     h.seams.occupancy.chooseLayout('1x2')
     h.round()
 
-    expect(h.split.toState().tileTabIds).toEqual(['t1', 't2'])
-    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'] }])
+    expect(h.split.toState().tileTabIds).toEqual(['t1', 'filler-2'])
+    expect(h.split.tileOfTab('t2')).toBeNull()
+    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['t1', 'filler-2'] }])
   })
 })
 
@@ -686,6 +703,187 @@ describe('the visible tiled view and its entry (U2)', () => {
 
     expect(h.broadcasts()).toBe(0)
     expect(h.seams.arrangements.summaries()).toMatchObject([{ activeTile: 1, visible: true }])
+  })
+})
+
+/**
+ * The paths the browser takes on its own, and what none of them may do any more (U3).
+ *
+ * Each used to move a tab between the strip and the panes without being asked: a closed tab's
+ * pane took the first loaded tab, a chosen layout seated loaded tabs before opening start pages,
+ * a drop filled the tiles nobody aimed at, a single view's last tab was replaced by whatever came
+ * first. With every tiled view an entry in the strip, each of those is a page leaving its entry or
+ * its place unasked (R16), so each path now has one rule, asserted here through the real seams.
+ */
+describe('the automatic paths (U3, R3, R16)', () => {
+  const seatsOf = (h: Harness, id: string | null): Array<string | null> | undefined =>
+    h.book.list().find((arrangement) => arrangement.id === id)?.seats
+
+  it('closes the ranks of the visible view and pulls in no member of a put-away one (AE7)', async () => {
+    const h = await harness({ tabs: ['b1', 'b2', 'a1', 'a2', 'a3'], layout: '1x2' })
+    h.seat(['b1', 'b2'])
+    h.round()
+    const b = h.seams.arrangements.liveId
+    h.seams.arrangements.putAway()
+    h.show('1x3', ['a1', 'a2', 'a3'])
+    h.round()
+    const a = h.seams.arrangements.liveId
+
+    h.close('a2')
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['a1', 'a3'])
+    expect(seatsOf(h, a)).toEqual(['a1', 'a3'])
+    expect(seatsOf(h, b)).toEqual(['b1', 'b2'])
+    expect(h.seams.arrangements.liveId).toBe(a)
+  })
+
+  it('keeps an empty pane with adaptation off, and pulls nobody into it', async () => {
+    const h = await harness({
+      tabs: ['t1', 't2', 't3', 'loose'],
+      layout: '1x3',
+      adaptLayoutToTabs: false
+    })
+    h.seat(['t1', 't2', 't3'])
+    h.round()
+    const id = h.seams.arrangements.liveId
+
+    h.close('t2')
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['t1', null, 't3'])
+    expect(seatsOf(h, id)).toEqual(['t1', null, 't3'])
+  })
+
+  it('puts the visible view away on a click on an ordinary tab with adaptation off (KTD9)', async () => {
+    /*
+      The tile used to be replaced: with the switch off the clicked tab took the first empty pane, or
+      the active one, and the page it displaced left the view on the next settle. R3 holds whatever
+      the switch says, so the view is put away whole and the clicked tab gets the window.
+    */
+    const h = await harness({
+      tabs: ['t1', 't2', 'mail'],
+      layout: '1x2',
+      adaptLayoutToTabs: false
+    })
+    h.seat(['t1', 't2'])
+    h.round()
+    const id = h.seams.arrangements.liveId
+
+    h.activate('mail')
+    h.round()
+
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['mail'])
+    expect(seatsOf(h, id)).toEqual(['t1', 't2'])
+    expect(h.seams.arrangements.summaries()).toMatchObject([{ id, visible: false }])
+  })
+
+  it('shows the next ordinary tab when a single view closes its tab, never a lone member', async () => {
+    const h = await harness({ tabs: ['m1', 'm2', 'shown', 'ordinary'], layout: '1x2' })
+    h.seat(['m1', 'm2'])
+    h.round()
+    h.seams.arrangements.putAway()
+    h.show('1x1', ['shown'])
+    h.round()
+
+    h.close('shown')
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['ordinary'])
+    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['m1', 'm2'] }])
+  })
+
+  it('brings back the first view in strip order when only members are left (KTD10)', async () => {
+    // A was written down first, so the book's order is not the strip's; B comes first in the strip.
+    const h = await harness({ tabs: ['b1', 'b2', 'a1', 'a2', 'shown'], layout: '1x2' })
+    h.seat(['a1', 'a2'])
+    h.round()
+    h.seams.arrangements.putAway()
+    h.show('1x2', ['b1', 'b2'])
+    h.round()
+    const b = h.seams.arrangements.liveId
+    h.seams.arrangements.putAway()
+    h.show('1x1', ['shown'])
+    h.round()
+
+    h.close('shown')
+    h.round()
+
+    expect(h.split.layout).toBe('1x2')
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b2'])
+    expect(h.seams.arrangements.liveId).toBe(b)
+  })
+
+  it('passes over a view a folded group holds and brings back the next one (KTD10)', async () => {
+    const h = await harness({ tabs: ['f1', 'f2', 'b1', 'b2', 'shown'], layout: '1x2' })
+    h.seat(['f1', 'f2'])
+    h.round()
+    const folded = h.seams.arrangements.liveId
+    h.seams.arrangements.putAway()
+    h.show('1x2', ['b1', 'b2'])
+    h.round()
+    const b = h.seams.arrangements.liveId
+    h.seams.arrangements.putAway()
+    h.show('1x1', ['shown'])
+    h.round()
+    const group = h.seams.groups.create({ tabIds: ['f1', 'f2'] })
+    h.seams.groups.setCollapsed(group.id, true)
+
+    h.close('shown')
+
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b2'])
+    expect(h.seams.arrangements.liveId).toBe(b)
+    expect(seatsOf(h, folded)).toEqual(['f1', 'f2'])
+  })
+
+  it('shows nothing rather than a folded view when that is all there is', async () => {
+    const h = await harness({ tabs: ['f1', 'f2', 'shown'], layout: '1x2' })
+    h.seat(['f1', 'f2'])
+    h.round()
+    h.seams.arrangements.putAway()
+    h.show('1x1', ['shown'])
+    h.round()
+    const group = h.seams.groups.create({ tabIds: ['f1', 'f2'] })
+    h.seams.groups.setCollapsed(group.id, true)
+
+    h.close('shown')
+
+    expect(h.split.toState().tileTabIds).toEqual([null])
+    expect(h.seams.arrangements.liveId).toBeNull()
+  })
+
+  it('keeps a page a drop displaced in the view, in the pane that was free (R16)', async () => {
+    /*
+      `#reseat`'s rule, through the book: the displaced page goes to the tile the drop freed — here
+      the one the split created — and so stays a member. What the drop no longer does is seat a
+      loaded tab in the pane left over.
+    */
+    const h = await harness({ tabs: ['t1', 't2', 'dragged', 'loose'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+    const id = h.seams.arrangements.liveId
+    const zone = dropZonesFor('1x2', CONTENT).find((candidate) => candidate.id === '0-top')
+    expect(zone).toBeDefined()
+
+    h.seams.occupancy.applyDrop('dragged', zone!)
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['dragged', 't2', 't1', null])
+    expect(seatsOf(h, id)).toEqual(['dragged', 't2', 't1', null])
+  })
+
+  it('swaps two members within the view, both staying members', async () => {
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+    const id = h.seams.arrangements.liveId
+    const zone = dropZonesFor('1x2', CONTENT).find((candidate) => candidate.id === '1-centre')
+
+    h.seams.occupancy.applyDrop('t1', zone!)
+    h.round()
+
+    expect(seatsOf(h, id)).toEqual(['t2', 't1'])
   })
 })
 

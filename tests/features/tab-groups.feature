@@ -72,13 +72,16 @@ Feature: Tab groups belong to the user
     And the tab strip still shows tabs "research, notes"
 
   Scenario: Tiling again after a single page starts a split of its own
+    # The page that lost its pane is an ordinary tab once the tiling ended, and
+    # a layout the user chooses gives its new pane a start page rather than
+    # pulling a loaded tab back in (KTD10): no tab leaves its place unasked.
     Given a window tiling tabs "research, notes" side by side
     When the window settles
     And I choose the single layout for the window
     And the window settles
     And I choose the side-by-side layout for the window
     And the window settles
-    Then the window shows "research, notes" side by side
+    Then the window shows "research" beside a start page
     And the tab strip shows no group chip
 
   Scenario: A group the user named outlives the single layout

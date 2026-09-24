@@ -297,10 +297,17 @@ Then('the window shows only {string}', (state: unknown, tabId: string) => {
   expect(split.toState().tileTabIds).toEqual([tabId])
 })
 
-Then('the window shows {string} side by side', (state: unknown, list: string) => {
+/**
+ * A split whose second pane the browser filled for a layout the user chose. `openFiller` in the fake
+ * window names its tabs `filler-…`, which is how a start page is told apart here from a page the
+ * scenario opened.
+ */
+Then('the window shows {string} beside a start page', (state: unknown, tabId: string) => {
   const { split } = groupedWindow(state)
   expect(split.layout).toBe('1x2')
-  expect(split.toState().tileTabIds).toEqual(tabList(list))
+  const [left, right] = split.toState().tileTabIds
+  expect(left).toBe(tabId)
+  expect(right, 'the second pane holds a page the scenario opened').toMatch(/^filler-/)
 })
 
 Then('the group {string} still holds {string}', (state: unknown, name: string, list: string) => {

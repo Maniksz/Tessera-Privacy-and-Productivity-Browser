@@ -54,7 +54,6 @@ async function fakeWindow(tabIds: readonly string[]): Promise<FakeWindow> {
       order = [...next]
     },
     releaseTiles: () => false,
-    shrinkTiles: () => {},
     activeTabId: () => null,
     activateTab: () => {},
     liveTabIds: () => order,

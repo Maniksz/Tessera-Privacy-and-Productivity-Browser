@@ -18,7 +18,8 @@ import type { TabGroupBook } from '../data/TabGroupStore.js'
  *   - **Order.** A group must appear as one run of tabs. Grouping the first and the last tab of five
  *     has to move something, and the window's `#tabOrder` is the only thing that knows what.
  *   - **Tiles.** Collapsing a group hides its tabs, and a hidden tab must not go on holding a tile —
- *     that tile would show a page with no tab in the strip to close, mute or switch away from.
+ *     that tile would show a page with no tab in the strip to close, mute or switch away from. A
+ *     tiled view holding one is put away whole rather than thinned out (R11).
  *
  * Behind a host seam so both can be tested without a window, which matters because they interact: a
  * collapse changes which tabs are visible, and the visible set is what the order is drawn from.
@@ -44,8 +45,13 @@ export interface TabGroupHost {
   tabOrder(): readonly string[]
   setTabOrder(order: readonly string[]): void
   /**
-   * Take these tabs out of the grid without closing any of them — a collapsed group's tabs stay
-   * loaded (spec 2). Answers whether any of them held a tile at all.
+   * Take these tabs off the screen without closing any of them — a collapsed group's tabs stay
+   * loaded (spec 2). Answers whether any of them was on screen, which leaves the screen empty.
+   *
+   * Empty because of what "off the screen" means for each shape of window. A tiled view holding one
+   * of them is put away whole, with its seats and its view as they were, and the single layout left
+   * empty (R11). A single page leaves the only pane there is. Either way the window needs a tab
+   * afterwards, which is `setCollapsed`'s to give.
    *
    * Plural, and it has to reach the split rather than the tabs. The single-tab version wrote
    * `tileIndex = null` on a `Tab` and left `SplitController` believing the tile was still occupied,
@@ -53,9 +59,7 @@ export interface TabGroupHost {
    * claims to prevent (KTD5).
    */
   releaseTiles(tabIds: readonly string[]): boolean
-  /** Take away the panes the release has just emptied, without filling or closing anything (R9). */
-  shrinkTiles(): void
-  /** The tab in the active tile, read before the fold to decide whether R10 has anything to do. */
+  /** The tab in the active tile, read before the fold so it can take the window back after it. */
   activeTabId(): string | null
   /** Make a tab the active one, the way a click in the strip does. */
   activateTab(tabId: string): void
@@ -146,35 +150,35 @@ export class TabGroupController {
    * whatever the user has since put there. They come back as ordinary unassigned tabs, which is
    * what dragging one into a tile is for.
    *
-   * The way back is not a guess and is not here: `ArrangementController` holds what the panes looked
-   * like, and clicking a member is what applies it.
+   * The way back is not a guess and is not here: the tiled view's entry in the strip holds what the
+   * panes looked like, and clicking it is what applies it.
    *
-   * ## Three steps, in this order, and each one is load-bearing
+   * ## Two steps, in this order
    *
-   * **Release**, then **shrink**, then **activate**. The release reaches the split grid — that is the
-   * whole of `releaseTiles`, and the reason it exists (KTD5). The shrink then takes the emptied panes
-   * away rather than leaving them standing, which is KD7; it runs whether or not the user has layout
-   * adaptation switched on, because it is undoing something the *fold* did rather than adapting to
-   * anything (R9, AE10). And the activation exists because a release can leave the active tile empty:
-   * `SplitController.activeTabId()` is `tabIdAt(activeTile)`, so the window would be left with no
-   * active tab at all and every toolbar command would silently do nothing.
+   * **Release**, then **activate**. The release reaches the split grid — that is the whole of
+   * `releaseTiles`, and the reason it exists (KTD5). A tiled view holding a folded tab is put away
+   * whole: its seats, its dividers, its active tile and every start page in it stay as they were, and
+   * no page moves into a pane (R8, R11, AE6). It used to release the folded members' tiles one by one
+   * and shrink the layout round whatever was left, which rewrote the view — the next settle wrote the
+   * reduced seating into its entry, or ended it once fewer than two were left. Now that a view is an
+   * entry the user can see, a fold changing it is a membership nobody chose; `setCollapsed` reversing
+   * the earlier "release only the members' tiles" rule is the plan's own (R10 replaces R9/AE10).
    *
-   * The activation rule is narrow on purpose. Only a *previously active tab that is now hidden* moves
-   * the selection, and it moves it to the first tab of the strip order the fold has not hidden. A user
-   * watching a page in another pane keeps watching it — the fold is about the group, not about them —
-   * and a window whose every remaining tab is hidden gets no activation, because there is nothing left
-   * to activate.
+   * The activation exists because every release leaves the screen empty, and with nothing in the
+   * active tile `SplitController.activeTabId()` is `null`: every toolbar command would silently do
+   * nothing. The tab that was active takes the window back if the fold did not hide it — a page the
+   * user was watching beside the folded ones, in a view only partly grouped — and otherwise the first
+   * tab of the strip order the fold has not hidden. A window whose every remaining tab is hidden gets
+   * no activation, because there is nothing left to activate.
    *
-   * Expanding runs all three too, and all three decline: no member holds a tile, so `releaseTiles`
-   * answers `false`, nothing shrinks, and no tab was hidden, so nothing is activated.
+   * Expanding runs both too, and both decline: no member holds a tile, so `releaseTiles` answers
+   * `false` and nothing is activated. Nothing comes back on its own (R11).
    *
-   * ## Collapsing writes nothing here, and nothing to the arrangement either
+   * ## Collapsing writes nothing here
    *
-   * It used to be a rule with an argument behind it: a recording existed only where the *browser* took
-   * the tiles away, so the user folding tabs away deliberately recorded nothing. It is now simply not
-   * this controller's business — the last settle already recorded what the panes held, on a carrier
-   * this file cannot reach. Expanding and clicking a member brings the panes back from a recording
-   * made before the fold, not from one made by it.
+   * The put-away is the arrangement controller's, on a carrier this file cannot reach, and it writes
+   * the view down exactly as it stood — which is also what makes a tiling that had not settled yet
+   * survive the fold instead of being lost to it.
    */
   setCollapsed(id: string, collapsed: boolean): void {
     // Before the fold, because releasing the tile is what makes the answer `null`.
@@ -190,12 +194,13 @@ export class TabGroupController {
       way. One call because the grid should not be observable half-released; see `releaseTiles`.
     */
     const hidden = tabsHiddenByCollapse(this.groups())
-    if (this.host.releaseTiles(hidden)) this.host.shrinkTiles()
+    const cleared = this.host.releaseTiles(hidden)
 
     this.#settle()
 
-    if (wasActive === null || !hidden.includes(wasActive)) return
-    const visible = this.displayOrder().find((tabId) => !hidden.includes(tabId))
+    if (!cleared) return
+    const stays = wasActive !== null && !hidden.includes(wasActive) ? wasActive : undefined
+    const visible = stays ?? this.displayOrder().find((tabId) => !hidden.includes(tabId))
     if (visible !== undefined) this.host.activateTab(visible)
   }
 

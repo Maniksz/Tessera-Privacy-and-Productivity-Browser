@@ -37,7 +37,6 @@ interface Harness {
   order: () => string[]
   released: () => string[]
   releaseCalls: () => string[][]
-  shrinks: () => number
   activated: () => string[]
   broadcasts: () => number
   cleanup: () => Promise<void>
@@ -62,7 +61,6 @@ async function harness(
   let activeTab: string | null = options.activeTab ?? null
   const releaseCalls: string[][] = []
   const activated: string[] = []
-  let shrinks = 0
   let broadcasts = 0
 
   const host: TabGroupHost = {
@@ -82,9 +80,6 @@ async function harness(
       }
       return held.length > 0
     },
-    shrinkTiles: () => {
-      shrinks += 1
-    },
     activeTabId: () => activeTab,
     activateTab: (tabId) => {
       activated.push(tabId)
@@ -101,7 +96,6 @@ async function harness(
     order: () => order,
     released: () => releaseCalls.flat(),
     releaseCalls: () => releaseCalls,
-    shrinks: () => shrinks,
     activated: () => activated,
     broadcasts: () => broadcasts,
     cleanup: async () => {
@@ -241,21 +235,26 @@ describe('folding a group away', () => {
     await h.cleanup()
   })
 
-  it('asks for the emptied panes to go once the tiles are back (R9)', async () => {
+  it('gives the window a tab once the screen is cleared, whoever was active (R11)', async () => {
+    /*
+      A release that took anything off screen has left it empty: a tiled view holding a folded tab
+      is put away whole, and a single page leaves the only pane there is. So the window needs a tab
+      whether or not the one in front of the user was folded — no shrink is asked for any more,
+      because there are no panes left to take away (R11 replaces R9).
+    */
     const h = await harness(['t1', 't2', 't3'])
     const group = h.controller.create({ tabIds: ['t1', 't2'] })
     h.controller.setCollapsed(group.id, true)
-    expect(h.shrinks()).toBe(1)
+    expect(h.activated()).toEqual(['t3'])
     await h.cleanup()
   })
 
-  it('leaves the layout alone when no member held a tile', async () => {
-    // Nothing was emptied, so there is nothing to take away — and a shrink here would remove a pane
-    // the user is still using.
-    const h = await harness(['t1', 't2', 't3'], { tiled: ['t3'] })
+  it('activates nothing when no member was on screen', async () => {
+    // Nothing left the screen, so the page in front of the user is still there.
+    const h = await harness(['t1', 't2', 't3'], { tiled: ['t3'], activeTab: 't3' })
     const group = h.controller.create({ tabIds: ['t1', 't2'] })
     h.controller.setCollapsed(group.id, true)
-    expect(h.shrinks()).toBe(0)
+    expect(h.activated()).toEqual([])
     await h.cleanup()
   })
 
@@ -295,15 +294,14 @@ describe('folding a group away', () => {
     const h = await harness(['t1', 't2'])
     const group = h.controller.create({ tabIds: ['t1'] })
     h.controller.setCollapsed(group.id, true)
-    const shrinksAfterCollapse = h.shrinks()
+    const activatedAfterCollapse = [...h.activated()]
 
     h.controller.setCollapsed(group.id, false)
 
-    // Nothing to release — no tab is hidden any more — so nothing shrinks and no tile is handed
-    // back out. `ArrangementController` holds the way back and a click is what applies it (R11).
+    // Nothing to release — no tab is hidden any more — so nothing leaves the screen and no tile is
+    // handed back out. The tiled view's entry is the way back, and a click is what applies it (R11).
     expect(h.releaseCalls().at(-1)).toEqual([])
-    expect(h.shrinks()).toBe(shrinksAfterCollapse)
-    expect(h.activated()).toEqual([])
+    expect(h.activated()).toEqual(activatedAfterCollapse)
     await h.cleanup()
   })
 
@@ -325,13 +323,18 @@ describe('folding a group away', () => {
     await h.cleanup()
   })
 
-  it('leaves an active tab that was not folded away alone (R10)', async () => {
-    const h = await harness(['t1', 't2', 't3'], { activeTab: 't3' })
+  it('gives the window back to an active tab the fold did not hide (R10)', async () => {
+    /*
+      It used to be left alone, because it kept its pane. Now the view it sat in is put away with
+      the folded members, so leaving it alone would leave the window empty; it takes the window,
+      ahead of the first tab in the strip, because it is the page the user was looking at.
+    */
+    const h = await harness(['t0', 't1', 't2', 't3'], { activeTab: 't3' })
     const group = h.controller.create({ tabIds: ['t1', 't2'] })
 
     h.controller.setCollapsed(group.id, true)
 
-    expect(h.activated()).toEqual([])
+    expect(h.activated()).toEqual(['t3'])
     await h.cleanup()
   })
 

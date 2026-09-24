@@ -235,115 +235,121 @@ async function harness(options: {
   }
 }
 
-describe('folding a group away gives its tiles back', () => {
-  it('leaves the split holding none of the members, in a smaller layout (AE5, R9, R10)', async () => {
-    /*
-      The reported state, and the one the seam was silently failing to produce. Two members holding
-      the only two tiles of a `1x2`: releasing them has to reach the *split*, because that is what
-      `relayout()` reads to decide which view is on screen. Writing `tileIndex = null` on the tab
-      left both pages up with no tab in the strip to act on.
-    */
+describe('folding a group away puts its tiled view away (R11, AE6)', () => {
+  /*
+    It used to release the folded members' tiles one by one and shrink the layout round whatever was
+    left. With a tiled view an entry in the strip that rewrote the view: the next settle wrote the
+    reduced seating into it, or ended it once fewer than two were left. The fold now puts the view
+    away whole — its seats, its view and its start pages as they were — and gives the window the
+    first tab the strip still draws (R10, R11). Expanding brings nothing back by itself.
+  */
+  it('puts the view away unchanged and shows the first visible tab (AE6)', async () => {
     const h = await harness({ tabs: ['m1', 'm2', 'other'], layout: '1x2' })
     const group = h.seams.groups.create({ tabIds: ['m1', 'm2'] })
     h.seat(['m1', 'm2'])
     h.split.setActiveTile(1)
+    h.round()
+    const id = h.seams.arrangements.liveId
 
     h.seams.groups.setCollapsed(group.id, true)
+    h.round()
 
-    expect(h.split.tileOfTab('m1')).toBeNull()
-    expect(h.split.tileOfTab('m2')).toBeNull()
     expect(h.split.layout).toBe('1x1')
-    // R10: the active tab was one of the folded members, so the first tab the strip still draws
-    // takes over. Without this every toolbar command reads `activeTabId() === null` and no-ops.
-    expect(h.split.activeTabId()).toBe('other')
+    expect(h.split.toState().tileTabIds).toEqual(['other'])
+    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['m1', 'm2'] }])
+    expect(h.seams.arrangements.summaries()).toMatchObject([{ id, activeTile: 1, visible: false }])
     await h.cleanup()
   })
 
-  it('closes nothing, however many tiles it takes back (AE8, R13)', async () => {
-    const h = await harness({ tabs: ['m1', 'm2', 'm3', 'm4'], layout: '2x2' })
-    const group = h.seams.groups.create({ tabIds: ['m1', 'm2', 'm3', 'm4'] })
-    h.seat(['m1', 'm2', 'm3', 'm4'])
-
-    h.seams.groups.setCollapsed(group.id, true)
-
-    expect(h.closed()).toEqual([])
-    expect(h.split.toState().tileTabIds).toEqual([null])
-    expect(h.split.layout).toBe('1x1')
-    await h.cleanup()
-  })
-
-  it('keeps a filler the shrink would otherwise sweep up (R13)', async () => {
+  it('leaves the seats of a view it folds only partly as they were (R11)', async () => {
     /*
-      The trap in reusing the close path. `afterLayoutChange` closes every *orphaned* tab the browser
-      opened itself, so a shrink that let a filler fall off the end of the grid would cost the user a
-      tab — and R13 forbids losing even that one. The tiles that survive are compacted before the
-      layout changes, so nothing is orphaned and nothing is swept up.
+      The rewrite this replaces, in the one shape where it showed. Releasing `m1` and `m2` alone left
+      `f1 | f2` on screen, and the next settle wrote that into the view — two of its members gone
+      from its entry because a group was folded (R16).
     */
-    const h = await harness({ tabs: ['m1', 'm2', 'foreign'], layout: '2x2' })
-    h.addFiller('filler')
+    const h = await harness({ tabs: ['m1', 'm2', 'f1', 'f2'], layout: '2x2' })
     const group = h.seams.groups.create({ tabIds: ['m1', 'm2'] })
-    h.seat(['m1', 'm2', 'filler', 'foreign'])
+    h.seat(['m1', 'f1', 'm2', 'f2'])
+    h.round()
 
     h.seams.groups.setCollapsed(group.id, true)
+    h.round()
 
-    expect(h.closed()).toEqual([])
-    expect(h.split.toState().tileTabIds).toEqual(['filler', 'foreign'])
+    expect(h.recordings()).toEqual([{ layoutId: '2x2', seats: ['m1', 'f1', 'm2', 'f2'] }])
+    expect(h.split.toState().tileTabIds).toEqual(['f1'])
     await h.cleanup()
   })
 
-  it('shrinks with layout adaptation off and pulls no loose tab in (AE10, R9, R13, R15)', async () => {
-    /*
-      The mixed window, and the case where the close path would have gone wrong twice over:
-      `afterTabClosed` returns early when adaptation is off — so R9 would not hold at all — and when
-      it does run it seats `#firstHiddenTab()` in the freed tile, which is the filling KD7 rejected.
-      Neither happens here: the shrink is unconditional and moves only tabs that already held a tile.
-    */
+  it('closes nothing, not even a start page in the view (R8)', async () => {
+    const h = await harness({ tabs: ['m1', 'm2', 'm3'], layout: '2x2' })
+    h.addFiller('filler')
+    const group = h.seams.groups.create({ tabIds: ['m1', 'm2', 'm3', 'filler'] })
+    h.seat(['m1', 'm2', 'm3', 'filler'])
+    h.round()
+
+    h.seams.groups.setCollapsed(group.id, true)
+    h.round()
+
+    expect(h.closed()).toEqual([])
+    expect(h.recordings()).toEqual([{ layoutId: '2x2', seats: ['m1', 'm2', 'm3', 'filler'] }])
+    await h.cleanup()
+  })
+
+  it('puts the view away with layout adaptation off as well, pulling nothing in', async () => {
     const h = await harness({
-      tabs: ['m1', 'm2', 'f1', 'f2', 'loose'],
-      layout: '2x2',
+      tabs: ['m1', 'm2', 'loose'],
+      layout: '1x2',
       adaptLayoutToTabs: false
     })
     const group = h.seams.groups.create({ tabIds: ['m1', 'm2'] })
-    h.seat(['m1', 'f1', 'm2', 'f2'])
-    h.split.setActiveTile(0)
+    h.seat(['m1', 'm2'])
     h.round()
 
     h.seams.groups.setCollapsed(group.id, true)
 
-    expect(h.split.layout).toBe('1x2')
-    expect(h.split.toState().tileTabIds).toEqual(['f1', 'f2'])
-    expect(h.closed()).toEqual([])
-    // "kein weiterer Tab ist nachgerückt": the loaded, untiled foreign tab stays off the grid.
-    expect(h.split.tileOfTab('loose')).toBeNull()
-    // R15: the recording of the tiling that has just been folded away is still there to come back to.
-    expect(h.recordings()).toEqual([{ layoutId: '2x2', seats: ['m1', 'f1', 'm2', 'f2'] }])
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['loose'])
+    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['m1', 'm2'] }])
     await h.cleanup()
   })
 
-  it('leaves an active tab that was not a member active (R10)', async () => {
-    const h = await harness({ tabs: ['m1', 'm2', 'f1', 'f2'], layout: '2x2' })
+  it('writes a view down that had not settled yet, rather than losing it', async () => {
+    // Two messages in one turn — tile these, fold their group — reach the fold before any round.
+    const h = await harness({ tabs: ['m1', 'm2', 'other'], layout: '1x2' })
     const group = h.seams.groups.create({ tabIds: ['m1', 'm2'] })
-    h.seat(['m1', 'f1', 'm2', 'f2'])
+    h.seat(['m1', 'm2'])
+
+    h.seams.groups.setCollapsed(group.id, true)
+
+    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['m1', 'm2'] }])
+    await h.cleanup()
+  })
+
+  it('gives the window back to a page that was beside the folded ones and stays visible', async () => {
+    // Before the invariant that keeps a view in one group (U8) a view can be partly grouped. The
+    // page the user was looking at is not folded, so it is the one that takes the window.
+    const h = await harness({ tabs: ['m1', 'first', 'watched'], layout: '1x2' })
+    const group = h.seams.groups.create({ tabIds: ['m1'] })
+    h.seat(['m1', 'watched'])
     h.split.setActiveTile(1)
 
     h.seams.groups.setCollapsed(group.id, true)
 
-    // It moved tile — the survivors are compacted — but it is still the page in front of the user.
-    expect(h.split.activeTabId()).toBe('f1')
+    expect(h.split.toState().tileTabIds).toEqual(['watched'])
     await h.cleanup()
   })
 
-  it('takes three tiles back in one release, not one release per member (KTD5)', async () => {
-    const h = await harness({ tabs: ['m1', 'm2', 'm3', 'other'], layout: '1x3' })
-    const group = h.seams.groups.create({ tabIds: ['m1', 'm2', 'm3'] })
-    h.seat(['m1', 'm2', 'm3'])
+  it('takes a single page out of its pane, one release and one redraw (KTD5)', async () => {
+    const h = await harness({ tabs: ['m1', 'other'], layout: '1x1' })
+    const group = h.seams.groups.create({ tabIds: ['m1'] })
+    h.seat(['m1'])
 
     h.seams.groups.setCollapsed(group.id, true)
 
-    // One release carrying all three, and one redraw for it — the reason the capability is plural.
     expect(h.releases()).toBe(1)
     expect(h.redraws()).toBe(1)
-    expect(['m1', 'm2', 'm3'].map((tabId) => h.split.tileOfTab(tabId))).toEqual([null, null, null])
+    expect(h.split.tileOfTab('m1')).toBeNull()
+    expect(h.split.activeTabId()).toBe('other')
     await h.cleanup()
   })
 
@@ -361,23 +367,22 @@ describe('folding a group away gives its tiles back', () => {
     await h.cleanup()
   })
 
-  it('brings the members back untiled when the group is opened again (R11)', async () => {
+  it('brings nothing back when the group is opened again (R11)', async () => {
     /*
-      Expanding is not the way back to a tiling — `ArrangementController` holds that, and clicking a
-      member is what applies it. The members return as ordinary unassigned tabs.
+      Expanding is not the way back to a tiling — the entry is, and a click on it applies it. The
+      members stay where the fold left them: in their put-away view, off the grid.
     */
     const h = await harness({ tabs: ['m1', 'm2', 'other'], layout: '1x2' })
     const group = h.seams.groups.create({ tabIds: ['m1', 'm2'] })
     h.seat(['m1', 'm2'])
+    h.round()
     h.seams.groups.setCollapsed(group.id, true)
 
-    const layoutAfterCollapse = h.split.layout
     h.seams.groups.setCollapsed(group.id, false)
 
     expect(h.seams.groups.isHidden('m1')).toBe(false)
-    expect(h.split.tileOfTab('m1')).toBeNull()
-    expect(h.split.tileOfTab('m2')).toBeNull()
-    expect(h.split.layout).toBe(layoutAfterCollapse)
+    expect(h.split.toState().tileTabIds).toEqual(['other'])
+    expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['m1', 'm2'] }])
     await h.cleanup()
   })
 })

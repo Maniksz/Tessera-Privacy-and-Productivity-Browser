@@ -167,10 +167,10 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     Before `occupancy`, and that is the second ordering constraint in this file.
 
     The occupancy controller asks the groups one question: whether a tab is folded away, which decides
-    whether it may be pulled back into a pane. That edge is satisfied directly by the construction
-    order. The one below it — `shrinkTiles`, a fold asking the panes it has just emptied to go away —
-    runs the other way and is therefore read through the same lazy `occupancy` as `drag`'s. It is
-    reached only from `setCollapsed`, so nothing calls it during construction.
+    whether a single view may show it when its own tab closes. That edge is satisfied directly by the
+    construction order. The fold used to ask the other way — `shrinkTiles`, the panes it had emptied
+    taken away. That edge now goes to `arrangements` instead, because a fold puts its tiled view away
+    whole (R11), and it is read through a closure for the same reason `drag` reads `occupancy`.
 
     The groups used to ask a third thing — `keepArrangement`, the tiling on its way out — and that edge
     is the defect this wiring was rebuilt for. A group was the only place a layout could be written
@@ -182,8 +182,12 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     book: internals.tabGroups,
     tabOrder: () => internals.tabOrder(),
     setTabOrder: (order) => internals.setTabOrder(order),
-    releaseTiles: (tabIds) => releaseTiles(internals, tabIds),
-    shrinkTiles: () => occupancy?.shrinkAfterRelease(),
+    /*
+      `arrangements` is declared further down, and this closure is the one place that reaches it
+      early. Safe for the reason every lazy edge in this file is: the fold is a user action, so
+      nothing calls it during construction, and by the first call the constant exists.
+    */
+    releaseTiles: (tabIds) => releaseTiles(internals, () => arrangements.putAway(), tabIds),
     activeTabId: () => internals.split.activeTabId(),
     activateTab: (tabId) => internals.activateTab(tabId),
     liveTabIds: () => internals.tabIds(),
@@ -203,8 +207,10 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
   })
 
   /*
-    Between `groups` and `occupancy`, and that is the third ordering constraint — the only one where
-    the dependency runs *both* ways.
+    Between `groups` and `occupancy`, and that is the third ordering constraint — one of two where the
+    dependency runs *both* ways. The other is with `groups`: this one asks the groups what is hidden,
+    and since U3 a fold asks this one to put its tiled view away — through a closure over the constant,
+    for the reason given where `groups` is built.
 
     The occupancy controller asks this one to keep the tiling it is about to put away; this one asks
     the occupancy controller to put a recording back on screen. One of the two therefore has to be
@@ -254,6 +260,13 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     tabOrder: () => internals.tabOrder(),
     isEphemeral: (tabId) => internals.tab(tabId)?.ephemeral === true,
     isHiddenByCollapse: (tabId) => groups.isHidden(tabId),
+    /*
+      Answered from the book alone, so the question carries nothing about groups to the occupancy
+      controller (KTD4). Whether a folded view may come back is `restore`'s to decide, which is why
+      the strip-order walk below needs no group edge either.
+    */
+    isArrangementMember: (tabId) => arrangements.isMember(tabId),
+    restoreFirstArrangement: () => restoreFirstArrangement(internals, arrangements),
     unassign: (tabId) => internals.tab(tabId)?.setTileIndex(null),
     assignTabToTile: (tabId, tileIndex) => internals.assignTabToTile(tabId, tileIndex),
     closeTab: (tabId) => internals.closeTab(tabId),
@@ -358,30 +371,51 @@ function stowTiling(internals: WindowInternals, audio: TileAudioController): voi
   }
   if (split.layout === '1x1') return
 
-  internals.applyLayout('1x1', { fill: false, rehome: false })
+  internals.applyLayout('1x1', { fill: false })
   split.restoreView(defaultArrangementView('1x1'), internals.contentRect())
   audio.apply()
 }
 
 /**
- * Takes several tabs out of the grid at once, closing none of them, and redraws once.
+ * Takes a fold's tabs off the screen, closing none of them, and answers whether any was on it.
  *
- * Written against the split rather than `Tab.setTileIndex(null)`, and that is the correction it exists
- * for: folding a group away used to write only the field the strip draws from and tell `SplitController`
- * nothing — so `relayout()`, which reads `split.tabIdAt`, went on showing the page with no tab left in
- * the strip to close, mute or switch away from it (KTD5). Here rather than on the window because every
- * part of it is already a projection of `WindowInternals`: the split, the layer, the tabs, one redraw.
+ * ## A tiled view goes whole
  *
- * Plural because a group is released as a group. One redraw for the whole fold rather than one per
- * member, and no half-released grid in between for anything downstream to read.
+ * A split holding a folded tab is put away through `putAway` — `ArrangementController.putAway`, which
+ * writes the view down as it stands and then stows it — rather than having the folded tiles emptied
+ * one by one (R11, AE6). Emptying them was what this did until U3, and with the view an entry in the
+ * strip it was a rewrite of that entry: the survivors were compacted into a smaller layout and the
+ * next settle wrote the reduced seating in, or ended the view once fewer than two were left. Whole,
+ * the view keeps its seats, its dividers, its active tile and its start pages (R8), and comes back
+ * with them once the group is open and its entry is clicked. Any split, not only one showing two or
+ * more tabs: a split with one folded page and empty panes beside it has nothing to keep, and putting
+ * it away is still what leaves no empty pane standing, now that the fold asks for no shrink.
  *
- * Answers whether any of them actually held a tile, which tells the collapse whether there is a layout
- * to shrink. Naming a tab that is already off the grid is ordinary rather than an error: the caller
- * passes every hidden member, and most folds happen with some of them already untiled.
+ * Which tabs are folded is the only thing about groups that reaches here, and it arrives as ids.
+ *
+ * ## A single page leaves its pane
+ *
+ * Written against the split rather than `Tab.setTileIndex(null)`, and that is the correction this
+ * function first existed for: folding a group away used to write only the field the strip draws from
+ * and tell `SplitController` nothing — so `relayout()`, which reads `split.tabIdAt`, went on showing
+ * the page with no tab left in the strip to close, mute or switch away from it (KTD5). One redraw,
+ * and no half-released grid in between for anything downstream to read.
+ *
+ * Either way the screen is left empty when the answer is `true`, which is what tells the fold it has
+ * a tab to give the window. Naming a tab that is already off the grid is ordinary rather than an
+ * error: the caller passes every hidden member, and most folds happen with some of them untiled.
  */
-function releaseTiles(internals: WindowInternals, tabIds: readonly string[]): boolean {
+function releaseTiles(
+  internals: WindowInternals,
+  putAway: () => void,
+  tabIds: readonly string[]
+): boolean {
   const held = tabIds.filter((tabId) => internals.split.tileOfTab(tabId) !== null)
   if (held.length === 0) return false
+  if (internals.split.layout !== '1x1') {
+    putAway()
+    return true
+  }
 
   // What `assignTabToTile` dismisses and for the same reason: every tile-bound surface belongs to a
   // tile whose content is about to leave. See `TILE_BOUND_KINDS`.
@@ -393,6 +427,31 @@ function releaseTiles(internals: WindowInternals, tabIds: readonly string[]): bo
   internals.relayout()
   internals.broadcast()
   return true
+}
+
+/**
+ * Brings back the first tiled view in strip order that may come back (KTD10).
+ *
+ * The last resort of a single view whose only tab closed with nothing but members and folded tabs
+ * left. "First in strip order" is the view whose first member comes first in the strip, which is
+ * where the strip draws its entry (KTD6). Each candidate is offered to `restore`, which refuses one
+ * a collapsed group is holding or one that is not wholly this window's, and the walk goes on past a
+ * refusal — so a folded view early in the strip does not leave the window blank while an open one
+ * waits further along. Nothing at all is the answer when none may come back.
+ */
+function restoreFirstArrangement(
+  internals: WindowInternals,
+  arrangements: ArrangementController
+): void {
+  const held = internals.arrangements.list()
+  const tried = new Set<string>()
+  for (const tabId of internals.tabOrder()) {
+    const owner = held.find((arrangement) => arrangement.seats.includes(tabId))
+    if (owner === undefined || tried.has(owner.id)) continue
+    tried.add(owner.id)
+    arrangements.restore(owner.id)
+    if (arrangements.liveId === owner.id) return
+  }
 }
 
 /**

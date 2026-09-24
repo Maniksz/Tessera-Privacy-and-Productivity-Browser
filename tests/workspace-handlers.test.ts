@@ -44,10 +44,13 @@ class FakeWindow implements WorkspaceWindow {
   readonly dismissed: string[] = []
   /** The tiles as they stood each time the visible tiled view was put away. */
   readonly putAway: Array<Array<string | null>> = []
+  /** Tabs that belong to a tiled view, which a workspace may not take (KTD10). */
+  readonly members = new Set<string>()
   readonly arrangements = {
     putAway: (): void => {
       this.putAway.push(this.tileUrls())
-    }
+    },
+    isMember: (tabId: string): boolean => this.members.has(tabId)
   }
   /** How each tab the handlers asked for was to be opened. */
   readonly created: Array<{ background: boolean; tileIndex: null }> = []
@@ -65,6 +68,8 @@ class FakeWindow implements WorkspaceWindow {
       tabOrder: () => [...this.#tabs.keys()],
       isEphemeral: (tabId) => this.#tabs.get(tabId)?.ephemeral === true,
       isHiddenByCollapse: (tabId) => this.hidden.has(tabId),
+      isArrangementMember: (tabId) => this.members.has(tabId),
+      restoreFirstArrangement: () => {},
       unassign: () => {},
       assignTabToTile: (tabId, tileIndex) => this.assignTabToTile(tabId, tileIndex),
       closeTab: (tabId) => {
@@ -357,6 +362,25 @@ describe('opening', () => {
     await call('workspaces:open', { id })
     expect(target.split.tabIdAt(0)).not.toBe(folded)
     expect(target.tileUrls()).toEqual(['https://a.example/'])
+  })
+
+  it('opens a new tab for an address a member of a tiled view shows, and the member stays (KTD10)', async () => {
+    /*
+      Taking it would move a page out of its view's entry and into the workspace's tiling unasked —
+      and since the settle after it could neither adopt nor create an entry over a mixed seating,
+      the workspace would be left with no entry of its own either (R16).
+    */
+    const id = await saved('1x2', ['https://a.example/', 'https://b.example/'])
+    const target = new FakeWindow()
+    window = target
+    const member = target.open('https://a.example/')
+    target.members.add(member)
+
+    await call('workspaces:open', { id })
+
+    expect(target.split.tileOfTab(member)).toBeNull()
+    expect(target.tileUrls()).toEqual(['https://a.example/', 'https://b.example/'])
+    expect(target.created).toHaveLength(2)
   })
 
   it('opens in a private window, which may open and not save', async () => {

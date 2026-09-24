@@ -255,7 +255,7 @@ export interface ClosingTab {
  *
  * A filler the browser opened, an internal page, a tab restored unloaded, a view already gone, or a view that
  * has not committed an address. Fillers are why this exists: `TileOccupancyController.afterLayoutChange` closes
- * them and redistributes the rest in the same pass, which only works while their close is synchronous.
+ * them in the middle of a layout change, which only settles in one pass while their close is synchronous.
  */
 export function closesAtOnce(tab: ClosingTab): boolean {
   if (tab.ephemeral || liveContentsOf(tab.view) === null) return true

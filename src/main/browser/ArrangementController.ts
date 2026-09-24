@@ -288,6 +288,19 @@ export class ArrangementController {
   }
 
   /**
+   * Whether a tab belongs to a tiled view, on screen or put away, of any window (KTD4).
+   *
+   * The one question the automatic paths ask before they choose a page — the single view whose tab
+   * closed, a workspace looking for an open tab to reuse (U3, KTD10) — so that none of them takes a
+   * member out of its entry. Any window's rather than only this one's because tab ids are unique:
+   * a tab of another window is never among the candidates, so asking about it costs nothing, and
+   * leaving `WindowTabs` out keeps the answer a plain fact about the book.
+   */
+  isMember(tabId: string): boolean {
+    return this.#host.book.list().some((arrangement) => arrangement.seats.includes(tabId))
+  }
+
+  /**
    * A tab has closed: its seat goes empty, and an arrangement left with fewer than two tabs ends,
    * its last tab an ordinary one (KTD2). Called by the window once the tab has really gone.
    *
