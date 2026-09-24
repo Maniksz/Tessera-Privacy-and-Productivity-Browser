@@ -6,7 +6,10 @@ gemeldet wurden.
 
 **Legende** — ✅ gebaut und belegt · 🟡 teilweise · ⬜ offen · ❓ braucht eine Entscheidung · ⛔ verworfen
 
-> **Zuletzt gegen den Code geprüft:** 24.09.2026 (Roadmap Herbst 2026, U5). Geprüft sind die Tabellen am
+> **Zuletzt gegen den Code geprüft:** 25.09.2026, nur für Split View, Tab-Gruppen und Tab-Leiste (Plan
+> Kachelansicht, U11): die Tabellen am Anfang, die Entscheidungen, die offenen Fragen und die bekannten
+> Risiken sind dafür nachgezogen, neu ist „Kachelansicht als ein Tab, Gruppen mit Drag & Drop" weiter unten.
+> Alles andere zuletzt am 24.09.2026 (Roadmap Herbst 2026, U5). Geprüft sind die Tabellen am
 > Anfang, „Noch zu bauen", die Entscheidungen, die Härtung und die bekannten Risiken; die Durchgangsberichte
 > vom Juli sind Geschichte und bleiben so stehen, wie sie damals galten. Neu ist „Roadmap Herbst 2026" weiter
 > unten. Davor zuletzt am 29.07.2026 (dritter Durchgang desselben Tages) — dort stimmte in vier Fällen der
@@ -34,7 +37,7 @@ gemeldet wurden.
 | 4 | Layout-Tasten alle oben rechts | ✅ | Ein Knopf mit Dropdown; Smoke prüft 1 Knopf, 5 Einträge, genau 1 aktiv |
 | 5 | Kein Settings-Knopf | ✅ | Der Knopf ist da und öffnet seit dem dritten Durchgang **den Tab** `tessera://settings`. Das Panel daneben ist gelöscht: eine Oberfläche, ein Eingang. Der frühere Eintrag hier nannte es ein „Overlay" — das war es nie, siehe „Einstellungen: eine Seite statt eines Panels" |
 | 6 | Kein Extension-Knopf | ✅ | Dito über `ExtensionsView.tsx`; `extensions.html` ist ein eigener Tab |
-| 7 | Tabs werden in der Multi-View nicht zur Tab-Gruppe | ✅ | **Gebaut.** Die Anordnung wird jetzt bei *jedem* Settle geschrieben statt einmal beim Verdrängen, und genau das macht den Rest möglich: eine Aufnahme, die nie veraltet, muss auch nie verbraucht werden. Details und die drei Entscheidungen unter „Multi-View ist eine Tab-Gruppe" |
+| 7 | Tabs werden in der Multi-View nicht zur Tab-Gruppe | ✅ | **Gebaut.** Die Anordnung wird jetzt bei *jedem* Settle geschrieben statt einmal beim Verdrängen, und genau das macht den Rest möglich: eine Aufnahme, die nie veraltet, muss auch nie verbraucht werden. Details und die drei Entscheidungen unter „Multi-View ist eine Tab-Gruppe". **Seit 25.09.2026 ist der Träger sichtbar:** jede Kachelansicht ist ein Eintrag in der Tab-Leiste, und eine Gruppe nimmt sie als Ganzes auf, siehe „Kachelansicht als ein Tab, Gruppen mit Drag & Drop" |
 | 8 | In der Multi-View nur „main page" zurück; Wischen; Leiste am oberen Rand | ✅ | Drei Teile, alle drei da: aktive Kachel folgt dem Klick (`split:setActiveTile`), Hover-Leiste als `overlay/TileBarSurface.tsx`, Wischen über `decideNavigationGesture` in `TileInputController` — nach Zeiger geroutet, nicht nach Fokus |
 | 9 | Icons oben links zu klein | ✅ | 32×32 Knopf mit 20 px SVG |
 | 10 | Kein Home-Knopf | ✅ | Smoke: 4 Navigationsknöpfe |
@@ -70,10 +73,10 @@ ohne Dashboard und ohne Symbol nicht konfigurierbar. Entschieden: **nativ bauen.
 
 | Punkt | Stand |
 |---|---|
-| Layout wählen soll leere Kacheln füllen | ✅ Füllen **mit Aufräumen**: unberührte Füller werden beim Verkleinern geschlossen, alles Angefasste bleibt (Spec 2). Ein Schalter, `splitView.adaptLayoutToTabs` |
-| Tab schließen soll die Kachel entfernen | ✅ Erst wird ein geladener, ausgeblendeter Tab hineingezogen; nur wenn nichts übrig ist, verschwindet die Kachel |
+| Layout wählen soll leere Kacheln füllen | ✅ Füllen **mit Aufräumen**, ein Schalter, `splitView.adaptLayoutToTabs`. Seit 25.09.2026 (R8): wählt der Benutzer weniger Kacheln oder beendet er die Kachelansicht, schließt zuerst jede Kachel, die gerade die Startseite zeigt, egal wer sie geöffnet hat; die übrigen Seiten rücken nach, was keine Kachel findet, wird ein normaler Tab hinter dem Eintrag. Weglegen, Einklappen der Gruppe und das Schließen eines einzelnen Tabs schließen keine Startseite |
+| Tab schließen soll die Kachel entfernen | ✅ Die Kachelansicht rückt zusammen (Schalter an) oder behält eine leere Kachel (Schalter aus). **Hineingezogen wird seit 25.09.2026 nichts mehr** (KTD10): mit sichtbaren Einträgen wäre jedes Nachziehen ein Tab, der ungefragt aus der Leiste verschwindet. Schließt der einzige Tab eines Fensters mit einer Kachel, zeigt es den ersten Tab, der weder eingeklappt noch Mitglied einer Kachelansicht ist, sonst die erste Kachelansicht |
 | Rein ziehen auf 3 oder 4 Kacheln geht nicht | ✅ Randzonen gab es nur für die Einzelansicht; jetzt für jede teilbare Kachel |
-| Neuer Tab in der Multi-View ersetzt den ersten | ✅ Eine leere Kachel gewinnt immer gegen eine belegte |
+| Neuer Tab in der Multi-View ersetzt den ersten | ✅ Ein neuer Tab bekommt das ganze Fenster; die Kachelansicht wird weggelegt und bleibt als Eintrag stehen, seit 25.09.2026 auch bei ausgeschalteter Anpassung (KTD9). Früher gewann eine leere Kachel gegen eine belegte |
 | DOM-Elemente selbst blocken wie uBO | ✅ Neu gebaut, weil es still scheiterte („keins der Elemente verschwindet"): der Commit gab `void` zurück und verwarf Regeln auf fünf Wegen ohne Meldung, und im privaten Fenster erreichte eine Regel nie eine Seite. Jetzt friert der Klick die Auswahl ein, eine Leiste auf der Overlay-Schicht zeigt Selektor und gemessene Trefferzahl, lässt breiter und enger ziehen, und jeder Versuch endet in einem von acht benannten Ausgängen. Die Vorschau läuft als Zusatz-Stylesheet nur in der pickenden Ansicht; nach dem Bestätigen wird sie aufgehoben, die Regel geschrieben, neu ausgeliefert und nachgemessen, erst dann heißt es „wirksam". Private Fenster bekommen ihre Regeln pro Ansicht, nie über den globalen Engine-Slot; gespeicherte Regeln lassen sich dort ein-, aber nicht ausschalten. Die Regelverwaltung ist ein Textfeld, das keine Regel löscht, die es nicht gezeigt hat; an der 500er-Grenze wird abgelehnt statt die älteste Regel zu verdrängen. Plan: `docs/plans/2026-08-09-001-fix-element-picker-plan.md`. Die zwei Grenzen bleiben Absicht: keine Netzregeln aus dem Picker, keine Regel ohne Host |
 
 ## Später gemeldete Fehler und Wünsche
@@ -100,7 +103,7 @@ Verbindungsstellen fehlen. Dieser Zustand ist aufgelöst — alles unten läuft 
 | Verlauf | Ende zu Ende belegt: Besuch aufgezeichnet, gefunden, gelöscht; `tessera://history` rendert |
 | Favicons | Im laufenden Programm: `naturalWidth = 1` über die Schemagrenze `file://` → `tessera://` |
 | Thumbnails | Im laufenden Programm: 480×300, dekodiert, richtige Proportionen |
-| Tab-Gruppen | Chip, Farbband, Einklappen, Inline-Umbenennen, Kontextmenü |
+| Tab-Gruppen | Chip, Farbband, Einklappen, Inline-Umbenennen, Kontextmenü, Drag & Drop hinein, heraus und innerhalb der Leiste (`strip:drop`). Eine Kachelansicht liegt ganz in einer Gruppe oder in keiner |
 | Fingerprint-Maskierung | In der Sitzung verdrahtet. iframes und Worker bleiben unmaskiert — der Preis dafür, Chromium nicht zu forken |
 | Medien-Erkennung | Beobachtung in der Anfrage-Pipeline, HLS- und DASH-Manifeste, Download mit benannten Verweigerungsgründen |
 | Berechtigungs-Dialog | Auf der Overlay-Schicht, mit Warteschlange. Escape blockiert; ein privates Fenster merkt sich nichts. **Korrektur 23.09.2026:** der Dialog war bis dahin *nicht* angeschlossen — `PermissionArbiter.ask()` hatte keinen Produktionsaufrufer, „Fragen" war ein stilles Nein (IMPROVEMENT-PLAN V1). Jetzt verdrahtet, siehe „Härtung nach dem Projekt-Review" |
@@ -212,7 +215,9 @@ wiederherstellen — also braucht sie auch nicht verbraucht zu werden. Der zweit
 > Aufnahme, die nie veraltet, ist richtig — sie an die Gruppe zu binden, war es nicht.** Die Anordnung hat
 > jetzt einen eigenen, unsichtbaren Träger (`src/shared/arrangements/`, `ArrangementController`), auf den
 > nur die Automatik schreibt, und `src/shared/tabgroups/` trägt kein `layout` mehr. Was hier folgt, ist
-> Vorgeschichte.
+> Vorgeschichte. **Seit 25.09.2026 ist der Träger sichtbar:** jede Kachelansicht ist ein Eintrag in der
+> Tab-Leiste, und sie ändert sich nur durch benannte Vorgänge; siehe „Kachelansicht als ein Tab, Gruppen mit
+> Drag & Drop".
 
 Drei Entscheidungen des Benutzers, mit ihren Kosten:
 
@@ -290,6 +295,11 @@ also eine Brücke in einer besuchten Seite, die Spezifikation 6 verbietet. `ZOOM
 
 ### Kachelleiste: Home und Schließen, und `#rehomeHiddenTabs` am Schalter
 
+> **Überholt am 25.09.2026 (Plan Kachelansicht, KTD10):** `#rehomeHiddenTabs` und das Nachziehen in
+> `afterTabClosed` gibt es nicht mehr, und mit ihnen das Nachrücken an den drei Stellen unten. Der Schalter
+> regelt nur noch das Füllen neuer Kacheln mit Startseiten und das Zusammenrücken nach dem Schließen. Home und
+> Schließen in der Kachelleiste bleiben; dazu kam „Aus Kachelansicht lösen".
+
 Beides gebaut, **ohne einen einzigen neuen i18n-Schlüssel** — `toolbar.home` und `tab.close` gab es
 schon, und diese Datei borgt sich ohnehin bereits vier `toolbar.*`-Schlüssel.
 
@@ -316,7 +326,8 @@ mit `r=6.5` auf der Fläche des Stopp-Kreuzes, damit die Zeile ihren Rhythmus be
 ### Handwerk
 
 - **Stryker-Erlaubnisliste**: `tabgroups/strip.ts`, `tabgroups/schema.ts` und das neue
-  `browser/navigation-policy.ts` eingetragen.
+  `browser/navigation-policy.ts` eingetragen. *(`tabgroups/strip.ts` ist seit 25.09.2026 entfernt; die Leiste
+  rechnet in `shared/strip/`, das als `src/shared/strip/**/*.ts` in der Liste steht.)*
 - **`catalog.ts` geteilt: 1219 → 94 Zeilen.** Nach Sprache (`catalog.en.ts` 665, `catalog.de.ts` 521),
   nicht nach Namensraum, weil ein Renderer immer nur eine Sprache zeichnet. Verlustfreiheit ist nicht
   „durchgesehen", sondern belegt: sha256 der ausgeschnittenen Literale gegen die Git-Fassung, plus ein
@@ -664,8 +675,8 @@ Code auf sie verweist.
 | ~~**Kachelleiste nur im Kachelmodus**~~ **erledigt** | `tileBarStep` gibt bei `rects.length <= 1` jetzt `hide` zurück. Die Entscheidung liegt dort und nicht in der Oberfläche, weil ein Renderer, der eine vom Kern gebaute und eingemessene Darstellung nicht zeichnet, die Schicht mit einer unsichtbaren Fläche zurücklässt, die Zeigerereignisse schluckt |
 | ~~**Leiste früher ausfahren**~~ **erledigt** | `TILE_BAR_REVEAL_WITHIN` von 6 auf **16 px**. Die Invariante ist im Kommentar festgehalten: strikt unter `TILE_BAR_HEIGHT`, das strikt unter `TILE_BAR_POINTER_AWAY` liegt — treffen sich die beiden Schwellen, beantworten Ausfahren und Einfahren dieselbe Position auf aufeinanderfolgenden Messungen verschieden, und genau das Flackern soll das Paar verhindern. Ein Test heftet die Reihenfolge fest |
 | ~~**Neuer Tab soll ein neuer Tab sein**~~ **erledigt, beide Hälften** | Widersprach dem damaligen Verhalten: `TileOccupancyController` füllte leere Kacheln absichtlich, weil drei Kacheln mit „zieh einen Tab hierher" eine Anweisung statt eines Browsers waren. Umgekehrt wie gewünscht — `claimTileForNewTab` legt die Kacheln weg und gibt die eine zurück, die bleibt. Die zweite Hälfte ist die Zeile darunter: ohne Aufnahme der Anordnung wäre die Umkehr ein Verlust gewesen |
-| **…aber die Anordnung darf dabei nicht verloren gehen** | Nachtrag des Benutzers: „er soll die layout gruppe der anderen tabs nicht auflösen, daher brauchen wir ja die tab gruppen." Die weggelegten Kacheln blieben geladen und im Streifen, aber *welches Layout* und *welche Kachel je Tab* war weg — es gab keinen Weg zurück. Die Anordnung gehört damit auf die **Tab-Gruppe**: beim Wegräumen aufnehmen (bestehende Gruppe wiederverwenden, sonst eine anlegen), beim Zurückkehren auf einen Gruppen-Tab wiederherstellen. Ohne die zweite Hälfte ist es eine Erinnerung, die niemand lesen kann. **Gebaut und in der echten App belegt** — `TabGroup.layout` trägt Layout-Id und einen Eintrag je Kachel, `keepArrangement` nimmt beim Wegräumen auf, `takeArrangementFor` gibt beim Anklicken zurück — und *verbrauchte* die Aufnahme dabei, damit eine zweite Aktivierung nicht spätere Arbeit zurücknimmt. **Das gilt seit dem zweiten Durchgang des 29.07.2026 nicht mehr:** die Anordnung wird bei jedem Settle neu geschrieben, kann also nicht veralten, und wird deshalb nicht mehr verbraucht. Der Smoke-Test fährt die Schleife, die ein Benutzer fährt: zurück zur verdrängten Seite → Anordnung ist da; ein Tab **ohne** Aufnahme → weiterhin ganzes Fenster; zweite Verdrängung → Anordnung kommt wieder. **Der Träger ist am 10.08.2026 gewechselt (KD1, KD2):** das Bedürfnis war richtig und die Schleife bleibt, aber die Anordnung gehört *nicht* auf die Tab-Gruppe. Sie an die Gruppe zu binden hieß, die Automatik zur zweiten Schreiberin an einer Struktur zu machen, die dem Benutzer gehört — sie legte Gruppen an und änderte Mitgliedschaften, ohne dass er etwas getan hätte. Die Aufnahme liegt jetzt auf einem eigenen, unsichtbaren Träger (`src/shared/arrangements/`, `ArrangementController`, `arrangements.json`); `TabGroup.layout`, `keepArrangement` und `takeArrangementFor` gibt es nicht mehr |
-| ~~**Ziehen auf die mittlere Kachel geht nicht**~~ **erledigt** | Der Verdacht traf zu und war zweiteilig. Geometrie: eine Lücke gehört *einer* Spalte, eine mittlere Spalte kann also nicht von beiden Seiten gleichzeitig beschnitten werden — beide Bänder der Mittelspalte waren Duplikate und nahmen zusammen 60 % der Fläche, sodass nur 40 % einen einfachen Ablegevorgang annahmen. Verhalten: `applyDrop` macht den Layoutwechsel jetzt mit `rehome: false`, weil das Nachrücken die neu entstandene Kachel mit dem erstbesten geladenen Tab füllte und die verdrängte Seite damit vom Schirm nahm. Geprüft über `LAYOUT_IDS` erschöpfend, plus benannte Tests für die Mittelkachel von `1x3` und beide von `1x4`. Und weil die Meldung aus der Benutzung kam, auch dort: `runEveryDragCheck` in `scripts/smoke.mjs` zieht in der echten App mit synthetischer Maus **jede** Zone **jedes** Layouts an, gezielt auf die Mitte ihrer eigenen Trefferfläche — und prüft zwei Dinge, von denen das zweite das interessante ist: dass die Seite dort landet, wo der Indikator es versprach, *und* dass keine bereits sichtbare Seite dabei verschwindet. Achtzehn der vierundzwanzig Teilungszonen fielen bei der zweiten Prüfung durch, beide Zonen der Mittelspalte darunter |
+| **…aber die Anordnung darf dabei nicht verloren gehen** | Nachtrag des Benutzers: „er soll die layout gruppe der anderen tabs nicht auflösen, daher brauchen wir ja die tab gruppen." Die weggelegten Kacheln blieben geladen und im Streifen, aber *welches Layout* und *welche Kachel je Tab* war weg — es gab keinen Weg zurück. Die Anordnung gehört damit auf die **Tab-Gruppe**: beim Wegräumen aufnehmen (bestehende Gruppe wiederverwenden, sonst eine anlegen), beim Zurückkehren auf einen Gruppen-Tab wiederherstellen. Ohne die zweite Hälfte ist es eine Erinnerung, die niemand lesen kann. **Gebaut und in der echten App belegt** — `TabGroup.layout` trägt Layout-Id und einen Eintrag je Kachel, `keepArrangement` nimmt beim Wegräumen auf, `takeArrangementFor` gibt beim Anklicken zurück — und *verbrauchte* die Aufnahme dabei, damit eine zweite Aktivierung nicht spätere Arbeit zurücknimmt. **Das gilt seit dem zweiten Durchgang des 29.07.2026 nicht mehr:** die Anordnung wird bei jedem Settle neu geschrieben, kann also nicht veralten, und wird deshalb nicht mehr verbraucht. Der Smoke-Test fährt die Schleife, die ein Benutzer fährt: zurück zur verdrängten Seite → Anordnung ist da; ein Tab **ohne** Aufnahme → weiterhin ganzes Fenster; zweite Verdrängung → Anordnung kommt wieder. **Der Träger ist am 10.08.2026 gewechselt (KD1, KD2):** das Bedürfnis war richtig und die Schleife bleibt, aber die Anordnung gehört *nicht* auf die Tab-Gruppe. Sie an die Gruppe zu binden hieß, die Automatik zur zweiten Schreiberin an einer Struktur zu machen, die dem Benutzer gehört — sie legte Gruppen an und änderte Mitgliedschaften, ohne dass er etwas getan hätte. Die Aufnahme liegt jetzt auf einem eigenen, unsichtbaren Träger (`src/shared/arrangements/`, `ArrangementController`, `arrangements.json`); `TabGroup.layout`, `keepArrangement` und `takeArrangementFor` gibt es nicht mehr. **Seit 25.09.2026 ist der Träger nicht mehr unsichtbar:** jede Kachelansicht ist ein Eintrag in der Tab-Leiste, mit einer ID, die sie behält, ohne Obergrenze und ohne stilles Ersetzen, siehe „Kachelansicht als ein Tab, Gruppen mit Drag & Drop" |
+| ~~**Ziehen auf die mittlere Kachel geht nicht**~~ **erledigt** | Der Verdacht traf zu und war zweiteilig. Geometrie: eine Lücke gehört *einer* Spalte, eine mittlere Spalte kann also nicht von beiden Seiten gleichzeitig beschnitten werden — beide Bänder der Mittelspalte waren Duplikate und nahmen zusammen 60 % der Fläche, sodass nur 40 % einen einfachen Ablegevorgang annahmen. Verhalten: `applyDrop` macht den Layoutwechsel jetzt mit `rehome: false` (seit 25.09.2026 gibt es `rehome` gar nicht mehr, kein Layoutwechsel zieht einen Tab nach), weil das Nachrücken die neu entstandene Kachel mit dem erstbesten geladenen Tab füllte und die verdrängte Seite damit vom Schirm nahm. Geprüft über `LAYOUT_IDS` erschöpfend, plus benannte Tests für die Mittelkachel von `1x3` und beide von `1x4`. Und weil die Meldung aus der Benutzung kam, auch dort: `runEveryDragCheck` in `scripts/smoke.mjs` zieht in der echten App mit synthetischer Maus **jede** Zone **jedes** Layouts an, gezielt auf die Mitte ihrer eigenen Trefferfläche — und prüft zwei Dinge, von denen das zweite das interessante ist: dass die Seite dort landet, wo der Indikator es versprach, *und* dass keine bereits sichtbare Seite dabei verschwindet. Achtzehn der vierundzwanzig Teilungszonen fielen bei der zweiten Prüfung durch, beide Zonen der Mittelspalte darunter |
 
 ## Stand zum Wiederaufnehmen
 
@@ -812,20 +823,23 @@ Baum war rot, als sie geschrieben wurde.
 
 Jetzt über `split:changed` aus dem Kern (`tileTabIds`) statt über die Plakette. Die Lehre ist die
 allgemeinere: eine Zusicherung über die Oberfläche prüft, was gezeichnet wird — nicht, was gilt.
+*(Die Plakette gibt es seit 25.09.2026 gar nicht mehr: die Leiste zeigt nirgends eine Kachelnummer, eine
+Kachelansicht ist ein Eintrag.)*
 
 ### Offene Fragen, gefunden aber nicht entschieden
 
 **Alle vier Einträge dieser Tabelle sind abgearbeitet** und stehen unter „In diesem Durchgang gebaut":
 das Einklappen nimmt die Anordnung auf (erledigt, indem der Aufruf überflüssig wurde statt gebaut),
 `#rehomeHiddenTabs` hängt am Schalter (an drei Stellen, nicht an einer), gemischte Herkunft nimmt die
-bestehende Gruppe, und die zwei fehlenden Stryker-Einträge sind eingetragen.
+bestehende Gruppe, und die zwei fehlenden Stryker-Einträge sind eingetragen. *(Die Gruppen-Absorption ist seit
+10.08.2026 zurückgenommen, `#rehomeHiddenTabs` seit 25.09.2026 entfallen.)*
 
 Was an ihrer Stelle offen ist, ist neu und stand hier nie:
 
 | Frage | Stand |
 |---|---|
 | **Zwei Kacheln auf demselben Host teilen den lebenden Zoomfaktor** | **Entschieden (24.09.2026): wir leben damit.** Chromiums Zoomkarte ist pro Ursprung und pro Sitzung; trennen ließe es sich nur über einen isolierten Zoom-Modus, den Electron nicht freigibt, oder eine Brücke in der besuchten Seite, die Spezifikation 6 verbietet. Seitenzoom gibt es nur über Strg/Cmd + und −, und nur dann tritt es auf |
-| **Gruppen-Chips bei jeder Kachelung** | **Überholt und nachgezogen.** Seit Roadmap U2 (`e42c1aa`) legt das Kacheln keine Gruppe mehr an; jede Gruppe macht der Benutzer (die installierte 0.21.0-ALPHA ist älter und zeigt noch das alte Verhalten). Auf Wunsch des Benutzers (24.09.2026, „wenn ich die page auf einzeln stelle …“): „Einzeln“ beendet jetzt die Kachelung, die auf dem Schirm steht — ihre unsichtbare Anordnung wird vergessen, der nächste Klick auf den anderen Tab holt den Split nicht zurück (`432edde`; engt R7 für die ausdrückliche Wahl „Einzeln“ ein, eine eingeklappte Gruppe und andere Fenster behalten ihre). Keine Gruppe wird automatisch aufgelöst. Neu: Rechtsklick auf den Chip öffnet „Gruppenfarbe“ und „Gruppierung auflösen“, damit auch eine eingeklappte Gruppe ohne Aufklappen endet. Alte, automatisch entstandene Gruppen aus 0.21.0 löst man einmal auf, dann bleiben sie weg |
+| **Gruppen-Chips bei jeder Kachelung** | **Überholt und nachgezogen.** Seit Roadmap U2 (`e42c1aa`) legt das Kacheln keine Gruppe mehr an; jede Gruppe macht der Benutzer (die installierte 0.21.0-ALPHA ist älter und zeigt noch das alte Verhalten). Auf Wunsch des Benutzers (24.09.2026, „wenn ich die page auf einzeln stelle …“): „Einzeln“ beendet jetzt die Kachelung, die auf dem Schirm steht — ihre Anordnung wird vergessen (seit 25.09.2026 ist das ihr Eintrag in der Tab-Leiste, und ihre Startseiten-Kacheln schließen dabei), der nächste Klick auf den anderen Tab holt den Split nicht zurück (`432edde`; engt R7 für die ausdrückliche Wahl „Einzeln“ ein, eine eingeklappte Gruppe und andere Fenster behalten ihre). Keine Gruppe wird automatisch aufgelöst. Neu: Rechtsklick auf den Chip öffnet „Gruppenfarbe“ und „Gruppierung auflösen“, damit auch eine eingeklappte Gruppe ohne Aufklappen endet. Alte, automatisch entstandene Gruppen aus 0.21.0 löst man einmal auf, dann bleiben sie weg |
 | **`about` und `https-only` liefern 404** | **Erledigt (Roadmap U7, U8).** Beide Seiten haben ihre HTML-Datei und ihren Vite-Eintrag; der „Über“-Eintrag und die HTTPS-only-Zwischenseite öffnen |
 | **Der Trackpad-Pinch zoomt nicht** | **Entschieden (24.09.2026): nicht gebaut.** Der Pinch vergrößert über den Zoom von macOS, und das reicht; der Seitenzoom bleibt bei Strg/Cmd + und −. Damit entfällt der Bau auf eine unzugesagte Nutzlast von `gesturePinchUpdate` |
 | **Vollbild verlassen über den Knopf des Players** | **Behoben (`a9d9429`), Prüfung in der App offen.** Der Benutzer bestätigte: F11, ein Video ins Vollbild, über den Knopf des Players wieder heraus, und manchmal ging das F11 mit. Der Schutz, der das Fenster-Vollbild zurückholt, lief nur in eingeschränkten Layouts (Kacheln unter Kachel-Scope); eine einzelne Kachel und Fenster-Scope überließ er Electrons eigener Buchführung, ob das Fenster schon im Vollbild war — und die liegt manchmal falsch (Vermutung über C++ im Binary, nicht prüfbar von hier). `TileFullscreenController` führt jetzt eine eigene Buchführung beim Vollbild-Wunsch der Seite, in jedem Layout. Ein bewusstes Verlassen (Taste, Menü, letzte Sprosse der Escape-Leiter) wird markiert und nie mit Wiedereintritt beantwortet. Unter macOS kann das Fenster sichtbar kurz heraus- und wieder hineinanimieren |
@@ -1001,11 +1015,11 @@ anderes" standen, sind zu einem geschrumpft.
 |---|---|---|
 | Der Name und das echte App-Symbol | Name: **Tessera** (`src/shared/product.ts`). Symbol zurückgestellt | Name ✅, Symbol Platzhalter |
 | Apple Developer-ID | Zurückgestellt, keine vorhanden | unverändert |
-| Soll eine Multi-View eine Tab-Gruppe sein? | **Ja**, und zwar **immer wenn gekachelt ist** | ✅ gebaut |
-| Gemischte Herkunft beim Teilen | **Immer die bestehende Gruppe nehmen** | ✅ gebaut, mit der Ausnahme für zwei Gruppen |
+| Soll eine Multi-View eine Tab-Gruppe sein? | **Ja**, und zwar **immer wenn gekachelt ist** | ⛔ zurückgenommen am 10.08.2026 (KD1). Seit 25.09.2026 ist eine Kachelansicht ein eigener Eintrag, den der Benutzer als Ganzes in eine Gruppe legt |
+| Gemischte Herkunft beim Teilen | **Immer die bestehende Gruppe nehmen** | ⛔ zurückgenommen am 10.08.2026 (KD4). Ein Tab, der auf eine Kachel gezogen wird, übernimmt seit 25.09.2026 die Gruppe dieser Kachelansicht (R12) |
 | Zoom: pro Domain oder pro Kachel? | **Pro View**, überlebt Navigation und Neustart | ✅ gebaut |
-| Eingeklappte Gruppe nimmt keine Anordnung auf | **Ja, aufnehmen** | ✅ erledigt, indem der Aufruf überflüssig wurde |
-| `#rehomeHiddenTabs` am Schalter | **Der Schalter steuert beides. Aus heißt aus** | ✅ gebaut, an drei Stellen |
+| Eingeklappte Gruppe nimmt keine Anordnung auf | **Ja, aufnehmen** | ✅ erledigt, indem der Aufruf überflüssig wurde. Seit 25.09.2026 legt Einklappen eine Kachelansicht darin unverändert weg (R11) |
+| `#rehomeHiddenTabs` am Schalter | **Der Schalter steuert beides. Aus heißt aus** | ⛔ entfallen am 25.09.2026 (KTD10): es gibt kein Nachziehen mehr, das der Schalter steuern könnte |
 | `shortcuts:getBindings` | **Kanal entfernen** | ✅ entfernt, `KNOWN_CONFLICTS` bleibt |
 | Netz-Sync des Tresors | Ja, aber erst nach dem lokalen Tresor | unverändert offen |
 
@@ -1053,7 +1067,7 @@ bezahlt:
 | „Zwölf tote Tasten" | Alle verdrahtet, und die Erlaubnisliste `withoutMenuItem` ist von vierzehn auf **sechs** geschrumpft: nur noch `escape`, `stop` und `splitLayout1`–`4`, jede mit ihrem Grund im Test |
 | „Der Rollen-Split ist die nächste Aufgabe am Preload" | **Gebaut, seit dem Init-Commit** — zwei Rollup-Durchläufe, `preloadFile(role)`, ein zweites Budget in `metrics.mjs`, `tests/preload-roles.test.ts` mit 148 Zeilen. Der Eintrag hätte Doppelarbeit ausgelöst |
 | „`zoomRegistry` ist eine Einstellung und gehört in die Sitzung" | Es war eine `Map` im Speicher, die **nie in eine Datei geschrieben wurde**. Nichts zu verschieben, keine Migration |
-| „`#rehomeHiddenTabs` hängt an einer Stelle nicht am Schalter" | Es waren **drei** Stellen. `afterTabClosed` stand in keiner Fassung dieses Dokuments |
+| „`#rehomeHiddenTabs` hängt an einer Stelle nicht am Schalter" | Es waren **drei** Stellen. `afterTabClosed` stand in keiner Fassung dieses Dokuments. Seit 25.09.2026 gibt es keine davon mehr |
 | „Die Lücke ist Navigation von Webinhalten" | Das war die halbe Lücke. `history:open` und `bookmarks:open` nahmen jede URL — eine Rechteausweitung ganz ohne Webinhalt |
 | „Tab-Gruppen überleben keinen Neustart" | Die Sitzungswiederherstellung rekonziliert sie: `retainTabs` einmal mit der Vereinigung aller Fenster, nach dem Öffnen |
 
@@ -1479,6 +1493,78 @@ Laufende App (`pnpm dev`). Kein Agent startet die App. Jede Zeile ist offen, bis
 | U21 | In `workspaces.json` (mit einem unversiegelten Profil) `"version": 2` setzen, neu starten, Layout-Menü öffnen | Die Workspaces stehen da und öffnen; „Speichern als…“ ist aus, darunter „Von einer neueren Version: nur lesbar.“, kein × |
 | U21 | Mit Pfeiltasten durch das Layout-Menü | Die Pfeile erreichen nach den Layouts die Workspaces und „Speichern als…“ (nicht, wenn ausgegraut) |
 
+## Kachelansicht als ein Tab, Gruppen mit Drag & Drop
+
+Plan: `docs/plans/2026-09-24-2201-feat-kachelansicht-als-tab-gruppen-plan.md`, Branch
+`feat/kachelansicht-als-tab`. Stand dieses Abschnitts: 25.09.2026, nach `08c84f4`.
+
+✅ heißt auch hier: gebaut, durch Tests und Architekturtests belegt. **In der laufenden App ist nichts davon
+belegt**; kein Agent startet die App. Wo der Plan und das Gebaute auseinandergehen, steht hier das Gebaute.
+
+| Einheit | Was gelandet ist | Stand | Commit |
+|---|---|---|---|
+| U1 | Eine Kachelansicht (`Arrangement`) behält ihre ID und trägt aktive Kachel, Teiler und Ton je Kachel. Kein Ersetzen bei Überschneidung, keine Obergrenze von 32 mehr (`MAX_ARRANGEMENTS` ist weg). `arrangements.json` wandert von Version 1 auf 2; ein Abgleich beim Start verwirft Aufnahmen, die über eine Gruppengrenze reichen, und behält bei geteiltem Tab die neueste | ✅ | `ce57f2b` |
+| U2 | Das Fenster kennt seine sichtbare Kachelansicht per ID und meldet alle über `arrangements:changed`. Neustart: die sichtbare kommt über ihre ID im Session-Slot zurück, ohne doppelten Eintrag; ein geschlossenes Fenster vergisst seine Kachelansichten nur, wenn noch ein anderes normales Fenster offen ist | ✅ | `341ff58` |
+| U3 | Kein automatischer Vorgang zieht mehr einen Tab in eine Kachelansicht: ein neuer Tab legt sie immer weg, nach einem geschlossenen Tab rückt sie zusammen (Schalter an) oder behält eine leere Kachel (Schalter aus), Workspaces übergehen Mitglieder anderer Kachelansichten, Einklappen legt sie ganz weg | ✅ | `200deb5` |
+| U4 | Ändern auf weniger Kacheln und Beenden schließen die Startseiten-Kacheln (`isStartPageTile`), eine weggelegte Kachelansicht lässt sich abseits des Bildschirms beenden | ✅ | `036e375` |
+| U5 | Ein pures Leisten-Modell für Tabs, Gruppen und Kachelansichten (`src/shared/strip/model.ts`); `Strg+1`…`9` zählen einen Eintrag als eine Position | ✅ | `1f568c9` |
+| U8 | Eine Kachelansicht liegt ganz in einer Gruppe oder in keiner (R10) | ✅ | `0697e5f` |
+| U6 | Menü des Eintrags, Kanäle `arrangements:activate`, `:close`, `:setMuted`, `:contextMenu`; „Kachelansicht beenden" im Menü „Split View" | ✅ | `9a936d5` |
+| U7 | Der Eintrag in der Tab-Leiste; die Kachelnummern sind weg, `tabgroups/strip.ts` ist durch das Leisten-Modell ersetzt, `Strg+Tab` springt von Eintrag zu Eintrag | ✅ | `772bfa3` |
+| U9 | Drag & Drop in der Leiste, in Gruppen hinein und aus ihnen heraus; `strip:drop` ersetzt `tabs:move` | ✅ | `1c3759d` |
+| U10 | „Aus Kachelansicht lösen" als Knopf in der Kachelleiste (`arrangements:releaseTab`) | ✅ | `08c84f4` |
+| U10 | Einen Tab am Griff der Kachelleiste in die Tab-Leiste ziehen (KTD14) | 🟡 in Arbeit, **gilt erst nach Prüfung durch den Benutzer** | — |
+| U11 | Glossar, dieser Abschnitt, `docs/QA.md` 5.1, BDD zu AE1, AE3, AE5 und AE6 (`tiled-views.feature`, `tab-groups.feature`) | ✅ | dieser Stand |
+
+**Was der Benutzer jetzt sieht.**
+
+- **Ein Eintrag je Kachelansicht.** Er zeigt die Favicons aller Tabs in Kachel-Reihenfolge und den Titel der
+  aktiven Kachel; Tooltip und Screenreader-Name nennen alle Titel, den der aktiven Kachel mit „(aktive
+  Kachel)". Eine Kachelnummer zeigt die Leiste nirgends mehr.
+- **Mehrere Kachelansichten nebeneinander**, jeder Tab in höchstens einer. Ein Klick auf einen normalen Tab, ein
+  neuer Tab, `Strg+1`…`9`, `Strg+Tab` oder die Tab-Suche legen die sichtbare weg; ihr Eintrag bleibt mit
+  Anordnung, aktiver Kachel, Teilern und Ton. Ein Klick auf den Eintrag holt sie mit ihrer zuletzt aktiven
+  Kachel zurück. Die Tab-Suche listet weiter jeden Tab; wer ein Mitglied wählt, holt dessen Kachelansicht mit
+  diesem Tab in der aktiven Kachel zurück.
+- **Am Eintrag:** ✕ (und Mittelklick) schließt alle Tabs darin. Die Kachelansicht wird vorher aufgelöst, damit
+  eine Seite, die „Bleiben" wählt, als normaler Tab stehen bleibt, statt die Kachelansicht zurückzuholen. Der
+  Lautsprecher schaltet alle Mitglieder stumm oder laut. Rechtsklick öffnet ein natives Menü mit „Layout ändern
+  ▸", „Kachelansicht beenden", den Gruppenaktionen und „Alle Tabs schließen". „Layout ändern" auf einer
+  weggelegten Kachelansicht holt sie zuerst zurück, „Beenden" läuft ohne sie anzuzeigen.
+- **Startseiten-Regel.** Beim Ändern auf weniger Kacheln und beim Beenden schließen zuerst die Kacheln, die
+  gerade die Startseite zeigen und nichts laden, egal wer sie geöffnet hat. Die übrigen Seiten rücken nach,
+  das kleinste passende Layout bleibt, und was keine Kachel findet, wird ein normaler Tab direkt hinter dem
+  Eintrag. Bleiben weniger als zwei Seiten, löst sich die Kachelansicht auf. Weglegen, Einklappen der Gruppe
+  und das Schließen eines einzelnen Tabs schließen keine Startseite. Nach einem Neustart kommen Startseiten
+  in einer Kachelansicht mit zurück, das Raster bleibt exakt.
+- **Gruppen.** Tabs und Einträge lassen sich per Drag & Drop umsortieren und in Gruppen hinein- und
+  herausziehen. Ein Drop zwischen Gruppenmitglieder oder auf einen eingeklappten Chip nimmt auf, ein Drop vor
+  den Chip oder außerhalb des Laufs nimmt heraus. Ein Eintrag bewegt sich als ein Lauf, und ein Tab, der auf
+  eine Kachel gezogen wird, übernimmt die Gruppe dieser Kachelansicht. Einklappen legt eine sichtbare
+  Kachelansicht darin unverändert weg, Ausklappen holt nichts zurück, und der Chip zählt sie als einen Eintrag.
+  Der Drop wird als Ziel und Seite gemeldet und im Kern aufgelöst (`src/shared/strip/drop.ts`). Damit ist auch
+  der alte Fehler behoben, bei dem eine eingeklappte Gruppe links vom Zeiger verschob, wo ein Tab landete.
+- **Lösen.** Die Kachelleiste eines Mitglieds bietet „Aus Kachelansicht lösen". Der Tab wird ein normaler Tab
+  direkt hinter dem Eintrag und behält seine Gruppe. Die Kachelansicht bleibt sichtbar und rückt zusammen,
+  unabhängig vom Schalter; eine Kachelansicht mit nur noch einer Seite endet. Keine Startseite schließt.
+
+**Zurückgestellt** (Plan, Deferred): Gruppen-Chips ziehen, `Strg+Umschalt+T` für eine ganze Kachelansicht,
+Kacheln innerhalb einer Kachelansicht durch Ziehen der Kachelleiste tauschen.
+
+### Was nur der Benutzer prüfen kann (Kachelansicht)
+
+Laufende App (`pnpm dev`). Kein Agent startet die App. Jede Zeile ist offen, bis der Benutzer sie bestätigt.
+
+| # | Prüfung | Erwartung |
+|---|---|---|
+| 1 | Zwei Seiten kacheln, einen anderen Tab anklicken, dann den Eintrag | Das Raster kommt mit derselben aktiven Kachel und denselben Teilern zurück |
+| 2 | Zwei Kachelansichten gleichzeitig, beide abwechselnd anzeigen, App neu starten | Beide sind da, kein doppelter Eintrag |
+| 3 | 2x2 mit zwei Startseiten per Rechtsklick auf „Zwei Spalten" ändern, dann beenden | Die Startseiten sind weg, der Rest sind normale Tabs an der Stelle des Eintrags |
+| 4 | Einen Tab in eine Gruppe ziehen, wieder heraus, einen Kachel-Eintrag in eine Gruppe ziehen, die Gruppe einklappen | Aufnahme und Herausnahme wie gezogen; eingeklappt zählt der Chip die Kachelansicht als 1 |
+| 5 | Einen Tab am Griff der Kachelleiste in die Tab-Leiste ziehen | **Offen, bis das Ziehen gelandet ist.** Der Tab wird ein normaler Tab an der Stelle des Drops |
+| 6 | Unter Windows: einen Kachel-Eintrag ziehen | Das Fenster bewegt sich nicht mit |
+| 7 | Video im Kachel-Vollbild, dann die Kachelansicht weglegen | Das Video verlässt das Vollbild sauber |
+
 ## Bekannte Risiken
 
 | Risiko | Warum es offen ist |
@@ -1486,6 +1572,7 @@ Laufende App (`pnpm dev`). Kein Agent startet die App. Jede Zeile ist offen, bis
 | `setFullScreenable(false)` als Mechanismus für Kachel-Vollbild — **auf Windows bestätigt**, Linux offen | Vom Benutzer am 29.07.2026 gemeldet: „auf windows klappen die full screens innerhalb der kacheln." Damit ist das größte Unbekannte dieses Risikos abgeräumt — der Mechanismus trägt auf zwei von drei Plattformen. Offen bleibt **Linux, besonders Wayland**, wo ein Compositor die Fenstergröße anders verhandelt. Erster Punkt in `docs/QA.md` |
 | **Ein Player im Vollbild passt sich einer geänderten Kachelgröße nicht an** | Ebenfalls am 29.07.2026 gemeldet, und es ist die Kehrseite des Befundes darüber: das Kachel-Vollbild trägt, aber der Inhalt darin folgt nicht immer. Ursache und was auf unserer Seite möglich ist, steht unter „Vollbild und Kachelgröße" |
 | **`grantFileProtocolExtraPrivileges` bleibt an** (seit 23.09.2026 benannt) | Die Chrome-UI lädt über `file://` und braucht das Fuse vermutlich für ihre Module. Solange es an ist, darf ein `file://`-Dokument in einem Tab andere lokale Dateien per `fetch` lesen, etwa eine heruntergeladene HTML-Datei die unverschlüsselten Profildateien. Offene Produktfrage an den Benutzer: `file:` aus der Tab-Navigation nehmen, bis die Chrome-UI auf ein eigenes Schema umgezogen ist. Siehe Plan, Open Questions |
+| **Ziehen aus der Kachelleiste in die Tab-Leiste** (Plan Kachelansicht, KTD14) | Ob ein Ziehen, das auf der Overlay-Schicht beginnt, über der Chrome UI ankommt, ist in dieser App nicht belegt. Lösen geht deshalb zuerst über den Knopf „Aus Kachelansicht lösen"; das Ziehen gilt erst als fertig, wenn der Benutzer es in der laufenden App bestätigt hat |
 | Optische Transparenz der Overlay-Schicht | Braucht einen Screenshot des zusammengesetzten Fensters; Bildschirmaufnahme ist in der Entwicklungsumgebung blockiert. Funktional belegt, optisch nicht |
 | ~~Die Ziehprüfung im Smoke-Test flackert~~ **behoben, und die Ursache war dieselbe wie bei den Store-Tests** | Zwei von vier Läufen fielen durch, jedes Mal an einer *anderen* Zone — was nach Produktfehler aussieht und eine Stoppuhr war: nach dem Mausdruck wartete die Prüfung fest 600 ms darauf, dass die Zonen über `overlay:presented` zurückkommen, und weitere 350 ms darauf, dass die Overlay-Schicht die Hervorhebung zeichnet. Auf einer belasteten Maschine reicht keins von beidem. Jetzt wird auf den **Zustand** gewartet (`waitFor`), nicht auf die Uhr — und der letzte Messwert wird zurückgegeben statt zu werfen, damit die Zusicherung des Aufrufers die Fehlermeldung bleibt. Fünf Läufe hintereinander grün, 440 Prüfungen |
 | ~~Tab-Gruppen überleben keinen Neustart~~ **behoben** | Die Sitzungswiederherstellung rekonziliert sie. Die damals genannte Gefahr — fremde neue Tabs in alten Gruppen — ist der Grund für die Reihenfolge in `session-restore/apply.ts`: jede wiederhergestellte Id muss existieren, *bevor* `retainTabs` läuft, und `retainTabs` läuft **einmal** mit der Vereinigung aller Fenster. Pro Fenster gerufen würde das zweite die Gruppen des ersten leerräumen |
@@ -1495,7 +1582,7 @@ Laufende App (`pnpm dev`). Kein Agent startet die App. Jede Zeile ist offen, bis
 | Drei Größenbudgets angehoben | Preload 16→22 kB, Hauptprozess 200→250→320 kB, größte Datei 750→780 Zeilen. Jede mit Begründung *und* mit dem nächsten Schritt im Kommentar — was eine weitere Anhebung rechtfertigen würde und was nicht |
 | **Sechs Budgets stehen darüber, absichtlich nicht angehoben** | Nach diesem Durchgang: größte Datei **1036 Zeilen** (Grenze 780, vorher 1219), Dateien über der Marke **5** (1, vorher 6), ungetestete Renderer-Zeilen **3900** (2800, unverändert). Die drei Größenzahlen — Hauptprozess 375 kB, Renderer-JavaScript 339 kB, Preload 26 kB — **sind nicht neu gemessen**: `pnpm build` konnte in diesem Durchgang nicht laufen, `metrics.mjs` liest also ein Bündel von vor dieser Arbeit. Sie sind zu erneuern, bevor jemand sie zitiert. Die Kommentare nennen ihren nächsten Schritt selbst, und keiner davon ist „höher setzen" — beim Hauptprozess das Laden der Manifest-Auswertung des Medien-Downloaders auf Abruf. **Beim Preload nennt der Kommentar den Rollen-Split, und der ist gebaut**; dort steht jetzt keine bekannte nächste Maßnahme mehr, siehe „Preload-Budget". Die 320 wurden bereits *für* dieses Funktionsbündel angehoben; eine dritte Anhebung dafür wäre keine Begründung mehr, sondern eine Gewohnheit |
 | **Die Zeilen-Marke maß nur die schlimmste Datei** | Ein Fund aus einer früheren Runde, und er war schlimmer als er aussah. Die Marke gilt *pro Datei*, gemessen wurde aber nur das Maximum — sobald eine Datei darüber stand, konnte jede weitere lautlos vorbeiziehen. Genau das war passiert: `shared/tabgroups/model.ts` erreichte 873 Zeilen, vierzig Zeilen davon entfernt, überhaupt gemeldet zu werden, während die Zahl auf dem Schirm weiter `catalog.ts` nannte. Neue Prüfung `files over the per-file line bar`. Nach diesem Durchgang **fünf**, und `catalog.ts` ist ganz von der Liste verschwunden (1219 → 94): `contract.ts` (1036), `BrowserWindowController.ts` (1034), `tabgroups/model.ts` (954), `main/index.ts` (953), `PasswordsPage.tsx` (788). Zu beachten: die neue Spitzenreiterin `contract.ts` ist die erste, für die **kein nächster Schritt aufgeschrieben** ist |
-| Mutationslauf ist älter als drei Funktionsbündel | Die Stryker-Liste ist eine **Erlaubnisliste**: eine Auslassung ist unsichtbar, und die Fitness-Funktion, die jeden Eintrag gegen eine echte Datei prüft, kann das Fehlen eines Eintrags nicht sehen. `crypto/**`, `passwords/**` und die Update-Module sind eingetragen, und seit diesem Durchgang auch `tabgroups/strip.ts`, `tabgroups/schema.ts` und `browser/navigation-policy.ts`. Der letzte Lauf (84,88 %) liegt vor dem Tresor und damit erst recht vor diesem Durchgang |
+| Mutationslauf ist älter als drei Funktionsbündel | Die Stryker-Liste ist eine **Erlaubnisliste**: eine Auslassung ist unsichtbar, und die Fitness-Funktion, die jeden Eintrag gegen eine echte Datei prüft, kann das Fehlen eines Eintrags nicht sehen. `crypto/**`, `passwords/**` und die Update-Module sind eingetragen, und seit diesem Durchgang auch `tabgroups/strip.ts`, `tabgroups/schema.ts` und `browser/navigation-policy.ts` (`tabgroups/strip.ts` ist seit 25.09.2026 entfernt, an seiner Stelle steht `src/shared/strip/**/*.ts`). Der letzte Lauf (84,88 %) liegt vor dem Tresor und damit erst recht vor diesem Durchgang |
 
 ## Qualitätsstand
 

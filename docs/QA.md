@@ -125,7 +125,7 @@ fehlende Labels, nicht ob das Vorgelesene Sinn ergibt.
 
 | # | Schritt | Erwartung |
 |---|---|---|
-| 5.1 | NVDA (Windows) / Orca (Linux) / VoiceOver (macOS): Tab-Leiste durchgehen | Jeder Tab wird mit Titel und Kachelzuordnung vorgelesen |
+| 5.1 | NVDA (Windows) / Orca (Linux) / VoiceOver (macOS): Tab-Leiste mit mindestens einer Kachelansicht durchgehen | Jeder Tab wird mit seinem Titel vorgelesen. Eine Kachelansicht ist *ein* Eintrag und wird als „Kachelansicht: …“ mit den Titeln aller ihrer Tabs in Kachel-Reihenfolge vorgelesen, der Tab der aktiven Kachel mit „(aktive Kachel)“. Keine Kachelnummern. Lautsprecher und ✕ am Eintrag nennen die ganze Kachelansicht („Kachelansicht stummschalten“, „Alle Tabs der Kachelansicht schließen“) |
 | 5.2 | Adressleiste fokussieren | Sicherheitszustand wird angekündigt, nicht nur das Symbol |
 | 5.3 | Layout-Umschalter | Jedes Layout hat einen aussagekräftigen Namen |
 | 5.4 | Startseite, Kacheln durchgehen | Name und Ziel werden vorgelesen; Ordner mit Anzahl |

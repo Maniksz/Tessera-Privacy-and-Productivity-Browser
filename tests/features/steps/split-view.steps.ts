@@ -20,9 +20,11 @@ import { scope, splitController } from './world.js'
  * need one, the actual view positioning, is covered by the smoke test.
  *
  * `closedTabs` is tracked so the "no tab was closed" assertion means something.
- * Spec 2 is explicit that shrinking the layout must unassign rather than close, and
- * a scenario that only checked assignment would pass even if tabs were being
- * destroyed.
+ * Spec 2 is explicit that the split unassigns rather than closes when its layout
+ * shrinks, and a scenario that only checked assignment would pass even if tabs were
+ * being destroyed. Closing start pages when the user chooses fewer tiles or ends a
+ * tiled view is `TileOccupancyController.chooseLayout`, above the split; its
+ * scenarios drive the window's seams in `tab-groups.steps.ts`.
  */
 
 const CONTENT: Rect = { x: 0, y: 88, width: 1600, height: 900 }
@@ -74,8 +76,8 @@ Given('the option {string} is on', (state: unknown, option: string) => {
 When('I switch to the {string} layout', (state: unknown, layout: string) => {
   const target = scope(state)
   const orphaned = splitController(state).setLayout(asLayout(layout))
-  // Orphaned tabs are unassigned, never closed (spec 2). Recording them here is
-  // what lets the "no tab was closed" assertion catch a regression.
+  // The split unassigns orphaned tabs and closes none (spec 2). Recording them here
+  // is what lets the "no tab was closed" assertion catch a regression.
   void orphaned
   target.windowFullscreenPermitted = windowFullscreenPermitted(
     asLayout(layout),

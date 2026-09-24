@@ -7,20 +7,28 @@ import {
   type WindowSeams
 } from '@main/browser/window-seams.js'
 import type { OverlayLayer } from '@main/browser/OverlayLayer.js'
+import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import { ArrangementStore } from '@main/data/ArrangementStore.js'
+import {
+  registerArrangementHandlers,
+  type ArrangementHandle,
+  type ArrangementWindow
+} from '@main/ipc/arrangement-handlers.js'
 import { TabGroupStore } from '@main/data/TabGroupStore.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
-import { stripItems } from '@shared/strip/model.js'
+import type { ArrangementSummary } from '@shared/arrangements/screen.js'
+import { stripItems, type StripItem } from '@shared/strip/model.js'
+import { HOME_URL } from '@shared/url/omnibox.js'
 import { tabSearchRows } from '@shared/search/tab-search.js'
 import { TabDiscards, type DiscardableTab } from '@main/browser/tab-unloader.js'
-import type { Rect } from '@shared/split/layout.js'
+import { isLayoutId, type LayoutId, type Rect } from '@shared/split/layout.js'
 import { dropZonesFor } from '@shared/split/dropzones.js'
 import type { Tab } from '@main/browser/Tab.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
 import { scope, tempFile } from './world.js'
 
 /**
- * Steps for `tab-groups.feature`.
+ * Steps for `tab-groups.feature` and `tiled-views.feature`.
  *
  * A window's real seams, over real stores, because that is where the reported defect lived. Neither
  * controller was wrong: `TabGroupController.dissolve` dissolved, and the pass that keeps the tiling
@@ -36,6 +44,11 @@ import { scope, tempFile } from './world.js'
  * `BrowserWindowController` itself cannot be here: it needs a browser process, which is why it is on
  * the coverage exclude list and why the defect survived. `WindowInternals` is the entire surface it
  * offers its seams, so a literal satisfying that interface is a complete stand-in for a window.
+ *
+ * A tiled view's entry in the strip is driven through the real `arrangements:*` handlers over the
+ * same seams, the way a click and a right-click on the entry reach them: `ArrangementWindow` is all
+ * those handlers ask of a window, and the seams answer most of it. The menu is the real template,
+ * picked by its English labels.
  */
 
 const CONTENT: Rect = { x: 0, y: 88, width: 1200, height: 800 }
@@ -47,8 +60,12 @@ interface GroupedWindow {
   order: () => readonly string[]
   /** A click on a tab in the strip: `BrowserWindowController.activateTab`, tiles and all. */
   activate: (tabId: string) => void
-  /** A tab opened in the background: in the strip, in no tile. */
-  addTab: (tabId: string) => void
+  /** A tab opened in the background: in the strip, in no tile — at the end, or at the front. */
+  addTab: (tabId: string, where?: 'front' | 'end') => void
+  /** The `arrangements:*` channels as the entry in the strip invokes them. */
+  invoke: (channel: string, payload: unknown) => void
+  /** Every native menu the handlers put up, the latest last. */
+  menus: MenuItemConstructorOptions[][]
 }
 
 /**
@@ -86,8 +103,20 @@ function tabList(list: string): string[] {
   return list.split(',').map((name) => name.trim())
 }
 
+/**
+ * Whether a tab shows the start page. A tab the scenario names `start page…` does, and so does a
+ * filler the window opens for an empty tile, as a real one would.
+ */
+function showsStartPage(tabId: string): boolean {
+  return tabId.startsWith('start page') || tabId.startsWith('filler-')
+}
+
 /** Builds a window around these tabs and seats each one in the tile of the same index. */
-async function openWindow(state: unknown, tabIds: readonly string[]): Promise<void> {
+async function openWindow(
+  state: unknown,
+  tabIds: readonly string[],
+  layout: LayoutId = '1x2'
+): Promise<void> {
   const groupStore = await TabGroupStore.open({
     filePath: tempFile('tab-groups', 'tab-groups.json')
   })
@@ -96,7 +125,11 @@ async function openWindow(state: unknown, tabIds: readonly string[]): Promise<vo
     debounceMs: 0
   })
 
-  const split = new SplitController({ layout: '1x2' })
+  const split = new SplitController({ layout })
+  // A tab named twice, or one more than the layout has tiles, would seat nowhere and then be
+  // asserted about as if it had.
+  expect(new Set(tabIds).size, 'every tab has a name of its own').toBe(tabIds.length)
+  expect(tabIds.length, `the ${layout} layout holds as many tabs`).toBe(split.tileCount)
   let order = [...tabIds]
 
   /*
@@ -174,21 +207,109 @@ async function openWindow(state: unknown, tabIds: readonly string[]): Promise<vo
     arrangements: arrangementStore.bookFor('normal')
   }
 
-  seams = createWindowSeams(internals)
+  const built = createWindowSeams(internals)
+  seams = built
   tabIds.forEach((tabId, index) => split.assignTab(tabId, index))
 
+  /*
+    What `BrowserWindowController` is to the handlers, over the same seams: `setLayout` is the
+    toolbar's choice (`chooseLayout`), and the rest reaches the fake window above. Nothing here is
+    muted or published, because no scenario asks about either.
+  */
+  const window: ArrangementWindow = {
+    arrangements: built.arrangements,
+    groups: built.groups,
+    split,
+    occupancy: built.occupancy,
+    setLayout: (next) => built.occupancy.chooseLayout(next),
+    setTileMuted: (tileIndex, muted) => split.setTileMuted(tileIndex, muted),
+    activateTab: (tabId) => internals.activateTab(tabId),
+    closeTab: (tabId) => internals.closeTab(tabId),
+    resolveTab: (tabId) => (order.includes(tabId) ? { setMuted: () => {} } : undefined),
+    publish: () => {}
+  }
+  const handlers = new Map<string, (payload: unknown, event: IpcMainInvokeEvent) => unknown>()
+  const menus: MenuItemConstructorOptions[][] = []
+  const handle = ((channel: string, handler: (payload: unknown, event: unknown) => unknown) => {
+    handlers.set(channel, handler)
+  }) as unknown as ArrangementHandle
+  registerArrangementHandlers({
+    handle,
+    windows: { resolve: () => window },
+    locale: () => 'en',
+    showMenu: (template) => menus.push(template)
+  })
+  // Never read: the handlers resolve the window through `windows.resolve`, which ignores it.
+  const event: unknown = {}
+
   scope(state).scratch[KEY] = {
-    seams,
+    seams: built,
     split,
     order: () => order,
     activate: (tabId) => internals.activateTab(tabId),
-    addTab: (tabId) => {
-      order.push(tabId)
-    }
+    addTab: (tabId, where = 'end') => {
+      if (where === 'front') order.unshift(tabId)
+      else order.push(tabId)
+    },
+    invoke: (channel, payload) => {
+      const handler = handlers.get(channel)
+      if (handler === undefined) throw new Error(`nothing registered on ${channel}`)
+      handler(payload, event as IpcMainInvokeEvent)
+    },
+    menus
   } satisfies GroupedWindow
 }
 
-/** A `Tab` as far as the seams read one: its title for a drag, and switches that do nothing. */
+/** The one tiled view the window holds; a scenario about "the tiled view" means there is one. */
+function theTiledView(state: unknown): ArrangementSummary {
+  const summaries = groupedWindow(state).seams.arrangements.summaries()
+  expect(summaries.length, 'the window holds one tiled view').toBe(1)
+  return summaries[0]!
+}
+
+/**
+ * The strip as a line of text, from what the tab bar draws (`stripItems` over the tabs, the groups
+ * and the tiled views): a tab is its name, a tiled view its members in tile order as `[a | b]`, and
+ * a group chip `<Name>` when open or `<Name: n>` when folded, `n` being the entries it hides.
+ */
+function stripText(state: unknown): string {
+  const window = groupedWindow(state)
+  const items: StripItem[] = stripItems(
+    window.order(),
+    window.seams.groups.groups(),
+    window.seams.arrangements.summaries()
+  )
+  return items
+    .map((item) => {
+      if (item.kind === 'tab') return item.tabId
+      if (item.kind === 'split') return `[${item.tabIds.join(' | ')}]`
+      return item.group.collapsed
+        ? `<${item.group.name}: ${item.hiddenCount}>`
+        : `<${item.group.name}>`
+    })
+    .join(', ')
+}
+
+/** Clicks a menu item by its labels, a submenu's path separated by ` > `. */
+function clickMenuItem(template: readonly MenuItemConstructorOptions[], path: string): void {
+  let level: readonly MenuItemConstructorOptions[] = template
+  const labels = path.split(' > ')
+  for (const [index, label] of labels.entries()) {
+    const found = level.find((entry) => entry.label === label)
+    if (found === undefined) throw new Error(`the menu has no item ${label}`)
+    if (index === labels.length - 1) {
+      ;(found.click as () => void)()
+      return
+    }
+    level = found.submenu as MenuItemConstructorOptions[]
+  }
+}
+
+/**
+ * A `Tab` as far as the seams read one: its title for a drag, its address for the start-page rule,
+ * and switches that do nothing. Every page has finished loading and holds no typed input, so the
+ * start-page rule (`isStartPageTile`) decides by the address alone.
+ */
 function fakeTab(tabId: string): Tab {
   const fake: unknown = {
     id: tabId,
@@ -198,7 +319,7 @@ function fakeTab(tabId: string): Tab {
     toState: () => ({
       id: tabId,
       title: tabId,
-      url: `https://${tabId}.example/`,
+      url: showsStartPage(tabId) ? HOME_URL : `https://${tabId}.example/`,
       loading: false,
       pendingInput: null
     })
@@ -216,6 +337,14 @@ Given('a window tiling tabs {string} side by side', async (state: unknown, list:
   await openWindow(state, tabIds)
 })
 
+Given(
+  'a window tiling tabs {string} in the {string} layout',
+  async (state: unknown, list: string, layout: string) => {
+    if (!isLayoutId(layout)) throw new Error(`not a layout id: ${layout}`)
+    await openWindow(state, tabList(list), layout)
+  }
+)
+
 Given('the tabs {string} are grouped as {string}', (state: unknown, list: string, name: string) => {
   groupedWindow(state).seams.groups.create({ tabIds: tabList(list), name })
 })
@@ -231,6 +360,10 @@ Given('the group {string} is folded', (state: unknown, name: string) => {
 
 Given('a loose tab {string}', (state: unknown, tabId: string) => {
   groupedWindow(state).addTab(tabId)
+})
+
+Given('a loose tab {string} at the front of the strip', (state: unknown, tabId: string) => {
+  groupedWindow(state).addTab(tabId, 'front')
 })
 
 // --- when --------------------------------------------------------------------
@@ -278,6 +411,36 @@ When('I choose the side-by-side layout for the window', (state: unknown) => {
 
 When('I click the tab {string}', (state: unknown, tabId: string) => {
   groupedWindow(state).activate(tabId)
+})
+
+/** A click into a tile's page, which makes that tile the active one (`split:setActiveTile`). */
+When('I click into the tile showing {string}', (state: unknown, tabId: string) => {
+  const { split } = groupedWindow(state)
+  const tile = split.tileOfTab(tabId)
+  if (tile === null) throw new Error(`no tile shows ${tabId}`)
+  split.setActiveTile(tile)
+})
+
+/** A click on the tiled view's entry in the strip: `arrangements:activate` with its id. */
+When('I click the entry of the tiled view', (state: unknown) => {
+  groupedWindow(state).invoke('arrangements:activate', { id: theTiledView(state).id })
+})
+
+/**
+ * A right-click on the tiled view's entry, which puts up its native menu
+ * (`arrangements:contextMenu`), and a click on one of its items.
+ */
+When('I choose {string} from the menu of the tiled view', (state: unknown, path: string) => {
+  const window = groupedWindow(state)
+  window.invoke('arrangements:contextMenu', { id: theTiledView(state).id })
+  const menu = window.menus.at(-1)
+  if (menu === undefined) throw new Error('the entry put up no menu')
+  clickMenuItem(menu, path)
+})
+
+/** A click on a group's chip that folds it — the same call as the Given above. */
+When('I fold the group {string}', (state: unknown, name: string) => {
+  groupedWindow(state).seams.groups.setCollapsed(groupNamed(state, name).id, true)
 })
 
 /**
@@ -389,4 +552,41 @@ Then('the tab strip still shows tabs {string}', (state: unknown, list: string) =
     .map((item) => item.tabId)
   // Dissolving a group must not cost a tab: the members go on being ordinary tabs (R4).
   expect(shown).toEqual(tabList(list))
+})
+
+Then('the tab strip reads {string}', (state: unknown, text: string) => {
+  expect(stripText(state)).toBe(text)
+})
+
+Then(
+  'the window shows {string} in the {string} layout',
+  (state: unknown, list: string, layout: string) => {
+    const { split } = groupedWindow(state)
+    expect(split.layout).toBe(layout)
+    expect(split.toState().tileTabIds).toEqual(tabList(list))
+  }
+)
+
+Then('the active tile shows {string}', (state: unknown, tabId: string) => {
+  expect(groupedWindow(state).split.activeTabId()).toBe(tabId)
+})
+
+/** The view as its entry holds it while off screen: members in tile order, layout, active page. */
+Then(
+  'the tiled view is put away as {string} in the {string} layout with {string} active',
+  (state: unknown, list: string, layout: string, active: string) => {
+    const view = theTiledView(state)
+    expect(view.visible, 'the tiled view is still on screen').toBe(false)
+    expect(view.tabIds).toEqual(tabList(list))
+    expect(view.layoutId).toBe(layout)
+    expect(view.activeTabId).toBe(active)
+  }
+)
+
+Then('the window holds no tiled view', (state: unknown) => {
+  expect(groupedWindow(state).seams.arrangements.summaries()).toEqual([])
+})
+
+Then('the tab {string} is closed', (state: unknown, tabId: string) => {
+  expect(groupedWindow(state).order(), `${tabId} is still open`).not.toContain(tabId)
 })

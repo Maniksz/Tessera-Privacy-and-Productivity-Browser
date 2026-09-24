@@ -15,7 +15,8 @@ Web Content by navigating, and what the browser accepts from it changes with it.
 
 A Window owns one Chrome UI and many Content Views. It also owns an ordered list of
 Tabs and a Layout of Tiles, and those two are deliberately independent: a Tab may exist
-without a Tile, but a Tile shows at most one Tab.
+without a Tile, but a Tile shows at most one Tab. What ties Tabs to Tiles as a unit is an
+Arrangement; a Window may hold several, and shows at most one of them at a time.
 
 A Window also owns at most one Overlay Surface, above every Content View. It counts as
 Chrome UI for the purpose of Sender Kinds — it is the browser's own interface, drawn on a
@@ -45,24 +46,37 @@ The arrangement of Tiles in a Window, chosen from a fixed set of shapes and adju
 by dragging the dividers between Tiles.
 
 Divider positions are stored as fractions of the Window rather than pixel offsets, so a
-Layout survives a resize. Shrinking a Layout never closes a Tab — Tabs that lose their
-Tile become unassigned and stay loaded, so switching back restores them.
+Layout survives a resize. Changing a Layout closes a Tab only when the user chooses fewer
+Tiles or ends the Arrangement: then its start-page Tiles close first, the other Tabs move up
+into the Tiles that remain, and a Tab left without one becomes an ordinary Tab. Putting an
+Arrangement away, folding its group and closing one of its Tabs close nothing.
 
 ### Arrangement
 A set of Tabs tiled together in one Layout, kept as a unit whether or not the Window is
-showing it. The interface calls it a *Kachelansicht* (tiled view). A Tab belongs to at
-most one Arrangement, and putting an Arrangement away keeps its Layout and seats so it
-can be brought back.
-*Avoid:* split, recording
+showing it. The interface calls it a *Kachelansicht* (tiled view), and the tab strip shows
+it as one entry rather than as its Tabs. A Tab belongs to at most one Arrangement.
+*Avoid:* split, recording, multi-view
+
+An Arrangement is *visible* while the Window shows it, *put away* while another Tab has
+the Window, and *dissolved* once it ends. Put away, it keeps its identity, Layout, seats,
+active Tile, divider positions and per-Tile sound, and its entry brings it back as it was
+left. It dissolves when the user ends it or closes all its Tabs, or when fewer than two of
+its Tabs remain; whatever Tabs are left become ordinary Tabs.
+
+Its members change only through something the user does to it or to one of its Tiles:
+dropping a Tab onto a Tile, releasing one from its tile bar, closing one, changing the
+Layout. No automatic pass moves a Tab into an Arrangement, and an Arrangement is wholly in
+one tab group or in none.
 
 ### Tab
 A loaded page belonging to a Window, listed in the tab strip. A Tab is not the same as
 a Tile: a Tab is what is loaded, a Tile is where it is shown.
 *Avoid:* page, view
 
-A Tab keeps running whether or not a Tile displays it, which is what makes reducing a
-Layout non-destructive. Tab strip order is independent of Tile assignment, so
-reordering the strip does not rearrange the Tiles.
+A Tab keeps running whether or not a Tile displays it, which is what makes putting an
+Arrangement away non-destructive. Reordering the strip does not rearrange the Tiles, but
+the members of an Arrangement are one contiguous run in the strip, drawn as its single
+entry at the place of its first member and nested inside the run of its group.
 
 ## Renderer roles
 

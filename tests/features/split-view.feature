@@ -4,7 +4,10 @@ Feature: Split view
   So that I can follow all of them without juggling windows
 
   The requirements these scenarios protect, from specification section 2:
-    - shrinking the layout must not close tabs, only unassign them
+    - the split itself never closes a tab when its layout shrinks, it only
+      unassigns them. Which tabs close when the user chooses fewer tiles or
+      ends a tiled view (its start pages) is decided above the split, and
+      tiled-views.feature holds those scenarios
     - website fullscreen inside a split layout stays within its own tile and the
       other tiles keep running
     - the escalation ladder is tile fullscreen, tile maximised, window fullscreen,
@@ -54,7 +57,7 @@ Feature: Split view
     Then tile 0 shows tab "b"
     And tab "a" is not in any tile
 
-  Scenario: Shrinking the layout does not close tabs
+  Scenario: Shrinking the split's layout does not close tabs
     Given the "2x2" layout
     And tabs "a, b, c, d"
     When I assign tab "a" to tile 0

@@ -14,6 +14,8 @@ Feature: Tab groups belong to the user
   And from the plan that made a tiled view an entry of its own:
     - R10: every tab of a tiled view is in the same group or in none, and any
       action that takes one of them into a group or out of it acts on the view
+    - R11: folding a group puts a tiled view in it away unchanged, and the
+      folded chip counts that view as one entry
     - R12: a tab dropped onto a tile takes the group of that tiled view
 
   Putting a split down for a single page ends the tiling and nothing else: the
@@ -110,6 +112,22 @@ Feature: Tab groups belong to the user
     And the window settles
     Then the tiled view holds "youtube, twitch, news"
     And the group "Sport" still holds "youtube, twitch, news"
+
+  Scenario: Folding a group puts its tiled view away whole, and its chip counts the view once
+    # AE6. Folding hides the view with the group rather than taking its tiles
+    # apart (R11): the view keeps its pages, its layout and its active tile,
+    # the window shows the first entry the strip still draws, and the chip
+    # counts the view as one entry, however many pages it holds.
+    Given a window tiling tabs "youtube, twitch" side by side
+    And a loose tab "news"
+    When the window settles
+    And the tabs "youtube" are grouped as "Sport"
+    And I click into the tile showing "twitch"
+    And I fold the group "Sport"
+    And the window settles
+    Then the window shows only "news"
+    And the tiled view is put away as "youtube, twitch" in the "1x2" layout with "twitch" active
+    And the tab strip reads "<Sport: 1>, news"
 
   Scenario: Taking one page of a grouped tiled view out of its group takes the whole view
     # "Remove from group" lost the same round as dissolving did: the pass that

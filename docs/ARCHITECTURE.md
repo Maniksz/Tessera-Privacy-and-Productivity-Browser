@@ -181,6 +181,24 @@ die Trenner in eine asymmetrische Anordnung gezogen wurden.
 `main/browser/SplitController.ts` hält den Zustand: Layout, Trennerpositionen,
 aktive Kachel, Tab-je-Kachel, Audio-je-Kachel, maximierte Kachel, Vollbild-Kachel.
 
+### Kachelansichten und die Tab-Leiste
+
+Welche Tabs zusammen gekachelt sind, hält nicht der `SplitController`, sondern
+`main/browser/ArrangementController.ts` über `shared/arrangements/` (`arrangements.json`):
+eine Kachelansicht mit fester ID, ihren Sitzen, aktiver Kachel, Teilern und Ton je
+Kachel. Ein Fenster kann mehrere halten, der `SplitController` zeigt höchstens eine.
+
+Was die Tab-Leiste zeichnet, rechnet das pure Modell `shared/strip/model.ts` aus Tabs,
+Gruppen und Kachelansichten. Die Mitglieder einer Kachelansicht sind ein Lauf, der als
+ein Eintrag erscheint, verschachtelt im Lauf ihrer Gruppe. Reihenfolge, `Strg+1`…`9`,
+`Strg+Tab` und der Zähler am eingeklappten Chip lesen dieselben Einträge. Ein Drop in der
+Leiste kommt als Ziel und Seite über `strip:drop` und wird in `shared/strip/drop.ts`
+aufgelöst, nicht als Index, den Renderer und Kern verschieden zählen könnten.
+
+Gruppenlogik liegt nur in `TabGroupController`. `ArrangementController` hat keinen Weg
+zu einer Gruppe, `TileOccupancyController` nur die eine Frage `isHiddenByCollapse`; das
+hält `tests/architecture.test.ts` („ownership of tab groups") fest.
+
 ### Die Eskalationsleiter
 
 ```
