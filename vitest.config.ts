@@ -289,6 +289,17 @@ export default defineConfig({
           branches: 92,
           statements: 96
         },
+        /*
+          The native menus' own labels and the one lookup that chooses between them and the catalogue.
+          Whole, because a branch of `menuLabel` nobody takes is a table nobody reads — and what that looks
+          like is a menu item labelled with its own key.
+        */
+        'src/main/menu/menu-text*.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
         'src/main/session/permission-policy.ts': {
           lines: 100,
           functions: 100,

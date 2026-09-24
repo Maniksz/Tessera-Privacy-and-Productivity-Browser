@@ -26,53 +26,20 @@ export const en = {
   // application
   'app.name': '{app}',
 
-  // menus
-  'menu.file': 'File',
-  'menu.file.newTab': 'New Tab',
-  'menu.file.newWindow': 'New Window',
-  'menu.file.newPrivateWindow': 'New Private Window',
-  'menu.file.closeTab': 'Close Tab',
-  'menu.file.reopenClosedTab': 'Reopen Closed Tab',
-  'menu.file.print': 'Print…',
-  'menu.file.closeWindow': 'Close Window',
-  'menu.file.quit': 'Quit',
+  /*
+    Menu labels that a renderer draws as well.
 
-  'menu.edit': 'Edit',
-  'menu.edit.undo': 'Undo',
-  'menu.edit.redo': 'Redo',
-  'menu.edit.cut': 'Cut',
-  'menu.edit.copy': 'Copy',
-  'menu.edit.paste': 'Paste',
-  'menu.edit.selectAll': 'Select All',
-  'menu.edit.findInPage': 'Find in Page…',
-  'menu.edit.findNext': 'Find Next',
-  'menu.edit.settings': 'Settings…',
-
-  'menu.view': 'View',
-  'menu.view.reload': 'Reload',
-  'menu.view.reloadIgnoringCache': 'Reload Without Cache',
-  'menu.view.stop': 'Stop',
+    The native menus are built by the core, and their own labels live in `main/menu/menu-text.*`, so
+    no renderer downloads them. The ones below stay because a renderer shows them too: the tile bar's
+    zoom buttons, the downloads panel's button to the full list, the tab strip's accessible name, and
+    the layout names `shared/split/labels.ts` hands to the layout button and its menu as well as to
+    the Split View menu. A `menu.*` key that no renderer or shared module reads belongs in
+    `menu-text.*`, not here.
+  */
   'menu.view.zoomIn': 'Zoom In',
   'menu.view.zoomOut': 'Zoom Out',
   'menu.view.zoomReset': 'Reset Zoom',
-  'menu.view.readerMode': 'Reader Mode',
-  'menu.view.fullscreen': 'Full Screen',
-  'menu.view.bookmarksBar': 'Bookmarks Bar',
-  'menu.view.focusAddressBar': 'Focus Address Bar',
-  'menu.view.focusTileBar': 'Focus Tile Navigation Bar',
-  'menu.view.devTools': 'Developer Tools',
 
-  'menu.history': 'History',
-  'menu.history.back': 'Back',
-  'menu.history.forward': 'Forward',
-  'menu.history.home': 'Home',
-  'menu.history.showAll': 'Show All History',
-
-  'menu.bookmarks': 'Bookmarks',
-  'menu.bookmarks.add': 'Bookmark This Page',
-  'menu.bookmarks.manage': 'Manage Bookmarks',
-
-  'menu.split': 'Split View',
   'menu.split.layout1': 'Single Tile',
   'menu.split.layout2Columns': 'Two Columns',
   'menu.split.layout3Columns': 'Three Columns',
@@ -80,27 +47,10 @@ export const en = {
   'menu.split.layout2Rows': 'Two Rows',
   'menu.split.layout3': 'One Large, Two Small',
   'menu.split.layout4': 'Four Tiles',
-  'menu.split.tileLeft': 'Focus Tile Left',
-  'menu.split.tileRight': 'Focus Tile Right',
-  'menu.split.tileUp': 'Focus Tile Above',
-  'menu.split.tileDown': 'Focus Tile Below',
-  'menu.split.maximizeTile': 'Maximize Tile',
 
-  'menu.tools': 'Tools',
   'menu.tools.downloads': 'Downloads',
-  'menu.tools.passwords': 'Passwords',
-  'menu.tools.extensionsTab': 'Extensions in a tab',
-  'menu.tools.clearData': 'Clear Browsing Data…',
-  'menu.tools.panic': 'Delete Everything and Quit',
 
   'menu.window': 'Window',
-  'menu.window.minimize': 'Minimize',
-  'menu.window.zoom': 'Zoom',
-  'menu.window.nextTab': 'Next Tab',
-  'menu.window.previousTab': 'Previous Tab',
-
-  'menu.help': 'Help',
-  'menu.help.about': 'About {app}',
 
   // toolbar
   'toolbar.back': 'Back',
@@ -555,7 +505,6 @@ export const en = {
   'page.blockElement': 'Block element…',
   'page.inspect': 'Inspect',
 
-  // blocker menu, behind the badge in the address bar
   /*
     The popup-and-redirect prompt.
 
@@ -572,24 +521,6 @@ export const en = {
   'navigation.follow': 'Go there',
   'navigation.stay': 'Stay on this page',
   'navigation.keyboardHint': 'Escape stays where you are',
-
-  'blocker.blockedOnPage': '{count} requests blocked on this page',
-  'blocker.myRules': 'My rules ({count})',
-  'blocker.updateLists': 'Update filter lists now',
-  'blocker.enabled': 'Blocking enabled',
-  /*
-    The per-site switch, worded as the state rather than as the change.
-
-    "Blocking on this site ✓" says what is true now as well as what a click would do, which is what a
-    checkbox is for — and it matters more here than for the global switch, because somebody who turned
-    filtering off to read one page and forgot has a wrong idea of why that site is full of adverts.
-  */
-  'blocker.enabledOnSite': 'Blocking on this site',
-  'blocker.nothingBlockedYet': 'Nothing blocked on this page',
-  'blocker.noRules': 'No rules of your own yet',
-  'blocker.openSettings': 'Manage in settings…',
-  /** How many of the user's own rules apply to the site in front of them, rather than in total. */
-  'blocker.forgetSiteRules': 'Delete my rules for this site ({count})',
 
   // reader mode
   'reader.title': 'Reader',

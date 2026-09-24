@@ -1,5 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron'
-import { translate, type Locale } from '@shared/i18n/catalog.js'
+import type { Locale } from '@shared/i18n/catalog.js'
+import { menuLabel, type MenuLabelKey } from './menu-text.js'
 import { describeUserRule, type UserRule } from '@shared/filters/user-rules.js'
 import { hostMatchesRule } from '@shared/url/domain.js'
 import { userRulesText } from '../settings/user-rules-text.js'
@@ -119,10 +120,8 @@ export interface BlockerMenuDeps {
 }
 
 export function blockerMenuTemplate(deps: BlockerMenuDeps): MenuItemConstructorOptions[] {
-  const t = (
-    key: Parameters<typeof translate>[1],
-    params?: Record<string, string | number>
-  ): string => translate(deps.locale, key, params)
+  const t = (key: MenuLabelKey, params?: Record<string, string | number>): string =>
+    menuLabel(deps.locale, key, params)
 
   const items: MenuItemConstructorOptions[] = [
     /*
@@ -232,7 +231,7 @@ export function blockerMenuTemplate(deps: BlockerMenuDeps): MenuItemConstructorO
 function myRulesSubmenu(
   deps: BlockerMenuDeps,
   rules: readonly UserRule[],
-  t: (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => string
+  t: (key: MenuLabelKey, params?: Record<string, string | number>) => string
 ): MenuItemConstructorOptions[] {
   if (rules.length === 0) {
     return [

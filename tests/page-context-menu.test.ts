@@ -665,3 +665,63 @@ describe("the user's own rules, in a private window", () => {
     expect(labels(rulesSubmenu(privateBlocker({ userRules: [session] })))).not.toContain(note)
   })
 })
+
+/**
+ * Both templates, in German, read from the core's own table.
+ *
+ * Their labels moved out of `shared/i18n/catalog.*` into `main/menu/menu-text.*` so that no renderer
+ * downloads them (see `menu-text.ts`). Every other test here reads English, so without this a German table
+ * that answered with the wrong entry — or a lookup that fell through to the catalogue and found nothing —
+ * would go unnoticed in the language most of these menus are actually read in.
+ */
+describe('the context menus in German', () => {
+  it('labels the page menu from both tables at once', () => {
+    // `page.*` still comes from the catalogue; back, forward and reload come from the menu table.
+    expect(
+      labels(
+        pageContextMenuTemplate(
+          pageMenu({ locale: 'de', target: target({ selectionText: 'Hallo' }), canGoForward: true })
+        )
+      )
+    ).toEqual([
+      'Kopieren',
+      'Nach „Hallo“ suchen',
+      'Zurück',
+      'Vorwärts',
+      'Neu laden',
+      'Element blockieren…',
+      'Untersuchen'
+    ])
+  })
+
+  it('labels the blocker menu and fills its counts', () => {
+    const items = blockerMenuTemplate(blocker({ locale: 'de' }))
+    expect(labels(items)).toEqual([
+      '12 Anfragen auf dieser Seite blockiert',
+      'Element blockieren…',
+      'Meine Regeln (2)',
+      'Filterlisten jetzt aktualisieren',
+      'Auf dieser Seite blockieren',
+      'Blockieren aktiv'
+    ])
+    expect(labels(blockerMenuTemplate(blocker({ locale: 'de', blockedOnPage: 0 })))[0]).toBe(
+      'Auf dieser Seite nichts blockiert'
+    )
+  })
+
+  it('labels the rules submenu, with and without rules for the site', () => {
+    const submenu = (deps: BlockerMenuDeps): MenuItemConstructorOptions[] =>
+      blockerMenuTemplate(deps).find((item) => Array.isArray(item.submenu))
+        ?.submenu as MenuItemConstructorOptions[]
+
+    const withRules = labels(submenu(blocker({ locale: 'de' })))
+    expect(withRules.slice(-2)).toEqual([
+      'Meine Regeln für diese Seite löschen (2)',
+      'In den Einstellungen verwalten…'
+    ])
+    expect(labels(submenu(blocker({ locale: 'de', userRules: [] })))).toEqual([
+      'Noch keine eigenen Regeln',
+      'In den Einstellungen verwalten…'
+    ])
+  })
+})

@@ -1,5 +1,6 @@
 import type { MenuItemConstructorOptions } from 'electron'
-import { translate, type Locale } from '@shared/i18n/catalog.js'
+import type { Locale } from '@shared/i18n/catalog.js'
+import { menuLabel, type MenuLabelKey } from './menu-text.js'
 
 /**
  * The menu a right-click on a page opens.
@@ -83,10 +84,8 @@ function truncate(text: string): string {
 
 export function pageContextMenuTemplate(deps: PageContextMenuDeps): MenuItemConstructorOptions[] {
   const { target, locale } = deps
-  const t = (
-    key: Parameters<typeof translate>[1],
-    params?: Record<string, string | number>
-  ): string => translate(locale, key, params)
+  const t = (key: MenuLabelKey, params?: Record<string, string | number>): string =>
+    menuLabel(locale, key, params)
 
   const items: MenuItemConstructorOptions[] = []
 

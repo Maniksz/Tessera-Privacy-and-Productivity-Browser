@@ -136,6 +136,7 @@
     "src/main/menu/blocker-menu-items.ts",
     "src/main/menu/alternative-accelerators.ts",
     "src/main/menu/tab-position-accelerators.ts",
+    "src/main/menu/menu-text.ts",
     "src/main/browser/page-keys.ts",
     "src/main/browser/navigation-policy.ts",
     "src/main/browser/sender-window.ts",

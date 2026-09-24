@@ -1,8 +1,9 @@
 import { Menu, app, type MenuItemConstructorOptions } from 'electron'
-import { translate, type Locale, type MessageKey } from '@shared/i18n/catalog.js'
+import type { Locale } from '@shared/i18n/catalog.js'
 import { acceleratorFor, type ShortcutAction } from '@shared/shortcuts/bindings.js'
 import { withAlternativeAccelerators } from './alternative-accelerators.js'
 import { tabPositionAccelerators } from './tab-position-accelerators.js'
+import { menuLabel, type MenuLabelKey } from './menu-text.js'
 import { openReaderMode } from '../reader/reader-mode.js'
 import type { Platform } from '@shared/model.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
@@ -45,7 +46,7 @@ export interface MenuDeps {
 export function buildApplicationMenu(deps: MenuDeps): Menu {
   const { windows, settings, locale, platform } = deps
   const overrides = settings.get('advanced.customShortcuts')
-  const t = (key: MessageKey): string => translate(locale, key)
+  const t = (key: MenuLabelKey): string => menuLabel(locale, key)
   const accel = (action: ShortcutAction): string => acceleratorFor(platform, action, overrides)
 
   /** Runs a command against the window the user is actually looking at. */

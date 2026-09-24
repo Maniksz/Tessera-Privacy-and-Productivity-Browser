@@ -371,7 +371,7 @@ describe('i18n helpers', () => {
     // sentences through `{app}`. If a caller had to supply it, every one of those call sites
     // would be a place to forget it — and the rename would be a search through prose again.
     expect(translate('en', 'app.name')).toBe(PRODUCT_NAME)
-    expect(translate('de', 'menu.help.about')).toBe(`Über ${PRODUCT_NAME}`)
+    expect(translate('de', 'error.blocked')).toBe(`${PRODUCT_NAME} hat diese Anfrage blockiert.`)
   })
 
   it('substitutes several parameters', () => {

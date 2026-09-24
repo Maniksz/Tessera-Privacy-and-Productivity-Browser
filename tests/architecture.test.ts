@@ -16,6 +16,7 @@ import {
   type ShortcutAction
 } from '@shared/shortcuts/bindings.js'
 import { platformSchema } from '@shared/model.js'
+import { menuTexts } from '@main/menu/menu-text.js'
 
 /**
  * Architecture tests — fitness functions.
@@ -467,6 +468,15 @@ describe('bundle weight', () => {
         of a third raise, every `updates.*` sentence that only its native message boxes show moved to
         `main/updates/update-text.*`, which brought it to 44.20 kB; `updates.checkNow` stayed, because the
         settings screen renders it. The `menu.*` keys are the obvious next candidates for the same move.
+
+        ## Hit a fourth time, and the menus followed
+
+        The autofill suggestion list took the chunk to 48.84 kB. The native menus' labels — every `menu.*` key
+        no renderer or shared module reads, and the blocker menu's nine — moved to `main/menu/menu-text.*`,
+        which brought it to 43.96 kB; the main-process bundle did not move, because it held those strings
+        already. What stayed (`menu.view.zoom*`, `menu.window`, `menu.tools.downloads`, `menu.split.layout*`)
+        stayed because a renderer draws it; the test below keeps the moved keys out of every bundle. The
+        per-locale split named above is the structural fix still left.
       */
       { match: /^catalog-.*\.js$/, maxKb: 48, note: 'message catalogue, both locales' },
       { match: /\.js$/, maxKb: 40, note: 'shared chunk' }
@@ -495,6 +505,27 @@ describe('bundle weight', () => {
       const kb = statSync(file).size / 1000
       expect(kb, `${budget.note}: ${name} is ${kb.toFixed(0)} kB`).toBeLessThan(budget.maxKb)
     }
+  })
+
+  it('keeps the labels only the core shows out of every renderer bundle', (context) => {
+    /*
+      What the move to `main/menu/menu-text.*` bought, checked where it is paid for.
+
+      The budget above only notices when the chunk is too big; it would stay green if a menu label crept
+      back into the catalogue with room to spare, and every renderer would be downloading it again. So the
+      built output is searched for each moved key, quoted as a bundler emits an object key with a dot in it.
+    */
+    requireFreshBuild('out/renderer', context.skip)
+    const keys = Object.keys(menuTexts.en)
+    expect(keys.length).toBeGreaterThan(0)
+
+    const found = filesUnder(join(ROOT, 'out/renderer')).flatMap((file) => {
+      const text = readFileSync(file, 'utf8')
+      return keys
+        .filter((key) => ["'", '"', '`'].some((quote) => text.includes(`${quote}${key}${quote}`)))
+        .map((key) => `${key} in ${relative(ROOT, file)}`)
+    })
+    expect(found).toEqual([])
   })
 
   it('keeps the preload bundle self-contained', (context) => {
