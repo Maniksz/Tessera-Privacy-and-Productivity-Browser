@@ -3036,7 +3036,7 @@ describe('continuous integration', () => {
     expect(release, 'release.yml runs a gate of its own').not.toMatch(
       /pnpm (?:run )?(?:lint|test|format:check)\b/
     )
-    for (const name of ['release', 'publish']) {
+    for (const name of ['release', 'publish', 'finish']) {
       expect(jobs.get(name), `${name} does not wait for the gates`).toMatch(
         /needs:\s*(?:gates\b|\[[^\]]*\bgates\b)/
       )
@@ -3055,7 +3055,7 @@ describe('continuous integration', () => {
     for (const [name, block] of jobs) {
       const writes = /contents:\s*write/.test(block)
       expect(writes, `${name} ${writes ? 'must not have' : 'needs'} contents: write`).toBe(
-        name === 'release' || name === 'publish'
+        name === 'release' || name === 'publish' || name === 'finish'
       )
     }
   })

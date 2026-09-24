@@ -85,7 +85,12 @@ jobs:
             echo "release $tag already exists, leaving it untouched"
             exit 0
           fi
-          gh release create "$tag" --prerelease --title "$tag" --generate-notes
+          # A draft: a running browser reads the release list, and a published release whose
+          # `latest*.yml` has not been uploaded yet answers its check with a 404 — which the browser
+          # showed as "GitHub could not be reached" for the minutes the builds took (0.22.0: three
+          # minutes between publishing and the Windows feed). `finish` below publishes it once every
+          # platform has uploaded.
+          gh release create "$tag" --draft --prerelease --title "$tag" --generate-notes
 
   publish:
     # Nothing is published unless the gates passed. A release cannot be taken back once a browser has
@@ -165,3 +170,21 @@ jobs:
           --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Takes the draft public once all three platforms have uploaded into it.
+  #
+  # Only after every `publish` job succeeded, so no browser ever reads a release that is missing its
+  # feed. One platform failing leaves the release a draft with two feeds in it; "Re-run failed jobs"
+  # re-runs that platform and this job with it, and the release goes out complete. A re-run of a
+  # release that is already public changes nothing here.
+  finish:
+    needs: [gates, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease
