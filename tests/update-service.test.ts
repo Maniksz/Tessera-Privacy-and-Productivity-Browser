@@ -151,6 +151,8 @@ async function settle(): Promise<void> {
 }
 
 const PLATFORMS: readonly Platform[] = ['darwin', 'win32', 'linux']
+/** The platforms whose row in the shipped table is `false`. */
+const RELEASE_PAGE_PLATFORMS: readonly Platform[] = ['darwin', 'linux']
 
 /**
  * Every platform able to install in place — the state a signed release would be in.
@@ -167,19 +169,20 @@ function quietWarnings(): ReturnType<typeof vi.spyOn> {
 }
 
 describe('which platform is offered a download', () => {
-  it('sends every platform to the release page while none of them may install in place', () => {
+  it('sends macOS and Linux to the release page, and lets Windows install in place', () => {
     /*
       No build of this browser is signed, and each platform turns that into a different failure.
       Squirrel.Mac refuses to replace an unsigned application, so a macOS download would restart into
-      the same old version. `NsisUpdater` and the AppImage updater would not refuse — they would
-      install whatever the release holds without checking who made it, which is worse. The release
-      page is the one route that works and that leaves the decision with the person.
+      the same old version. The AppImage updater would not refuse — it would install whatever the
+      release holds without checking who made it, which is worse. Windows is the same as Linux in
+      that respect, and installs in place anyway by the user's decision; see its row.
     */
-    for (const platform of PLATFORMS) {
+    for (const platform of RELEASE_PAGE_PLATFORMS) {
       expect(updateDelivery({ platform, inPlaceUpdates: IN_PLACE_UPDATES }), platform).toBe(
         'release-page'
       )
     }
+    expect(updateDelivery({ platform: 'win32', inPlaceUpdates: IN_PLACE_UPDATES })).toBe('in-place')
   })
 
   it('offers the download on Windows the moment its row says so', () => {
@@ -201,14 +204,15 @@ describe('which platform is offered a download', () => {
     expect(updateDelivery({ platform: 'darwin', inPlaceUpdates: macSigned })).toBe('in-place')
   })
 
-  it('ships with in-place updates off on every platform, because no build is signed', () => {
+  it('ships with in-place updates on for Windows only, because no build is signed', () => {
     /*
       Not a tautology about a constant: it is the assertion that nobody has flipped a row while the
-      release still ships that platform unsigned. `architecture.test.ts` ties the macOS and Windows
-      rows to `release.yml`; this is the whole table, Linux included, whose AppImage updater checks
-      no signature at all and so has nothing in the workflow to be tied to.
+      release still ships that platform unsigned. `architecture.test.ts` ties the macOS row to
+      `release.yml`; this is the whole table, Linux included, whose AppImage updater checks no
+      signature at all and so has nothing in the workflow to be tied to. Windows is `true` by the
+      user's decision of 24.09.2026, and this line is where that decision is visible in the tests.
     */
-    expect(IN_PLACE_UPDATES).toEqual({ darwin: false, win32: false, linux: false })
+    expect(IN_PLACE_UPDATES).toEqual({ darwin: false, win32: true, linux: false })
   })
 })
 
@@ -584,7 +588,7 @@ describe('the first consent: told, not downloaded', () => {
     }
   })
 
-  for (const platform of PLATFORMS) {
+  for (const platform of RELEASE_PAGE_PLATFORMS) {
     it(`opens the release page and downloads nothing on ${platform} as shipped`, async () => {
       /*
         No `inPlaceUpdates` given, so this is the state the application ships in: every user is
@@ -615,7 +619,7 @@ describe('the first consent: told, not downloaded', () => {
       itself, and an answer the offer never carried changes nothing.
     */
     const h = harness({
-      platform: 'win32',
+      platform: 'linux',
       current: '1.0.0',
       feed: { kind: 'offer', version: '1.1.0' },
       answer: () => 'download'

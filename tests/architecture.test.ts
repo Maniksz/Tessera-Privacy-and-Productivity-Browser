@@ -1697,33 +1697,23 @@ describe('IPC discipline', () => {
     expect(inPlaceUpdatesInSource().darwin, 'the workflow builds mac unsigned').toBe(false)
   })
 
-  it('keeps Windows in-place updates off while the publish job holds no signing certificate', () => {
+  it('makes the Windows updater verify the signature the moment the publish job signs', () => {
     /*
-      The Windows half has no override to look for, which is what makes it the dangerous one. An
-      unsigned NSIS build is the *default*: electron-builder signs only when it is handed a certificate,
-      and it is handed one through `CSC_LINK` or `WIN_CSC_LINK` in the environment of the job that
-      packages. So "unsigned" is the absence of those names in `publish`, and an in-place row for
-      Windows in that state would have `NsisUpdater` install whatever the release holds.
+      Windows installs in place while unsigned, by the user's decision (see the `win32` row of
+      `IN_PLACE_UPDATES`), and this test does not second-guess it. What it holds is the other half of
+      that decision: the exception ends the day a certificate arrives, not the day somebody remembers.
 
-      Same direction as the macOS test above: an unsigned workflow pins the row to `false`, and adding
-      a certificate is left free. A signing route through Azure Trusted Signing would arrive under
+      A certificate in the workflow is not yet a checked update. `NsisUpdater` compares the downloaded
+      installer's Authenticode signature against `publisherName` from `app-update.yml`, and when that
+      value is absent it skips the check and installs — a signed release and an unsigned impostor then
+      look the same to it. So once the publish job is handed `CSC_LINK` or `WIN_CSC_LINK`, an in-place
+      Windows row requires `win.publisherName` in `electron-builder.yml`, where the updater's copy is
+      generated from. A signing route through Azure Trusted Signing or SignPath would arrive under
       other names, and belongs in this pattern the day it is set up.
     */
     const publish = workflowJobs(workflowCode('release.yml')).get('publish')
     expect(publish, 'release.yml has no publish job').toBeDefined()
-    if (/\b(?:WIN_)?CSC_LINK\b/.test(publish ?? '')) return
-
-    expect(inPlaceUpdatesInSource().win32, 'the publish job packages Windows unsigned').toBe(false)
-  })
-
-  it('lets Windows install in place only once the updater is told whose signature to expect', () => {
-    /*
-      A certificate in the workflow is not yet a checked update. `NsisUpdater` compares the downloaded
-      installer's Authenticode signature against `publisherName` from `app-update.yml`, and when that
-      value is absent it skips the check and installs — a signed release and an unsigned impostor then
-      look the same to it. So a Windows row set to `true` requires `win.publisherName` to be written
-      down in `electron-builder.yml`, where the updater's copy is generated from.
-    */
+    if (!/\b(?:WIN_)?CSC_LINK\b/.test(publish ?? '')) return
     if (!inPlaceUpdatesInSource().win32) return
 
     const config = readFileSync(join(ROOT, 'electron-builder.yml'), 'utf8')
@@ -1731,14 +1721,14 @@ describe('IPC discipline', () => {
       .filter((line) => !/^\s*#/.test(line))
       .join('\n')
     const win = /^win:\s*$([\s\S]*?)^\S/m.exec(config)?.[1] ?? ''
-    expect(win, 'Windows installs in place with no publisher to verify against').toMatch(
+    expect(win, 'Windows is signed, and the updater is not told whose signature to expect').toMatch(
       /^ {2}publisherName:\s*\S/m
     )
   })
 
   it('decides the update route in the service, not in the adapter', () => {
     /*
-      The three tests above read `IN_PLACE_UPDATES`, and that is only the truth if nothing overrides it.
+      The two tests above read `IN_PLACE_UPDATES`, and that is only the truth if nothing overrides it.
       `UpdateServiceOptions.inPlaceUpdates` exists for tests; `install-updates.ts` passing it would put
       a second table beside the one the fitness functions check, and neither would say so.
     */

@@ -111,16 +111,18 @@ export const UPDATE_REPOSITORY = {
 export type InPlaceUpdates = Readonly<Record<Platform, boolean>>
 
 /**
- * Which platforms may download and install an update themselves. **None, today.**
+ * Which platforms may download and install an update themselves. **Windows, today.**
  *
  * The rule is that an update nobody can verify does not install itself: the person is sent to the
  * release page and installs it by hand, with their operating system's own warning in front of them.
  * No build of this browser is signed yet, and each platform turns that into a different failure,
  * which is why this is a table rather than one switch — each row is flipped by its own change, and
- * nothing else moves when it is, because `updateDelivery` already routes on it.
+ * nothing else moves when it is, because `updateDelivery` already routes on it. Windows is the one
+ * exception, by the user's decision; its row says what that costs.
  *
- * `architecture.test.ts` ties the macOS and Windows rows to the release pipeline, so neither can be
- * set to `true` while the build it describes is still unsigned.
+ * `architecture.test.ts` ties the macOS row to the release pipeline, so it cannot be set to `true`
+ * while the mac build is still unsigned, and requires `win.publisherName` the moment the Windows
+ * build is signed.
  */
 export const IN_PLACE_UPDATES: InPlaceUpdates = {
   /**
@@ -134,16 +136,24 @@ export const IN_PLACE_UPDATES: InPlaceUpdates = {
    */
   darwin: false,
   /**
-   * `NsisUpdater` would not refuse, which is worse: it checks the installer's Authenticode signature
-   * against `publisherName` from `app-update.yml`, and without one it skips the check and installs
-   * whatever the release holds.
+   * **On although the build is unsigned, on the user's instruction of 24.09.2026: "für windows würde
+   * ich das wieder einschalten wollen".** Having to fetch every alpha from GitHub by hand was the
+   * cost U15 put on the one platform that is tested day to day, and it was judged too high.
    *
-   * Flipped by two things together: a code-signing certificate in the environment of the publish job
-   * (`WIN_CSC_LINK` or `CSC_LINK`), and `win.publisherName` in `electron-builder.yml` naming the
-   * subject of that certificate. The first alone signs the installer; only the second makes the
-   * updater look.
+   * What that accepts, said plainly: `NsisUpdater` checks the installer's Authenticode signature
+   * against `publisherName` from `app-update.yml`, and without one it skips the check. What remains
+   * is the SHA-512 in `latest.yml`, fetched over HTTPS from the same release as the installer — it
+   * proves the download is intact, not who made it. Anyone who can publish a release to the
+   * repository can therefore replace this program on the next restart. That is the same trust a
+   * download by hand from the release page places in the repository; what is lost is SmartScreen's
+   * warning in front of it.
+   *
+   * Made verified, rather than switched off again, by two things together: a code-signing
+   * certificate in the environment of the publish job (`WIN_CSC_LINK` or `CSC_LINK`), and
+   * `win.publisherName` in `electron-builder.yml` naming the subject of that certificate. The first
+   * alone signs the installer; only the second makes the updater look.
    */
-  win32: false,
+  win32: true,
   /**
    * The AppImage updater checks no signature at all — only the checksum in `latest-linux.yml`, which
    * comes from the same release as the file it describes, so it proves the download is intact and

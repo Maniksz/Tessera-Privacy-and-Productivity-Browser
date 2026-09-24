@@ -154,14 +154,20 @@ function electronUpdaterPort(): UpdaterPort {
     },
 
     /*
-      The defaults, named rather than left implicit: not silent, and run afterwards.
+      Silent, and run afterwards.
+
+      Silent because the person has already said yes twice — to the download and to the restart — and
+      the NSIS wizard would ask a third time, for an installation directory that is already chosen.
+      `/S` reinstalls into the existing directory, and `perMachine: false` means there is no UAC
+      prompt either: the browser closes, the installer runs without a window, and the new version
+      starts. The flag only exists on Windows; the other platforms ignore it.
 
       `quitAndInstall()` closes the windows and quits, which goes through `before-quit` in
       `index.ts` — so the flush that writes history, bookmarks and the session still happens on the
       way into the installer.
     */
     installAndRestart: () => {
-      autoUpdater.quitAndInstall(false, true)
+      autoUpdater.quitAndInstall(true, true)
     }
   }
 }
