@@ -863,6 +863,34 @@ body {
   margin: 0;
 }
 
+/* A failed page or a gone renderer, in the tile whose view the core hid (`TabFailure`). */
+.tab-failure {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  max-width: min(420px, 90%);
+  text-align: center;
+}
+
+.tab-failure__message {
+  margin: 0;
+  color: var(--fg);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.tab-failure__code {
+  margin: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-failure__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 /*
   Divider layer. Sits above the content region but is itself click-through: only
   the handles accept pointer events, so clicks elsewhere reach the native views.

@@ -34,6 +34,7 @@ import {
 } from './navigation-policy.js'
 import { decideAutomaticNavigation, withinGestureWindow } from './automatic-navigation.js'
 import { isFillGestureInput } from '@shared/passwords/gesture.js'
+import { watchTabFailure, type TabFailureWatch } from './tab-failure-watch.js'
 
 /**
  * One tab: a full `WebContentsView` with its own renderer process.
@@ -45,6 +46,8 @@ import { isFillGestureInput } from '@shared/passwords/gesture.js'
 
 export interface TabCallbacks {
   onStateChanged(tab: Tab): void
+  /** Its failure came or went, and with it whether the view is shown; see `view-visibility.ts`. */
+  onFailureChanged(tab: Tab): void
   /**
    * The user put the caret or the pointer into this tab's view.
    *
@@ -219,8 +222,9 @@ export class Tab {
   #pendingInput: string | null = null
   #tileIndex: number | null = null
   #blockedRequests = 0
-  #certificateError = false
   #faviconUrls: string[] = []
+  /** What went wrong with the page, for the tile and the omnibox; see `tab-failure-watch.ts`. */
+  #failure: TabFailureWatch | undefined
 
   /**
    * Where the last commit left this view.
@@ -480,9 +484,6 @@ export class Tab {
       if (pinch === 'begin') this.#pinchUntil = Number.POSITIVE_INFINITY
       else if (pinch === 'end') this.#pinchUntil = Date.now() + PINCH_GRACE_MS
 
-      // Gated on the setting here rather than further up: this runs per mouse move in every tile, which is
-      // exactly the cost `splitView.tileBarMode: 'keyboard'` exists to remove on a machine that cannot
-      // afford it.
       if (this.getSettings()['splitView.tileBarMode'] !== 'hover') return
       const y = mouseMoveY(input)
       if (y === null) return
@@ -523,7 +524,6 @@ export class Tab {
       notify()
     })
     on('did-start-navigation', () => {
-      this.#certificateError = false
       /*
         Cancel any pending screenshot. This is the whole reason the timer is held rather than fired
         and forgotten: the capture is filed under the address it was *requested* for, so one that
@@ -650,18 +650,16 @@ export class Tab {
     on('audio-state-changed', notify)
     on('media-started-playing', notify)
     on('media-paused', notify)
-    on('did-fail-load', notify)
+    this.#failure = watchTabFailure({ webContentsId: wc.id, on, url: () => wc.getURL() }, () => {
+      notify()
+      this.callbacks.onFailureChanged(this)
+    })
     on('destroyed', notify)
 
     // Fullscreen requests from the page. The window-level suppression that
     // keeps this inside the tile lives in `BrowserWindowController`.
     on('enter-html-full-screen', () => this.callbacks.onEnterHtmlFullscreen(this))
     on('leave-html-full-screen', () => this.callbacks.onLeaveHtmlFullscreen(this))
-
-    on('certificate-error', () => {
-      this.#certificateError = true
-      notify()
-    })
 
     /*
       Navigation to an internal address that this browser did not start.
@@ -971,8 +969,9 @@ export class Tab {
     this.callbacks.onStateChanged(this)
   }
 
-  get faviconUrls(): readonly string[] {
-    return this.#faviconUrls
+  /** Why the tile shows a failure instead of this page, if it does. */
+  get failure(): TabFailureWatch['current'] {
+    return this.#failure?.current
   }
 
   noteBlockedRequest(): void {
@@ -1087,7 +1086,7 @@ export class Tab {
   #securityState(): SecurityState {
     const url = this.view.webContents.getURL()
     if (url === '' || url.startsWith(INTERNAL_SCHEME) || url.startsWith('about:')) return 'internal'
-    if (this.#certificateError) return 'invalid-certificate'
+    if (this.#failure?.certificateRejected === true) return 'invalid-certificate'
     return url.startsWith('https:') ? 'secure' : 'insecure'
   }
 
@@ -1115,7 +1114,8 @@ export class Tab {
       // off Chromium, so a destroyed view no longer comes into it. See `PaneZoom`.
       zoomPercent: this.#zoomPercent,
       tileIndex: this.#tileIndex,
-      unloaded: this.#deferred !== null
+      unloaded: this.#deferred !== null,
+      failure: this.failure
     }
   }
 

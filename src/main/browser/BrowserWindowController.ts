@@ -47,6 +47,7 @@ import { currentPlatform, preloadFile, preloadRoleArgument } from '../paths.js'
 import { devServerUrl } from '../startup-flags.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
 import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
+import { planViews } from '@shared/browser/view-visibility.js'
 import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
 import { CloseTabFallback, pageKeyAction, type PageKeystroke } from './page-keys.js'
 import { CloseContract, askToLeave, hostOf, preventDefaultOf } from './unload-guard.js'
@@ -591,6 +592,7 @@ export class BrowserWindowController implements PermissionHost {
           this.#navigationPrompt.ask({ kind: 'navigation', url, host: hostOf(url) }, allow)
         },
         onFocused: (source) => this.#handleTabFocused(source),
+        onFailureChanged: () => this.relayout(),
         onEnterHtmlFullscreen: (source) => this.#seams.fullscreen.onPageEnter(source.id),
         onLeaveHtmlFullscreen: () => this.#seams.fullscreen.onPageLeave(),
         onCloseRequested: (source) => this.closeTab(source.id),
@@ -1326,23 +1328,14 @@ export class BrowserWindowController implements PermissionHost {
       return
     }
 
-    const rects = this.split.tileRects(contentRect)
-
-    const visibleTabIds = new Set<string>()
-    rects.forEach((rect, index) => {
-      const tabId = this.split.tabIdAt(index)
-      if (tabId === null || rect === null) return
+    // One rule for every view (KTD22): a tab with no tile, or with a failure, stays hidden through this.
+    const tiles = this.split
+      .tileRects(contentRect)
+      .map((rect, index) => ({ rect, tabId: this.split.tabIdAt(index) }))
+    for (const [tabId, { visible, rect }] of planViews(tiles, this.#tabs)) {
       const tab = this.#tabs.get(tabId)
-      if (!tab) return
-      tab.setBounds(rect)
-      tab.setVisible(true)
-      visibleTabIds.add(tabId)
-    })
-
-    // Tabs with no tile are hidden but stay loaded and keep running (spec 2).
-    for (const [tabId, tab] of this.#tabs) {
-      if (visibleTabIds.has(tabId)) continue
-      tab.setVisible(false)
+      if (rect !== null) tab?.setBounds(rect)
+      tab?.setVisible(visible)
     }
   }
 

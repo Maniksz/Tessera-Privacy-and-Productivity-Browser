@@ -13,6 +13,7 @@ import { Toolbar } from './components/Toolbar.js'
 import { isDownloadsPanel, useDownloadSummary } from './components/DownloadsButton.js'
 import { SplitDividers } from './components/SplitDividers.js'
 import { ExtensionsPanel } from './components/ExtensionsPanel.js'
+import { TileFailures } from './components/TabFailure.js'
 
 /**
  * Settings opens a tab; it is not a panel any more.
@@ -322,6 +323,15 @@ export function App(): React.ReactNode {
                 </div>
               )
             })}
+        {/* A failed page or a gone renderer, drawn where the core hid its view (U9, KTD4). */}
+        {state.split !== null && (
+          <TileFailures
+            split={state.split}
+            tabs={state.tabs}
+            rects={tileRects}
+            exemptSites={state.settings?.['privacy.blockerOffForSites'] ?? []}
+          />
+        )}
       </div>
     </div>
   )

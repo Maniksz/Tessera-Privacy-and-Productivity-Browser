@@ -321,6 +321,8 @@ export interface ObservedRequest {
 export interface PipelineHooks {
   /** Called for every blocked request so the omnibox badge shows a real count. */
   onBlocked(documentUrl: string | null, reason: StageId): void
+  /** A main frame a stage cancelled, by view, so the tile can say which stage (U9). */
+  onBlockedNavigation(webContentsId: number | null, reason: StageId): void
   /**
    * Every request the stages let through, exactly once each.
    *
@@ -428,6 +430,7 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
   const { session, getSettings } = options
   const engine = options.filterEngine ?? null
   const onBlocked = options.hooks?.onBlocked ?? (() => {})
+  const onBlockedNavigation = options.hooks?.onBlockedNavigation ?? (() => {})
   const onRequest = options.hooks?.onRequest ?? (() => {})
 
   const stages: readonly RequestStage[] = [
@@ -463,6 +466,9 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
       const outcome = stage.evaluate(context)
       if (outcome.action === 'block') {
         onBlocked(context.documentUrl, outcome.reason)
+        if (facts.resourceType === 'mainFrame') {
+          onBlockedNavigation(facts.webContentsId, outcome.reason)
+        }
         callback({ cancel: true })
         return
       }

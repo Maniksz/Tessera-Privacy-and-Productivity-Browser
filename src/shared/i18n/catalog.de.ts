@@ -482,6 +482,10 @@ export const de = {
   'error.offline': 'Keine Netzwerkverbindung.',
   'error.certificate': 'Das Zertifikat für {host} konnte nicht überprüft werden.',
   'error.blocked': '{app} hat diese Anfrage blockiert.',
+  'error.network': '{host} konnte nicht geladen werden.',
+  'error.proxy': 'Der Proxyserver antwortet nicht.',
+  'error.crashed': 'Diese Seite funktioniert nicht mehr.',
+  'error.openAnyway': 'Trotzdem öffnen',
   'error.httpsOnly': '{host} bietet keine verschlüsselte Verbindung an.',
   'error.httpsOnly.continue': 'Unverschlüsselt fortfahren',
   'error.httpsOnly.back': 'Zurück'

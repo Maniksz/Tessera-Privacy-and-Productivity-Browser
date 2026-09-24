@@ -26,6 +26,7 @@ import { installRequestPipeline } from '../privacy/RequestPipeline.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
 import { WindowRecency, downloadWindowFor } from './window-recency.js'
 import { windowOfSender, windowOfTab } from './sender-window.js'
+import { noteBlockedNavigation } from './tab-failure-watch.js'
 
 /**
  * Owns every window and every session.
@@ -591,7 +592,8 @@ export class WindowRegistry {
       */
       filterEngine: this.#deps.filters.engine,
       hooks: {
-        onBlocked: (documentUrl) => this.#noteBlockedRequest(documentUrl)
+        onBlocked: (documentUrl) => this.#noteBlockedRequest(documentUrl),
+        onBlockedNavigation: noteBlockedNavigation
       }
     })
   }

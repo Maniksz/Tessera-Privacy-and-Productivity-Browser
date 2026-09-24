@@ -655,6 +655,10 @@ export const en = {
   'error.offline': 'No network connection.',
   'error.certificate': 'The certificate for {host} could not be verified.',
   'error.blocked': '{app} blocked this request.',
+  'error.network': 'Could not load {host}.',
+  'error.proxy': 'The proxy server is not responding.',
+  'error.crashed': 'This page stopped working.',
+  'error.openAnyway': 'Open anyway',
   'error.httpsOnly': '{host} does not offer an encrypted connection.',
   'error.httpsOnly.continue': 'Continue unencrypted',
   'error.httpsOnly.back': 'Go back'

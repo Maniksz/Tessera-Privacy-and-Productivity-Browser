@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { LAYOUT_IDS } from './split/layout.js'
+import { BLOCK_SOURCES, FAILURE_KINDS } from './browser/tab-failure.js'
 
 /**
  * State objects that cross the UI <-> core boundary.
@@ -60,7 +61,21 @@ export const tabStateSchema = z.object({
   /** Which split tile shows this tab, or null when unassigned but still loaded. */
   tileIndex: z.number().int().nullable(),
   /** True while the tab is discarded to save memory. Never true for tiled tabs. */
-  unloaded: z.boolean()
+  unloaded: z.boolean(),
+  /**
+   * Why the tile shows a failure instead of the page, absent while it shows the page (KTD4).
+   *
+   * Optional so every state without one, and every fixture written before it, still passes. Never in
+   * the session: `captureWindow` copies the fields a slot holds by name. See `browser/tab-failure.ts`.
+   */
+  failure: z
+    .object({
+      kind: z.enum(FAILURE_KINDS),
+      code: z.number().int(),
+      host: z.string(),
+      source: z.enum(BLOCK_SOURCES).optional()
+    })
+    .optional()
 })
 export type TabState = z.output<typeof tabStateSchema>
 
