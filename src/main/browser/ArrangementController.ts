@@ -32,8 +32,8 @@ import type { ArrangementBook } from '../data/ArrangementStore.js'
  *
  * ## Every rule is the model's
  *
- * Nothing in here decides what supersedes what, what may be evicted, what counts as protected or
- * whether a recording may be applied. Those are `recordArrangement`, `arrangementOfTab` and
+ * Nothing in here decides which seating may become an arrangement, what counts as protected or
+ * whether a recording may be applied. Those are `createArrangement`, `arrangementOfTab` and
  * `arrangementIsProtected` in `@shared/arrangements/model.ts`, where they can be read and tested
  * without a window. What is decided here — and only here — is *when to leave the store alone*,
  * because that is a fact about the window's broadcast round rather than about arrangements: this
@@ -157,9 +157,10 @@ export class ArrangementController {
    * `arrangementIsCurrent` — rather than a second opinion about what is worth keeping. The model
    * stays the authority; this is the same rule read early to keep a hand off the store.
    *
-   * Everything after the gates is the model's: which older recording this supersedes, what may
-   * be evicted to make room, and the refusal to evict anything a collapsed group is protecting
-   * (R15). None of it is decided here.
+   * Everything after the gates is the model's, and since KTD2 the model refuses a seating that
+   * shares a tab with an arrangement it already holds instead of replacing that one. Changing the
+   * visible arrangement in place is `update` under its id, which this method learns to do once the
+   * window knows which arrangement is on screen (U2). None of it is decided here.
    */
   keep(): void {
     const layoutId = this.#host.currentLayout()
@@ -167,7 +168,7 @@ export class ArrangementController {
     if (seatedTabs(seats).length < MIN_ARRANGED_TILES) return
     if (this.#host.book.list().some((held) => arrangementIsCurrent(held, layoutId, seats))) return
 
-    this.#host.book.record({ layoutId, seats }, this.#windowTabs())
+    this.#host.book.create({ layoutId, seats }, this.#windowTabs())
   }
 
   /**

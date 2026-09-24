@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { LAYOUT_IDS } from '../split/layout.js'
+import { tileAudioSchema } from '../model.js'
 import type { SameShape } from '../ipc/same-shape.js'
 import type { KnownFields } from '../known-fields.js'
 import type { Arrangement, ArrangementDocument } from './model.js'
@@ -33,18 +34,27 @@ import type { Arrangement, ArrangementDocument } from './model.js'
  *     which fails the array, which fails the document — every arrangement lost over one bad
  *     string. Emptied, the recording either still seats `MIN_ARRANGED_TILES` tabs and is
  *     usable, or it does not and `repairArrangements` drops it.
- *   - **`recordedAt` heals to 0.** It orders eviction and nothing else; a nonsense timestamp
- *     makes a recording the first to go, which is the right outcome for a record nobody can
- *     date.
+ *   - **`recordedAt` heals to 0.** It orders `reconcileArrangements` and nothing else; a
+ *     nonsense timestamp makes a recording the older of two sharing a tab, which is the right
+ *     outcome for a record nobody can date.
+ *   - **The view heals field by field to an empty value** — `activeTile` to 0, `fractions` to
+ *     none, `tileAudio` to no tiles, and a single malformed tile's sound to loud. The version-1
+ *     migration writes every field, so this is the net under it: a file cut short or edited by
+ *     hand. Empty rather than the layout's defaults, because the defaults depend on the layout
+ *     and a field schema cannot see its neighbour; `repairArrangements` fills them in. A view
+ *     is how a recording looked, never whether it exists, so no view field may cost one.
  *
  * The cross-field facts — a seating whose length matches its layout, no tab in two tiles, at
- * least `MIN_ARRANGED_TILES` seated — cannot be stated here at all and belong to
- * `repairArrangements`, which runs on the loaded document.
+ * least `MIN_ARRANGED_TILES` seated, a view that fits the layout — cannot be stated here at all
+ * and belong to `repairArrangements`, which runs on the loaded document.
  */
 export const arrangementSchema = z.looseObject({
   id: z.string().min(1),
   layoutId: z.enum(LAYOUT_IDS).catch('1x1'),
   seats: z.array(z.string().min(1).nullable().catch(null)),
+  activeTile: z.number().int().nonnegative().catch(0),
+  fractions: z.record(z.string(), z.number()).catch({}),
+  tileAudio: z.array(tileAudioSchema.catch({ muted: false, volume: 1 })).catch([]),
   recordedAt: z.number().int().nonnegative().catch(0)
 })
 
@@ -54,7 +64,7 @@ export const arrangementSchema = z.looseObject({
  * signature that adds back off before the shapes are compared.
  */
 export const arrangementDocumentSchema = z.looseObject({
-  version: z.literal(1),
+  version: z.literal(2),
   arrangements: z.array(arrangementSchema)
 })
 

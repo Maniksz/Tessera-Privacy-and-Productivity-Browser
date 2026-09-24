@@ -1,7 +1,30 @@
-import { TILE_COUNT, type LayoutId } from '../split/layout.js'
+import type { TileAudio } from '../model.js'
+import { DEFAULT_FRACTIONS, TILE_COUNT, withDefaults, type LayoutId } from '../split/layout.js'
 
 /**
- * Arrangements — the tiling a window has put away, kept so a click can bring it back.
+ * Arrangements — a set of tabs tiled together, kept as one unit whether or not the window is
+ * showing it. The interface calls it a *Kachelansicht*.
+ *
+ * ## An entity, not a recording
+ *
+ * This module used to keep an invisible recording of a tiling that had been put away: its id
+ * changed on every settle, a new recording overlapping an old one replaced it without a word,
+ * and the oldest fell off at a cap of thirty-two. None of that was visible, so none of it was a
+ * loss. The strip now shows every arrangement as an entry (R1), and each of those three rules
+ * would make an entry vanish under the user's hand. So (KTD1, KTD2, KTD3):
+ *
+ *   - **the id is given once, at `createArrangement`, and kept by every change** —
+ *     `updateArrangement` rewrites layout, seats and view under the id it already has;
+ *   - **membership changes only through named operations** — create, update, remove a closed
+ *     tab, forget one, forget a window's. A tab already in an arrangement is refused by the next
+ *     one rather than taken from the first, which is how "a tab belongs to at most one" (R4)
+ *     holds without anything being replaced;
+ *   - **nothing is evicted**. There is no cap: `retainTabs` bounds the document at start-up to
+ *     arrangements whose tabs came back, and a window that closes forgets its own (R16).
+ *
+ * An arrangement also carries its **view** — the active tile, the divider positions and each
+ * tile's sound — because bringing one back must show it as it was left (R4), and after a
+ * restart as well (R15).
  *
  * ## Why this file has no zod import
  *
@@ -34,11 +57,11 @@ import { TILE_COUNT, type LayoutId } from '../split/layout.js'
  * windows that made them and a window has no identity that survives a restart. Two facts
  * therefore cannot be read off a recording and have to be handed in by the caller:
  *
- *   - **which tabs the calling window owns** — without it, one window's settle would evict
- *     another window's recording and a click in one window could re-tile the other (R16);
+ *   - **which tabs the calling window owns** — without it, one window's settle could change
+ *     another window's arrangement and a click in one window could re-tile the other (R16);
  *   - **which tabs the strip is currently hiding**, because their group is collapsed —
  *     without it, a recording would be applied over tabs that are not there to be seated
- *     (R14) and would be evicted while the user is still one click from wanting it (R15).
+ *     (R14).
  *
  * Both arrive as sets of tab ids, never as groups. Hiddenness is a fact about tabs here,
  * not a capability to ask about groups: `WindowTabs` is the entire vocabulary this module
@@ -48,10 +71,9 @@ import { TILE_COUNT, type LayoutId } from '../split/layout.js'
  *
  * A `protected` flag on a recording would be written when a group collapses and would have
  * to be cleared on every path that can make a tab visible again — expanding, leaving the
- * group, dissolving it, closing the tab. Miss one and the recording is protected for ever,
- * and the cap then fills with entries nothing may evict, which is the failure mode a cap
- * exists to prevent. Derived from the hidden set on every call it cannot go stale: the
- * protection ends the moment the tabs come back, with nothing to clear (KTD8).
+ * group, dissolving it, closing the tab. Miss one and the recording stays unapplicable for
+ * ever. Derived from the hidden set on every call it cannot go stale: the protection ends the
+ * moment the tabs come back, with nothing to clear (KTD8).
  *
  * ## Why every operation is pure
  *
@@ -75,31 +97,6 @@ import { TILE_COUNT, type LayoutId } from '../split/layout.js'
 export const MIN_ARRANGED_TILES = 2
 
 /**
- * Recordings kept at most, across every ordinary window.
- *
- * This number is load-bearing rather than hygiene. It replaces the back-pressure that
- * `MAX_TAB_GROUPS` used to apply through `groupToHoldArrangement`: a recording no longer
- * costs a chip in the strip, so nothing else in the design pushes back on making them, and
- * without a cap a long session would grow the document without bound.
- *
- * Thirty-two, and the two rejected numbers say what it is balancing:
- *
- *   - **Not fifty**, the group cap. A group is visible and the user can dissolve one; a
- *     recording is invisible, so the only thing that keeps the document from becoming
- *     clutter is that the oldest fall off. A cap the user cannot see should be the smallest
- *     one that never bites.
- *   - **Not eight**, which would be small enough to bite. The document is shared by every
- *     ordinary window, so the cap is spent by all of them together, while eviction is
- *     confined to the caller's own window (R16). At eight, three windows tiling in turn
- *     would push one another's recordings out within a few minutes.
- *
- * Thirty-two recordings mean at least sixty-four tabs have been tiled and put away in one
- * session — well past any believable window, and reached at all only by a caller with a bug
- * or a hand-edited file, which is what the cap is here to bound.
- */
-export const MAX_ARRANGEMENTS = 32
-
-/**
  * A tiling that has been put away: which layout, and who sat in which tile.
  *
  * `seats` is one entry per tile of `layoutId`, in tile order, naming the tab that was in it
@@ -110,37 +107,68 @@ export const MAX_ARRANGEMENTS = 32
  *
  * The shape is also exactly what restoring needs — `applyArrangement(layoutId, seats,
  * activatedTabId)` — so nothing has to be guessed on the way back.
+ *
+ * The view fields always fit the layout: one `tileAudio` entry per tile, `activeTile` a tile
+ * the layout has, and `fractions` exactly the layout's own dividers. Every write path fits them
+ * (`fitView`), so a reader never has to.
  */
-export interface Arrangement {
+export interface Arrangement extends ArrangementView {
   id: string
   layoutId: LayoutId
   /** Tab id per tile, `null` for an empty tile. Exactly `TILE_COUNT[layoutId]` entries. */
   seats: Array<string | null>
+  /**
+   * When the arrangement was created, kept by `updateArrangement`. It orders nothing but
+   * `reconcileArrangements`, where the newer of two arrangements sharing a tab is the one kept.
+   */
   recordedAt: number
 }
 
 /**
- * What a caller proposes to record.
+ * How an arrangement looks on screen, apart from who sits where (KTD11).
+ *
+ * Kept with the arrangement rather than with the window, because a window shows one at a time
+ * and every other one has to remember its own: bringing an arrangement back must put the focus,
+ * the dividers and the muted tiles where they were when it was put away.
+ */
+export interface ArrangementView {
+  /** The tile that had the focus. */
+  activeTile: number
+  /** Divider positions, keyed by divider id from `split/layout.ts`. */
+  fractions: Record<string, number>
+  /** Per tile, in tile order: muted and volume, as `SplitController` keeps them. */
+  tileAudio: TileAudio[]
+}
+
+/**
+ * What a caller proposes to create.
  *
  * The same fields as an `Arrangement`, and deliberately not the same type: this one has not
  * been through the rules yet. Identity and time are on it because the pure layer must not
  * invent either — that is the division `TabGroupStore` already uses, and it is what lets
- * every test in this module assert on exact objects.
+ * every test in this module assert on exact objects. The view is optional: a tiling that has
+ * just come into being starts from `defaultArrangementView`.
  */
-export interface ArrangementDraft {
+export interface ArrangementDraft extends Partial<ArrangementView> {
   id: string
   layoutId: LayoutId
   seats: ReadonlyArray<string | null>
   recordedAt: number
 }
 
+/**
+ * What `updateArrangement` may change. Every field optional, so a caller writing the view alone
+ * — putting an arrangement away — cannot also rewrite who sits where by accident.
+ */
+export interface ArrangementPatch extends Partial<ArrangementView> {
+  layoutId?: LayoutId
+  seats?: ReadonlyArray<string | null>
+}
+
 export interface ArrangementDocument {
-  version: 1
-  /**
-   * Newest last, which is the order `recordArrangement` appends in. Nothing reads it as a
-   * ranking: eviction sorts by `recordedAt` so that a document written by an older build,
-   * or repaired after a crash, cannot make the wrong entry the oldest.
-   */
+  /** 2 since the view fields; `ARRANGEMENT_MIGRATIONS` in the store brings a version 1 up. */
+  version: 2
+  /** Oldest first, which is the order `createArrangement` appends in. */
   arrangements: Arrangement[]
 }
 
@@ -159,7 +187,25 @@ export interface WindowTabs {
 }
 
 export function emptyArrangementDocument(): ArrangementDocument {
-  return { version: 1, arrangements: [] }
+  return { version: 2, arrangements: [] }
+}
+
+/** What a tile's sound is before anybody touches it, as `SplitController` starts one. */
+const LOUD: TileAudio = { muted: false, volume: 1 }
+
+/**
+ * The view an arrangement of this layout starts with: the first tile active, the layout's
+ * default dividers, every tile loud at full volume — what `SplitController` gives a fresh tile.
+ *
+ * Also what the version-1 migration writes into every stored arrangement (KTD15), so an upgraded
+ * file and a tiling made today start from the same place. A fresh object per call.
+ */
+export function defaultArrangementView(layoutId: LayoutId): ArrangementView {
+  return {
+    activeTile: 0,
+    fractions: { ...DEFAULT_FRACTIONS[layoutId] },
+    tileAudio: Array.from({ length: TILE_COUNT[layoutId] }, () => ({ ...LOUD }))
+  }
 }
 
 // --- reads -------------------------------------------------------------------
@@ -173,11 +219,8 @@ export function seatedTabs(seats: ReadonlyArray<string | null>): string[] {
  * True while at least one of the recording's tabs is hidden by a collapsed group.
  *
  * The `Geschützt` state of the plan's diagram, and the reason it is a function rather than
- * a field is in the header. Both protections in this file are this predicate: a protected
- * recording is not evicted (R15) and is not applied (R14). The two rules are one condition
- * because they are the same fact — a recording that cannot be applied must not be thrown
- * away either, or collapsing a group would quietly destroy the arrangement the user is
- * about to expand back into.
+ * a field is in the header. A protected recording is not applied (R14): seating the visible
+ * tabs alone would put an arrangement on screen that is not the one the user made.
  */
 export function arrangementIsProtected(
   arrangement: Arrangement,
@@ -241,51 +284,184 @@ export function arrangementIsCurrent(
 // --- writes ------------------------------------------------------------------
 
 /**
- * Records a tiling the window has just put away, and makes room for it if it has to.
+ * Creates an arrangement for a tiling that has just come into being, or refuses to.
  *
- * Three decisions in one pass, in the order they have to happen:
+ * Refused — the list handed back unchanged — when
  *
- *   1. **Is this worth recording at all** — `seatsWorthKeeping`. A draft naming a tab the
- *      calling window does not own is refused rather than trimmed: it means the caller has
- *      mixed up two windows, and recording the remainder would write down an arrangement
- *      that never existed.
- *   2. **What does it supersede** — every recording sharing a seated tab with it, provided
- *      that recording may be touched at all. A tab that has just been re-tiled is not in the
- *      arrangement it used to be in, so leaving the old recording would offer the user a way
- *      back that puts the tab in two places.
- *   3. **Does it fit** — the cap, evicting oldest first until it does.
+ *   - **it is not worth keeping**: `seatsWorthKeeping`, the one gate every seating passes;
+ *   - **it names a tab the calling window does not own**. Refused rather than trimmed: the caller
+ *     has mixed up two windows, and keeping the remainder would write down a tiling that never
+ *     existed (R16);
+ *   - **one of its tabs already sits in another arrangement**, hidden or not. The old rule
+ *     replaced that arrangement, which was harmless while nobody could see it and is an entry
+ *     vanishing from the strip now (KTD2). A tab joins another arrangement only through a named
+ *     operation that takes it out of the first, so a refusal here means the caller has skipped
+ *     one — and the right answer to a skipped step is to change nothing;
+ *   - **its id is taken**. Ids come from the store and do not collide, so this only guards the
+ *     rule that `forgetArrangement(id)` addresses exactly one arrangement.
  *
- * When nothing may be evicted the answer is **to record nothing**, not to evict a protected
- * recording. That direction is the one worth arguing: the alternative sacrifices a recording
- * the user is one expand away from wanting, in order to keep one they can rebuild with a
- * drag they have just performed. Refusing costs the newest arrangement, which is also the
- * one still on screen; the next settle after any expand records it again.
+ * Nothing is evicted to make room, because there is no room to make (KTD3). The caller learns
+ * the outcome from whether the id is in the answer, which is how the store tells its own caller.
  *
- * Always returns a fresh array of fresh recordings, including when it changes nothing, so no
+ * Always returns a fresh array of fresh arrangements, including when it changes nothing, so no
  * caller can mutate a stored document through the value it was handed.
  */
-export function recordArrangement(
+export function createArrangement(
   arrangements: readonly Arrangement[],
   draft: ArrangementDraft,
   window: WindowTabs
 ): Arrangement[] {
-  const sets = tabSetsOf(window)
-  const seats = seatsWorthKeeping(draft.layoutId, draft.seats, sets.live)
-  if (seats === null) return cloneArrangements(arrangements)
-
-  const seated = new Set(seatedTabs(seats))
-  let kept = arrangements.filter((arrangement) => !isSupersededBy(arrangement, seated, sets))
-
-  while (kept.length >= MAX_ARRANGEMENTS) {
-    const victim = oldestEvictable(kept, sets)
-    if (victim === undefined) return cloneArrangements(arrangements)
-    kept = kept.filter((arrangement) => arrangement !== victim)
+  const seats = seatsWorthKeeping(draft.layoutId, draft.seats, tabSetsOf(window).live)
+  const taken = arrangements.some((arrangement) => arrangement.id === draft.id)
+  if (seats === null || taken || seatsHeldElsewhere(arrangements, seats, undefined)) {
+    return cloneArrangements(arrangements)
   }
 
   return [
-    ...cloneArrangements(kept),
-    { id: draft.id, layoutId: draft.layoutId, seats, recordedAt: draft.recordedAt }
+    ...cloneArrangements(arrangements),
+    {
+      id: draft.id,
+      layoutId: draft.layoutId,
+      seats,
+      ...fitView(draft.layoutId, draft),
+      recordedAt: draft.recordedAt
+    }
   ]
+}
+
+/**
+ * Changes one arrangement under the id it already has (KTD1).
+ *
+ * What the visible arrangement goes through when its panes change — a tab dropped onto a tile,
+ * a layout chosen — and what putting one away writes its view with. The id is kept whatever
+ * changes, which is the point: an entry in the strip is the same entry after its layout changed,
+ * and a session slot naming it still names it.
+ *
+ * Refused, with the list unchanged, when
+ *
+ *   - **the arrangement has a tab the calling window does not own** (R16);
+ *   - **the new seating is no arrangement**, by the same gate as `createArrangement`, including
+ *     a new layout handed in without the seating that fits it. Refused rather than dropping the
+ *     arrangement: ending one is `forgetArrangement`, a named operation with a caller who knows
+ *     it is ending something, not the side effect of a write that went wrong;
+ *   - **the new seating takes a tab from another arrangement** (R4).
+ *
+ * Deliberately not refused while a collapsed group hides the tabs. Collapsing a group puts the
+ * visible arrangement in it away (R11), and putting away is exactly this write of the view — so
+ * hiddenness, which stops an arrangement being *applied*, must not stop it being *remembered*.
+ *
+ * The view is fitted to the layout afterwards, so a patch that changes the layout keeps whatever
+ * of the old view still fits it: the dividers the two layouts share, the sound of the tiles both
+ * have, and the focus if that tile still exists.
+ */
+export function updateArrangement(
+  arrangements: readonly Arrangement[],
+  id: string,
+  patch: ArrangementPatch,
+  window: WindowTabs
+): Arrangement[] {
+  const unchanged = cloneArrangements(arrangements)
+  const current = arrangements.find((arrangement) => arrangement.id === id)
+  const live = tabSetsOf(window).live
+  if (current === undefined || !seatedTabs(current.seats).every((tab) => live.has(tab))) {
+    return unchanged
+  }
+
+  const layoutId = patch.layoutId ?? current.layoutId
+  const seats = seatsWorthKeeping(layoutId, patch.seats ?? current.seats, live)
+  if (seats === null || seatsHeldElsewhere(arrangements, seats, id)) return unchanged
+
+  const view = fitView(layoutId, { ...current, ...patch })
+  return unchanged.map((arrangement) =>
+    arrangement.id === id ? { ...arrangement, layoutId, seats, ...view } : arrangement
+  )
+}
+
+/**
+ * A tab has closed: its tile in every arrangement goes empty.
+ *
+ * Emptied rather than closed up, the rule everywhere `seats` is touched: the pages that stay must
+ * come back in the tiles they were in. An arrangement left with fewer than `MIN_ARRANGED_TILES`
+ * tabs goes, because one page in one tile is no arrangement — the remaining tab is an ordinary
+ * one from then on, which is the "Aufgelöst" of the plan's lifecycle.
+ *
+ * No window is asked for: tab ids are unique across windows, so a closed tab can only be in the
+ * arrangements of the window it closed in.
+ */
+export function removeTabFromArrangements(
+  arrangements: readonly Arrangement[],
+  tabId: string
+): Arrangement[] {
+  return keepWorthwhile(
+    arrangements.map((arrangement) => ({
+      ...arrangement,
+      seats: arrangement.seats.map((seated) => (seated === tabId ? null : seated))
+    }))
+  )
+}
+
+/**
+ * Forgets every arrangement that seats one of these tabs — a window's, when it closes.
+ *
+ * The caller decides *whether* a window's arrangements go: only when another ordinary window
+ * stays open, as `forgetWindow` does for session slots, so that closing the last window keeps
+ * them for the restart (KTD3). This decides only which ones, and one shared tab is enough —
+ * an arrangement whose tabs are partly gone is no longer one anybody can bring back.
+ */
+export function forgetArrangementsOfTabs(
+  arrangements: readonly Arrangement[],
+  tabIds: readonly string[]
+): Arrangement[] {
+  const gone = new Set(tabIds)
+  return cloneArrangements(
+    arrangements.filter((arrangement) => !seatedTabs(arrangement.seats).some((t) => gone.has(t)))
+  )
+}
+
+/**
+ * Brings a loaded document in line with two rules older builds did not keep (KTD15, step 2).
+ *
+ * Runs at every start, right after `retainTabs`, with the members of every group as sets of tab
+ * ids. Called with sets rather than groups so this file keeps its narrowing: it still cannot take
+ * a group, and "a group" here is only "tabs that belong together".
+ *
+ *   1. **An arrangement reaching across a set boundary goes** — tabs in two groups, or some in a
+ *      group and some in none. R10 says all tabs of an arrangement share one group or none, and
+ *      the old automation, which regrouped by settle, left files that break it. Which side should
+ *      win cannot be told, so neither does: the tabs stay where they are, as ordinary tabs.
+ *   2. **Of arrangements sharing a tab, the newest by `recordedAt` stays** (R4). The old
+ *      supersede rule made such overlaps rare but not impossible — a collapsed group protected
+ *      the older one. On a tie the later entry wins, as it was the later written.
+ *
+ * An arrangement wholly inside a collapsed group stays: collapsing is not a boundary, and the
+ * model does not know about it. Idempotent — a second pass finds nothing left to drop.
+ */
+export function reconcileArrangements(
+  arrangements: readonly Arrangement[],
+  memberSets: ReadonlyArray<readonly string[]>
+): Arrangement[] {
+  const setOf = new Map<string, number>()
+  memberSets.forEach((members, index) => {
+    for (const tabId of members) setOf.set(tabId, index)
+  })
+  const within = arrangements.filter((arrangement) => {
+    const sets = new Set(seatedTabs(arrangement.seats).map((tabId) => setOf.get(tabId) ?? -1))
+    return sets.size === 1
+  })
+
+  const newestFirst = within
+    .map((arrangement, index) => ({ arrangement, index }))
+    .sort((a, b) => b.arrangement.recordedAt - a.arrangement.recordedAt || b.index - a.index)
+  const claimed = new Set<string>()
+  const kept = new Set<Arrangement>()
+  for (const { arrangement } of newestFirst) {
+    const tabs = seatedTabs(arrangement.seats)
+    if (tabs.some((tabId) => claimed.has(tabId))) continue
+    for (const tabId of tabs) claimed.add(tabId)
+    kept.add(arrangement)
+  }
+
+  return cloneArrangements(within.filter((arrangement) => kept.has(arrangement)))
 }
 
 /**
@@ -300,9 +476,10 @@ export function recordArrangement(
  * is ended the way that group should have been: every tab stays open and in the strip, and only the
  * recording that tied them together goes.
  *
- * Exactly the set a new recording of `seats` would supersede, and read through the same predicate
- * (`isSupersededBy`), so "the tiling ends" and "the tiling is replaced" cannot come to disagree about
- * which recordings a seating owns. Two refusals follow from that, and both are deliberate:
+ * Every recording that shares a tab with `seats` and is free to act on (`isOwnedBySeating`). It used
+ * to be the set a new recording would supersede; superseding is gone (KTD2), and the set is kept for
+ * the one caller that still ends a tiling by its seating until the window knows its arrangement's id.
+ * Two refusals, and both are deliberate:
  *
  *   - **A recording a collapsed group still needs is kept** (R15). It is not the tiling on screen —
  *     its hidden members are in no pane — and it is the only way back the fold left the user.
@@ -320,7 +497,7 @@ export function arrangementsEndedBy(
   const sets = tabSetsOf(window)
   const seated = new Set(seatedTabs(seats))
   return cloneArrangements(
-    arrangements.filter((arrangement) => isSupersededBy(arrangement, seated, sets))
+    arrangements.filter((arrangement) => isOwnedBySeating(arrangement, seated, sets))
   )
 }
 
@@ -387,9 +564,13 @@ export function retainTabs(
  *   - **A duplicate recording id.** Two entries claiming one id are one recording as far as
  *     `forgetArrangement` is concerned; the later is dropped rather than shadowing the
  *     earlier in half the operations.
- *   - **More recordings than the cap.** A quantity, and a quantity must never reach the
- *     schema: a validation failure replaces the whole document with defaults, so a `.max()`
- *     there would turn "grew larger than expected" into "lost every arrangement".
+ *   - **A view that does not fit its layout.** The schema heals a missing or malformed view
+ *     field to an empty value, because it cannot see the layout; here it is fitted — the
+ *     layout's default dividers filled in, one sound entry per tile, the focus on a tile that
+ *     exists.
+ *
+ * What it no longer does is cut the document to a cap. There is none (KTD3): a cap that drops
+ * arrangements is an entry disappearing from the strip, and the only bound left is `retainTabs`.
  *
  * No window is involved and none can be: this runs before any window has claimed a tab, so
  * neither ownership (R16) nor hiddenness is knowable yet. Both are applied on every call
@@ -400,12 +581,11 @@ export function repairArrangements(arrangements: readonly Arrangement[]): Arrang
   const repaired: Arrangement[] = []
 
   for (const arrangement of arrangements) {
-    if (repaired.length >= MAX_ARRANGEMENTS) break
     if (seen.has(arrangement.id)) continue
     const seats = seatsWorthKeeping(arrangement.layoutId, arrangement.seats, undefined)
     if (seats === null) continue
     seen.add(arrangement.id)
-    repaired.push({ ...arrangement, seats })
+    repaired.push({ ...arrangement, seats, ...fitView(arrangement.layoutId, arrangement) })
   }
 
   return repaired
@@ -416,10 +596,16 @@ export function repairArrangements(arrangements: readonly Arrangement[]): Arrang
  *
  * `seats` is the array that makes a shallow copy a bug: two documents that share it are the
  * same document as far as any restore is concerned, which is the class of defect where a
- * store's "previous" and "next" turn out to be one object.
+ * store's "previous" and "next" turn out to be one object. The view is copied as deep for the
+ * same reason — a muted tile written into a snapshot must not reach the document.
  */
 export function cloneArrangements(arrangements: readonly Arrangement[]): Arrangement[] {
-  return arrangements.map((arrangement) => ({ ...arrangement, seats: [...arrangement.seats] }))
+  return arrangements.map((arrangement) => ({
+    ...arrangement,
+    seats: [...arrangement.seats],
+    fractions: { ...arrangement.fractions },
+    tileAudio: arrangement.tileAudio.map((audio) => ({ ...audio }))
+  }))
 }
 
 // --- internals ---------------------------------------------------------------
@@ -427,10 +613,8 @@ export function cloneArrangements(arrangements: readonly Arrangement[]): Arrange
 /**
  * True when this recording is the calling window's to act on, and free to act on.
  *
- * One predicate for two rules on purpose — see `arrangementIsProtected`. A caller asking
- * "may I apply this" and a caller asking "may I evict this" are asking the same question,
- * and answering them from one place is what stops the two from drifting into a state where
- * a recording can be destroyed but not used.
+ * One predicate for applying and for ending by seating, so that a recording a click may not bring
+ * back is not one a seating may end either — both would act on tabs that are not there.
  */
 function isUnobstructed(arrangement: Arrangement, sets: WindowTabSets): boolean {
   if (!seatedTabs(arrangement.seats).every((tabId) => sets.live.has(tabId))) return false
@@ -440,10 +624,10 @@ function isUnobstructed(arrangement: Arrangement, sets: WindowTabSets): boolean 
 /**
  * True when a seating of `seated` tabs owns this recording: it is free to act on and shares a tab.
  *
- * What a new recording supersedes and what choosing the single layout ends. A tab that has just been
- * re-tiled — or untiled on purpose — is not in the arrangement it used to be in any more.
+ * What choosing the single layout ends: a tab untiled on purpose is not in the arrangement it used
+ * to be in any more.
  */
-function isSupersededBy(
+function isOwnedBySeating(
   arrangement: Arrangement,
   seated: ReadonlySet<string>,
   sets: WindowTabSets
@@ -468,27 +652,45 @@ function tabSetsOf(window: WindowTabs): WindowTabSets {
 }
 
 /**
- * The recording that has been in the document longest and may be thrown away, or nothing.
+ * True when one of these seats names a tab that another arrangement already seats (R4).
  *
- * Oldest first, chosen over newest first and over "the one sharing fewest tabs": the age of a
- * recording is the only evidence this module has about what the user has stopped caring
- * about, and it is evidence the user can act on — anything they have used recently was
- * re-recorded by the settle that followed.
- *
- * `undefined` is a real answer, not a failure. Every recording in the document can be
- * protected or foreign at once, and the caller's response is to record nothing.
+ * `except` is the arrangement being changed, whose own seats are of course not "another". Every
+ * arrangement counts, whichever window it belongs to and whether a collapsed group hides it:
+ * a tab id is unique across windows, and hiding a tab does not take it out of its arrangement.
  */
-function oldestEvictable(
+function seatsHeldElsewhere(
   arrangements: readonly Arrangement[],
-  sets: WindowTabSets
-): Arrangement | undefined {
-  return arrangements
-    .filter((arrangement) => isUnobstructed(arrangement, sets))
-    .reduce<Arrangement | undefined>(
-      (oldest, arrangement) =>
-        oldest === undefined || arrangement.recordedAt < oldest.recordedAt ? arrangement : oldest,
-      undefined
-    )
+  seats: ReadonlyArray<string | null>,
+  except: string | undefined
+): boolean {
+  const held = new Set(
+    arrangements
+      .filter((arrangement) => arrangement.id !== except)
+      .flatMap((arrangement) => seatedTabs(arrangement.seats))
+  )
+  return seatedTabs(seats).some((tabId) => held.has(tabId))
+}
+
+/**
+ * A view made to fit its layout, from whatever a caller or a file brought.
+ *
+ * Every field is fitted rather than trusted, because each can arrive from a different layout: a
+ * patch that changes `2x2` to `1x2` carries four sound entries and a horizontal divider the new
+ * layout does not have. Dividers go through `withDefaults`, the split view's own rule, so a stored
+ * arrangement holds exactly the dividers `SplitController` would. Missing sound is loud, and a
+ * focus beyond the last tile lands on the last one — the one nearest to where it was.
+ */
+function fitView(layoutId: LayoutId, view: Partial<ArrangementView>): ArrangementView {
+  const count = TILE_COUNT[layoutId]
+  const wanted = view.activeTile ?? 0
+  const activeTile = Number.isFinite(wanted) ? Math.trunc(wanted) : 0
+  return {
+    activeTile: Math.min(Math.max(activeTile, 0), count - 1),
+    fractions: { ...withDefaults(layoutId, view.fractions ?? {}) },
+    tileAudio: Array.from({ length: count }, (_, index) => ({
+      ...(view.tileAudio?.[index] ?? LOUD)
+    }))
+  }
 }
 
 /**
@@ -530,5 +732,7 @@ function keepWorthwhile(arrangements: readonly Arrangement[]): Arrangement[] {
     const seats = seatsWorthKeeping(arrangement.layoutId, arrangement.seats, undefined)
     if (seats !== null) kept.push({ ...arrangement, seats })
   }
-  return kept
+  // Deep, because the view would otherwise be shared between the document handed in and the one
+  // handed back — the "previous and next are one object" defect `cloneArrangements` describes.
+  return cloneArrangements(kept)
 }

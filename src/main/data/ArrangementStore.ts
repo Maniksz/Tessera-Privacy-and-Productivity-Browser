@@ -1,19 +1,26 @@
 import {
   arrangementOfTab,
   cloneArrangements,
+  createArrangement,
+  defaultArrangementView,
   emptyArrangementDocument,
   forgetArrangement,
-  recordArrangement,
+  forgetArrangementsOfTabs,
+  removeTabFromArrangements,
   repairArrangements,
   retainTabs,
+  seatedTabs,
+  updateArrangement,
   type Arrangement,
   type ArrangementDocument,
+  type ArrangementPatch,
+  type ArrangementView,
   type WindowTabs
 } from '@shared/arrangements/model.js'
 import { arrangementDocumentSchema } from '@shared/arrangements/schema.js'
-import type { LayoutId } from '@shared/split/layout.js'
+import { LAYOUT_IDS, type LayoutId } from '@shared/split/layout.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 // The same named pair, imported rather than redeclared, so `'private'` means one thing across
 // the core. `recorderFor` there, `bookFor` in `TabGroupStore` and `bookFor` here are one idea.
 import type { BrowsingMode } from './HistoryStore.js'
@@ -29,6 +36,10 @@ import type { BrowsingMode } from './HistoryStore.js'
  * The file belongs in the user-data directory, never the cache one: a recording is how a user
  * gets their panes back, and a cache clear or a disk cleaner must not take it. `paths.ts` keeps
  * that decision, which is why no path is assembled here.
+ *
+ * Membership changes only through the named operations below (KTD2): `create`, `update`,
+ * `removeTab`, `forgetTabs`, `forget` and `retainTabs`. There is no `record` that replaces an
+ * overlapping arrangement any more — see the header of `@shared/arrangements/model.ts`.
  *
  * ## Where the schema is, and why it is not in this file
  *
@@ -47,7 +58,7 @@ import type { BrowsingMode } from './HistoryStore.js'
  * Every recording of every ordinary window lives in one document, so which tabs the caller owns
  * and which of them are hidden cannot be read off the document. They arrive as a `WindowTabs`
  * on each call and are handed straight to the model. This store must not default them, fill
- * them in, or drop them: doing so would let one window evict or apply another's recording,
+ * them in, or drop them: doing so would let one window change or apply another's recording,
  * which is the whole of R16.
  */
 
@@ -58,22 +69,29 @@ import type { BrowsingMode } from './HistoryStore.js'
  * depend on holding the persisting implementation. A private window is handed one of these that
  * writes nothing, and nothing at the call site has to know.
  *
- * Mutations return nothing on purpose. The interface is fed by `onChange` with the whole list,
- * so returning the changed recording would create a second, narrower path for the same
- * information to travel down and disagree on. There is no exception here — unlike a tab group,
- * whose creation hands back an id so the strip can open a rename field, a recording is invisible
- * and nobody has an id to be told.
+ * Mutations return nothing on purpose, with one exception. The interface is fed by `onChange`
+ * with the whole list, so returning the changed arrangement would create a second, narrower path
+ * for the same information to travel down and disagree on. The exception is `create`, for the
+ * reason `TabGroupBook.create` has one: the window that creates an arrangement is showing it and
+ * has to know which entry in the strip is the visible one (KTD1). It answers `undefined` when the
+ * model refuses — a tab of another window, a tab already in another arrangement — which on the
+ * settle path is an ordinary outcome, not an error.
  *
- * `record` in particular answers nothing even when it *declines*: the model refuses a draft that
- * names another window's tab, and refuses to evict a protected recording to make room. Both are
- * ordinary outcomes of a pass that runs on every settle, not errors a caller could act on.
+ * Nothing here makes room. There is no cap and no eviction (KTD3), so a window that tiles forty
+ * times holds forty arrangements until it closes them, closes their tabs or closes itself.
  */
 export interface ArrangementBook {
   list(): Arrangement[]
   /** The recording a click on this tab should bring back, if there is one that may be applied. */
   arrangementOfTab(tabId: string, window: WindowTabs): Arrangement | undefined
-  /** Writes down a tiling the window has just put away, evicting for it if it has to. */
-  record(draft: ArrangementInput, window: WindowTabs): void
+  /** A new arrangement for a tiling that has just come into being; its id, or `undefined` if refused. */
+  create(draft: ArrangementInput, window: WindowTabs): string | undefined
+  /** Changes one arrangement under the id it has; see `updateArrangement`. */
+  update(id: string, patch: ArrangementPatch, window: WindowTabs): void
+  /** A tab has closed: its tile goes empty, and an arrangement left too thin goes. */
+  removeTab(tabId: string): void
+  /** Forgets every arrangement that seats one of these tabs, for a window that has closed. */
+  forgetTabs(tabIds: readonly string[]): void
   forget(id: string): void
   /** Reconciles a loaded document with the tabs a session actually brought back. */
   retainTabs(liveTabIds: readonly string[]): void
@@ -87,11 +105,46 @@ export interface ArrangementBook {
  * A tiling as a caller describes it: the model's draft without the two fields the store owns.
  *
  * `id` and `recordedAt` are not asked for, so no controller can invent either and no test of a
- * controller has to. That is the same reason `CreateGroupInput` exists next to `TabGroup`.
+ * controller has to. That is the same reason `CreateGroupInput` exists next to `TabGroup`. The
+ * view is optional and starts from `defaultArrangementView` when left out.
  */
-export interface ArrangementInput {
+export interface ArrangementInput extends Partial<ArrangementView> {
   layoutId: LayoutId
   seats: ReadonlyArray<string | null>
+}
+
+/**
+ * The steps from each older `arrangements.json` to the version this build writes. See
+ * `StoreMigrations`.
+ *
+ * 1 → 2 gives every arrangement the view it starts with — `activeTile` 0, the layout's default
+ * dividers, every tile loud — and nothing else (KTD15, step 1). Only what is missing is added, so
+ * an entry that already carries a field keeps it. Deliberately nothing about groups or overlaps:
+ * the file is read before any tab or group exists, so those are `reconcileArrangements`' to judge
+ * at session restore, where both are known. The id stays, which is the point of migrating rather
+ * than starting afresh — a session slot naming an arrangement must still name it.
+ *
+ * As a migration rather than schema healing because of what a migration brings with it: the
+ * original kept as `arrangements.json.v1.bak`, and a file from a newer build left alone. Anything
+ * that is not an arrangement with a layout this build knows is passed on untouched for the schema
+ * and `repairArrangements` to judge, so this step never decides on its own that a file is broken.
+ */
+export const ARRANGEMENT_MIGRATIONS: StoreMigrations = [
+  (document) => ({
+    ...document,
+    version: 2,
+    arrangements: Array.isArray(document['arrangements'])
+      ? document['arrangements'].map((entry: unknown) => withStartingView(entry))
+      : document['arrangements']
+  })
+]
+
+function withStartingView(entry: unknown): unknown {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return entry
+  const record = entry as Record<string, unknown>
+  const layoutId = LAYOUT_IDS.find((id) => id === record['layoutId'])
+  if (layoutId === undefined) return entry
+  return { ...defaultArrangementView(layoutId), ...record }
 }
 
 /**
@@ -138,14 +191,13 @@ export class ArrangementStore implements ArrangementBook {
       filePath: options.filePath,
       schema: arrangementDocumentSchema,
       fallback: emptyArrangementDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: ARRANGEMENT_MIGRATIONS,
       // A recording is one drag to rebuild, so a file this build cannot write back costs this run's
       // recordings and nothing a user made by hand.
       criticality: 'degradable',
       // A file written by an older build, edited by hand or cut short by a crash must not leave
-      // a seating that does not match its layout, a tab in two tiles, or more recordings than
-      // the cap — the apply path and the eviction rule both rely on none of those existing.
+      // a seating that does not match its layout, a tab in two tiles, or a view that does not
+      // fit its layout — the apply path relies on none of those existing.
       repair: (document) => ({
         ...document,
         arrangements: repairArrangements(document.arrangements)
@@ -191,21 +243,41 @@ export class ArrangementStore implements ArrangementBook {
 
   /**
    * Looks up in a snapshot rather than in the live list, so the recording handed out cannot be
-   * mutated into the document. Costs a copy of a list capped at `MAX_ARRANGEMENTS` and read when
-   * a person clicks something.
+   * mutated into the document. Costs a copy of a short list, read when a person clicks something.
    */
   arrangementOfTab(tabId: string, window: WindowTabs): Arrangement | undefined {
     return arrangementOfTab(this.list(), tabId, window)
   }
 
-  record(draft: ArrangementInput, window: WindowTabs): void {
-    const complete = {
-      id: this.#generateId(),
-      layoutId: draft.layoutId,
-      seats: draft.seats,
-      recordedAt: this.#now()
-    }
-    this.#cell.write((arrangements) => recordArrangement(arrangements, complete, window))
+  /**
+   * The only place an id is made (KTD1). Written whether or not the model accepts, as every
+   * mutation here is: whether to reach the store at all is the caller's question, answered by the
+   * gates in `ArrangementController.keep`.
+   */
+  create(draft: ArrangementInput, window: WindowTabs): string | undefined {
+    const complete = { ...draft, id: this.#generateId(), recordedAt: this.#now() }
+    this.#cell.write((arrangements) => createArrangement(arrangements, complete, window))
+    return this.#cell.read().some((held) => held.id === complete.id) ? complete.id : undefined
+  }
+
+  update(id: string, patch: ArrangementPatch, window: WindowTabs): void {
+    this.#cell.write((arrangements) => updateArrangement(arrangements, id, patch, window))
+  }
+
+  /**
+   * Every tab that closes in any window reaches this, and almost none sits in an arrangement.
+   * A write publishes, so the store is left alone unless there is a seat to empty — gated here
+   * rather than at each caller, because the question is only "does any arrangement seat it".
+   */
+  removeTab(tabId: string): void {
+    if (!this.#seatsAny([tabId])) return
+    this.#cell.write((arrangements) => removeTabFromArrangements(arrangements, tabId))
+  }
+
+  /** Gated like `removeTab`: a window closing with no arrangement writes nothing. */
+  forgetTabs(tabIds: readonly string[]): void {
+    if (!this.#seatsAny(tabIds)) return
+    this.#cell.write((arrangements) => forgetArrangementsOfTabs(arrangements, tabIds))
   }
 
   forget(id: string): void {
@@ -244,6 +316,12 @@ export class ArrangementStore implements ArrangementBook {
   /** What opening the file found, for the warning `index.ts` logs. See `describeStoreLoad`. */
   get loadReport(): StoreLoadReport {
     return this.#cell.loadReport
+  }
+
+  #seatsAny(tabIds: readonly string[]): boolean {
+    return this.#cell
+      .read()
+      .some((held) => seatedTabs(held.seats).some((tabId) => tabIds.includes(tabId)))
   }
 }
 

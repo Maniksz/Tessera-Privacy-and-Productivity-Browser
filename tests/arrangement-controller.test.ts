@@ -158,7 +158,8 @@ describe('recording what the window is showing', () => {
 
     h.controller.keep()
 
-    expect(h.book.list()).toEqual([
+    // `toMatchObject`, because the view an arrangement carries (KTD1) is not this test's subject.
+    expect(h.book.list()).toMatchObject([
       { id: 'a1', layoutId: '1x2', seats: ['t1', 't2'], recordedAt: T0 + 1_000 }
     ])
 
@@ -195,27 +196,26 @@ describe('recording what the window is showing', () => {
     await h.cleanup()
   })
 
-  it('records again when the same tabs swap panes', async () => {
-    // Seats are positional, so a drag between two tiles is a different arrangement. Comparing them
-    // as sets would leave the drag unrecorded.
+  it('does not replace the arrangement when the same tabs swap panes (KTD2)', async () => {
+    // Seats are positional, so a drag between two tiles is a different seating — and it used to be
+    // recorded afresh under a new id. With arrangements visible as entries, replacing one is an entry
+    // vanishing; the in-place update under the same id arrives with the window's `liveId` (U2).
     const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
     h.controller.keep()
 
     h.showing('1x2', ['t2', 't1'])
     h.controller.keep()
 
-    expect(h.book.list()).toEqual([
-      { id: 'a2', layoutId: '1x2', seats: ['t2', 't1'], recordedAt: T0 + 2_000 }
-    ])
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a1'])
 
     await h.cleanup()
   })
 
-  it('supersedes its own older recording that shares a tab', async () => {
+  it('does not supersede its own older arrangement that shares a tab (KTD2)', async () => {
     /*
-      A tab that has just been re-tiled is not in the arrangement it used to be in. Leaving the old
-      recording would offer the user two ways back for one tab, and the older one would be found
-      first — a click on `t1` would jump to the four-pane layout the user has just left.
+      A tab belongs to at most one arrangement (R4), and the old way of keeping that — a new
+      recording replacing every one it overlapped — made an entry disappear. The model now refuses
+      the overlapping seating instead, and the arrangement keeps its id.
     */
     const h = await harness({
       live: ['t1', 't2', 't3', 't4'],
@@ -227,8 +227,8 @@ describe('recording what the window is showing', () => {
     h.showing('1x2', ['t1', 't2'])
     h.controller.keep()
 
-    expect(h.book.list()).toEqual([
-      { id: 'a2', layoutId: '1x2', seats: ['t1', 't2'], recordedAt: T0 + 2_000 }
+    expect(h.book.list().map((arrangement) => [arrangement.id, arrangement.layoutId])).toEqual([
+      ['a1', '2x2']
     ])
 
     await h.cleanup()
@@ -238,7 +238,7 @@ describe('recording what the window is showing', () => {
     // R16. One document holds every ordinary window's recordings, so a settle here must not evict
     // or supersede one made of tabs this window does not have.
     const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
-    h.book.record(
+    h.book.create(
       { layoutId: '1x2', seats: ['other-1', 'other-2'] },
       { liveTabIds: ['other-1', 'other-2'], hiddenTabIds: [] }
     )
@@ -269,7 +269,7 @@ describe('the settle that follows a collapse', () => {
     h.controller.keep()
 
     expect(h.writes()).toBe(1)
-    expect(h.book.list()).toEqual([
+    expect(h.book.list()).toMatchObject([
       { id: 'a1', layoutId: '1x2', seats: ['t1', 't2'], recordedAt: T0 + 1_000 }
     ])
 
@@ -364,7 +364,7 @@ describe('bringing an arrangement back', () => {
   it('does not apply a recording that seats a tab of another window', async () => {
     // R16. Applying it here would move a page the caller does not own.
     const h = await harness({ live: ['t1', 't3'], layout: '1x1', tiles: ['t3'] })
-    h.book.record(
+    h.book.create(
       { layoutId: '1x2', seats: ['t1', 'other-2'] },
       { liveTabIds: ['t1', 'other-2'], hiddenTabIds: [] }
     )
@@ -465,7 +465,7 @@ describe('ending the tiling on screen for a single page', () => {
     h.showing('1x2', ['t1', 't2'])
     h.controller.keep()
 
-    expect(h.book.list()).toEqual([
+    expect(h.book.list()).toMatchObject([
       { id: 'a2', layoutId: '1x2', seats: ['t1', 't2'], recordedAt: T0 + 2_000 }
     ])
 

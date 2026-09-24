@@ -1,24 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_ARRANGEMENTS,
   MIN_ARRANGED_TILES,
   arrangementIsCurrent,
   arrangementIsProtected,
   arrangementOfTab,
   arrangementsEndedBy,
   cloneArrangements,
+  createArrangement,
+  defaultArrangementView,
   emptyArrangementDocument,
   forgetArrangement,
-  recordArrangement,
+  forgetArrangementsOfTabs,
+  reconcileArrangements,
+  removeTabFromArrangements,
   repairArrangements,
   retainTabs,
   seatedTabs,
+  updateArrangement,
   type Arrangement,
   type ArrangementDocument,
   type ArrangementDraft,
   type WindowTabs
 } from '@shared/arrangements/model.js'
 import { arrangementDocumentSchema, arrangementSchema } from '@shared/arrangements/schema.js'
+import { DEFAULT_FRACTIONS } from '@shared/split/layout.js'
 
 /**
  * The arrangement rules.
@@ -30,19 +35,32 @@ import { arrangementDocumentSchema, arrangementSchema } from '@shared/arrangemen
  * is what makes the three protections it owes the plan testable at all:
  *
  *   - R14, a recording with a hidden tab is not offered to a click;
- *   - R15, a recording with a hidden tab is not evicted to make room;
- *   - R16, a recording whose tabs belong to another window is neither.
+ *   - R4, a tab sits in at most one recording, and changing one keeps its id;
+ *   - R16, a recording whose tabs belong to another window is neither offered nor changed, and
+ *     nothing makes room by throwing a recording away — there is no cap any more (KTD3).
  */
 
 const T0 = 1_700_000_000_000
 
-/** A `2x2` recording, which is the shape most of these cases need. */
+/** What a tile's sound is before anybody touches it. */
+const LOUD = { muted: false, volume: 1 }
+
+/** A `2x2` recording, which is the shape most of these cases need, with the view it starts with. */
 function arrangement(
   id: string,
   seats: Array<string | null>,
   overrides: Partial<Arrangement> = {}
 ): Arrangement {
-  return { id, layoutId: '2x2', seats, recordedAt: T0, ...overrides }
+  return {
+    id,
+    layoutId: '2x2',
+    seats,
+    activeTile: 0,
+    fractions: { ...DEFAULT_FRACTIONS['2x2'] },
+    tileAudio: [{ ...LOUD }, { ...LOUD }, { ...LOUD }, { ...LOUD }],
+    recordedAt: T0,
+    ...overrides
+  }
 }
 
 function draft(
@@ -53,14 +71,14 @@ function draft(
   return { id, layoutId: '2x2', seats, recordedAt: T0 + 1, ...overrides }
 }
 
-/** The calling window, as `recordArrangement` and `arrangementOfTab` see it. */
+/** The calling window, as `createArrangement` and `arrangementOfTab` see it. */
 function windowWith(liveTabIds: string[], hiddenTabIds: string[] = []): WindowTabs {
   return { liveTabIds, hiddenTabIds }
 }
 
 describe('the empty document', () => {
-  it('starts at version 1 with nothing recorded', () => {
-    expect(emptyArrangementDocument()).toEqual({ version: 1, arrangements: [] })
+  it('starts at version 2 with nothing recorded', () => {
+    expect(emptyArrangementDocument()).toEqual({ version: 2, arrangements: [] })
   })
 })
 
@@ -70,15 +88,36 @@ describe('reading seats', () => {
   })
 })
 
-describe('recordArrangement: what is worth recording', () => {
+describe('defaultArrangementView', () => {
+  it('starts on the first tile, with the layout default dividers and every tile loud', () => {
+    expect(defaultArrangementView('1+2')).toEqual({
+      activeTile: 0,
+      fractions: { v: 0.6, hRight: 0.5 },
+      tileAudio: [LOUD, LOUD, LOUD]
+    })
+  })
+
+  it('hands out a fresh view each time, so no recording shares one', () => {
+    const first = defaultArrangementView('1x2')
+    first.fractions['v'] = 0.9
+    first.tileAudio[0]!.muted = true
+    expect(defaultArrangementView('1x2')).toEqual({
+      activeTile: 0,
+      fractions: { v: 0.5 },
+      tileAudio: [LOUD, LOUD]
+    })
+  })
+})
+
+describe('createArrangement: what is worth recording', () => {
   it('refuses an arrangement seating fewer than MIN_ARRANGED_TILES tabs', () => {
     expect(MIN_ARRANGED_TILES).toBe(2)
-    const next = recordArrangement([], draft('r1', ['a', null, null, null]), windowWith(['a']))
+    const next = createArrangement([], draft('r1', ['a', null, null, null]), windowWith(['a']))
     expect(next).toEqual([])
   })
 
   it('refuses seats that do not fill exactly the tiles of their layout', () => {
-    const next = recordArrangement(
+    const next = createArrangement(
       [],
       draft('r1', ['a', 'b'], { layoutId: '2x2' }),
       windowWith(['a', 'b'])
@@ -87,143 +126,307 @@ describe('recordArrangement: what is worth recording', () => {
   })
 
   it('refuses the same tab in two tiles', () => {
-    const next = recordArrangement([], draft('r1', ['a', 'a', null, null]), windowWith(['a']))
+    const next = createArrangement([], draft('r1', ['a', 'a', null, null]), windowWith(['a']))
     expect(next).toEqual([])
   })
 
   it('refuses a draft seating a tab the calling window does not own', () => {
-    const next = recordArrangement([], draft('r1', ['a', 'b', null, null]), windowWith(['a']))
+    const next = createArrangement([], draft('r1', ['a', 'b', null, null]), windowWith(['a']))
     expect(next).toEqual([])
   })
 
-  it('records an arrangement the window owns in full', () => {
-    const next = recordArrangement(
+  it('records an arrangement the window owns in full, with the view it starts with', () => {
+    const next = createArrangement(
       [],
       draft('r1', ['a', 'b', null, null]),
       windowWith(['a', 'b', 'c'])
     )
-    expect(next).toEqual([
-      { id: 'r1', layoutId: '2x2', seats: ['a', 'b', null, null], recordedAt: T0 + 1 }
-    ])
+    expect(next).toEqual([arrangement('r1', ['a', 'b', null, null], { recordedAt: T0 + 1 })])
   })
 
-  it('hands back seats no caller still holds', () => {
+  it('keeps the view a draft brings, fitted to its layout', () => {
+    const [created] = createArrangement(
+      [],
+      draft('r1', ['a', 'b'], {
+        layoutId: '1x2',
+        activeTile: 1,
+        fractions: { v: 0.3, h: 0.7 },
+        tileAudio: [{ muted: true, volume: 0.4 }]
+      }),
+      windowWith(['a', 'b'])
+    )
+    expect(created).toMatchObject({
+      activeTile: 1,
+      fractions: { v: 0.3 },
+      tileAudio: [{ muted: true, volume: 0.4 }, LOUD]
+    })
+  })
+
+  it('pulls an active tile the layout does not have back onto one it does', () => {
+    const [created] = createArrangement(
+      [],
+      draft('r1', ['a', 'b'], { layoutId: '1x2', activeTile: 7 }),
+      windowWith(['a', 'b'])
+    )
+    expect(created?.activeTile).toBe(1)
+  })
+
+  it('hands back seats and a view no caller still holds', () => {
     const seats: Array<string | null> = ['a', 'b', null, null]
-    const [recorded] = recordArrangement([], draft('r1', seats), windowWith(['a', 'b']))
+    const tileAudio = [{ muted: true, volume: 1 }]
+    const [recorded] = createArrangement(
+      [],
+      draft('r1', seats, { tileAudio }),
+      windowWith(['a', 'b'])
+    )
     seats[0] = 'stolen'
+    tileAudio[0]!.muted = false
     expect(recorded?.seats).toEqual(['a', 'b', null, null])
+    expect(recorded?.tileAudio[0]?.muted).toBe(true)
   })
 })
 
-describe('recordArrangement: superseding', () => {
+describe('createArrangement: a tab belongs to at most one (R4, KTD2)', () => {
   const previous = arrangement('r1', ['a', 'b', null, null])
 
-  it('replaces an overlapping recording none of whose tabs is hidden', () => {
-    const next = recordArrangement(
+  it('refuses tabs that already sit in another recording, and changes nothing', () => {
+    const next = createArrangement(
       [previous],
       draft('r2', ['a', 'c', null, null]),
       windowWith(['a', 'b', 'c'])
     )
-    expect(next.map((entry) => entry.id)).toEqual(['r2'])
+    expect(next).toEqual([previous])
   })
 
-  it('leaves an overlapping recording alone as soon as one of its tabs is hidden', () => {
-    const next = recordArrangement(
+  it('refuses them even while the other recording is hidden by a collapsed group', () => {
+    const next = createArrangement(
       [previous],
       draft('r2', ['a', 'c', null, null]),
       windowWith(['a', 'b', 'c'], ['b'])
     )
-    expect(next.map((entry) => entry.id)).toEqual(['r1', 'r2'])
+    expect(next.map((entry) => entry.id)).toEqual(['r1'])
   })
 
-  it('leaves a recording that shares no tab alone', () => {
-    const next = recordArrangement(
+  it('refuses an id another recording already has', () => {
+    const next = createArrangement(
+      [previous],
+      draft('r1', ['c', 'd', null, null]),
+      windowWith(['a', 'b', 'c', 'd'])
+    )
+    expect(next).toEqual([previous])
+  })
+
+  it('records beside a recording that shares no tab', () => {
+    const next = createArrangement(
       [previous],
       draft('r2', ['c', 'd', null, null]),
       windowWith(['a', 'b', 'c', 'd'])
     )
     expect(next.map((entry) => entry.id)).toEqual(['r1', 'r2'])
   })
+
+  it('evicts nothing, however many recordings a window holds (R16, KTD3)', () => {
+    let held: Arrangement[] = []
+    const live: string[] = []
+    for (let index = 0; index < 40; index += 1) {
+      live.push(`t${index}a`, `t${index}b`)
+      held = createArrangement(
+        held,
+        draft(`r${index}`, [`t${index}a`, `t${index}b`, null, null], { recordedAt: T0 + index }),
+        windowWith(live)
+      )
+    }
+    expect(held).toHaveLength(40)
+    expect(held[0]?.id).toBe('r0')
+  })
 })
 
-describe('recordArrangement: the cap', () => {
-  /** `count` recordings, each over two tabs of its own, oldest first. */
-  function filledStore(count: number): Arrangement[] {
-    return Array.from({ length: count }, (_, index) =>
-      arrangement(`r${index}`, [`t${index}a`, `t${index}b`, null, null], { recordedAt: T0 + index })
-    )
-  }
+describe('updateArrangement: the same recording, changed (KTD1)', () => {
+  const held = arrangement('r1', ['a', 'b', null, null])
 
-  function everyTabOf(arrangements: readonly Arrangement[]): string[] {
-    return arrangements.flatMap((entry) => seatedTabs(entry.seats))
-  }
-
-  it('evicts the oldest evictable recording when the store is full', () => {
-    const store = filledStore(MAX_ARRANGEMENTS)
-    const next = recordArrangement(
-      store,
-      draft('fresh', ['x', 'y', null, null]),
-      windowWith([...everyTabOf(store), 'x', 'y'])
+  it('keeps the id through a new layout and seating, and sets the active tile', () => {
+    const [updated] = updateArrangement(
+      [held],
+      'r1',
+      { layoutId: '1+2', seats: ['a', 'c', 'b'], activeTile: 2 },
+      windowWith(['a', 'b', 'c'])
     )
-    expect(next).toHaveLength(MAX_ARRANGEMENTS)
-    expect(next.map((entry) => entry.id)).not.toContain('r0')
-    expect(next.map((entry) => entry.id)).toContain('fresh')
+    expect(updated).toEqual({
+      id: 'r1',
+      layoutId: '1+2',
+      seats: ['a', 'c', 'b'],
+      activeTile: 2,
+      // The divider both layouts share keeps its place, as `SplitController.setLayout` keeps it.
+      fractions: { v: 0.5, hRight: 0.5 },
+      tileAudio: [LOUD, LOUD, LOUD],
+      recordedAt: T0
+    })
   })
 
-  it('evicts down to the cap when a loaded store somehow sits above it', () => {
-    const store = filledStore(MAX_ARRANGEMENTS + 2)
-    const next = recordArrangement(
-      store,
-      draft('fresh', ['x', 'y', null, null]),
-      windowWith([...everyTabOf(store), 'x', 'y'])
+  it('writes the view alone, even while a collapsed group is hiding the tabs (R11)', () => {
+    const [updated] = updateArrangement(
+      [held],
+      'r1',
+      { fractions: { v: 0.25 }, tileAudio: [LOUD, { muted: true, volume: 1 }] },
+      windowWith(['a', 'b'], ['a', 'b'])
     )
-    expect(next).toHaveLength(MAX_ARRANGEMENTS)
-    expect(next.map((entry) => entry.id)).toEqual(expect.not.arrayContaining(['r0', 'r1', 'r2']))
+    expect(updated).toMatchObject({
+      seats: ['a', 'b', null, null],
+      fractions: { v: 0.25, h: 0.5 },
+      tileAudio: [LOUD, { muted: true, volume: 1 }, LOUD, LOUD]
+    })
   })
 
-  it('records nothing rather than sacrificing a protected recording', () => {
-    const store = filledStore(MAX_ARRANGEMENTS)
-    const hidden = store.map((entry) => `${entry.id.replace('r', 't')}a`)
-    const next = recordArrangement(
-      store,
-      draft('fresh', ['x', 'y', null, null]),
-      windowWith([...everyTabOf(store), 'x', 'y'], hidden)
+  it('refuses a seating with a tab that sits in another recording', () => {
+    const other = arrangement('r2', ['c', 'd', null, null])
+    const next = updateArrangement(
+      [held, other],
+      'r1',
+      { seats: ['a', 'b', 'c', null] },
+      windowWith(['a', 'b', 'c', 'd'])
     )
-    expect(next.map((entry) => entry.id)).toEqual(store.map((entry) => entry.id))
+    expect(next).toEqual([held, other])
+  })
+
+  it('refuses a seating that is no arrangement any more, rather than dropping the recording', () => {
+    const next = updateArrangement(
+      [held],
+      'r1',
+      { seats: ['a', null, null, null] },
+      windowWith(['a', 'b'])
+    )
+    expect(next).toEqual([held])
+  })
+
+  it('refuses a new layout without the seating that fits it', () => {
+    const next = updateArrangement([held], 'r1', { layoutId: '1x2' }, windowWith(['a', 'b']))
+    expect(next).toEqual([held])
+  })
+
+  it("refuses to touch another window's recording (R16)", () => {
+    const next = updateArrangement([held], 'r1', { activeTile: 1 }, windowWith(['a']))
+    expect(next).toEqual([held])
+  })
+
+  it('refuses to seat a tab the calling window does not own', () => {
+    const next = updateArrangement(
+      [held],
+      'r1',
+      { seats: ['a', 'b', 'x', null] },
+      windowWith(['a', 'b'])
+    )
+    expect(next).toEqual([held])
+  })
+
+  it('is a no-op for an id nothing holds', () => {
+    expect(updateArrangement([held], 'nope', { activeTile: 1 }, windowWith(['a', 'b']))).toEqual([
+      held
+    ])
+  })
+
+  it('leaves the other recordings as they were', () => {
+    const other = arrangement('r2', ['c', 'd', null, null])
+    const next = updateArrangement(
+      [held, other],
+      'r1',
+      { activeTile: 1 },
+      windowWith(['a', 'b', 'c', 'd'])
+    )
+    expect(next).toEqual([{ ...held, activeTile: 1 }, other])
+  })
+})
+
+describe('removeTabFromArrangements: a member closes', () => {
+  it('empties its tile and keeps a recording that still seats enough tabs', () => {
+    const held = [arrangement('r1', ['a', 'b', 'c', null])]
+    expect(removeTabFromArrangements(held, 'b')).toEqual([
+      arrangement('r1', ['a', null, 'c', null])
+    ])
+  })
+
+  it('drops a recording that falls below MIN_ARRANGED_TILES', () => {
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    expect(removeTabFromArrangements(held, 'a')).toEqual([])
+  })
+
+  it('hands back a view no caller still holds', () => {
+    const held = [arrangement('r1', ['a', 'b', 'c', null])]
+    const [kept] = removeTabFromArrangements(held, 'b')
+    kept!.tileAudio[0]!.muted = true
+    kept!.fractions['v'] = 0.9
+    expect(held[0]).toEqual(arrangement('r1', ['a', 'b', 'c', null]))
+  })
+
+  it('leaves every recording alone for a tab none of them seats', () => {
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    expect(removeTabFromArrangements(held, 'z')).toEqual(held)
+  })
+})
+
+describe('forgetArrangementsOfTabs: a window goes (KTD3)', () => {
+  it('drops every recording that seats one of the tabs, and only those', () => {
+    const held = [
+      arrangement('r1', ['a', 'b', null, null]),
+      arrangement('r2', ['c', 'd', null, null]),
+      arrangement('r3', ['e', 'f', null, null])
+    ]
+    expect(forgetArrangementsOfTabs(held, ['b', 'e']).map((entry) => entry.id)).toEqual(['r2'])
+  })
+})
+
+describe('reconcileArrangements: one start-up pass over groups (KTD15)', () => {
+  it('drops a recording whose tabs reach across a group boundary', () => {
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    expect(reconcileArrangements(held, [['a'], ['b']])).toEqual([])
+  })
+
+  it('drops a recording that is half in a group and half outside', () => {
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    expect(reconcileArrangements(held, [['a', 'x']])).toEqual([])
+  })
+
+  it('keeps a recording that lies in one group, or in none', () => {
+    const held = [
+      arrangement('r1', ['a', 'b', null, null]),
+      arrangement('r2', ['c', 'd', null, null])
+    ]
+    expect(reconcileArrangements(held, [['a', 'b', 'z']])).toEqual(held)
+  })
+
+  it('keeps only the newer of two recordings sharing a tab', () => {
+    const older = arrangement('r1', ['a', 'b', null, null], { recordedAt: T0 })
+    const newer = arrangement('r2', ['b', 'c', null, null], { recordedAt: T0 + 5 })
+    expect(reconcileArrangements([newer, older], []).map((entry) => entry.id)).toEqual(['r2'])
+  })
+
+  it('keeps the later entry of two sharing a tab and a timestamp', () => {
+    const first = arrangement('r1', ['a', 'b', null, null])
+    const second = arrangement('r2', ['b', 'c', null, null])
+    expect(reconcileArrangements([first, second], []).map((entry) => entry.id)).toEqual(['r2'])
+  })
+
+  it('keeps a recording inside a collapsed group, and a second pass changes nothing', () => {
+    // A collapsed group is still a set of tab ids here: the model has no word for collapsing.
+    const inside = arrangement('r1', ['a', 'b', null, null])
+    const across = arrangement('r2', ['c', 'x', null, null])
+    const once = reconcileArrangements([inside, across], [['a', 'b', 'c']])
+    expect(once).toEqual([inside])
+    expect(reconcileArrangements(once, [['a', 'b', 'c']])).toEqual(once)
   })
 })
 
 describe('R16: an arrangement acts only in its own window', () => {
   const foreign = arrangement('other-window', ['p', 'q', null, null])
 
-  it('evicts nothing whose tabs lie outside the calling window', () => {
-    const store = [
-      foreign,
-      ...Array.from({ length: MAX_ARRANGEMENTS - 1 }, (_, index) =>
-        arrangement(`r${index}`, [`t${index}a`, `t${index}b`, null, null], {
-          recordedAt: T0 + 1 + index
-        })
-      )
-    ]
-    const live = store.slice(1).flatMap((entry) => seatedTabs(entry.seats))
-    const next = recordArrangement(
-      store,
-      draft('fresh', ['x', 'y', null, null]),
-      windowWith([...live, 'x', 'y'])
-    )
-    expect(next.map((entry) => entry.id)).toContain('other-window')
-    expect(next.map((entry) => entry.id)).not.toContain('r0')
-  })
-
   it('does not offer a foreign recording to a click', () => {
     expect(arrangementOfTab([foreign], 'p', windowWith(['a', 'b']))).toBeUndefined()
   })
 
-  it('does not supersede a foreign recording that shares a tab id', () => {
-    const next = recordArrangement(
+  it('leaves a foreign recording standing beside a new one', () => {
+    const next = createArrangement(
       [foreign],
-      draft('fresh', ['p', 'x', null, null]),
-      windowWith(['p', 'x'])
+      draft('fresh', ['x', 'y', null, null]),
+      windowWith(['x', 'y'])
     )
     expect(next.map((entry) => entry.id)).toEqual(['other-window', 'fresh'])
   })
@@ -336,9 +539,7 @@ describe('forgetArrangement', () => {
 describe('retainTabs', () => {
   it('empties the tiles of tabs that did not come back', () => {
     const store = [arrangement('r1', ['a', 'b', 'c', null])]
-    expect(retainTabs(store, ['a', 'c'])).toEqual([
-      { id: 'r1', layoutId: '2x2', seats: ['a', null, 'c', null], recordedAt: T0 }
-    ])
+    expect(retainTabs(store, ['a', 'c'])).toEqual([arrangement('r1', ['a', null, 'c', null])])
   })
 
   it('discards a recording that falls below MIN_ARRANGED_TILES', () => {
@@ -373,11 +574,34 @@ describe('repairArrangements', () => {
     expect(repairArrangements(store).map((entry) => seatedTabs(entry.seats))).toEqual([['a', 'b']])
   })
 
-  it('cuts a document down to MAX_ARRANGEMENTS', () => {
-    const store = Array.from({ length: MAX_ARRANGEMENTS + 3 }, (_, index) =>
+  it('keeps every recording of a long document, because there is no cap to cut to (KTD3)', () => {
+    const store = Array.from({ length: 40 }, (_, index) =>
       arrangement(`r${index}`, [`t${index}a`, `t${index}b`, null, null])
     )
-    expect(repairArrangements(store)).toHaveLength(MAX_ARRANGEMENTS)
+    expect(repairArrangements(store)).toEqual(store)
+  })
+
+  it('fits a view that does not match its layout back onto it', () => {
+    const [repaired] = repairArrangements([
+      arrangement('r1', ['a', 'b'], {
+        layoutId: '1x2',
+        activeTile: 3,
+        fractions: { h: 0.2 },
+        tileAudio: [LOUD, LOUD, LOUD, { muted: true, volume: 0 }]
+      })
+    ])
+    expect(repaired).toMatchObject({
+      activeTile: 1,
+      fractions: { v: 0.5 },
+      tileAudio: [LOUD, LOUD]
+    })
+  })
+
+  it('puts a nonsense active tile back on the first one', () => {
+    const [repaired] = repairArrangements([
+      arrangement('r1', ['a', 'b', null, null], { activeTile: Number.NaN })
+    ])
+    expect(repaired?.activeTile).toBe(0)
   })
 })
 
@@ -388,12 +612,20 @@ describe('cloneArrangements', () => {
     copy[0]?.seats.splice(0, 1)
     expect(store[0]?.seats).toEqual(['a', 'b', null, null])
   })
+
+  it('copies the view as deep, dividers and every tile of sound', () => {
+    const store = [arrangement('r1', ['a', 'b', null, null])]
+    const copy = cloneArrangements(store)
+    copy[0]!.fractions['v'] = 0.9
+    copy[0]!.tileAudio[0]!.muted = true
+    expect(store[0]).toEqual(arrangement('r1', ['a', 'b', null, null]))
+  })
 })
 
 describe('the storage schema', () => {
   it('accepts a document the model produced and hands it back unchanged', () => {
     const document: ArrangementDocument = {
-      version: 1,
+      version: 2,
       arrangements: [arrangement('r1', ['a', 'b', null, null])]
     }
     expect(arrangementDocumentSchema.parse(document)).toEqual(document)
@@ -440,9 +672,42 @@ describe('the storage schema', () => {
     ).toBe(false)
   })
 
+  it('heals a view a recording lacks rather than losing the recording', () => {
+    // The fields version 2 added. The migration writes them, and this is the net under it: a file
+    // cut short or edited by hand still loads, and `repairArrangements` fits the rest to the layout.
+    const parsed = arrangementSchema.parse({
+      id: 'r1',
+      layoutId: '2x2',
+      seats: ['a', 'b', null, null],
+      recordedAt: T0
+    })
+    expect(parsed).toMatchObject({ activeTile: 0, fractions: {}, tileAudio: [] })
+  })
+
+  it('heals a nonsense view value by value', () => {
+    const parsed = arrangementSchema.parse({
+      id: 'r1',
+      layoutId: '2x2',
+      seats: ['a', 'b', null, null],
+      activeTile: -2,
+      fractions: 'wide',
+      tileAudio: [
+        { muted: true, volume: 0.5 },
+        { muted: 'loud', volume: 9 }
+      ],
+      recordedAt: T0
+    })
+    expect(parsed).toMatchObject({
+      activeTile: 0,
+      fractions: {},
+      tileAudio: [{ muted: true, volume: 0.5 }, LOUD]
+    })
+  })
+
   it('rejects a document of another version', () => {
-    expect(arrangementDocumentSchema.safeParse({ version: 2, arrangements: [] }).success).toBe(
-      false
-    )
+    // Version 1 is not "another version" on disk — the store migrates it before this runs.
+    for (const version of [1, 3]) {
+      expect(arrangementDocumentSchema.safeParse({ version, arrangements: [] }).success).toBe(false)
+    }
   })
 })
