@@ -1301,7 +1301,7 @@ belegt**; kein Agent startet die App. Was dort zu prüfen ist, steht in der Tabe
 | U6 | Die Beschriftungen der nativen Menüs kommen aus Text im Kern, nicht mehr aus dem Katalog | ✅ | `cb634c7` |
 | U2 | Tab-Gruppen gehören dem Benutzer; die Anordnung der Kacheln liegt auf einem eigenen Träger | ✅ | `e42c1aa` |
 | U3 | Die Formatprüfung ist in `gates.yml` blockierend, `continue-on-error` gibt es nirgends mehr | ✅ | `a57fde3` |
-| U4 | Die Lesezeichenseite nennt eine neuere, ungültige oder schreibgeschützte Datei. Der Mutationslauf aus U4 läuft noch | 🟡 | `795152b` |
+| U4 | Die Lesezeichenseite nennt eine neuere, ungültige oder schreibgeschützte Datei. Mutationslauf: 82,26 % bei `46b435b`, zuletzt **82,89 %** bei `8a46262` (201 Dateien, 23 156 Mutanten, 10 646 getötet, 2 161 überlebt, 87 Zeitüberschreitungen; Schwelle 70) | ✅ | `795152b`, `54bc7d7`, dieser Stand |
 | U10 | Eine Seite mit `beforeunload` fragt vor dem Schließen und Verlassen nach | ✅ | `3306bc6` |
 | U9 | Eine Kachel zeigt, warum eine Seite nicht lud oder abstürzte | ✅ | `e4322be` |
 | U11 | Dateninventar; „Beim Beenden löschen" nimmt Verlauf und Downloads mit und holt nach einem Absturz nach | ✅ | `fb991bc` |
@@ -1513,7 +1513,7 @@ einen Stand vor zwei Durchgängen Arbeit. Alles andere ist frisch.
 | Branch-Coverage | **95,05 %** (Schwelle 85 %) | 95,13 % |
 | Metriken | **9 von 15** — sechs über der Marke, keine angehoben | 9 von 15 |
 | Größenmetriken | **nicht neu gemessen** — `pnpm build` lief nicht | — |
-| Mutations-Score | 85 % (Schwelle 70 %) — Lauf steht weiterhin aus | gleich |
+| Mutations-Score | 85 % (Schwelle 70 %) — Lauf steht weiterhin aus; seit Roadmap Herbst 2026 **82,89 %** (24.09.2026, `8a46262`), siehe dort | gleich |
 | Smoke-Test in echter App | **nicht gelaufen** (Vorgabe des Benutzers) | gleich |
 
 **Eine Metrik ist schlechter geworden, und das gehört hierher und nicht in eine Fußnote.** Die größte
