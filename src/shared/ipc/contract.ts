@@ -15,6 +15,7 @@ import { localeSchema } from '../i18n/schema.js'
 import { isInternalScheme } from '../product.js'
 import { quickLinkCardSchema, quickLinkKindSchema, quickLinkSchema } from '../quicklinks/schema.js'
 import { tabGroupInvokeContract, tabGroupSchema } from '../tabgroups/schema.js'
+import { arrangementsChangedSchema } from '../arrangements/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
@@ -1248,6 +1249,7 @@ export const eventContract = {
    */
   'quicklinks:changed': z.object({ links: z.array(quickLinkCardSchema) }),
   'tabgroups:changed': z.object({ groups: z.array(tabGroupSchema) }),
+  'arrangements:changed': arrangementsChangedSchema,
   'media:changed': mediaFindingListSchema,
   /**
    * The download list, pushed.

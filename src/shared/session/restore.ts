@@ -1,6 +1,6 @@
 import { TILE_COUNT, type LayoutId } from '../split/layout.js'
 import { INTERNAL_SCHEME } from '../product.js'
-import { isHomeUrl } from '../url/omnibox.js'
+import { HOME_URL, isHomeUrl } from '../url/omnibox.js'
 import {
   MAX_SESSION_URL_LENGTH,
   MAX_UNFINISHED_RESTORES,
@@ -23,7 +23,8 @@ import {
  * Everything here is pure, and that is what makes the three quiet mistakes testable:
  *
  *   1. **A start-page tab restored as if it were a page.** It is the new-tab page. There
- *      is nothing to come back to, and a pinned one is worse than useless.
+ *      is nothing to come back to, and a pinned one is worse than useless — unless it holds a
+ *      tile of a tiled view, which comes back with its grid exact (R15).
  *   2. **A tab caught mid-navigation, which has two addresses.** Picking the wrong one is
  *      invisible: the tab opens, it is simply somewhere the user was not.
  *   3. **A layout with more tiles than the settings now allow.** Assigning a tab to a
@@ -74,6 +75,12 @@ export interface PlannedWindow {
   layout: LayoutId
   fractions: Record<string, number>
   activeTile: number
+  /**
+   * The tiled view the window comes back showing, as the slot named it; `null` for none, for a
+   * slot from an older build, and whenever the layout is not restored — then every tiled view
+   * comes back put away (KTD3).
+   */
+  arrangementId: string | null
   /** Strip order, never empty, and at least one of them holds a tile. */
   tabs: PlannedTab[]
 }
@@ -206,7 +213,11 @@ export function loadTimingFor(tileIndex: number | null): LoadTiming {
  * two: a user who turned it off is asking not to be given the previous session back after
  * any crash, not after two.
  */
-export function planRestore(document: SessionDocument, settings: RestoreSettings): RestorePlan {
+export function planRestore(
+  document: SessionDocument,
+  settings: RestoreSettings,
+  arrangedTabIds: ReadonlySet<string> = new Set()
+): RestorePlan {
   if (!settings.wantsRestore) return { kind: 'skip', reason: 'not-requested' }
   if (document.pendingRestores >= MAX_UNFINISHED_RESTORES) {
     return { kind: 'skip', reason: 'restore-keeps-crashing' }
@@ -216,7 +227,7 @@ export function planRestore(document: SessionDocument, settings: RestoreSettings
   }
 
   const windows = document.windows
-    .map((window) => planWindow(window, settings))
+    .map((window) => planWindow(window, settings, arrangedTabIds))
     .filter((window): window is PlannedWindow => window !== null)
 
   // A session of nothing but start pages reaches here as no windows at all, and that is
@@ -246,19 +257,37 @@ export function planRestore(document: SessionDocument, settings: RestoreSettings
  *   - **The active tile is re-chosen** rather than clamped blindly: a clamp can land on
  *     an empty tile, and then every toolbar button acts on nothing.
  *
+ * ## Tabs in a tiled view (R15, KTD3)
+ *
+ * `arrangedTabIds` are the tabs `arrangements.json` seats. Two rules follow from them:
+ *
+ *   - **A start page among them comes back**, with its id, as the start page. The user asked for the
+ *     grid to look exactly as it did (session-settled, R15) and accepted the renderer process each
+ *     one costs; dropping it would leave its tiled view one seat short, or — for a view of a page
+ *     and a start page — end the view outright when `retainTabs` finds one tab left.
+ *   - **With the layout not restored, they come back without a tile**, and the window shows a tab
+ *     outside every tiled view instead. The tiled view is then a put-away entry, whole, rather than
+ *     one of its members alone on the screen with the others nowhere. The slot's `arrangementId` is
+ *     dropped with the layout for the same reason: nothing on screen is that view.
+ *
  * Returns `null` for a window with nothing worth restoring, which the caller drops. An
  * empty window is not a lesser restore, it is a window the user has to close.
  */
-function planWindow(window: SessionWindow, settings: RestoreSettings): PlannedWindow | null {
+function planWindow(
+  window: SessionWindow,
+  settings: RestoreSettings,
+  arranged: ReadonlySet<string>
+): PlannedWindow | null {
   const layout = settings.restoreLayout ? window.layout : settings.defaultLayout
   const tileCount = TILE_COUNT[layout]
   const taken = new Set<number>()
 
   const planned: PlannedTab[] = []
   for (const saved of window.tabs) {
-    const url = restorableAddressOf(saved)
+    const url = restorableAddressOf(saved) ?? arrangedStartPage(saved, arranged)
     if (url === null) continue
-    const tileIndex = claimTile(saved.tileIndex, tileCount, taken)
+    const seated = settings.restoreLayout || !arranged.has(saved.id)
+    const tileIndex = seated ? claimTile(saved.tileIndex, tileCount, taken) : null
     planned.push({
       id: saved.id,
       url,
@@ -271,7 +300,7 @@ function planWindow(window: SessionWindow, settings: RestoreSettings): PlannedWi
   }
 
   if (planned.length === 0) return null
-  const tabs = withFirstTileFilled(planned)
+  const tabs = withFirstTileFilled(planned, arranged)
 
   return {
     layout,
@@ -279,8 +308,19 @@ function planWindow(window: SessionWindow, settings: RestoreSettings): PlannedWi
       ? keepKnownFractions(window.fractions, layout)
       : keepKnownFractions({}, layout),
     activeTile: activeTileFor(window.activeTile, tabs, tileCount),
+    arrangementId: settings.restoreLayout ? window.arrangementId : null,
     tabs
   }
+}
+
+/**
+ * The address a start page in a tiled view comes back at, or `null` for every other tab.
+ *
+ * The start page itself, whichever of its spellings the slot holds — `''` and `about:blank` for one
+ * that had not loaded yet included, because `isHomeUrl` is the rule the address bar uses too.
+ */
+function arrangedStartPage(saved: SessionTab, arranged: ReadonlySet<string>): string | null {
+  return arranged.has(saved.id) && isHomeUrl(saved.url) ? HOME_URL : null
 }
 
 /**
@@ -291,16 +331,18 @@ function planWindow(window: SessionWindow, settings: RestoreSettings): PlannedWi
  * did use has been taken away by a smaller layout. Either way the restored window would
  * come up blank, and a blank window is indistinguishable from a restore that failed.
  *
- * The first tab in strip order takes tile 0, which is also the one the user would reach
- * for. `slice(0, 1)` rather than an index read, so there is no "the tab I just counted is
- * missing" branch that no test can reach.
+ * The first tab in strip order that sits in no tiled view takes tile 0, which is also the one
+ * the user would reach for. Outside every tiled view, because a member alone on the screen is a
+ * view shown one pane at a time (KTD3); when every tab is a member the first tab takes it all
+ * the same, since a blank window is the worse of the two.
  */
-function withFirstTileFilled(tabs: readonly PlannedTab[]): PlannedTab[] {
+function withFirstTileFilled(
+  tabs: readonly PlannedTab[],
+  arranged: ReadonlySet<string>
+): PlannedTab[] {
   if (tabs.some((tab) => tab.tileIndex !== null)) return [...tabs]
-  return [
-    ...tabs.slice(0, 1).map((tab) => ({ ...tab, tileIndex: 0, load: loadTimingFor(0) })),
-    ...tabs.slice(1)
-  ]
+  const first = tabs.find((tab) => !arranged.has(tab.id)) ?? tabs[0]
+  return tabs.map((tab) => (tab === first ? { ...tab, tileIndex: 0, load: loadTimingFor(0) } : tab))
 }
 
 /**

@@ -504,6 +504,44 @@ describe('persistence', () => {
   })
 })
 
+describe('restoreView: a tiled view brought back (U2, KTD11)', () => {
+  it('puts the dividers and every tile sound back where the tiled view left them', () => {
+    const split = new SplitController({ layout: '1x2' })
+    split.restoreView(
+      {
+        fractions: { v: 0.3 },
+        tileAudio: [
+          { muted: false, volume: 1 },
+          { muted: true, volume: 0.4 }
+        ]
+      },
+      CONTENT
+    )
+    expect(split.toState().fractions).toEqual({ v: 0.3 })
+    expect(split.tileAudio(1)).toEqual({ muted: true, volume: 0.4 })
+  })
+
+  it("keeps only the layout's own dividers and fills a missing tile's sound as loud", () => {
+    const split = new SplitController({ layout: '1x2' })
+    split.setTileMuted(1, true)
+    split.restoreView({ fractions: { v: 0.4, h: 0.2 }, tileAudio: [] }, CONTENT)
+    expect(split.toState().fractions).toEqual({ v: 0.4 })
+    expect(split.toState().tileAudio).toEqual([
+      { muted: false, volume: 1 },
+      { muted: false, volume: 1 }
+    ])
+  })
+
+  it('holds a divider to the smallest tile the window allows, as a drag would', () => {
+    const split = new SplitController({ layout: '1x2' })
+    split.restoreView({ fractions: { v: 0.001 }, tileAudio: [] }, CONTENT)
+    const narrow = new SplitController({ layout: '1x2' })
+    narrow.setFractions({ v: 0.001 }, CONTENT)
+    expect(split.toState().fractions).toEqual(narrow.toState().fractions)
+    expect(split.toState().fractions['v']).toBeGreaterThan(0.001)
+  })
+})
+
 describe('resetFractions', () => {
   it('returns dividers to the layout default', () => {
     const split = new SplitController({ layout: '1+2' })

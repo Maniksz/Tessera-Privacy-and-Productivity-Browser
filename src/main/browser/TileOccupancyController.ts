@@ -23,8 +23,8 @@ import type { SplitController } from './SplitController.js'
  * window rather than a pane, so it can do neither.
  *
  * Taking the window away from a tiling is the one thing here that loses something a user cared about,
- * so it is also the one thing here that reports what it is about to destroy: `keepTiling` tells the
- * arrangement controller to write down what is on screen before the panes go, and `restoreArrangement`
+ * so it is also the one thing here that reports what it is about to destroy: `putAway` tells the
+ * arrangement controller to write down what is on screen and take the panes away, and `restoreArrangement`
  * puts a recording back. The tabs never needed saving — they stay loaded either way — but which layout
  * they were in and who sat where did. The window keeps that up to date on every settle now
  * (`BrowserWindowController`); the call here is the one write that cannot wait for a settle, because
@@ -86,32 +86,29 @@ export interface TileOccupancyHost {
   openFiller(tileIndex: number): void
   applyLayout(layout: LayoutId, options: LayoutChangeOptions): void
   /**
-   * Write down the tiling that is on screen, because it is about to stop being on screen.
+   * Put the tiled view on screen away, because it is about to stop being on screen (R3).
    *
    * Deliberately "now is the moment" rather than "here is the arrangement": the reader of the tiling
-   * is `ArrangementController.keep`, which takes the layout and the seating off the same split
-   * controller this one holds, so passing them would be handing over a copy of what the other side
-   * is looking at. Called *before* `applyLayout`, which is the whole of its correctness — read
-   * afterwards the window is a single view and the recording would be the thing that replaced the
-   * arrangement rather than the arrangement.
+   * is `ArrangementController.putAway`, which takes the layout, the seating and the view off the
+   * same split controller this one holds, so passing them would be handing over a copy of what the
+   * other side is looking at. It writes the view down first — the one moment it still exists, in a
+   * burst too fast for the scheduled round — and then empties every pane and falls back to the
+   * single layout, closing nothing (R8). The one pane left is empty, for whoever asked.
    *
-   * It used to be `keepArrangement(layout)`, and it went to a tab group. That is the defect the
-   * rebuild removed: a group was the only place a layout could be stored, so this call created
-   * groups and pulled loose tabs into them (R1, R3). Nothing about a group is reachable from here
-   * any more, by way of `window-seams.ts` rather than by way of care.
-   *
-   * Kept on the seam although the window now maintains the recording on every settle, which would
-   * make this a second write of a value that is already current. It is not removed, because the
-   * settle is *scheduled* — one `setImmediate` per burst — and two IPC messages delivered in the same
-   * turn of the loop ("split this window", then "new tab") would reach the collapse before the round
-   * that would have written anything down. This is the only moment the arrangement still exists, and
-   * in every other case the write is refused as already-current and costs a comparison.
+   * It used to be `keepTiling`, which only wrote the tiling down and left the layout change to this
+   * controller, and before that `keepArrangement(layout)`, which went to a tab group. That is the
+   * defect the rebuild removed: a group was the only place a layout could be stored, so this call
+   * created groups and pulled loose tabs into them (R1, R3). Nothing about a group is reachable from
+   * here any more, by way of `window-seams.ts` rather than by way of care. The layout change moved
+   * behind the seam in U2 because putting a view away is more than a layout change — its panes are
+   * emptied first, so a start page in it is not orphaned and closed on the way — and the same
+   * sequence is what bringing another view back and opening a workspace need.
    */
-  keepTiling(): void
+  putAway(): void
   /**
    * Forget the tiling that is on screen, because the user is putting it down for a single page.
    *
-   * `keepTiling`'s opposite, and called at the same moment for the same reason: *before*
+   * `putAway`'s opposite, and called at the same moment for the same reason: *before*
    * `applyLayout`, while the seating still names every pane. Reached only from `chooseLayout`, which
    * says why a chosen single layout is the one change that ends a tiling instead of putting it away.
    */
@@ -342,12 +339,13 @@ export class TileOccupancyController {
    *
    * "The pages stay loaded and choosing a layout again brings them back" was true and not enough: it
    * brought them back in the strip's order, into whatever layout was chosen next, so *which*
-   * arrangement it had been and who sat where was gone. The panes are put away, so `keepTiling` runs
-   * first — the one moment the arrangement still exists. See `restoreArrangement` for the way back.
+   * arrangement it had been and who sat where was gone. The panes are put away through `putAway`,
+   * which writes the view down first — the one moment it still exists — and keeps its entry in the
+   * strip (R3). See `restoreArrangement` for the way back.
    *
    * Ordinarily it is already recorded: the window writes it whenever the tiling settles, and by the
-   * time a new tab is asked for the last settle has been and gone. This call is the belt-and-braces
-   * one, for the burst where it has not — see `TileOccupancyHost.keepTiling`.
+   * time a new tab is asked for the last settle has been and gone. The write in `putAway` is the
+   * belt-and-braces one, for the burst where it has not — see `TileOccupancyHost.putAway`.
    *
    * Reported, not decided, here. Whether the tiling is worth recording, what it supersedes and what
    * may be evicted for it are the arrangement model's questions. Both branches that skip the collapse
@@ -358,10 +356,7 @@ export class TileOccupancyController {
     if (!this.host.adaptEnabled()) {
       return this.host.split.firstEmptyTile() ?? this.host.split.activeTile
     }
-    if (this.host.split.layout !== '1x1' && this.#anyTileOccupied()) {
-      this.host.keepTiling()
-      this.host.applyLayout('1x1', { fill: false, rehome: false })
-    }
+    if (this.host.split.layout !== '1x1' && this.#anyTileOccupied()) this.host.putAway()
     return 0
   }
 

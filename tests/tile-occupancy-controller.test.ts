@@ -34,9 +34,9 @@ interface Harness {
   /** Tabs whose group is folded away. The controller must leave these off the grid. */
   collapsed: Set<string>
   /**
-   * The tiling as it stood each time this controller said "write it down now", newest last.
+   * The tiling as it stood each time this controller said "put it away now", newest last.
    *
-   * `keepTiling()` carries no arguments — `ArrangementController.keep` reads the layout and the
+   * `putAway()` carries no arguments — `ArrangementController.putAway` reads the layout and the
    * seating off the same split controller — so the snapshot is taken here, at the moment of the
    * call. That is exactly what these tests are about: what this controller owes is the *timing*, and
    * a report taken one line later would describe the single view that replaced the arrangement.
@@ -107,8 +107,19 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     applyLayout: (next, options) => {
       state.occupancy!.afterLayoutChange(split.setLayout(next), options)
     },
-    keepTiling: () => {
+    /*
+      What `window-seams.ts` does behind `ArrangementController.putAway`, so the tests below see the
+      window a new tab arrives in: every pane emptied first — which is why nothing is orphaned and no
+      filler closes (R8) — and then the single layout, with its one tile free for the new tab.
+    */
+    putAway: () => {
       state.kept!.push({ id: split.layout, tiles: split.toState().tileTabIds })
+      for (const tabId of split.toState().tileTabIds) {
+        if (tabId === null) continue
+        state.unassigned!.push(tabId)
+        split.assignTab(tabId, null)
+      }
+      state.occupancy!.afterLayoutChange(split.setLayout('1x1'), { fill: false, rehome: false })
     },
     endTiling: () => {
       state.ended!.push({ id: split.layout, tiles: split.toState().tileTabIds })
@@ -419,7 +430,8 @@ describe('where a new tab goes', () => {
     const h = harness('2x2', ['tab-1'])
     h.split.assignTab('tab-1', 0)
     h.occupancy.claimTileForNewTab()
-    expect(h.split.toState().tileTabIds).toEqual(['tab-1'])
+    // One pane, free for the tab that is arriving — not three waiting for somebody to drag.
+    expect(h.split.toState().tileTabIds).toEqual([null])
     expect(h.fillers).toEqual([])
   })
 
@@ -430,8 +442,19 @@ describe('where a new tab goes', () => {
     seed(h, ['tab-1', 'tab-2'])
     h.occupancy.claimTileForNewTab()
     expect(h.closed).toEqual([])
-    expect(h.unassigned).toEqual(['tab-2'])
-    expect(h.split.tabIdAt(0)).toBe('tab-1')
+    expect(h.unassigned).toEqual(['tab-1', 'tab-2'])
+    expect(h.order).toEqual(['tab-1', 'tab-2'])
+  })
+
+  it('closes no start page that sat in the tiling it puts away (R8)', () => {
+    // A filler the browser opened is still a member of the tiled view; putting that away is not
+    // ending it, so the start page stays where the view will come back to it.
+    const h = harness('1x2', ['tab-1'])
+    h.split.assignTab('tab-1', 0)
+    h.occupancy.fillEmptyTiles()
+    h.occupancy.claimTileForNewTab()
+    expect(h.closed).toEqual([])
+    expect(h.order).toEqual(['tab-1', 'filler-1'])
   })
 
   it('leaves a fresh window in the layout it was opened in', () => {

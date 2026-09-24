@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ArrangementController, type ArrangementHost } from '@main/browser/ArrangementController.js'
 import { ArrangementStore, type ArrangementBook } from '@main/data/ArrangementStore.js'
+import { defaultArrangementView, type ArrangementView } from '@shared/arrangements/model.js'
 import type { LayoutId } from '@shared/split/layout.js'
 
 /**
@@ -46,6 +47,12 @@ interface Harness {
   book: ArrangementBook
   /** Every call the controller made to put a recording back on screen, in order. */
   applied: () => Applied[]
+  /** The dividers and tile sounds it put back with each one (KTD11). */
+  views: () => Array<Omit<ArrangementView, 'activeTile'>>
+  /** `stow` and `apply` in the order they reached the window, for "put the other one away first". */
+  events: () => string[]
+  /** The view the window reports: active tile, dividers, tile sounds. Defaults to the layout's own. */
+  setView: (view: ArrangementView) => void
   /**
    * How many times the store was handed a document.
    *
@@ -89,6 +96,9 @@ async function harness(options: {
   let layout: LayoutId = options.layout ?? '1x1'
   let tiles: Array<string | null> = options.tiles ?? [null]
   const applied: Applied[] = []
+  const views: Array<Omit<ArrangementView, 'activeTile'>> = []
+  const events: string[] = []
+  let view: ArrangementView | null = null
   let writes = 0
   store.onChange(() => {
     writes += 1
@@ -100,8 +110,20 @@ async function harness(options: {
     hiddenTabIds: () => hidden,
     currentLayout: () => layout,
     tileTabIds: () => tiles,
+    currentView: () => view ?? defaultArrangementView(layout),
     applyArrangement: (layoutId, seats, activatedTabId) => {
+      events.push('apply')
       applied.push({ layoutId, seats: [...seats], activatedTabId })
+    },
+    applyView: (next) => {
+      views.push({ fractions: { ...next.fractions }, tileAudio: [...next.tileAudio] })
+    },
+    // What the seam does: the panes go, nothing closes, and the one tile left is empty.
+    stowTiling: () => {
+      events.push('stow')
+      layout = '1x1'
+      tiles = [null]
+      view = null
     }
   }
 
@@ -109,6 +131,11 @@ async function harness(options: {
     controller: new ArrangementController(host),
     book: store,
     applied: () => applied,
+    views: () => views,
+    events: () => events,
+    setView: (next) => {
+      view = next
+    },
     writes: () => writes,
     showing: (nextLayout, nextTiles) => {
       layout = nextLayout
@@ -140,10 +167,13 @@ describe('the seam this controller was built for', () => {
 
     expect(h.capabilities()).toEqual([
       'applyArrangement',
+      'applyView',
       'book',
       'currentLayout',
+      'currentView',
       'hiddenTabIds',
       'liveTabIds',
+      'stowTiling',
       'tileTabIds'
     ])
 
@@ -206,16 +236,18 @@ describe('recording what the window is showing', () => {
     h.showing('1x2', ['t2', 't1'])
     h.controller.keep()
 
-    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a1'])
+    expect(h.book.list().map((arrangement) => [arrangement.id, arrangement.seats])).toEqual([
+      ['a1', ['t2', 't1']]
+    ])
 
     await h.cleanup()
   })
 
-  it('does not supersede its own older arrangement that shares a tab (KTD2)', async () => {
+  it('changes the visible arrangement in place when its layout shrinks (KTD2)', async () => {
     /*
       A tab belongs to at most one arrangement (R4), and the old way of keeping that — a new
-      recording replacing every one it overlapped — made an entry disappear. The model now refuses
-      the overlapping seating instead, and the arrangement keeps its id.
+      recording replacing every one it overlapped — made an entry disappear. The visible
+      arrangement is now updated under its own id instead, so the entry stays and shows the change.
     */
     const h = await harness({
       live: ['t1', 't2', 't3', 't4'],
@@ -228,7 +260,7 @@ describe('recording what the window is showing', () => {
     h.controller.keep()
 
     expect(h.book.list().map((arrangement) => [arrangement.id, arrangement.layoutId])).toEqual([
-      ['a1', '2x2']
+      ['a1', '1x2']
     ])
 
     await h.cleanup()
@@ -502,6 +534,411 @@ describe('reconciling with the tabs that are still there', () => {
     expect(h.book.list().map((arrangement) => arrangement.seats)).toEqual([
       ['t1', 't2', 't3', null]
     ])
+
+    await h.cleanup()
+  })
+})
+
+describe('the visible arrangement and its id (U2)', () => {
+  const LOUD = { muted: false, volume: 1 }
+
+  it('knows the id of the arrangement it created for the screen', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+
+    h.controller.keep()
+
+    expect(h.controller.liveId).toBe('a1')
+
+    await h.cleanup()
+  })
+
+  it('takes a tab dropped into the visible arrangement under the same id', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.showing('1+2', ['t1', 't3', 't2'])
+    h.controller.keep()
+
+    expect(h.book.list()).toMatchObject([{ id: 'a1', layoutId: '1+2', seats: ['t1', 't3', 't2'] }])
+
+    await h.cleanup()
+  })
+
+  it('writes the active tile, the dividers and the tile sounds down with the seating (KTD11)', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.setView({
+      activeTile: 1,
+      fractions: { v: 0.3 },
+      tileAudio: [LOUD, { muted: true, volume: 1 }]
+    })
+    h.controller.keep()
+    h.controller.keep()
+
+    expect(h.book.list()).toMatchObject([
+      {
+        id: 'a1',
+        activeTile: 1,
+        fractions: { v: 0.3 },
+        tileAudio: [LOUD, { muted: true, volume: 1 }]
+      }
+    ])
+    // Once for the creation and once for the view: the third settle found nothing new.
+    expect(h.writes()).toBe(2)
+
+    await h.cleanup()
+  })
+
+  it('adopts the arrangement that already holds every tab on screen instead of making a second', async () => {
+    // A restart, a workspace, anything that shows an arrangement without going through `restore`.
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    const id = h.book.create(
+      { layoutId: '1+2', seats: ['t1', 't2', 't3'] },
+      { liveTabIds: ['t1', 't2', 't3'], hiddenTabIds: [] }
+    )
+
+    h.controller.keep()
+
+    expect(h.controller.liveId).toBe(id)
+    expect(h.book.list()).toMatchObject([{ id, layoutId: '1x2', seats: ['t1', 't2'] }])
+
+    await h.cleanup()
+  })
+
+  it('lets go of the id once fewer than two tabs are on screen', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.showing('1x2', ['t1', null])
+    h.controller.keep()
+
+    expect(h.controller.liveId).toBeNull()
+    expect(h.book.list()).toMatchObject([{ id: 'a1', seats: ['t1', 't2'] }])
+
+    await h.cleanup()
+  })
+
+  it('does not write a different set of tabs over the arrangement it had on screen', async () => {
+    // The screen changed wholesale without the arrangement being put away: that is another tiling,
+    // and rewriting the first one's seats would take its tabs out of its entry.
+    const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.showing('1x2', ['t3', 't4'])
+    h.controller.keep()
+
+    expect(h.book.list().map((arrangement) => [arrangement.id, arrangement.seats])).toEqual([
+      ['a1', ['t1', 't2']],
+      ['a2', ['t3', 't4']]
+    ])
+    expect(h.controller.liveId).toBe('a2')
+
+    await h.cleanup()
+  })
+
+  it('starts afresh when its arrangement was forgotten under it', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.book.forget('a1')
+
+    h.controller.keep()
+
+    expect(h.controller.liveId).toBe('a2')
+
+    await h.cleanup()
+  })
+})
+
+describe('putting the visible arrangement away (R3, KTD11)', () => {
+  it('writes the latest state down, takes the panes off screen and lets go of the id', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.setView({
+      activeTile: 1,
+      fractions: { v: 0.4 },
+      tileAudio: [
+        { muted: false, volume: 1 },
+        { muted: false, volume: 1 }
+      ]
+    })
+
+    h.controller.putAway()
+
+    expect(h.events()).toEqual(['stow'])
+    expect(h.controller.liveId).toBeNull()
+    expect(h.book.list()).toMatchObject([
+      { id: 'a1', seats: ['t1', 't2'], activeTile: 1, fractions: { v: 0.4 } }
+    ])
+
+    await h.cleanup()
+  })
+
+  it('does nothing to a window showing a single page', async () => {
+    const h = await harness({ live: ['t1'], layout: '1x1', tiles: ['t1'] })
+
+    h.controller.putAway()
+
+    expect(h.events()).toEqual([])
+    expect(h.writes()).toBe(0)
+
+    await h.cleanup()
+  })
+
+  it('gives an unrecorded tiling on screen its own entry before it goes', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+
+    h.controller.putAway()
+
+    expect(h.book.list()).toMatchObject([{ id: 'a1', seats: ['t1', 't2'] }])
+
+    await h.cleanup()
+  })
+})
+
+describe('bringing one back by its id (R4)', () => {
+  /** A window that has put `t1`/`t2` away as `a1` and is showing `t3` alone. */
+  async function withPutAway(): Promise<Harness> {
+    const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.setView({
+      activeTile: 1,
+      fractions: { v: 0.3 },
+      tileAudio: [
+        { muted: false, volume: 1 },
+        { muted: true, volume: 1 }
+      ]
+    })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x1', ['t3'])
+    return h
+  }
+
+  it('applies its seats with the tab of its active tile active, and its dividers and sounds', async () => {
+    const h = await withPutAway()
+
+    h.controller.restore('a1')
+
+    expect(h.applied()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'], activatedTabId: 't2' }])
+    expect(h.views()).toEqual([
+      {
+        fractions: { v: 0.3 },
+        tileAudio: [
+          { muted: false, volume: 1 },
+          { muted: true, volume: 1 }
+        ]
+      }
+    ])
+    expect(h.controller.liveId).toBe('a1')
+
+    await h.cleanup()
+  })
+
+  it('clears the single page off the screen first, so it does not land in an empty seat', async () => {
+    const h = await withPutAway()
+
+    h.controller.restore('a1')
+
+    expect(h.events()).toEqual(['stow', 'stow', 'apply'])
+
+    await h.cleanup()
+  })
+
+  it('puts another visible arrangement away before bringing this one back', async () => {
+    const h = await withPutAway()
+    h.showing('1x2', ['t3', 't4'])
+    h.controller.keep()
+    expect(h.controller.liveId).toBe('a2')
+
+    h.controller.restore('a1')
+
+    expect(h.book.list().map((arrangement) => [arrangement.id, arrangement.seats])).toEqual([
+      ['a1', ['t1', 't2']],
+      ['a2', ['t3', 't4']]
+    ])
+    expect(h.events().slice(-2)).toEqual(['stow', 'apply'])
+    expect(h.controller.liveId).toBe('a1')
+
+    await h.cleanup()
+  })
+
+  it('does nothing for an id nothing holds, or while one of its tabs is hidden', async () => {
+    const h = await withPutAway()
+
+    h.controller.restore('nope')
+    h.setHidden(['t1'])
+    h.controller.restore('a1')
+
+    expect(h.applied()).toEqual([])
+
+    await h.cleanup()
+  })
+
+  it('does nothing for the arrangement already on screen', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.controller.restore('a1')
+
+    expect(h.applied()).toEqual([])
+    expect(h.events()).toEqual([])
+
+    await h.cleanup()
+  })
+
+  it('brings it back for a member found by search, with that member active (R14)', async () => {
+    const h = await withPutAway()
+
+    h.controller.restoreFor('t1')
+
+    expect(h.applied()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'], activatedTabId: 't1' }])
+    expect(h.controller.liveId).toBe('a1')
+
+    await h.cleanup()
+  })
+})
+
+describe('a member closing (KTD2)', () => {
+  it('empties its seat in a put-away arrangement of three, which stays restorable', async () => {
+    const h = await harness({
+      live: ['t1', 't2', 't3', 't4'],
+      layout: '1x3',
+      tiles: ['t1', 't2', 't3']
+    })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x1', ['t4'])
+
+    h.controller.tabClosed('t2')
+    h.setLiveTabs(['t1', 't3', 't4'])
+    h.controller.restoreFor('t3')
+
+    expect(h.book.list()).toMatchObject([{ id: 'a1', seats: ['t1', null, 't3'] }])
+    expect(h.applied()).toEqual([
+      { layoutId: '1x3', seats: ['t1', null, 't3'], activatedTabId: 't3' }
+    ])
+
+    await h.cleanup()
+  })
+
+  it('ends a put-away arrangement of two, leaving the other tab an ordinary one', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x1', ['t3'])
+
+    h.controller.tabClosed('t2')
+    h.setLiveTabs(['t1', 't3'])
+    h.controller.restoreFor('t1')
+
+    expect(h.book.list()).toEqual([])
+    expect(h.applied()).toEqual([])
+
+    await h.cleanup()
+  })
+
+  it('lets go of the id when the visible arrangement ends with it', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.controller.tabClosed('t2')
+
+    expect(h.controller.liveId).toBeNull()
+
+    await h.cleanup()
+  })
+})
+
+describe('the restart (KTD3)', () => {
+  it('keeps the arrangement the session slot names as the visible one', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    const id = h.book.create(
+      { layoutId: '1+2', seats: ['t1', 't2', 't3'] },
+      { liveTabIds: ['t1', 't2', 't3'], hiddenTabIds: [] }
+    )
+
+    h.controller.settleRestored(id ?? null)
+    h.controller.keep()
+
+    expect(h.controller.liveId).toBe(id)
+    expect(h.book.list()).toMatchObject([{ id, layoutId: '1x2', seats: ['t1', 't2'] }])
+
+    await h.cleanup()
+  })
+
+  it('adopts the arrangement matching the screen for a slot without an id', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    const id = h.book.create(
+      { layoutId: '1x2', seats: ['t1', 't2'] },
+      { liveTabIds: ['t1', 't2', 't3'], hiddenTabIds: [] }
+    )
+
+    h.controller.settleRestored(null)
+
+    expect(h.controller.liveId).toBe(id)
+
+    await h.cleanup()
+  })
+
+  it('forgets an arrangement in the way of the screen, so the next settle can record it', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.book.create(
+      { layoutId: '1x2', seats: ['t3', 't1'] },
+      { liveTabIds: ['t1', 't2', 't3'], hiddenTabIds: [] }
+    )
+
+    h.controller.settleRestored(null)
+    h.controller.keep()
+
+    expect(h.book.list().map((arrangement) => [arrangement.id, arrangement.seats])).toEqual([
+      ['a2', ['t1', 't2']]
+    ])
+    expect(h.controller.liveId).toBe('a2')
+
+    await h.cleanup()
+  })
+
+  it('names nothing while the window comes back showing a single page', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x1', tiles: ['t3'] })
+    const id = h.book.create(
+      { layoutId: '1x2', seats: ['t1', 't2'] },
+      { liveTabIds: ['t1', 't2', 't3'], hiddenTabIds: [] }
+    )
+
+    h.controller.settleRestored(id ?? null)
+
+    expect(h.controller.liveId).toBeNull()
+    expect(h.book.list()).toHaveLength(1)
+
+    await h.cleanup()
+  })
+})
+
+describe('what the strip is told (KTD5)', () => {
+  it("summarises this window's arrangements and marks the visible one", async () => {
+    const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x2', ['t3', 't4'])
+    h.controller.keep()
+
+    expect(h.controller.summaries().map((summary) => [summary.id, summary.visible])).toEqual([
+      ['a1', false],
+      ['a2', true]
+    ])
+
+    await h.cleanup()
+  })
+})
+
+describe('ending the tiling lets go of the id', () => {
+  it('names no visible arrangement after the single layout was chosen', async () => {
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.controller.endTiling()
+
+    expect(h.controller.liveId).toBeNull()
 
     await h.cleanup()
   })

@@ -182,6 +182,41 @@ describe('SessionStore basics', () => {
     expect(plan.windows[0]?.tabs[0]?.zoomPercent).toBe(175)
   })
 
+  it('keeps the id of the tiled view on screen through the file (KTD3)', async () => {
+    const { store, filePath } = await openStore()
+    store.recorderFor('normal').record(live('tab-1', { arrangementId: 'ar-1' }))
+    await store.flush()
+    expect((await stored(filePath)).windows[0]?.arrangementId).toBe('ar-1')
+
+    const reopened = await openStore({ seed: await stored(filePath), settleMs: 60_000 })
+    const plan = await reopened.store.beginRun(RESTORE)
+    reopened.store.seal()
+    if (plan.kind !== 'restore') throw new Error('expected a restore')
+    expect(plan.windows[0]?.arrangementId).toBe('ar-1')
+  })
+
+  it('reads a slot from an older build, which names no tiled view, as naming none', async () => {
+    const { store } = await openStore({ seed: savedFile([SAVED_WINDOW]), settleMs: 60_000 })
+    const plan = await store.beginRun(RESTORE)
+    store.seal()
+    if (plan.kind !== 'restore') throw new Error('expected a restore')
+    expect(plan.windows[0]?.arrangementId).toBeNull()
+  })
+
+  it('brings back a start page a tiled view seats, told which tabs the views seat (R15)', async () => {
+    const seeded = savedFile([
+      {
+        ...SAVED_WINDOW,
+        tabs: [SAVED_TAB, { ...SAVED_TAB, id: 'tab-start', url: 'tessera://start', tileIndex: 0 }]
+      }
+    ])
+    const { store } = await openStore({ seed: seeded, settleMs: 60_000 })
+    const plan = await store.beginRun(RESTORE, new Set(['tab-start']))
+    store.seal()
+    if (plan.kind !== 'restore') throw new Error('expected a restore')
+    expect(plan.windows[0]?.tabs.map((tab) => tab.id)).toContain('tab-start')
+  })
+
   it('binds a recorder to one slot for its lifetime', async () => {
     /*
       Recording twice from the same recorder must not accumulate slots, and two recorders

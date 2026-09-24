@@ -22,6 +22,9 @@ import type { WorkspaceStore } from '../data/WorkspaceStore.js'
  *
  * ## Opening closes nothing
  *
+ * A tiled view on screen is put away before anything else happens (U2): it keeps its entry, its
+ * seats and its view, and the workspace's pages arrive in a window that is showing no tiling.
+ *
  * Each seat takes an open tab showing its address, or a new tab opened in the background; every tab
  * that gets no seat leaves the grid and stays in the strip (spec 2). Tiles are cleared *before* the
  * layout changes, so a shrink orphans no tab — which is what keeps `afterLayoutChange` from closing a
@@ -60,6 +63,12 @@ export interface WorkspaceWindow {
   readonly tabs: ReadonlyArray<{ readonly id: string; toState(): { url: string } }>
   /** Whether a collapsed group hides a tab, which may then not be put in a tile. */
   readonly groups: { isHidden(tabId: string): boolean }
+  /**
+   * The window's tiled views. Opening a workspace puts the visible one away first (U2), as bringing
+   * another tiled view back does: its entry stays in the strip, unchanged, and none of its panes is
+   * left for the workspace's seating to be read as a change to it.
+   */
+  readonly arrangements: { putAway(): void }
   readonly occupancy: {
     restoreArrangement(
       layoutId: LayoutId,
@@ -107,6 +116,7 @@ export function registerWorkspaceHandlers(deps: WorkspaceHandlerDeps): void {
     const window = windows.resolve(event)
     if (workspace === undefined || window === undefined) return { outcome: 'missing' }
 
+    window.arrangements.putAway()
     const candidates = window.tabs
       .filter((tab) => !window.groups.isHidden(tab.id))
       .map((tab) => ({ id: tab.id, url: tab.toState().url }))

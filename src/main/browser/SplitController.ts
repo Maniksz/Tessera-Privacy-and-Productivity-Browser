@@ -125,6 +125,31 @@ export class SplitController {
     this.#fractions = { ...DEFAULT_FRACTIONS[this.#layout] }
   }
 
+  /**
+   * Puts back the dividers and the tile sounds of a tiled view that is coming back on screen
+   * (U2, KTD11).
+   *
+   * The rest of what a tiled view is — layout, seats, active tile — goes through the paths that
+   * already exist for it (`setLayout`, `assignTab`, `setActiveTile`), because each of those has
+   * something to settle beside the value. These two had no setter a restore could use: dividers
+   * are otherwise only dragged, and a tile's sound only toggled by the user, one tile at a time.
+   *
+   * The dividers are held to the smallest tile this window allows, exactly as a drag is, because
+   * the window may be smaller than the one the view was put away in. A divider the current layout
+   * does not have is dropped and a tile with no stored sound is loud — the caller has already
+   * switched to the view's layout, so a mismatch means a stored value from an older build.
+   *
+   * Maximising and tile fullscreen are not part of it: both end when a view is put away (KTD11).
+   */
+  restoreView(
+    view: { fractions: Readonly<Record<string, number>>; tileAudio: readonly TileAudio[] },
+    content: { width: number; height: number }
+  ): void {
+    const known = { ...DEFAULT_FRACTIONS[this.#layout], ...pickKnown(view.fractions, this.#layout) }
+    this.#fractions = { ...clampFractions(this.#layout, known, content) }
+    this.#tileAudio = makeAudio(this.tileCount, view.tileAudio)
+  }
+
   // --- active tile ---------------------------------------------------------
 
   setActiveTile(index: number): void {
@@ -387,7 +412,10 @@ function makeAudio(count: number, previous?: readonly TileAudio[]): TileAudio[] 
 }
 
 /** Keeps only the divider ids a layout actually has. */
-function pickKnown(fractions: Record<string, number>, layout: LayoutId): Record<string, number> {
+function pickKnown(
+  fractions: Readonly<Record<string, number>>,
+  layout: LayoutId
+): Record<string, number> {
   const allowed = Object.keys(DEFAULT_FRACTIONS[layout])
   const out: Record<string, number> = {}
   for (const id of allowed) {

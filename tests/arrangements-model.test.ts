@@ -22,7 +22,20 @@ import {
   type ArrangementDraft,
   type WindowTabs
 } from '@shared/arrangements/model.js'
-import { arrangementDocumentSchema, arrangementSchema } from '@shared/arrangements/schema.js'
+import {
+  activeTabOf,
+  arrangementHolding,
+  arrangementSummaries,
+  arrangementViewIsCurrent,
+  restorableArrangement,
+  settleRestoredScreen,
+  windowCloseForgetsArrangements
+} from '@shared/arrangements/screen.js'
+import {
+  arrangementDocumentSchema,
+  arrangementSchema,
+  arrangementsChangedSchema
+} from '@shared/arrangements/schema.js'
 import { DEFAULT_FRACTIONS } from '@shared/split/layout.js'
 
 /**
@@ -709,5 +722,238 @@ describe('the storage schema', () => {
     for (const version of [1, 3]) {
       expect(arrangementDocumentSchema.safeParse({ version, arrangements: [] }).success).toBe(false)
     }
+  })
+})
+
+describe('arrangementHolding: the visible tiling a window adopts (U2)', () => {
+  const held = arrangement('r1', ['a', 'b', 'c', null])
+
+  it('answers the one arrangement that holds every tab on screen', () => {
+    expect(
+      arrangementHolding([held], ['b', 'a', null, null], windowWith(['a', 'b', 'c']))?.id
+    ).toBe('r1')
+  })
+
+  it('answers nothing when a tab on screen sits in no arrangement', () => {
+    expect(
+      arrangementHolding([held], ['a', 'x', null, null], windowWith(['a', 'b', 'c', 'x']))
+    ).toBeUndefined()
+  })
+
+  it('answers nothing when the tab on screen first sits in no arrangement', () => {
+    expect(
+      arrangementHolding([held], ['x', 'a', null, null], windowWith(['a', 'b', 'c', 'x']))
+    ).toBeUndefined()
+  })
+
+  it('answers nothing for an empty screen', () => {
+    expect(arrangementHolding([held], [null, null, null, null], windowWith(['a']))).toBeUndefined()
+  })
+
+  it("answers nothing for another window's arrangement (R16)", () => {
+    expect(
+      arrangementHolding([held], ['a', 'b', null, null], windowWith(['a', 'b']))
+    ).toBeUndefined()
+  })
+})
+
+describe('arrangementViewIsCurrent: the gate on writing the view', () => {
+  const held = arrangement('r1', ['a', 'b', null, null], {
+    activeTile: 1,
+    fractions: { v: 0.3, h: 0.5 },
+    tileAudio: [LOUD, { muted: true, volume: 1 }, LOUD, LOUD]
+  })
+  const view = {
+    activeTile: 1,
+    fractions: { v: 0.3, h: 0.5 },
+    tileAudio: [LOUD, { muted: true, volume: 1 }, LOUD, LOUD]
+  }
+
+  it('is true for the view the arrangement already holds', () => {
+    expect(arrangementViewIsCurrent(held, view)).toBe(true)
+  })
+
+  it('reads the view as the store would write it, so a settled view stays settled', () => {
+    // A divider the layout does not have and a missing tile's sound are what `updateArrangement`
+    // drops and fills; comparing the raw value would make every round write again.
+    expect(
+      arrangementViewIsCurrent(held, {
+        ...view,
+        fractions: { v: 0.3, h: 0.5, stray: 0.9 },
+        tileAudio: [LOUD, { muted: true, volume: 1 }]
+      })
+    ).toBe(true)
+  })
+
+  it('is false for another active tile', () => {
+    expect(arrangementViewIsCurrent(held, { ...view, activeTile: 0 })).toBe(false)
+  })
+
+  it('is false for an arrangement that holds no sound for a tile', () => {
+    expect(arrangementViewIsCurrent({ ...held, tileAudio: [] }, view)).toBe(false)
+  })
+
+  it('is false for a moved divider', () => {
+    expect(arrangementViewIsCurrent(held, { ...view, fractions: { v: 0.6, h: 0.5 } })).toBe(false)
+  })
+
+  it("is false for a tile's sound, muted or turned down", () => {
+    expect(arrangementViewIsCurrent(held, { ...view, tileAudio: [LOUD, LOUD, LOUD, LOUD] })).toBe(
+      false
+    )
+    expect(
+      arrangementViewIsCurrent(held, {
+        ...view,
+        tileAudio: [LOUD, { muted: true, volume: 0.5 }, LOUD, LOUD]
+      })
+    ).toBe(false)
+  })
+})
+
+describe('activeTabOf', () => {
+  it('names the tab in the active tile', () => {
+    expect(activeTabOf(arrangement('r1', ['a', 'b', null, null], { activeTile: 1 }))).toBe('b')
+  })
+
+  it('falls back to the first seated tab when the active tile is empty', () => {
+    expect(activeTabOf(arrangement('r1', [null, null, 'c', 'd'], { activeTile: 1 }))).toBe('c')
+  })
+
+  it('names nothing for a seating with nobody in it', () => {
+    expect(activeTabOf(arrangement('r1', [null, null, null, null]))).toBeNull()
+  })
+})
+
+describe('restorableArrangement: bringing one back by id (R4)', () => {
+  const held = arrangement('r1', ['a', 'b', null, null])
+
+  it('answers the arrangement with that id', () => {
+    expect(restorableArrangement([held], 'r1', windowWith(['a', 'b']))?.id).toBe('r1')
+  })
+
+  it('answers nothing for an id nothing holds', () => {
+    expect(restorableArrangement([held], 'r2', windowWith(['a', 'b']))).toBeUndefined()
+  })
+
+  it('answers nothing while one of its tabs is hidden, or belongs to another window', () => {
+    expect(restorableArrangement([held], 'r1', windowWith(['a', 'b'], ['b']))).toBeUndefined()
+    expect(restorableArrangement([held], 'r1', windowWith(['a']))).toBeUndefined()
+  })
+})
+
+describe('settleRestoredScreen: one entry after a restart (KTD3)', () => {
+  const shown = ['a', 'b', null, null]
+  const live = windowWith(['a', 'b', 'c', 'd'])
+
+  it('keeps the arrangement the slot names, and forgets any other sharing a tab with the screen', () => {
+    const named = arrangement('r1', ['a', 'b', 'c', null])
+    const stale = arrangement('r2', ['b', 'd', null, null])
+    expect(settleRestoredScreen([named, stale], '2x2', shown, 'r1', live)).toEqual({
+      liveId: 'r1',
+      forget: ['r2']
+    })
+  })
+
+  it('adopts the arrangement whose seats match the screen for a slot without an id', () => {
+    const matching = arrangement('r1', ['a', 'b', null, null])
+    const overlapping = arrangement('r2', ['c', 'a', null, null])
+    expect(settleRestoredScreen([overlapping, matching], '2x2', shown, null, live)).toEqual({
+      liveId: 'r1',
+      forget: ['r2']
+    })
+  })
+
+  it('falls back to the matching seats when the named arrangement did not come back', () => {
+    const matching = arrangement('r1', ['a', 'b', null, null])
+    expect(settleRestoredScreen([matching], '2x2', shown, 'gone', live)).toEqual({
+      liveId: 'r1',
+      forget: []
+    })
+  })
+
+  it('names no arrangement when none fits, and clears the way for the next settle', () => {
+    const overlapping = arrangement('r2', ['a', 'c', null, null])
+    expect(settleRestoredScreen([overlapping], '2x2', shown, null, live)).toEqual({
+      liveId: null,
+      forget: ['r2']
+    })
+  })
+
+  it('leaves every arrangement alone while the screen shows one page (restoreLayoutOnStart off)', () => {
+    const held = arrangement('r1', ['a', 'b', null, null])
+    expect(settleRestoredScreen([held], '1x1', ['c'], 'r1', live)).toEqual({
+      liveId: null,
+      forget: []
+    })
+  })
+
+  it("leaves another window's and a disjoint arrangement alone", () => {
+    const foreign = arrangement('r3', ['a', 'z', null, null])
+    const disjoint = arrangement('r4', ['c', 'd', null, null])
+    expect(settleRestoredScreen([foreign, disjoint], '2x2', shown, null, live)).toEqual({
+      liveId: null,
+      forget: []
+    })
+  })
+})
+
+describe('arrangementSummaries: what the strip is told (KTD5)', () => {
+  const visible = arrangement('r1', ['a', null, 'b', null], { activeTile: 2 })
+  const putAway = arrangement('r2', ['c', 'd', null, null], { layoutId: '2x2' })
+  const foreign = arrangement('r3', ['x', 'y', null, null])
+
+  it("lists this window's arrangements, members in tile order, and marks the visible one", () => {
+    expect(
+      arrangementSummaries([visible, putAway, foreign], windowWith(['a', 'b', 'c', 'd']), 'r1')
+    ).toEqual([
+      {
+        id: 'r1',
+        layoutId: '2x2',
+        tabIds: ['a', 'b'],
+        activeTile: 2,
+        activeTabId: 'b',
+        visible: true
+      },
+      {
+        id: 'r2',
+        layoutId: '2x2',
+        tabIds: ['c', 'd'],
+        activeTile: 0,
+        activeTabId: 'c',
+        visible: false
+      }
+    ])
+  })
+
+  it('marks none visible while the window shows a single page', () => {
+    const summaries = arrangementSummaries([visible], windowWith(['a', 'b']), null)
+    expect(summaries.map((summary) => summary.visible)).toEqual([false])
+  })
+
+  it('is what the event schema accepts', () => {
+    const arrangements = arrangementSummaries([visible], windowWith(['a', 'b']), 'r1')
+    expect(arrangementsChangedSchema.parse({ arrangements })).toEqual({ arrangements })
+  })
+})
+
+describe('windowCloseForgetsArrangements: the rule forgetWindow keeps for slots (KTD3)', () => {
+  const normal = { privateMode: false }
+  const privateWindow = { privateMode: true }
+
+  it('forgets when another ordinary window stays open', () => {
+    expect(windowCloseForgetsArrangements(normal, [normal], false)).toBe(true)
+  })
+
+  it('keeps them when the last ordinary window closes, for the restart', () => {
+    expect(windowCloseForgetsArrangements(normal, [], false)).toBe(false)
+    expect(windowCloseForgetsArrangements(normal, [privateWindow], false)).toBe(false)
+  })
+
+  it('keeps them while the browser is shutting down and every window closes', () => {
+    expect(windowCloseForgetsArrangements(normal, [normal], true)).toBe(false)
+  })
+
+  it('has nothing to forget for a private window, whose book was never the file', () => {
+    expect(windowCloseForgetsArrangements(privateWindow, [normal], false)).toBe(false)
   })
 })

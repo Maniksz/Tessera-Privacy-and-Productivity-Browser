@@ -183,6 +183,7 @@ Given(
       layout: id,
       fractions: { ...DEFAULT_FRACTIONS[id] },
       activeTile: 0,
+      arrangementId: null,
       tabs: table.hashes().map((row, index) => savedTab(row, index))
     }))
   }
@@ -198,6 +199,7 @@ Given(
       layout: id,
       fractions: { ...DEFAULT_FRACTIONS[id] },
       activeTile: 0,
+      arrangementId: null,
       tabs: Array.from({ length: count }, (_unused, index) => ({
         id: tabIdForSequence(index + 1),
         url: `https://example.test/page-${index}`,

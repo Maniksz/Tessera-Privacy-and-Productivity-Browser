@@ -100,7 +100,8 @@ export interface WindowControllerOptions {
    */
   onPageContextMenu(tab: Tab, target: PageContextTarget): void
   getSettings(): SettingsSnapshot
-  onClosed(controller: BrowserWindowController): void
+  /** With the ids its tabs had, which are gone from the window by the time this runs (KTD3). */
+  onClosed(controller: BrowserWindowController, closedTabIds: readonly string[]): void
   /** A tab has gone, closed or with its window; its media finds go with it (media plan R4). */
   onTabClosed(tabId: string): void
   onRequestNewWindow(options: { privateMode: boolean }): void
@@ -477,6 +478,7 @@ export class BrowserWindowController implements PermissionHost {
       this.#overlay.destroy()
       // Before the tabs go: a close still waiting on a page finishes nothing in a window that is gone.
       this.#close.dispose()
+      const closedTabIds = [...this.#tabs.keys()]
       for (const tab of this.#tabs.values()) {
         tab.destroy()
         this.options.onTabClosed(tab.id)
@@ -485,7 +487,7 @@ export class BrowserWindowController implements PermissionHost {
       // The window's slot goes with it. `SessionStore.seal()` is what keeps this from rewriting the session
       // during shutdown, when every window closes and none of them means it.
       this.options.sessionSlot.close()
-      this.options.onClosed(this)
+      this.options.onClosed(this, closedTabIds)
     })
   }
 
@@ -698,6 +700,7 @@ export class BrowserWindowController implements PermissionHost {
     this.#tabOrder = this.#tabOrder.filter((id) => id !== tabId)
     // A group whose last member just closed would otherwise linger as a chip with nothing behind it.
     this.options.tabGroups.removeTab(tabId)
+    this.#seams.arrangements.tabClosed(tabId)
     this.#tabs.delete(tabId)
     this.window.contentView.removeChildView(tab.view)
     // Usually inside the page's `destroyed`, where its view already has no contents (`view-contents.ts`).
@@ -1133,6 +1136,11 @@ export class BrowserWindowController implements PermissionHost {
     return this.#seams.occupancy
   }
 
+  /** This window's tiled views: a restart settles one and a workspace puts one away (U2). */
+  get arrangements(): WindowSeams['arrangements'] {
+    return this.#seams.arrangements
+  }
+
   dismissOverlay(): void {
     this.#overlay.dismiss()
   }
@@ -1391,9 +1399,12 @@ export class BrowserWindowController implements PermissionHost {
         layout: this.split.layout,
         fractions: this.split.toPersistence().fractions,
         activeTile: this.split.activeTile,
+        arrangementId: this.#seams.arrangements.liveId,
         tabs
       })
       this.emit('tabgroups:changed', { groups: this.#seams.groups.groups() })
+      // After `keep()` above, from this round's book, so no write schedules a second round (KTD5).
+      this.emit('arrangements:changed', { arrangements: this.#seams.arrangements.summaries() })
       this.emit('split:changed', this.split.toState())
     })
   }

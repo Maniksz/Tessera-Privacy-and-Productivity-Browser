@@ -4,6 +4,7 @@ import { tileAudioSchema } from '../model.js'
 import type { SameShape } from '../ipc/same-shape.js'
 import type { KnownFields } from '../known-fields.js'
 import type { Arrangement, ArrangementDocument } from './model.js'
+import type { ArrangementSummary } from './screen.js'
 
 /**
  * What `arrangements.json` must look like to be usable.
@@ -69,6 +70,33 @@ export const arrangementDocumentSchema = z.looseObject({
 })
 
 /**
+ * One arrangement as `arrangements:changed` carries it to the chrome UI (KTD5).
+ *
+ * The event is its own rather than a field on `tabs:changed`, for the reason `tabgroups:changed`
+ * is: the strip needs one summary per tiled view, not a fact per tab, and a field on `TabState`
+ * would grow every tab for every consumer. The window sends it in the same round as
+ * `tabs:changed`, right after the visible view has been kept, from that round's snapshot.
+ *
+ * Here rather than in `contract.ts`, which gains the one event line and nothing else — the same
+ * split `tabgroups/schema.ts` makes for `tabgroups:changed`. Strict, unlike the file schemas above:
+ * this is built by the core from its own document on every round, so a value that does not fit is
+ * a bug to hear about at the boundary rather than something to heal.
+ */
+export const arrangementSummarySchema = z.object({
+  id: z.string().min(1),
+  layoutId: z.enum(LAYOUT_IDS),
+  tabIds: z.array(z.string().min(1)),
+  activeTile: z.number().int().nonnegative(),
+  activeTabId: z.string().min(1).nullable(),
+  visible: z.boolean()
+})
+
+/** The whole event: every arrangement of the window, in document order. */
+export const arrangementsChangedSchema = z.object({
+  arrangements: z.array(arrangementSummarySchema)
+})
+
+/**
  * Keeps the schemas and the interfaces from drifting apart, in both directions at once.
  *
  * `SameShape` rather than a pair of `null as unknown as` assignments: the pair checks one
@@ -85,5 +113,10 @@ const _arrangementDocumentWireMatchesModel: SameShape<
   KnownFields<z.output<typeof arrangementDocumentSchema>>,
   ArrangementDocument
 > = true
+const _arrangementSummaryWireMatchesModel: SameShape<
+  z.output<typeof arrangementSummarySchema>,
+  ArrangementSummary
+> = true
 void _arrangementWireMatchesModel
 void _arrangementDocumentWireMatchesModel
+void _arrangementSummaryWireMatchesModel

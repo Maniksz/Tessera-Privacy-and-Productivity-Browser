@@ -82,6 +82,7 @@ import { FaviconStore } from './data/FaviconStore.js'
 import { ThumbnailStore } from './data/ThumbnailStore.js'
 import { TabGroupStore } from './data/TabGroupStore.js'
 import { ArrangementStore } from './data/ArrangementStore.js'
+import { seatedTabs } from '@shared/arrangements/model.js'
 import { WorkspaceStore } from './data/WorkspaceStore.js'
 import { SessionStore } from './data/SessionStore.js'
 import { WindowPlacementStore } from './data/WindowPlacementStore.js'
@@ -936,6 +937,9 @@ async function main(): Promise<void> {
     thumbnails,
     tabGroups,
     arrangements,
+    // A window closing while the browser shuts down keeps its tiled views; see
+    // `windowCloseForgetsArrangements`.
+    shuttingDown: quitting,
     filters: filterSubscription,
     sessionStore,
     windowPlacement,
@@ -1092,7 +1096,10 @@ async function main(): Promise<void> {
     disk before this line returns, which is what makes it a counter of launches that *started* a restore rather
     than of ones that finished. Groups and arrangements are then reconciled once each, with every id that came back.
   */
-  const plan = await sessionStore.beginRun(restoreSettingsFrom(settings.snapshot()))
+  // The tabs the arrangements file seats, read before anything reconciles it: a start page among
+  // them comes back so its tiled view keeps its grid (R15).
+  const arranged = new Set(arrangements.list().flatMap((held) => seatedTabs(held.seats)))
+  const plan = await sessionStore.beginRun(restoreSettingsFrom(settings.snapshot()), arranged)
   // No windows for a shutdown that began while the plan was being read; the session is sealed by now.
   if (quitting()) return
   const registry = windows
@@ -1107,11 +1114,14 @@ async function main(): Promise<void> {
           controller.createTab(restoredTabOptions(tab))
           if (tab.pinned) controller.setTabPinned(tab.id, true)
         },
-        setActiveTile: (index) => controller.setActiveTile(index)
+        setActiveTile: (index) => controller.setActiveTile(index),
+        settleArrangement: (id) => controller.arrangements.settleRestored(id)
       }
     },
     retainTabs: (ids) => tabGroups?.retainTabs(ids),
-    retainArrangementTabs: (ids) => arrangements?.retainTabs(ids)
+    retainArrangementTabs: (ids) => arrangements?.retainTabs(ids),
+    groupMemberSets: () => tabGroups?.list().map((group) => group.tabIds) ?? [],
+    reconcileArrangements: (memberSets) => arrangements?.reconcile(memberSets)
   }
   if (plan.kind === 'skip') {
     // Worth saying rather than shrugging at: a user who asked for their session and did not get it has no other

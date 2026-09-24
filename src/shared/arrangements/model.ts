@@ -110,7 +110,7 @@ export const MIN_ARRANGED_TILES = 2
  *
  * The view fields always fit the layout: one `tileAudio` entry per tile, `activeTile` a tile
  * the layout has, and `fractions` exactly the layout's own dividers. Every write path fits them
- * (`fitView`), so a reader never has to.
+ * (`fitArrangementView`), so a reader never has to.
  */
 export interface Arrangement extends ArrangementView {
   id: string
@@ -281,6 +281,15 @@ export function arrangementIsCurrent(
   return arrangement.seats.every((tabId, index) => tabId === seats[index])
 }
 
+/**
+ * True when this arrangement is the calling window's to act on, and free to act on: every tab is
+ * the window's and none is hidden by a collapsed group. `arrangementOfTab`'s test for one arrangement
+ * already in hand, for the callers that address one by id (`screen.ts`).
+ */
+export function arrangementIsApplicable(arrangement: Arrangement, window: WindowTabs): boolean {
+  return isUnobstructed(arrangement, tabSetsOf(window))
+}
+
 // --- writes ------------------------------------------------------------------
 
 /**
@@ -323,7 +332,7 @@ export function createArrangement(
       id: draft.id,
       layoutId: draft.layoutId,
       seats,
-      ...fitView(draft.layoutId, draft),
+      ...fitArrangementView(draft.layoutId, draft),
       recordedAt: draft.recordedAt
     }
   ]
@@ -371,7 +380,7 @@ export function updateArrangement(
   const seats = seatsWorthKeeping(layoutId, patch.seats ?? current.seats, live)
   if (seats === null || seatsHeldElsewhere(arrangements, seats, id)) return unchanged
 
-  const view = fitView(layoutId, { ...current, ...patch })
+  const view = fitArrangementView(layoutId, { ...current, ...patch })
   return unchanged.map((arrangement) =>
     arrangement.id === id ? { ...arrangement, layoutId, seats, ...view } : arrangement
   )
@@ -585,7 +594,11 @@ export function repairArrangements(arrangements: readonly Arrangement[]): Arrang
     const seats = seatsWorthKeeping(arrangement.layoutId, arrangement.seats, undefined)
     if (seats === null) continue
     seen.add(arrangement.id)
-    repaired.push({ ...arrangement, seats, ...fitView(arrangement.layoutId, arrangement) })
+    repaired.push({
+      ...arrangement,
+      seats,
+      ...fitArrangementView(arrangement.layoutId, arrangement)
+    })
   }
 
   return repaired
@@ -680,7 +693,10 @@ function seatsHeldElsewhere(
  * arrangement holds exactly the dividers `SplitController` would. Missing sound is loud, and a
  * focus beyond the last tile lands on the last one — the one nearest to where it was.
  */
-function fitView(layoutId: LayoutId, view: Partial<ArrangementView>): ArrangementView {
+export function fitArrangementView(
+  layoutId: LayoutId,
+  view: Partial<ArrangementView>
+): ArrangementView {
   const count = TILE_COUNT[layoutId]
   const wanted = view.activeTile ?? 0
   const activeTile = Number.isFinite(wanted) ? Math.trunc(wanted) : 0

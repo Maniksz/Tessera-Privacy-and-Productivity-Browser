@@ -149,6 +149,15 @@ export interface SessionWindow {
   /** Divider positions, by divider id. Only the ids this layout has; see `repairSession`. */
   fractions: Record<string, number>
   activeTile: number
+  /**
+   * The tiled view this window was showing, by its id in `arrangements.json`, or `null` for none.
+   *
+   * The second half of what a restart needs to show one entry for the view on screen rather than
+   * two (KTD3, R15): the tabs come back into their tiles from this slot, and the entry comes back
+   * from the arrangements file, and this id is what says they are the same view. `null` also for
+   * every slot an older build wrote, which the restart settles by matching seats instead.
+   */
+  arrangementId: string | null
   /** Strip order. The array *is* the order — there is no position field to disagree with it. */
   tabs: SessionTab[]
 }
@@ -195,6 +204,8 @@ export interface CapturedWindow {
   layout: LayoutId
   fractions: Readonly<Record<string, number>>
   activeTile: number
+  /** The tiled view on screen; see `SessionWindow.arrangementId`. Absent means none. */
+  arrangementId?: string | null
   /** In strip order. */
   tabs: readonly CapturedTab[]
 }
@@ -251,6 +262,7 @@ export function captureWindow(id: string, input: CapturedWindow): SessionWindow 
     layout: input.layout,
     fractions: { ...input.fractions },
     activeTile: input.activeTile,
+    arrangementId: input.arrangementId ?? null,
     tabs: input.tabs.map((tab) => ({
       id: tab.id,
       url: storableAddress(tab.url),

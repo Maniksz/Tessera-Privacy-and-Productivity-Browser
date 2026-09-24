@@ -10,11 +10,14 @@ import {
   type WindowSeams
 } from '@main/browser/window-seams.js'
 import type { OverlayLayer } from '@main/browser/OverlayLayer.js'
-import { ArrangementStore } from '@main/data/ArrangementStore.js'
+import type { Tab } from '@main/browser/Tab.js'
+import { ArrangementStore, type ArrangementBook } from '@main/data/ArrangementStore.js'
 import { TabGroupStore } from '@main/data/TabGroupStore.js'
 import type { BrowsingMode } from '@main/data/HistoryStore.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
+import { dropZonesFor } from '@shared/split/dropzones.js'
+import { windowCloseForgetsArrangements } from '@shared/arrangements/screen.js'
 
 /**
  * What a window's own seams do to each other — and, the point of this file, what they no longer do.
@@ -52,6 +55,24 @@ interface Harness {
   /** The `tile === null` branch of `BrowserWindowController.activateTab`. */
   activate: (tabId: string) => void
   addTab: (tabId: string) => void
+  /** A start page the browser opened as a filler: in the strip, ephemeral, a member like any tab. */
+  addStartPage: (tabId: string) => void
+  /** A new tab, the way `BrowserWindowController.createTab` places one: it gets the whole window. */
+  newTab: (tabId: string) => void
+  /** Switches layout the way nothing but this test does — no filling, no pulling in — and seats. */
+  show: (layout: LayoutId, seats: Array<string | null>) => void
+  /** What `BrowserWindowController.#finishClose` does once a tab has really gone. */
+  close: (tabId: string) => void
+  /** The book this window writes into, ids and all. */
+  book: ArrangementBook
+  /** Every tab the seams asked to leave its page's fullscreen, in order. */
+  fullscreenExits: () => string[]
+  /** Whether the seams last told this tab to be muted. */
+  muted: (tabId: string) => boolean
+  /** How often the seams asked the window for another broadcast round. */
+  broadcasts: () => number
+  /** The strip, which a closed tab has left. */
+  order: () => string[]
   /** What the window's book holds, stripped of the id and the clock the store owns. */
   recordings: () => Array<{ layoutId: LayoutId; seats: Array<string | null> }>
   /**
@@ -85,6 +106,8 @@ async function harness(options: {
   tabs: string[]
   layout?: LayoutId
   mode?: BrowsingMode
+  /** An `arrangements.json` another window, or the last run, already wrote to. */
+  store?: ArrangementStore
 }): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), 'tessera-window-seams-'))
   directories.push(directory)
@@ -92,10 +115,12 @@ async function harness(options: {
 
   const groupStore = await TabGroupStore.open({ filePath: join(directory, 'tab-groups.json') })
   const arrangementsFile = join(directory, 'arrangements.json')
-  const arrangementStore = await ArrangementStore.open({
-    filePath: arrangementsFile,
-    debounceMs: 0
-  })
+  const arrangementStore =
+    options.store ??
+    (await ArrangementStore.open({
+      filePath: arrangementsFile,
+      debounceMs: 0
+    }))
   flushes.push(async () => {
     await arrangementStore.flush()
     await groupStore.flush()
@@ -116,6 +141,35 @@ async function harness(options: {
   const overlayStub: unknown = { dismissKind: () => {} }
   const overlay = overlayStub as OverlayLayer
 
+  /*
+    Tab objects only as far as the seams read them: whether it is a filler, a view whose page can be
+    asked to leave its fullscreen, and a mute switch. Built on demand for every id the window has,
+    because the seams ask about tabs by id and a test adds them as it goes.
+  */
+  const ephemeral = new Set<string>()
+  const fullscreenExits: string[] = []
+  const mutedTabs = new Map<string, boolean>()
+  let broadcasts = 0
+  const fakeTab = (tabId: string): Tab => {
+    const fake: unknown = {
+      id: tabId,
+      ephemeral: ephemeral.has(tabId),
+      setTileIndex: () => {},
+      setMuted: (muted: boolean) => mutedTabs.set(tabId, muted),
+      toState: () => ({ id: tabId, title: tabId, url: `https://example.test/${tabId}` }),
+      view: {
+        webContents: {
+          isDestroyed: () => false,
+          executeJavaScript: () => {
+            fullscreenExits.push(tabId)
+            return Promise.resolve()
+          }
+        }
+      }
+    }
+    return fake as Tab
+  }
+
   const internals: WindowInternals = {
     split,
     overlay,
@@ -135,7 +189,7 @@ async function harness(options: {
       index — and `SplitController` is the authority on tile assignment either way, so a window with
       no `Tab` instances settles exactly as one with them.
     */
-    tab: () => undefined,
+    tab: (tabId) => (order.includes(tabId) ? fakeTab(tabId) : undefined),
     tabIds: () => order,
     tabOrder: () => order,
     setTabOrder: (next) => {
@@ -171,7 +225,9 @@ async function harness(options: {
     },
     presentOverlay: () => {},
     relayout: () => {},
-    broadcast: () => {},
+    broadcast: () => {
+      broadcasts += 1
+    },
     onOverlayPresentationChanged: () => {},
     tabGroups: groupStore.bookFor(mode),
     arrangements
@@ -197,6 +253,32 @@ async function harness(options: {
     addTab: (tabId) => {
       order.push(tabId)
     },
+    addStartPage: (tabId) => {
+      order.push(tabId)
+      ephemeral.add(tabId)
+    },
+    newTab: (tabId) => {
+      order.push(tabId)
+      split.assignTab(tabId, seams.occupancy.claimTileForNewTab())
+    },
+    show: (layout, seats) => {
+      split.setLayout(layout)
+      seats.forEach((tabId, index) => {
+        if (tabId !== null) split.assignTab(tabId, index)
+      })
+    },
+    close: (tabId) => {
+      const vacated = split.tileOfTab(tabId)
+      split.forgetTab(tabId)
+      order = order.filter((id) => id !== tabId)
+      seams.arrangements.tabClosed(tabId)
+      seams.occupancy.afterTabClosed(vacated)
+    },
+    book: arrangements,
+    fullscreenExits: () => fullscreenExits,
+    muted: (tabId) => mutedTabs.get(tabId) === true,
+    broadcasts: () => broadcasts,
+    order: () => order,
     recordings: () =>
       arrangements.list().map((held) => ({ layoutId: held.layoutId, seats: held.seats })),
     persistedRecordings: () => {
@@ -408,5 +490,332 @@ describe('a private window', () => {
 
     expect(h.recordings()).toEqual([])
     expect(h.split.toState().tileTabIds).toEqual(['t2'])
+  })
+})
+
+describe('the visible tiled view and its entry (U2)', () => {
+  /** The ids and seats the book holds, in order. */
+  const held = (h: Harness): Array<[string, Array<string | null>]> =>
+    h.book.list().map((arrangement) => [arrangement.id, arrangement.seats])
+
+  it('comes back exactly as it was put away, under the same id (AE1, R3, R4)', async () => {
+    const h = await harness({ tabs: ['youtube', 'twitch', 'mail'], layout: '1x2' })
+    h.seat(['youtube', 'twitch'])
+    h.split.setFractions({ v: 0.3 }, CONTENT)
+    h.split.setActiveTile(1)
+    h.round()
+    const id = h.book.list()[0]?.id ?? ''
+
+    h.activate('mail')
+    h.round()
+    expect(h.split.toState().tileTabIds).toEqual(['mail'])
+    expect(h.seams.arrangements.summaries()).toMatchObject([{ id, visible: false }])
+
+    h.seams.arrangements.restore(id)
+    h.round()
+
+    expect(h.split.layout).toBe('1x2')
+    expect(h.split.toState().tileTabIds).toEqual(['youtube', 'twitch'])
+    expect(h.split.activeTile).toBe(1)
+    expect(h.split.toState().fractions).toEqual({ v: 0.3 })
+    expect(held(h)).toEqual([[id, ['youtube', 'twitch']]])
+    expect(h.seams.arrangements.summaries()).toMatchObject([{ id, visible: true }])
+  })
+
+  it('keeps two tiled views put away one after the other, each under its own id', async () => {
+    const h = await harness({ tabs: ['t1', 't2', 't3', 't4'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+    h.newTab('t5')
+    h.show('1x2', ['t5', 't3'])
+    h.round()
+
+    h.newTab('t6')
+    h.round()
+
+    const entries = held(h)
+    expect(entries.map(([, seats]) => seats)).toEqual([
+      ['t1', 't2'],
+      ['t5', 't3']
+    ])
+    expect(new Set(entries.map(([id]) => id)).size).toBe(2)
+    expect(h.seams.arrangements.summaries().map((summary) => summary.visible)).toEqual([
+      false,
+      false
+    ])
+  })
+
+  it('puts the visible one away whole when the user brings another back (R16)', async () => {
+    /*
+      A is a `2x2` with a start page in it, B a `2x2` with an empty seat. Bringing B back must not
+      leave any of A behind in B's empty seat, and putting A away must close nothing — its start
+      page is a member like the others (R8, AE4).
+    */
+    const h = await harness({ tabs: ['b1', 'b2', 'b3', 'a1', 'a2', 'a3'], layout: '2x2' })
+    h.seat(['b1', 'b2', 'b3'])
+    h.round()
+    const b = h.seams.arrangements.liveId ?? ''
+    h.seams.arrangements.putAway()
+    h.addStartPage('start')
+    h.show('2x2', ['a1', 'start', 'a2', 'a3'])
+    h.split.setFractions({ v: 0.4 }, CONTENT)
+    h.split.setActiveTile(2)
+    h.round()
+    const a = h.seams.arrangements.liveId ?? ''
+
+    h.seams.arrangements.restore(b)
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b2', 'b3', null])
+    expect(h.seams.arrangements.liveId).toBe(b)
+    expect(h.book.list().find((arrangement) => arrangement.id === a)).toMatchObject({
+      seats: ['a1', 'start', 'a2', 'a3'],
+      activeTile: 2,
+      fractions: { v: 0.4 }
+    })
+    expect(held(h).map(([id]) => id)).toEqual([b, a])
+    expect(h.order()).toContain('start')
+  })
+
+  it('stands unchanged as a put-away entry when a workspace opens (lifecycle)', async () => {
+    const h = await harness({ tabs: ['t1', 't2', 'w1', 'w2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+    const a = h.seams.arrangements.liveId ?? ''
+
+    // What `workspaces:open` does: the visible view away first, then the workspace's seating.
+    h.seams.arrangements.putAway()
+    h.seams.occupancy.restoreArrangement('1x2', ['w1', 'w2'], 'w1')
+    h.round()
+
+    expect(h.book.list().find((arrangement) => arrangement.id === a)?.seats).toEqual(['t1', 't2'])
+    expect(h.seams.arrangements.summaries()).toMatchObject([
+      { id: a, tabIds: ['t1', 't2'], visible: false },
+      { tabIds: ['w1', 'w2'], visible: true }
+    ])
+  })
+
+  it('takes a tab dragged into it under the same id (KTD2)', async () => {
+    const h = await harness({ tabs: ['t1', 't2', 't3'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+    const id = h.seams.arrangements.liveId
+    const zone = dropZonesFor('1x2', CONTENT).find(
+      (candidate) => candidate.layout === '1x3' && candidate.tileIndex === 2
+    )
+    expect(zone).toBeDefined()
+
+    h.seams.occupancy.applyDrop('t3', zone!)
+    h.round()
+
+    expect(held(h)).toEqual([[id, ['t1', 't2', 't3']]])
+  })
+
+  it('empties the seat of a member closing in a put-away view of three, which stays restorable', async () => {
+    const h = await harness({ tabs: ['t1', 't2', 't3'], layout: '1x3' })
+    h.seat(['t1', 't2', 't3'])
+    h.round()
+    h.newTab('other')
+
+    h.close('t2')
+    h.round()
+    h.activate('t3')
+
+    expect(h.split.layout).toBe('1x3')
+    expect(h.split.toState().tileTabIds).toEqual(['t1', null, 't3'])
+  })
+
+  it('ends a put-away view of two when a member closes, and the other is an ordinary tab', async () => {
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.round()
+    h.newTab('other')
+
+    h.close('t2')
+    h.round()
+    h.activate('t1')
+
+    expect(h.book.list()).toEqual([])
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['t1'])
+  })
+
+  it('keeps each view its own tile sounds (KTD11)', async () => {
+    const h = await harness({ tabs: ['a1', 'a2', 'b1', 'b2'], layout: '1x2' })
+    h.seat(['a1', 'a2'])
+    h.seams.audio.setMutedByUser(1, true)
+    h.round()
+    const a = h.seams.arrangements.liveId ?? ''
+    h.seams.arrangements.putAway()
+    h.show('1x2', ['b1', 'b2'])
+    h.round()
+
+    expect(h.split.tileAudio(1).muted).toBe(false)
+
+    h.seams.arrangements.restore(a)
+    h.round()
+
+    expect(h.split.tileAudio(1).muted).toBe(true)
+    expect(h.muted('a2')).toBe(true)
+    expect(h.muted('a1')).toBe(false)
+  })
+
+  it('asks a page in tile fullscreen to leave it when the view is put away (KTD11)', async () => {
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+    h.split.enterTileFullscreen(1)
+    h.round()
+
+    h.newTab('fresh')
+
+    expect(h.fullscreenExits()).toEqual(['t2'])
+    expect(h.split.fullscreenTile).toBeNull()
+  })
+
+  it('reaches the store without asking for another round (KTD5)', async () => {
+    /*
+      `arrangements:changed` is built from the same round's snapshot right after `keep()`, so a
+      write here must not schedule the next round — or every settle would publish twice.
+    */
+    const h = await harness({ tabs: ['t1', 't2'], layout: '1x2' })
+    h.seat(['t1', 't2'])
+
+    h.round()
+    h.split.setActiveTile(1)
+    h.round()
+
+    expect(h.broadcasts()).toBe(0)
+    expect(h.seams.arrangements.summaries()).toMatchObject([{ activeTile: 1, visible: true }])
+  })
+})
+
+describe('a restart (R15, KTD3)', () => {
+  /** What the last run left in `arrangements.json`: one tiled view of `t1` and `t2`. */
+  async function lastRun(): Promise<{ store: ArrangementStore; id: string }> {
+    const directory = await mkdtemp(join(tmpdir(), 'tessera-window-seams-'))
+    directories.push(directory)
+    const store = await ArrangementStore.open({
+      filePath: join(directory, 'arrangements.json'),
+      debounceMs: 0
+    })
+    flushes.push(() => store.flush())
+    const id =
+      store.create(
+        { layoutId: '1x2', seats: ['t1', 't2'], activeTile: 1 },
+        { liveTabIds: ['t1', 't2'], hiddenTabIds: [] }
+      ) ?? ''
+    return { store, id }
+  }
+
+  it('shows the visible view as one entry with the same id', async () => {
+    const { store, id } = await lastRun()
+    const h = await harness({ tabs: ['t1', 't2', 't3'], layout: '1x2', store })
+    h.seat(['t1', 't2'])
+
+    h.seams.arrangements.settleRestored(id)
+    h.round()
+
+    expect(h.seams.arrangements.summaries()).toEqual([
+      expect.objectContaining({ id, tabIds: ['t1', 't2'], visible: true })
+    ])
+  })
+
+  it('adopts the matching view for a slot from an older build without an id', async () => {
+    const { store, id } = await lastRun()
+    const h = await harness({ tabs: ['t1', 't2', 't3'], layout: '1x2', store })
+    h.seat(['t1', 't2'])
+
+    h.seams.arrangements.settleRestored(null)
+    h.round()
+
+    expect(h.seams.arrangements.summaries()).toEqual([
+      expect.objectContaining({ id, visible: true })
+    ])
+  })
+
+  it('comes back put away with restoreLayoutOnStart off, the window showing another tab', async () => {
+    const { store, id } = await lastRun()
+    const h = await harness({ tabs: ['t1', 't2', 't3'], layout: '1x1', store })
+    h.seat(['t3'])
+
+    h.seams.arrangements.settleRestored(id)
+    h.round()
+
+    expect(h.seams.arrangements.summaries()).toEqual([
+      expect.objectContaining({ id, visible: false })
+    ])
+    h.activate('t1')
+    expect(h.split.toState().tileTabIds).toEqual(['t1', 't2'])
+  })
+})
+
+describe('a window closing (KTD3)', () => {
+  it("forgets the closing window's views while another window stays open, and only those", async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'tessera-window-seams-'))
+    directories.push(directory)
+    const store = await ArrangementStore.open({
+      filePath: join(directory, 'arrangements.json'),
+      debounceMs: 0
+    })
+    flushes.push(() => store.flush())
+    store.create(
+      { layoutId: '1x2', seats: ['a1', 'a2'] },
+      { liveTabIds: ['a1', 'a2'], hiddenTabIds: [] }
+    )
+    store.create(
+      { layoutId: '1x2', seats: ['b1', 'b2'] },
+      { liveTabIds: ['b1', 'b2'], hiddenTabIds: [] }
+    )
+
+    const normal = { privateMode: false }
+    if (windowCloseForgetsArrangements(normal, [normal], false)) store.forgetTabs(['a1', 'a2'])
+
+    expect(store.list().map((arrangement) => arrangement.seats)).toEqual([['b1', 'b2']])
+  })
+
+  it('keeps the last window’s views for the restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'tessera-window-seams-'))
+    directories.push(directory)
+    const filePath = join(directory, 'arrangements.json')
+    const store = await ArrangementStore.open({ filePath, debounceMs: 0 })
+    store.create(
+      { layoutId: '1x2', seats: ['a1', 'a2'] },
+      { liveTabIds: ['a1', 'a2'], hiddenTabIds: [] }
+    )
+
+    if (windowCloseForgetsArrangements({ privateMode: false }, [], false)) {
+      store.forgetTabs(['a1', 'a2'])
+    }
+    await store.flush()
+    const restarted = await ArrangementStore.open({ filePath, debounceMs: 0 })
+
+    expect(restarted.list().map((arrangement) => arrangement.seats)).toEqual([['a1', 'a2']])
+  })
+
+  it('is decided by that rule where the window closes', () => {
+    // `WindowRegistry` needs Electron, so the wiring is read rather than run: the rule is asked in
+    // `onClosed`, with the windows still open, and its answer is what reaches `forgetTabs`.
+    const registry = readFileSync(join(process.cwd(), 'src/main/browser/WindowRegistry.ts'), 'utf8')
+    expect(registry).toMatch(
+      /windowCloseForgetsArrangements\([\s\S]{0,200}?this\.#deps\.arrangements\.forgetTabs\(/
+    )
+  })
+})
+
+describe('the broadcast round in the window (KTD5)', () => {
+  it('sends arrangements:changed once, after keep(), from the same round', () => {
+    // `BrowserWindowController` needs Electron, so the round is read rather than run.
+    const source = readFileSync(
+      join(process.cwd(), 'src/main/browser/BrowserWindowController.ts'),
+      'utf8'
+    )
+    const round = source.slice(source.indexOf('#scheduleBroadcast(): void {'))
+    const body = round.slice(0, round.indexOf('\n  }\n'))
+    const keep = body.indexOf('this.#seams.arrangements.keep()')
+    const sent = body.indexOf("this.emit('arrangements:changed'")
+    expect(keep).toBeGreaterThan(-1)
+    expect(sent).toBeGreaterThan(keep)
+    expect(body.split("'arrangements:changed'").length - 1).toBe(1)
+    expect(body).toMatch(/arrangementId: this\.#seams\.arrangements\.liveId/)
   })
 })

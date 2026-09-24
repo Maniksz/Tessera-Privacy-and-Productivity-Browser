@@ -81,6 +81,9 @@ const sessionWindowSchema = z.looseObject({
   layout: z.enum(LAYOUT_IDS).catch('1x1'),
   fractions: z.record(z.string(), z.number()).catch({}),
   activeTile: z.number().int().catch(0),
+  // Heals to "none": a slot from before U2 has no such field, and one bad value must not cost the
+  // window — the restart settles a view it cannot name by matching seats (KTD3).
+  arrangementId: z.string().min(1).nullable().catch(null),
   tabs: z.array(sessionTabSchema)
 })
 
@@ -191,9 +194,16 @@ export class SessionStore {
    * precisely backwards.
    *
    * Called exactly once per process, before any window exists.
+   *
+   * `arrangedTabIds` are the tabs the arrangements file seats, read before anything reconciles
+   * it: a start page among them comes back so its tiled view keeps its grid (R15). Empty by
+   * default, which is the rule every start page followed before U2.
    */
-  async beginRun(settings: RestoreSettings): Promise<RestorePlan> {
-    const plan = planRestore(this.#store.get(), settings)
+  async beginRun(
+    settings: RestoreSettings,
+    arrangedTabIds: ReadonlySet<string> = new Set()
+  ): Promise<RestorePlan> {
+    const plan = planRestore(this.#store.get(), settings, arrangedTabIds)
     const restoring = plan.kind === 'restore'
     this.#write((document) => startedRun(document, restoring))
     await this.#store.flush()

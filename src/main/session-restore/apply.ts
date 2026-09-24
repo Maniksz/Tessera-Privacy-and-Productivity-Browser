@@ -27,6 +27,11 @@ export interface RestoreTarget {
    */
   openTab(tab: PlannedTab): void
   setActiveTile(index: number): void
+  /**
+   * `ArrangementController.settleRestored`: which tiled view the window is showing, settled
+   * against the arrangements that came back (KTD3). Handed the id the slot named, `null` for none.
+   */
+  settleArrangement(arrangementId: string | null): void
 }
 
 export interface RestoreHost {
@@ -70,6 +75,19 @@ export interface RestoreHost {
    * would then find one of them unable to bring its panes back, with nothing to say why.
    */
   retainArrangementTabs(ids: readonly string[]): void
+  /**
+   * The members of every tab group, as plain sets of tab ids, read after `retainTabs`.
+   *
+   * Plain sets because the arrangements must learn nothing about groups beyond where their
+   * boundaries run (KTD4, KTD15) — and read here rather than inside the arrangement side, so the
+   * one place that knows both is the one that carries out the restart.
+   */
+  groupMemberSets(): ReadonlyArray<readonly string[]>
+  /**
+   * `ArrangementBook.reconcile`: drops every arrangement that reaches over a group boundary, and of
+   * two sharing a tab keeps the newer (KTD15). Once, over the shared document, like the two above.
+   */
+  reconcileArrangements(memberSets: ReadonlyArray<readonly string[]>): void
 }
 
 /**
@@ -82,11 +100,17 @@ export interface RestoreHost {
  *      right.
  *   2. **The active tile after the tabs.** Activating a tile focuses the tab in it, so
  *      doing it first would focus an empty pane.
- *   3. **Both reconciliations last, and once each.** Every restored id must exist before the
- *      groups and the arrangements are reconciled: a group naming a tab that has not been
- *      created yet would be emptied, and a recording naming one would lose that seat — which
+ *   3. **The reconciliations after every tab, and once each.** Every restored id must exist
+ *      before the groups and the arrangements are reconciled: a group naming a tab that has not
+ *      been created yet would be emptied, and a recording naming one would lose that seat — which
  *      is precisely the loss session restore is meant to stop. And they must run before the
  *      user can see anything, so nobody watches groups appear and then vanish.
+ *   4. **The group boundaries right after the arrangements are retained** (KTD15). The groups
+ *      are read once they are reconciled themselves, so a group whose tabs did not come back does
+ *      not draw a boundary through an arrangement that did.
+ *   5. **Each window's visible tiled view last** (KTD3). It is settled against the arrangements
+ *      as they stand after both passes — a pass may have dropped the one the slot named — and
+ *      before the first broadcast, so the strip never shows two entries for one view (R15).
  *
  * Called with no windows as well — a launch that restored nothing still has to reconcile, or
  * the stored groups would keep members that do not exist in this run and the stored recordings
@@ -102,6 +126,7 @@ export function applySessionRestore(
   host: RestoreHost
 ): string[] {
   const restored: string[] = []
+  const opened: Array<{ target: RestoreTarget; arrangementId: string | null }> = []
 
   for (const window of windows) {
     const target = host.openWindow(window.layout, window.fractions)
@@ -110,10 +135,13 @@ export function applySessionRestore(
       restored.push(tab.id)
     }
     target.setActiveTile(window.activeTile)
+    opened.push({ target, arrangementId: window.arrangementId })
   }
 
   host.retainTabs(restored)
   host.retainArrangementTabs(restored)
+  host.reconcileArrangements(host.groupMemberSets())
+  for (const { target, arrangementId } of opened) target.settleArrangement(arrangementId)
   return restored
 }
 

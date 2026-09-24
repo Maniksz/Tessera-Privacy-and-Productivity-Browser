@@ -1,4 +1,9 @@
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { ArrangementStore } from '@main/data/ArrangementStore.js'
+import { HOME_URL } from '@shared/url/omnibox.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
 import { DEFAULT_FRACTIONS, TILE_COUNT } from '@shared/split/layout.js'
 import {
@@ -60,6 +65,7 @@ function window_(overrides: Partial<SessionWindow> = {}): SessionWindow {
     layout: '1x1',
     fractions: {},
     activeTile: 0,
+    arrangementId: null,
     tabs: [tab('tab-1')],
     ...overrides
   }
@@ -72,15 +78,20 @@ function documentOf(...windows: SessionWindow[]): SessionDocument {
 /** The planned windows, or a failure that names the reason instead of an empty array. */
 function plannedWindows(
   document: SessionDocument,
-  settings: RestoreSettings = T_SETTINGS
+  settings: RestoreSettings = T_SETTINGS,
+  arranged: ReadonlySet<string> = new Set()
 ): PlannedWindow[] {
-  const plan = planRestore(document, settings)
+  const plan = planRestore(document, settings, arranged)
   if (plan.kind === 'skip') throw new Error(`expected a restore, got ${plan.reason}`)
   return plan.windows
 }
 
-function firstWindow(document: SessionDocument, settings?: RestoreSettings): PlannedWindow {
-  const [only] = plannedWindows(document, settings)
+function firstWindow(
+  document: SessionDocument,
+  settings?: RestoreSettings,
+  arranged?: ReadonlySet<string>
+): PlannedWindow {
+  const [only] = plannedWindows(document, settings, arranged)
   if (only === undefined) throw new Error('expected one planned window')
   return only
 }
@@ -316,6 +327,102 @@ describe('reconciling a layout the settings no longer allow', () => {
   })
 })
 
+describe('tiled views across a restart (R15, KTD3)', () => {
+  const tiled = window_({
+    layout: '1x2',
+    activeTile: 1,
+    arrangementId: 'ar-1',
+    tabs: [
+      tab('page', { tileIndex: 0 }),
+      tab('start', { url: 'tessera://start', tileIndex: 1 }),
+      tab('loose-start', { url: 'tessera://start' }),
+      tab('other')
+    ]
+  })
+  const arranged = new Set(['page', 'start'])
+
+  it('brings back a start page that sits in a tiled view, so the grid comes back exact', () => {
+    const planned = firstWindow(documentOf(tiled), T_SETTINGS, arranged)
+    expect(planned.tabs.map((entry) => [entry.id, entry.url, entry.tileIndex])).toEqual([
+      ['page', 'https://example.com/page', 0],
+      ['start', HOME_URL, 1],
+      ['other', 'https://example.com/other', null]
+    ])
+    // With its id, which is what lets `retainTabs` keep its seat.
+    expect(planned.tabs[1]?.load).toBe('now')
+  })
+
+  it('brings back a member start page that had not loaded anything yet', () => {
+    const blank = window_({
+      tabs: [tab('page', { tileIndex: 0 }), tab('start', { url: '', pendingUrl: null })]
+    })
+    const planned = firstWindow(documentOf(blank), T_SETTINGS, arranged)
+    expect(planned.tabs.map((entry) => [entry.id, entry.url])).toEqual([
+      ['page', 'https://example.com/page'],
+      ['start', HOME_URL]
+    ])
+  })
+
+  it('still drops a loose start page, as before', () => {
+    const planned = firstWindow(documentOf(tiled), T_SETTINGS, arranged)
+    expect(planned.tabs.map((entry) => entry.id)).not.toContain('loose-start')
+  })
+
+  it('carries the id of the visible view along with the layout', () => {
+    expect(firstWindow(documentOf(tiled), T_SETTINGS, arranged).arrangementId).toBe('ar-1')
+  })
+
+  it('brings the view back put away when the layout is not restored, showing a tab outside it', () => {
+    const planned = firstWindow(
+      documentOf(tiled),
+      { ...T_SETTINGS, restoreLayout: false, defaultLayout: '1x2' },
+      arranged
+    )
+    expect(planned.arrangementId).toBeNull()
+    expect(planned.tabs.map((entry) => [entry.id, entry.tileIndex])).toEqual([
+      ['page', null],
+      ['start', null],
+      ['other', 0]
+    ])
+    expect(planned.activeTile).toBe(0)
+  })
+
+  it('falls back to the first tab when every tab is in a tiled view', () => {
+    const all = window_({
+      layout: '1x2',
+      tabs: [tab('page', { tileIndex: 0 }), tab('second', { tileIndex: 1 })]
+    })
+    const planned = firstWindow(
+      documentOf(all),
+      { ...T_SETTINGS, restoreLayout: false },
+      new Set(['page', 'second'])
+    )
+    expect(planned.tabs.map((entry) => entry.tileIndex)).toEqual([0, null])
+  })
+
+  it('keeps a put-away view of a page and a start page with both seats', async () => {
+    const putAway = window_({
+      tabs: [tab('shown', { tileIndex: 0 }), tab('page'), tab('start', { url: 'tessera://start' })]
+    })
+    const directory = await mkdtemp(join(tmpdir(), 'tessera-session-restore-'))
+    const book = await ArrangementStore.open({
+      filePath: join(directory, 'arrangements.json'),
+      debounceMs: 0
+    })
+    book.create(
+      { layoutId: '1x2', seats: ['page', 'start'] },
+      { liveTabIds: ['page', 'start'], hiddenTabIds: [] }
+    )
+
+    const planned = firstWindow(documentOf(putAway), T_SETTINGS, arranged)
+    book.retainTabs(planned.tabs.map((entry) => entry.id))
+
+    expect(planned.tabs.map((entry) => entry.id)).toEqual(['shown', 'page', 'start'])
+    expect(book.list().map((arrangement) => arrangement.seats)).toEqual([['page', 'start']])
+    await book.flush()
+  })
+})
+
 describe('when nothing is restored', () => {
   it('does not restore unless the user asked', () => {
     const plan = planRestore(documentOf(window_()), { ...T_SETTINGS, wantsRestore: false })
@@ -430,6 +537,9 @@ interface Recorded {
   retainedArrangements: string[]
 }
 
+/** The groups' members after `retainTabs`, as plain sets of tab ids (KTD15). */
+const GROUP_MEMBERS: string[][] = [['tab-3', 'tab-7']]
+
 function fakeHost(): { host: Parameters<typeof applySessionRestore>[1]; log: Recorded } {
   const log: Recorded = { calls: [], retained: [], retainedArrangements: [] }
   const target = (index: number): RestoreTarget => ({
@@ -440,7 +550,8 @@ function fakeHost(): { host: Parameters<typeof applySessionRestore>[1]; log: Rec
         // silently drops is exactly how a pane comes back at 100 % with nothing looking wrong.
         `w${index}:tab=${entry.id}@${String(entry.tileIndex)}/${entry.load}/zoom=${String(entry.zoomPercent)}`
       ),
-    setActiveTile: (tile) => log.calls.push(`w${index}:active=${tile}`)
+    setActiveTile: (tile) => log.calls.push(`w${index}:active=${tile}`),
+    settleArrangement: (id) => log.calls.push(`w${index}:settle=${String(id)}`)
   })
 
   let windows = 0
@@ -458,6 +569,13 @@ function fakeHost(): { host: Parameters<typeof applySessionRestore>[1]; log: Rec
       retainArrangementTabs: (ids) => {
         log.calls.push(`retain-arrangements=${ids.join(',')}`)
         log.retainedArrangements = [...ids]
+      },
+      groupMemberSets: () => {
+        log.calls.push('group-members')
+        return GROUP_MEMBERS
+      },
+      reconcileArrangements: (memberSets) => {
+        log.calls.push(`reconcile-arrangements=${JSON.stringify(memberSets)}`)
       }
     },
     log
@@ -469,6 +587,7 @@ describe('carrying a plan out', () => {
     layout: '1x2',
     fractions: { v: 0.4 },
     activeTile: 1,
+    arrangementId: 'ar-1',
     tabs: [
       {
         id: 'tab-3',
@@ -514,7 +633,29 @@ describe('carrying a plan out', () => {
       'w1:tab=tab-7@null/on-activation/zoom=null',
       'w1:active=1',
       'retain=tab-3,tab-7',
-      'retain-arrangements=tab-3,tab-7'
+      'retain-arrangements=tab-3,tab-7',
+      'group-members',
+      'reconcile-arrangements=[["tab-3","tab-7"]]',
+      'w1:settle=ar-1'
+    ])
+  })
+
+  it('reconciles the arrangements with the groups right after retaining, then settles each window (KTD3, KTD15)', () => {
+    /*
+      After `retainTabs` because the member sets are the groups as they came back, and the pass drops
+      a view that reaches over a group boundary. Each window then settles its visible view against
+      what survived — before the first broadcast, so the strip never shows two entries for one view.
+    */
+    const second: PlannedWindow = { ...planned, arrangementId: null }
+    const { host, log } = fakeHost()
+    applySessionRestore([planned, second], host)
+
+    expect(log.calls.slice(-5)).toEqual([
+      'retain-arrangements=tab-3,tab-7,tab-3,tab-7',
+      'group-members',
+      'reconcile-arrangements=[["tab-3","tab-7"]]',
+      'w1:settle=ar-1',
+      'w2:settle=null'
     ])
   })
 
@@ -603,7 +744,12 @@ describe('carrying a plan out', () => {
     */
     const { host, log } = fakeHost()
     expect(applySessionRestore([], host)).toEqual([])
-    expect(log.calls).toEqual(['retain=', 'retain-arrangements='])
+    expect(log.calls).toEqual([
+      'retain=',
+      'retain-arrangements=',
+      'group-members',
+      'reconcile-arrangements=[["tab-3","tab-7"]]'
+    ])
   })
 })
 

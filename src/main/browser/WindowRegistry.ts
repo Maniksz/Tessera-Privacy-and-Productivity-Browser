@@ -10,6 +10,7 @@ import type { ArrangementStore } from '../data/ArrangementStore.js'
 import type { SessionStore } from '../data/SessionStore.js'
 import type { WindowPlacementStore } from '../data/WindowPlacementStore.js'
 import { placeNewWindow, type OpeningPlacement } from '@shared/window-placement/model.js'
+import { windowCloseForgetsArrangements } from '@shared/arrangements/screen.js'
 import type { SplitSnapshotForPersistence } from './SplitController.js'
 import type { FilterSubscription } from '../privacy/FilterSubscription.js'
 import type { FilterStatus } from '@shared/filters/status.js'
@@ -159,6 +160,11 @@ export interface WindowRegistryDeps {
    * recording carries the calling window's tabs on each use rather than a window id (R16).
    */
   arrangements: ArrangementStore
+  /**
+   * Whether the browser is shutting down, when every window closes and none of them means it — so
+   * none takes its tiled views with it (KTD3). `SessionStore.seal` is the same answer for slots.
+   */
+  shuttingDown(): boolean
   /** The saved session. One store for every window; each window gets its own slot. */
   sessionStore: SessionStore
   /** Where the last window was, for each new one to open there. One store for every window. */
@@ -369,11 +375,22 @@ export class WindowRegistry {
       placementRecorder: this.#deps.windowPlacement.recorderFor(mode),
       ...(options.initialSplit === undefined ? {} : { initialSplit: options.initialSplit }),
       getSettings: () => this.#deps.settings.snapshot(),
-      onClosed: (closed) => {
+      onClosed: (closed, closedTabIds) => {
         this.#controllers.delete(closed)
         this.#open.delete(closed)
         this.#recency.forget(opened)
         closed.window.removeListener('focus', onFocus)
+        /*
+          The window's tiled views go with it, by the rule its session slot follows (KTD3): only while
+          another ordinary window stays open. The last one closing is how a session ends on Windows
+          and Linux, and its views are what the next start brings back. Asked after the window has
+          left `#controllers`, so "another" means another; see `windowCloseForgetsArrangements`.
+        */
+        if (
+          windowCloseForgetsArrangements(closed, [...this.#controllers], this.#deps.shuttingDown())
+        ) {
+          this.#deps.arrangements.forgetTabs(closedTabIds)
+        }
         // A private session's data exists only for the life of its window
         // (spec 4): nothing may outlive it on disk or in memory.
         if (closed.privateMode) {

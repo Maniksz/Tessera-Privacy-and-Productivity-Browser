@@ -42,6 +42,13 @@ class FakeWindow implements WorkspaceWindow {
   readonly groups = { isHidden: (tabId: string): boolean => this.hidden.has(tabId) }
   readonly closed: string[] = []
   readonly dismissed: string[] = []
+  /** The tiles as they stood each time the visible tiled view was put away. */
+  readonly putAway: Array<Array<string | null>> = []
+  readonly arrangements = {
+    putAway: (): void => {
+      this.putAway.push(this.tileUrls())
+    }
+  }
   /** How each tab the handlers asked for was to be opened. */
   readonly created: Array<{ background: boolean; tileIndex: null }> = []
   readonly #tabs = new Map<string, FakeTab>()
@@ -72,7 +79,7 @@ class FakeWindow implements WorkspaceWindow {
       applyLayout: (next, options) => {
         this.occupancy.afterLayoutChange(this.split.setLayout(next), options)
       },
-      keepTiling: () => {},
+      putAway: () => {},
       endTiling: () => {}
     })
   }
@@ -301,6 +308,18 @@ describe('opening', () => {
     expect(target.split.toState().fractions).toEqual({ v: 0.3, h: 0.7 })
     expect(target.split.activeTabId()).toBe(target.split.tabIdAt(0))
     expect(target.dismissed).toEqual(['layout-menu'])
+  })
+
+  it('puts the visible tiled view away before it touches a tile (U2)', async () => {
+    // Otherwise the workspace's seating would be read as a change to that view and written into it.
+    const id = await saved('1x2', ['https://a.example/', 'https://b.example/'])
+    const target = new FakeWindow()
+    window = target
+    target.tile('1x2', ['https://x.example/', 'https://y.example/'])
+
+    await call('workspaces:open', { id })
+
+    expect(target.putAway).toEqual([['https://x.example/', 'https://y.example/']])
   })
 
   it('closes no tab: what gets no seat leaves the grid and stays open, the browser’s fillers too', async () => {

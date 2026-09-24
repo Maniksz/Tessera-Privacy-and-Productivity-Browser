@@ -3,6 +3,7 @@ import { TILE_BOUND_KINDS, type OverlayPresentation } from '@shared/overlay/surf
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { effectiveZoomPercent } from '@shared/zoom/model.js'
 import { isTabHidden } from '@shared/tabgroups/model.js'
+import { defaultArrangementView } from '@shared/arrangements/model.js'
 import type { ArrangementBook } from '../data/ArrangementStore.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SplitController } from './SplitController.js'
@@ -36,7 +37,7 @@ import { liveContentsOf } from './view-contents.js'
  * ## What this is not
  *
  * Not a dependency-injection container and not a lifecycle. It is called once, returns seven objects, and is
- * finished — the window still owns them and still decides when each is asked anything. The three ordering
+ * finished — the window still owns them and still decides when each is asked anything. The ordering
  * constraints are spelled out where each bites.
  */
 
@@ -155,18 +156,7 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     defer: (run) => {
       setTimeout(run, 0)
     },
-    askPageToExitFullscreen: (tabId) => {
-      /*
-        Asked rather than forced, and the failure swallowed on purpose.
-
-        Leaving fullscreen is the page's own API; a page that has navigated away, or one whose script has been
-        stopped, simply will not answer — and the tile has already left fullscreen from the browser's side, so
-        there is nothing here for a caller to do about it.
-      */
-      liveContentsOf(internals.tab(tabId)?.view)
-        ?.executeJavaScript('document.exitFullscreen?.()', true)
-        .catch(() => {})
-    },
+    askPageToExitFullscreen: (tabId) => askPageToExitFullscreen(internals, tabId),
     changed: () => {
       internals.relayout()
       internals.broadcast()
@@ -201,6 +191,18 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
   })
 
   /*
+    Before `arrangements`, which puts a tiled view's tile sounds back and has them applied at once
+    (KTD11). The audio controller reaches only the split and the tabs in its tiles, so nothing it
+    needs is built later.
+  */
+  const audio = new TileAudioController({
+    split: internals.split,
+    onlyActiveAudible: () => internals.getSettings()['splitView.onlyActiveTileAudible'],
+    muteAllButActive: () => internals.getSettings()['splitView.muteAllButActive'],
+    setTileMuted: (tileIndex, muted) => tabInTile(internals, tileIndex)?.setMuted(muted)
+  })
+
+  /*
     Between `groups` and `occupancy`, and that is the third ordering constraint — the only one where
     the dependency runs *both* ways.
 
@@ -226,9 +228,24 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     },
     currentLayout: () => internals.split.layout,
     tileTabIds: () => internals.split.toState().tileTabIds,
+    currentView: () => {
+      const state = internals.split.toState()
+      return {
+        activeTile: state.activeTile,
+        fractions: state.fractions,
+        tileAudio: state.tileAudio
+      }
+    },
     applyArrangement: (layoutId, seats, activatedTabId) => {
       occupancy?.restoreArrangement(layoutId, seats, activatedTabId)
-    }
+    },
+    applyView: (view) => {
+      internals.split.restoreView(view, internals.contentRect())
+      audio.apply()
+      internals.relayout()
+      internals.broadcast()
+    },
+    stowTiling: () => stowTiling(internals, audio)
   })
 
   occupancy = new TileOccupancyController({
@@ -243,15 +260,8 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     setActiveTile: (tileIndex) => internals.setActiveTile(tileIndex),
     openFiller: (tileIndex) => internals.openFiller(tileIndex),
     applyLayout: (layout, options) => internals.applyLayout(layout, options),
-    keepTiling: () => arrangements.keep(),
+    putAway: () => arrangements.putAway(),
     endTiling: () => arrangements.endTiling()
-  })
-
-  const audio = new TileAudioController({
-    split: internals.split,
-    onlyActiveAudible: () => internals.getSettings()['splitView.onlyActiveTileAudible'],
-    muteAllButActive: () => internals.getSettings()['splitView.muteAllButActive'],
-    setTileMuted: (tileIndex, muted) => tabInTile(internals, tileIndex)?.setMuted(muted)
   })
 
   /** What "not zoomed" means on this profile right now, read per call because the setting is live. */
@@ -299,6 +309,58 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
 function tabInTile(internals: WindowInternals, tileIndex: number): Tab | undefined {
   const tabId = internals.split.tabIdAt(tileIndex)
   return tabId === null ? undefined : internals.tab(tabId)
+}
+
+/**
+ * Asks a page to leave its own fullscreen.
+ *
+ * Asked rather than forced, and the failure swallowed on purpose. Leaving fullscreen is the page's own
+ * API; a page that has navigated away, or one whose script has been stopped, simply will not answer —
+ * and the tile has already left fullscreen from the browser's side, so there is nothing here for a
+ * caller to do about it. Two seams need it: the ladder's first rung, and a tiled view being put away.
+ */
+function askPageToExitFullscreen(internals: WindowInternals, tabId: string): void {
+  liveContentsOf(internals.tab(tabId)?.view)
+    ?.executeJavaScript('document.exitFullscreen?.()', true)
+    .catch(() => {})
+}
+
+/**
+ * Takes a tiled view off screen: every pane emptied, the single layout, nothing closed (U2, R3).
+ *
+ * The window half of `ArrangementController.putAway`, which has written the view down by the time
+ * this runs. The order is the point:
+ *
+ *   1. **A page in tile fullscreen is asked to leave it** (KTD11). The layout change below clears the
+ *      split's own record of it, but the page would stay in its fullscreen state, off screen, and come
+ *      back with its player still believing it fills the window.
+ *   2. **Every pane is emptied first**, through `assignTabToTile`, so each tab learns it has no tile.
+ *      The layout change that follows then orphans nothing, which is what keeps `afterLayoutChange`
+ *      from closing a start page the browser opened as a filler — it is a member of the tiled view,
+ *      and putting the view away is not ending it (R8, AE4). The same reason `workspaces:open`
+ *      clears its tiles before its own layout change.
+ *   3. **The single layout, without filling or pulling anything in.** Maximising ends with it.
+ *   4. **The tiled view's dividers and sounds leave with it.** They are the arrangement's now, not
+ *      the window's, so the single page shown next starts from the defaults rather than inheriting a
+ *      muted tile from a view it was never part of.
+ *
+ * A window already on the single layout only has its pane emptied: there is no layout to change,
+ * and the one tile's sound is the window's own, as it always was.
+ */
+function stowTiling(internals: WindowInternals, audio: TileAudioController): void {
+  const { split } = internals
+  const fullscreenTile = split.fullscreenTile
+  const inFullscreen = fullscreenTile === null ? null : split.tabIdAt(fullscreenTile)
+  if (inFullscreen !== null) askPageToExitFullscreen(internals, inFullscreen)
+
+  for (const tabId of split.toState().tileTabIds) {
+    if (tabId !== null) internals.assignTabToTile(tabId, null)
+  }
+  if (split.layout === '1x1') return
+
+  internals.applyLayout('1x1', { fill: false, rehome: false })
+  split.restoreView(defaultArrangementView('1x1'), internals.contentRect())
+  audio.apply()
 }
 
 /**

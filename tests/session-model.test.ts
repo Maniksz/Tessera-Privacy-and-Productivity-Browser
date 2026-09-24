@@ -53,6 +53,7 @@ function window_(id: string, overrides: Partial<SessionWindow> = {}): SessionWin
     layout: '1x1',
     fractions: {},
     activeTile: 0,
+    arrangementId: null,
     tabs: [tab(`${id}-a`)],
     ...overrides
   }
@@ -93,6 +94,7 @@ describe('capturing a window', () => {
       layout: '1x2',
       fractions: { v: 0.4 },
       activeTile: 1,
+      arrangementId: null,
       tabs: [
         {
           id: 'tab-1',
@@ -105,6 +107,20 @@ describe('capturing a window', () => {
         }
       ]
     })
+  })
+
+  it('records which tiled view is on screen, and none for a window from an older build', () => {
+    // KTD3: the restart settles the visible view by this id, so the strip shows one entry for it.
+    const shown = captureWindow('win-1', {
+      layout: '1x2',
+      fractions: {},
+      activeTile: 0,
+      arrangementId: 'ar-1',
+      tabs: [captured]
+    })
+    const older = captureWindow('win-2', { layout: '1x1', fractions: {}, activeTile: 0, tabs: [] })
+    expect(shown.arrangementId).toBe('ar-1')
+    expect(older.arrangementId).toBeNull()
   })
 
   it('keeps "never zoomed" as itself rather than writing the default down', () => {

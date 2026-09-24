@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import {
   arrangementOfTab,
   cloneArrangements,
@@ -6,6 +7,7 @@ import {
   emptyArrangementDocument,
   forgetArrangement,
   forgetArrangementsOfTabs,
+  reconcileArrangements,
   removeTabFromArrangements,
   repairArrangements,
   retainTabs,
@@ -95,6 +97,12 @@ export interface ArrangementBook {
   forget(id: string): void
   /** Reconciles a loaded document with the tabs a session actually brought back. */
   retainTabs(liveTabIds: readonly string[]): void
+  /**
+   * Drops every arrangement that reaches over a boundary of these member sets; see
+   * `reconcileArrangements`. Plain sets of tab ids, so the book learns nothing about what made
+   * them (KTD15).
+   */
+  reconcile(memberSets: ReadonlyArray<readonly string[]>): void
   onChange(listener: (arrangements: Arrangement[]) => void): () => void
   flush(): Promise<void>
   readonly recoveredFromInvalidFile: boolean
@@ -250,18 +258,28 @@ export class ArrangementStore implements ArrangementBook {
   }
 
   /**
-   * The only place an id is made (KTD1). Written whether or not the model accepts, as every
-   * mutation here is: whether to reach the store at all is the caller's question, answered by the
-   * gates in `ArrangementController.keep`.
+   * The only place an id is made (KTD1).
+   *
+   * A refusal writes nothing, and neither does an update that changes nothing (U2). Both are asked
+   * from the window's broadcast round, on every round while the screen shows a tiling: a refusal
+   * that stands — a seating that mixes two arrangements — or a view already written would otherwise
+   * hand the file a document on every pass. `ArrangementController.keep` gates the common steady
+   * state before it reaches here; this is the net for the states its gates cannot see, decided by
+   * what the model answered rather than by a second opinion about what it would answer.
    */
   create(draft: ArrangementInput, window: WindowTabs): string | undefined {
     const complete = { ...draft, id: this.#generateId(), recordedAt: this.#now() }
-    this.#cell.write((arrangements) => createArrangement(arrangements, complete, window))
-    return this.#cell.read().some((held) => held.id === complete.id) ? complete.id : undefined
+    const next = createArrangement(this.#cell.read(), complete, window)
+    if (!next.some((held) => held.id === complete.id)) return undefined
+    this.#cell.write(() => next)
+    return complete.id
   }
 
   update(id: string, patch: ArrangementPatch, window: WindowTabs): void {
-    this.#cell.write((arrangements) => updateArrangement(arrangements, id, patch, window))
+    const current = this.#cell.read()
+    const next = updateArrangement(current, id, patch, window)
+    if (isDeepStrictEqual(next, current)) return
+    this.#cell.write(() => next)
   }
 
   /**
@@ -286,6 +304,10 @@ export class ArrangementStore implements ArrangementBook {
 
   retainTabs(liveTabIds: readonly string[]): void {
     this.#cell.write((arrangements) => retainTabs(arrangements, liveTabIds))
+  }
+
+  reconcile(memberSets: ReadonlyArray<readonly string[]>): void {
+    this.#cell.write((arrangements) => reconcileArrangements(arrangements, memberSets))
   }
 
   onChange(listener: (arrangements: Arrangement[]) => void): () => void {

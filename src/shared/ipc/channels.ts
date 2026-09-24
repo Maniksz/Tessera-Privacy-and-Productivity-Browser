@@ -756,6 +756,7 @@ export const EVENT_CHANNELS = [
   /** The toolbar key's state, pushed when the vault locks; see `passwords:autofillState`. */
   'passwords:autofillStateChanged',
   'tabgroups:changed',
+  'arrangements:changed',
   /**
    * Sent to both the overlay surface, which renders it, and the chrome UI, whose button
    * needs to know whether its menu is up. One event rather than two keeps the two

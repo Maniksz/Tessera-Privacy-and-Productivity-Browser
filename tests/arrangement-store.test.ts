@@ -212,6 +212,37 @@ describe('ArrangementStore basics', () => {
     expect(writes).not.toHaveBeenCalled()
   })
 
+  it('writes nothing for a creation it refused or a change that changes nothing (U2)', async () => {
+    /*
+      The window keeps its visible arrangement from inside the broadcast round, on every round, so a
+      refusal that still reached the file would be a write per round for as long as the refusal
+      stood. Only a document that moved is handed to the file.
+    */
+    const { store } = await openStore()
+    const live = windowWith('tab-1', 'tab-2', 'tab-3')
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, live)
+    const writes = vi.fn()
+    store.onChange(writes)
+
+    store.create({ layoutId: '1x2', seats: ['tab-2', 'tab-3'] }, live)
+    store.update('a1', { layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, live)
+    store.update('a1', { seats: ['tab-1', 'tab-9'] }, live)
+    store.update('nope', { activeTile: 1 }, live)
+    expect(writes).not.toHaveBeenCalled()
+
+    store.update('a1', { activeTile: 1 }, live)
+    expect(writes).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the arrangements that reach over a boundary of the member sets it is given', async () => {
+    // KTD15, step 2: the pure pass, reached through the one store every ordinary window shares.
+    const { store } = await openStore()
+    store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
+    store.create({ layoutId: '1x2', seats: ['tab-3', 'tab-4'] }, windowWith('tab-3', 'tab-4'))
+    store.reconcile([['tab-1', 'tab-2', 'tab-3']])
+    expect(store.list().map((entry) => entry.id)).toEqual(['a1'])
+  })
+
   it("forgets every recording of a window's tabs at once", async () => {
     const { store } = await openStore()
     store.create({ layoutId: '1x2', seats: ['tab-1', 'tab-2'] }, windowWith('tab-1', 'tab-2'))
