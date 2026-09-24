@@ -29,6 +29,12 @@ import { TAB_GROUP_COLORS, type TabGroupColor } from '@shared/tabgroups/palette.
  * wrong in a way that still produces a perfectly ordinary-looking menu. Kept in this file they are
  * ordinary unit tests; kept next to the `Menu` import they would be unreachable from a test at all.
  * `tabContextMenu.ts` is the four-line wrapper, for this menu and the chip's.
+ *
+ * ## A tab of a tiled view
+ *
+ * Its group items act on the whole view (R10), with the same words. Nothing here has to know: every
+ * item hands the tab's id to `TabGroupController`, which widens a member of a view to all of its
+ * members, so this menu, the strip's channels and the entry's own menu cannot disagree about it.
  */
 
 export interface TabContextMenuDeps {
@@ -46,8 +52,13 @@ export interface TabContextMenuDeps {
   isPinned(tabId: string): boolean
 }
 
-/** A colour's own name, so the submenu reads as colours rather than as eight identical rows. */
-const COLOR_LABELS: Readonly<Record<TabGroupColor, MessageKey>> = {
+/**
+ * A colour's own name, so the submenu reads as colours rather than as eight identical rows.
+ *
+ * Exported for the menu of a tiled view's entry (`arrangement-items.ts`), which names an unnamed
+ * group the same way, so the two menus cannot come to call one group two things.
+ */
+export const COLOR_LABELS: Readonly<Record<TabGroupColor, MessageKey>> = {
   blue: 'tabgroup.color.blue',
   cyan: 'tabgroup.color.cyan',
   green: 'tabgroup.color.green',

@@ -11,6 +11,7 @@ import {
   type TabGroupWindow
 } from '@main/ipc/tabgroup-handlers.js'
 import { tabGroupInvokeContract } from '@shared/tabgroups/schema.js'
+import type { StripArrangement } from '@shared/strip/model.js'
 
 /**
  * The `tabgroups:*` channels and the two menus they are reached through, against a window whose groups
@@ -42,7 +43,10 @@ interface FakeWindow extends TabGroupWindow {
   readonly pinned: Map<string, boolean>
 }
 
-async function fakeWindow(tabIds: readonly string[]): Promise<FakeWindow> {
+async function fakeWindow(
+  tabIds: readonly string[],
+  arrangements: readonly StripArrangement[] = []
+): Promise<FakeWindow> {
   const store = await TabGroupStore.open({ filePath: join(directory, 'tab-groups.json') })
   let order = [...tabIds]
   const closed: string[] = []
@@ -58,7 +62,7 @@ async function fakeWindow(tabIds: readonly string[]): Promise<FakeWindow> {
     activateTab: () => {},
     liveTabIds: () => order,
     broadcast: () => {},
-    arrangements: () => []
+    arrangements: () => arrangements
   })
   return {
     groups,
@@ -257,5 +261,49 @@ describe("a tab's menu", () => {
     const { call, menus } = register(undefined)
     expect(call('tabs:contextMenu', { tabId: 'a' })).toEqual({ ok: true })
     expect(menus).toEqual([])
+  })
+})
+
+describe('a tab of a tiled view (U8, R10)', () => {
+  /*
+    Every door to a group — the channels the strip calls and the tab's own menu — reaches the same
+    controller, which widens a member of a tiled view to the whole view. So whichever of them the
+    user takes, the view joins and leaves as one, and nothing here has to know it.
+  */
+  const A: StripArrangement = { id: 'A', tabIds: ['a1', 'a2'], activeTabId: 'a1' }
+
+  it('joins a group whole through tabgroups:addTab, as one run', async () => {
+    const window = await fakeWindow(['x', 'a1', 'y', 'a2'], [A])
+    const { call } = register(window)
+    const group = window.groups.create({ tabIds: ['x', 'y'] })
+
+    call('tabgroups:addTab', { groupId: group.id, tabId: 'a2', index: 1 })
+
+    expect(window.groups.groups()[0]?.tabIds).toEqual(['x', 'a1', 'a2', 'y'])
+    expect(window.groups.displayOrder()).toEqual(['x', 'a1', 'a2', 'y'])
+  })
+
+  it('leaves a group whole through tabgroups:removeTab', async () => {
+    const window = await fakeWindow(['x', 'a1', 'a2'], [A])
+    const { call } = register(window)
+    window.groups.create({ tabIds: ['x', 'a1'] })
+
+    call('tabgroups:removeTab', { tabId: 'a1' })
+
+    expect(window.groups.groups()[0]?.tabIds).toEqual(['x'])
+  })
+
+  it('is grouped and ungrouped whole from its own menu', async () => {
+    const window = await fakeWindow(['a1', 'a2', 'x'], [A])
+    const { call, menus } = register(window)
+    const menu = (): MenuItemConstructorOptions[] => menus[menus.length - 1]?.template ?? []
+
+    call('tabs:contextMenu', { tabId: 'a2' })
+    click(menu(), 'Group these tabs')
+    expect(window.groups.groups()[0]?.tabIds).toEqual(['a1', 'a2'])
+
+    call('tabs:contextMenu', { tabId: 'a1' })
+    click(menu(), 'Remove from group')
+    expect(window.groups.groups()).toEqual([])
   })
 })

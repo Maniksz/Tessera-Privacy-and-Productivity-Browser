@@ -14,6 +14,8 @@ import { stripItems } from '@shared/tabgroups/strip.js'
 import { tabSearchRows } from '@shared/search/tab-search.js'
 import { TabDiscards, type DiscardableTab } from '@main/browser/tab-unloader.js'
 import type { Rect } from '@shared/split/layout.js'
+import { dropZonesFor } from '@shared/split/dropzones.js'
+import type { Tab } from '@main/browser/Tab.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
 import { scope, tempFile } from './world.js'
 
@@ -45,6 +47,8 @@ interface GroupedWindow {
   order: () => readonly string[]
   /** A click on a tab in the strip: `BrowserWindowController.activateTab`, tiles and all. */
   activate: (tabId: string) => void
+  /** A tab opened in the background: in the strip, in no tile. */
+  addTab: (tabId: string) => void
 }
 
 /**
@@ -100,7 +104,7 @@ async function openWindow(state: unknown, tabIds: readonly string[]): Promise<vo
     use it — the drag and the tile bar — are constructed and asked nothing; folding a group away
     dismisses the tile-bound surfaces, which is the one call it answers.
   */
-  const overlayStub: unknown = { dismissKind: () => {} }
+  const overlayStub: unknown = { dismissKind: () => {}, dismiss: () => {} }
   const overlay = overlayStub as OverlayLayer
 
   /*
@@ -122,9 +126,12 @@ async function openWindow(state: unknown, tabIds: readonly string[]): Promise<vo
     exitWindowFullscreen: () => {},
     enterWindowFullscreen: () => {},
     toggleWindowFullscreen: () => {},
-    // No `Tab` objects: `SplitController` is the authority on tile assignment, so a window with
-    // none settles exactly as one with them.
-    tab: () => undefined,
+    /*
+      Tab objects only as far as the seams read them — a title for the drag, and switches that do
+      nothing. `SplitController` is the authority on tile assignment, so a window with these settles
+      exactly as one with real tabs.
+    */
+    tab: (tabId) => (order.includes(tabId) ? fakeTab(tabId) : undefined),
     tabIds: () => order,
     tabOrder: () => order,
     setTabOrder: (next) => {
@@ -174,8 +181,29 @@ async function openWindow(state: unknown, tabIds: readonly string[]): Promise<vo
     seams,
     split,
     order: () => order,
-    activate: (tabId) => internals.activateTab(tabId)
+    activate: (tabId) => internals.activateTab(tabId),
+    addTab: (tabId) => {
+      order.push(tabId)
+    }
   } satisfies GroupedWindow
+}
+
+/** A `Tab` as far as the seams read one: its title for a drag, and switches that do nothing. */
+function fakeTab(tabId: string): Tab {
+  const fake: unknown = {
+    id: tabId,
+    ephemeral: false,
+    setTileIndex: () => {},
+    setMuted: () => {},
+    toState: () => ({
+      id: tabId,
+      title: tabId,
+      url: `https://${tabId}.example/`,
+      loading: false,
+      pendingInput: null
+    })
+  }
+  return fake as Tab
 }
 
 // --- given -------------------------------------------------------------------
@@ -201,11 +229,30 @@ Given('the group {string} is folded', (state: unknown, name: string) => {
   groups.setCollapsed(groupNamed(state, name).id, true)
 })
 
+Given('a loose tab {string}', (state: unknown, tabId: string) => {
+  groupedWindow(state).addTab(tabId)
+})
+
 // --- when --------------------------------------------------------------------
 
 /** One coalesced broadcast round — the `arrangements.keep()` in `BrowserWindowController`. */
 When('the window settles', (state: unknown) => {
   groupedWindow(state).seams.arrangements.keep()
+})
+
+/**
+ * A tab dragged from the strip onto the right edge of the second pane, which grows the side-by-side
+ * view into three columns with the tab in the new one. `TabDragController` from press to drop, so
+ * the drop goes through the window's own seam, the way the strip's does.
+ */
+When('I drag {string} onto a new tile beside the tiled view', (state: unknown, tabId: string) => {
+  const { seams, split } = groupedWindow(state)
+  const zone = dropZonesFor(split.layout, CONTENT).find(
+    (candidate) => candidate.layout === '1x3' && candidate.tileIndex === 2
+  )
+  if (zone === undefined) throw new Error('this window has no edge that grows a third column')
+  seams.drag.start(tabId)
+  seams.drag.end({ x: zone.hit.x + zone.hit.width / 2, y: zone.hit.y + zone.hit.height / 2 }, true)
 })
 
 When('I dissolve the group {string}', (state: unknown, name: string) => {
@@ -324,6 +371,11 @@ Then('the tab strip shows one unnamed group chip', (state: unknown) => {
 
 Then('the tab search lists {string} first', (state: unknown, name: string) => {
   expect(searchResults(state)[0]).toBe(name)
+})
+
+Then('the tiled view holds {string}', (state: unknown, list: string) => {
+  const summaries = groupedWindow(state).seams.arrangements.summaries()
+  expect(summaries.map((summary) => summary.tabIds)).toEqual([tabList(list)])
 })
 
 Then('the group {string} is open', (state: unknown, name: string) => {

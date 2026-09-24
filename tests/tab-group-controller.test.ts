@@ -451,3 +451,95 @@ describe('the strip order with tiled views in it', () => {
     await h.cleanup()
   })
 })
+
+describe('a tiled view is grouped as one (U8, R10)', () => {
+  /*
+    Every tab of a tiled view is in the same group or in none (R10), and the controller keeps that by
+    widening every request that names a member to the whole view — `create`, `addTab`, `removeTab`.
+    The view's members come from the window's own summaries (`arrangements()`), in tile order, which
+    is also the order they join in: a view is one entry in the strip, so it joins as one run.
+  */
+  const A = { id: 'A', tabIds: ['A1', 'A2', 'A3'], activeTabId: 'A2' }
+
+  const members = (h: Harness, groupId: string): string[] =>
+    h.controller.groups().find((group) => group.id === groupId)?.tabIds ?? []
+
+  it('adds the whole view for the id of one member, as one run', async () => {
+    const h = await harness(['X', 'A1', 'Y', 'A2', 'A3'], { arrangements: [A] })
+    const group = h.controller.create({ tabIds: ['X'], name: 'Sport' })
+
+    h.controller.addTab(group.id, 'A2')
+
+    expect(members(h, group.id)).toEqual(['X', 'A1', 'A2', 'A3'])
+    expect(h.order()).toEqual(['X', 'A1', 'A2', 'A3', 'Y'])
+    await h.cleanup()
+  })
+
+  it('puts the whole view at the index asked for, members in tile order', async () => {
+    const h = await harness(['X', 'Z', 'A1', 'A2', 'A3'], { arrangements: [A] })
+    const group = h.controller.create({ tabIds: ['X', 'Z'] })
+
+    h.controller.addTab(group.id, 'A3', 1)
+
+    expect(members(h, group.id)).toEqual(['X', 'A1', 'A2', 'A3', 'Z'])
+    await h.cleanup()
+  })
+
+  it('moves a view already in the group to the index as one run, and keeps the group', async () => {
+    /*
+      The trap in adding one member at a time: members already in the group before the index shift
+      it as they leave their old place. The group is also never left empty on the way, which would
+      dissolve it — the view is all it holds here but one tab.
+    */
+    const h = await harness(['A1', 'A2', 'A3', 'X'], { arrangements: [A] })
+    const group = h.controller.create({ tabIds: ['A1', 'X'] })
+    expect(members(h, group.id)).toEqual(['A1', 'A2', 'A3', 'X'])
+
+    h.controller.addTab(group.id, 'A1', 1)
+
+    expect(members(h, group.id)).toEqual(['X', 'A1', 'A2', 'A3'])
+    await h.cleanup()
+  })
+
+  it('takes the whole view out for the id of one member', async () => {
+    const h = await harness(['X', 'A1', 'A2', 'A3'], { arrangements: [A] })
+    const group = h.controller.create({ tabIds: ['X', 'A1'] })
+
+    h.controller.removeTab('A3')
+
+    expect(members(h, group.id)).toEqual(['X'])
+    await h.cleanup()
+  })
+
+  it('creates a group holding the whole view for one member named among loose tabs', async () => {
+    const h = await harness(['X', 'A1', 'A2', 'A3', 'Y'], { arrangements: [A] })
+
+    const group = h.controller.create({ tabIds: ['A2', 'Y'] })
+
+    expect(group.tabIds).toEqual(['A1', 'A2', 'A3', 'Y'])
+    await h.cleanup()
+  })
+
+  it('moves the whole view out of the group it was in when it joins another', async () => {
+    const h = await harness(['X', 'Y', 'A1', 'A2', 'A3'], { arrangements: [A] })
+    const work = h.controller.create({ tabIds: ['X', 'A1'] })
+    const sport = h.controller.create({ tabIds: ['Y'] })
+
+    h.controller.addTab(sport.id, 'A1')
+
+    expect(members(h, work.id)).toEqual(['X'])
+    expect(members(h, sport.id)).toEqual(['Y', 'A1', 'A2', 'A3'])
+    await h.cleanup()
+  })
+
+  it('leaves a tab of no view on its own, as before', async () => {
+    const h = await harness(['X', 'A1', 'A2', 'A3', 'Y'], { arrangements: [A] })
+    const group = h.controller.create({ tabIds: ['X'] })
+
+    h.controller.addTab(group.id, 'Y')
+    h.controller.removeTab('X')
+
+    expect(members(h, group.id)).toEqual(['Y'])
+    await h.cleanup()
+  })
+})

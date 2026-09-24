@@ -14,6 +14,7 @@ import { ArrangementStore } from '@main/data/ArrangementStore.js'
 import { TabGroupStore } from '@main/data/TabGroupStore.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
+import { stripItems } from '@shared/strip/model.js'
 
 /**
  * Folding a group away, driven through the wiring rather than around it.
@@ -258,6 +259,13 @@ describe('folding a group away puts its tiled view away (R11, AE6)', () => {
     expect(h.split.toState().tileTabIds).toEqual(['other'])
     expect(h.recordings()).toEqual([{ layoutId: '1x2', seats: ['m1', 'm2'] }])
     expect(h.seams.arrangements.summaries()).toMatchObject([{ id, activeTile: 1, visible: false }])
+    // The folded chip counts the view as one entry, not as its two pages (R11).
+    const [chip] = stripItems(
+      h.seams.groups.displayOrder(),
+      h.seams.groups.groups(),
+      h.seams.arrangements.summaries()
+    )
+    expect(chip).toMatchObject({ kind: 'group', hiddenCount: 1 })
     await h.cleanup()
   })
 

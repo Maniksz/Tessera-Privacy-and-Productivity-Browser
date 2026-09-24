@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
 import {
+  COLOR_LABELS,
   tabContextMenuTemplate,
   tabGroupMenuTemplate,
   type TabContextMenuDeps,
   type TabGroupMenuDeps
 } from '@main/menu/tab-context-items.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
+import { TAB_GROUP_COLORS } from '@shared/tabgroups/palette.js'
+import { translate } from '@shared/i18n/catalog.js'
 
 /**
  * The tab context menu's items.
@@ -223,5 +226,12 @@ describe("a group chip's own menu", () => {
       'Gruppenfarbe',
       'Gruppierung auflösen'
     ])
+  })
+})
+
+describe('the colour names', () => {
+  it('name every colour of the palette, for this menu and the tiled view entry’s alike', () => {
+    expect(Object.keys(COLOR_LABELS).sort()).toEqual([...TAB_GROUP_COLORS].sort())
+    expect(TAB_GROUP_COLORS.map((color) => translate('en', COLOR_LABELS[color]))).not.toContain('')
   })
 })

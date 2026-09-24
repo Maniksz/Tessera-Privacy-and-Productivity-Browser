@@ -11,6 +11,11 @@ Feature: Tab groups belong to the user
     - R4: "dissolve grouping" holds whatever the layout is and however many tiles
       are occupied
 
+  And from the plan that made a tiled view an entry of its own:
+    - R10: every tab of a tiled view is in the same group or in none, and any
+      action that takes one of them into a group or out of it acts on the view
+    - R12: a tab dropped onto a tile takes the group of that tiled view
+
   Putting a split down for a single page ends the tiling and nothing else: the
   pages stay open, the split does not come back at the next click, and a group
   the user made outlives it like any other layout change.
@@ -43,17 +48,6 @@ Feature: Tab groups belong to the user
     When I activate the first tab the search lists
     Then the group "Later" is open
     And the tab strip still shows tabs "mail, news"
-
-  Scenario: Taking a tiled tab out of its group keeps it out
-    # "Remove from group" lost the same round as dissolving did: the pass that
-    # wrote the tiling down pulled the loose tab back into the group beside it.
-    Given a window tiling tabs "research, notes" side by side
-    And the tabs "research, notes" are grouped as "Reading"
-    When the window settles
-    And I take "notes" out of its group
-    And the window settles
-    Then the group "Reading" still holds "research"
-    And the tab strip still shows tabs "research, notes"
 
   Scenario: Tiling makes no group, and choosing a single page ends the tiling
     # What the user asked for: tiling used to leave a group behind that going
@@ -101,4 +95,31 @@ Feature: Tab groups belong to the user
     And I choose the single layout for the window
     And the window settles
     Then the tab strip shows one unnamed group chip
+    And the tab strip still shows tabs "research, notes"
+
+  Scenario: A tab dropped onto a tile of a grouped tiled view joins the view and its group
+    # AE5. Grouping one page of the view groups both (R10), and a tab dragged
+    # onto a new tile beside them becomes a member of the view and of its
+    # group in the same gesture (R12).
+    Given a window tiling tabs "youtube, twitch" side by side
+    And a loose tab "news"
+    When the window settles
+    And the tabs "youtube" are grouped as "Sport"
+    Then the group "Sport" still holds "youtube, twitch"
+    When I drag "news" onto a new tile beside the tiled view
+    And the window settles
+    Then the tiled view holds "youtube, twitch, news"
+    And the group "Sport" still holds "youtube, twitch, news"
+
+  Scenario: Taking one page of a grouped tiled view out of its group takes the whole view
+    # "Remove from group" lost the same round as dissolving did: the pass that
+    # wrote the tiling down pulled the loose tab back into the group beside it.
+    # Since a view is never split across a group's edge (R10), removing one of
+    # its pages takes all of them, and the round must leave them all out.
+    Given a window tiling tabs "research, notes" side by side
+    When the window settles
+    And the tabs "research" are grouped as "Reading"
+    And I take "notes" out of its group
+    And the window settles
+    Then the tab strip shows no group chip
     And the tab strip still shows tabs "research, notes"

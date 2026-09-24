@@ -16,8 +16,9 @@ import { TabGroupStore } from '@main/data/TabGroupStore.js'
 import type { BrowsingMode } from '@main/data/HistoryStore.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
-import { dropZonesFor } from '@shared/split/dropzones.js'
+import { dropZonesFor, type DropZone } from '@shared/split/dropzones.js'
 import { windowCloseForgetsArrangements } from '@shared/arrangements/screen.js'
+import { groupOfTab } from '@shared/tabgroups/model.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
 import type { LayoutChangeOptions } from '@main/browser/TileOccupancyController.js'
 
@@ -95,6 +96,11 @@ interface Harness {
   persistedRecordings: () => unknown[]
   /** Waits for every debounced write, for the assertions that are about the file itself. */
   settled: () => Promise<void>
+  /**
+   * A tab dragged from the strip and let go over this zone: `TabDragController` from press to drop,
+   * so the drop goes through the seam's own `drop` rather than straight to the occupancy controller.
+   */
+  drag: (tabId: string, zone: DropZone) => void
 }
 
 const directories: string[] = []
@@ -149,7 +155,7 @@ async function harness(options: {
     reach it — drag, fullscreen, the tile bar — are constructed here and asked nothing; folding a
     group away dismisses the tile-bound surfaces, which is the one call it answers.
   */
-  const overlayStub: unknown = { dismissKind: () => {} }
+  const overlayStub: unknown = { dismissKind: () => {}, dismiss: () => {} }
   const overlay = overlayStub as OverlayLayer
 
   /*
@@ -320,6 +326,13 @@ async function harness(options: {
     settled: async () => {
       await arrangementStore.flush()
       await groupStore.flush()
+    },
+    drag: (tabId, zone) => {
+      seams.drag.start(tabId)
+      seams.drag.end(
+        { x: zone.hit.x + zone.hit.width / 2, y: zone.hit.y + zone.hit.height / 2 },
+        true
+      )
     }
   }
 }
@@ -343,23 +356,27 @@ describe('the broadcast round and tab groups', () => {
     expect(h.seams.groups.groups()).toEqual([])
   })
 
-  it('leaves a tab removed from a group out of it (AE2, AE4, R3, R4)', async () => {
+  it('leaves a tiled view removed from a group out of it (AE2, AE4, R3, R4, R10)', async () => {
     /*
       The same defect from the other side, and the one the plan calls absorption. The round found a
       group holding two of the three seated tabs and pulled the third back in, because "mixed origin
       takes the existing group" was the rule that let one layout live in one group. Removing a tab
       from a group therefore held for one tick.
+
+      Since U8 removing one tile's tab takes the whole view out (R10), so what must hold is that the
+      round pulls none of the three back into the group the loose tab is still in.
     */
-    const h = await harness({ tabs: ['t1', 't2', 't3'], layout: '1x3' })
+    const h = await harness({ tabs: ['t1', 't2', 't3', 'loose'], layout: '1x3' })
     h.seat(['t1', 't2', 't3'])
-    const group = h.seams.groups.create({ tabIds: ['t1', 't2', 't3'] })
+    h.round()
+    const group = h.seams.groups.create({ tabIds: ['t1', 't2', 't3', 'loose'] })
     h.round()
 
     h.seams.groups.removeTab('t3')
     h.round()
 
     expect(h.seams.groups.groups()[0]?.id).toBe(group.id)
-    expect(h.seams.groups.groups()[0]?.tabIds).toEqual(['t1', 't2'])
+    expect(h.seams.groups.groups()[0]?.tabIds).toEqual(['loose'])
     expect(h.seams.groups.isHidden('t3')).toBe(false)
   })
 
@@ -1123,6 +1140,168 @@ describe('a window closing (KTD3)', () => {
     expect(registry).toMatch(
       /windowCloseForgetsArrangements\([\s\S]{0,200}?this\.#deps\.arrangements\.forgetTabs\(/
     )
+  })
+})
+
+/**
+ * A tiled view is in one group or in none, and every gesture on it keeps that (U8, R10, R12, KTD4).
+ *
+ * Through the real stores and the real drag, because the two halves of the rule live in different
+ * places: `TabGroupController` widens a request naming a member to the whole view, and the seam's
+ * drop gives a tab dropped onto a tile the group of the view it lands in. Neither the arrangement
+ * controller nor the occupancy controller is told anything about groups for it.
+ */
+describe('tab groups and tiled views (U8)', () => {
+  const zoneOf = (layout: LayoutId, pick: (zone: DropZone) => boolean): DropZone => {
+    const zone = dropZonesFor(layout, CONTENT).find(pick)
+    if (zone === undefined) throw new Error(`no such zone in ${layout}`)
+    return zone
+  }
+  /** The edge of the last tile of a `1x2` that grows it into a `1x3`, the new page on the right. */
+  const growingToThree = (zone: DropZone): boolean => zone.layout === '1x3' && zone.tileIndex === 2
+  const groupOf = (h: Harness, tabId: string): string | undefined =>
+    groupOfTab(h.seams.groups.groups(), tabId)?.name
+  const seatsOf = (h: Harness, id: string | null): Array<string | null> | undefined =>
+    h.book.list().find((arrangement) => arrangement.id === id)?.seats
+
+  it('takes a loose tab dropped onto a tile of a grouped view into the view and its group (AE5)', async () => {
+    const h = await harness({ tabs: ['a1', 'a2', 'loose'], layout: '1x2' })
+    h.seat(['a1', 'a2'])
+    h.round()
+    const a = h.seams.arrangements.liveId
+    h.seams.groups.create({ tabIds: ['a1'], name: 'Sport', color: 'green' })
+
+    h.drag('loose', zoneOf('1x2', growingToThree))
+    h.round()
+
+    expect(seatsOf(h, a)).toEqual(['a1', 'a2', 'loose'])
+    expect(groupOf(h, 'loose')).toBe('Sport')
+    expect(h.seams.groups.groups().map((group) => group.tabIds)).toEqual([['a1', 'a2', 'loose']])
+  })
+
+  it('takes a grouped tab dropped onto an ungrouped view out of its group (R12)', async () => {
+    const h = await harness({ tabs: ['a1', 'a2', 'w1', 'w2'], layout: '1x2' })
+    h.seat(['a1', 'a2'])
+    h.round()
+    h.seams.groups.create({ tabIds: ['w1', 'w2'], name: 'Arbeit' })
+
+    h.drag('w1', zoneOf('1x2', growingToThree))
+    h.round()
+
+    expect(groupOf(h, 'w1')).toBeUndefined()
+    expect(h.seams.groups.groups().map((group) => group.tabIds)).toEqual([['w2']])
+  })
+
+  it('puts a view made by an edge drop wholly into the group of the page on screen (R12)', async () => {
+    const h = await harness({ tabs: ['g', 'other', 'loose'] })
+    h.seat(['g'])
+    h.seams.groups.create({ tabIds: ['g', 'other'], name: 'Reading' })
+
+    h.drag(
+      'loose',
+      zoneOf('1x1', (zone) => zone.layout === '1x2' && zone.tileIndex === 1)
+    )
+    h.round()
+
+    expect(h.seams.arrangements.summaries()).toMatchObject([{ tabIds: ['g', 'loose'] }])
+    expect(groupOf(h, 'g')).toBe('Reading')
+    expect(groupOf(h, 'loose')).toBe('Reading')
+  })
+
+  it('changes no group for a drop that leaves a single page on screen', async () => {
+    const h = await harness({ tabs: ['g', 'loose'] })
+    h.seat(['g'])
+    h.seams.groups.create({ tabIds: ['g'], name: 'Reading' })
+
+    h.drag(
+      'loose',
+      zoneOf('1x1', (zone) => zone.layout === null)
+    )
+    h.round()
+
+    expect(h.split.toState().tileTabIds).toEqual(['loose'])
+    expect(groupOf(h, 'loose')).toBeUndefined()
+    expect(groupOf(h, 'g')).toBe('Reading')
+  })
+
+  it('takes a member of a put-away view into the visible one under its id, and its group (R12, KTD2)', async () => {
+    /*
+      A tab is in at most one view (R4), so the drop takes it out of the one it was in — which ends
+      that view here, left with one page — before the visible view writes its new seating down.
+      Without that, the next settle's update was refused for a seat held elsewhere, and the view on
+      screen went on standing in its entry as it had been before the drop.
+    */
+    const h = await harness({ tabs: ['b1', 'b2', 'a1', 'a2'], layout: '1x2' })
+    h.seat(['b1', 'b2'])
+    h.round()
+    h.seams.groups.create({ tabIds: ['b1'], name: 'Later' })
+    h.seams.arrangements.putAway()
+    h.show('1x2', ['a1', 'a2'])
+    h.round()
+    const a = h.seams.arrangements.liveId
+    h.seams.groups.create({ tabIds: ['a1'], name: 'Sport' })
+
+    h.drag('b2', zoneOf('1x2', growingToThree))
+    h.round()
+
+    expect(seatsOf(h, a)).toEqual(['a1', 'a2', 'b2'])
+    expect(h.book.list().map((arrangement) => arrangement.id)).toEqual([a])
+    expect(groupOf(h, 'b2')).toBe('Sport')
+    expect(groupOf(h, 'b1')).toBe('Later')
+  })
+
+  it('keeps a put-away view of three standing when one of its members is dropped elsewhere', async () => {
+    const h = await harness({ tabs: ['b1', 'b2', 'b3', 'a1', 'a2'], layout: '1x3' })
+    h.seat(['b1', 'b2', 'b3'])
+    h.round()
+    const b = h.seams.arrangements.liveId
+    h.seams.arrangements.putAway()
+    h.show('1x2', ['a1', 'a2'])
+    h.round()
+    const a = h.seams.arrangements.liveId
+
+    h.drag('b3', zoneOf('1x2', growingToThree))
+    h.round()
+
+    expect(seatsOf(h, a)).toEqual(['a1', 'a2', 'b3'])
+    expect(seatsOf(h, b)).toEqual(['b1', 'b2', null])
+  })
+
+  it('groups the whole view for one of its members, through the window’s own summaries (R10)', async () => {
+    const h = await harness({ tabs: ['x', 'a1', 'y', 'a2'], layout: '1x2' })
+    h.show('1x2', ['a1', 'a2'])
+    h.round()
+    const group = h.seams.groups.create({ tabIds: ['x'] })
+
+    h.seams.groups.addTab(group.id, 'a2')
+    expect(h.seams.groups.groups()[0]?.tabIds).toEqual(['x', 'a1', 'a2'])
+    expect(h.order()).toEqual(['x', 'a1', 'a2', 'y'])
+
+    h.seams.groups.removeTab('a1')
+    expect(h.seams.groups.groups()[0]?.tabIds).toEqual(['x'])
+  })
+
+  it('leaves every former member in the group when a grouped view ends (R10)', async () => {
+    const h = await harness({ tabs: ['a1', 'a2', 'b1', 'b2', 'mail'], layout: '1x2' })
+    h.seat(['b1', 'b2'])
+    h.round()
+    const b = h.seams.arrangements.liveId ?? ''
+    h.seams.groups.create({ tabIds: ['b1'], name: 'Later' })
+    h.seams.arrangements.putAway()
+    h.show('1x2', ['a1', 'a2'])
+    h.round()
+    h.seams.groups.create({ tabIds: ['a1'], name: 'Sport' })
+
+    h.seams.occupancy.chooseLayout('1x1')
+    h.round()
+    h.seams.arrangements.endArrangement(b)
+    h.round()
+
+    expect(h.book.list()).toEqual([])
+    expect(h.seams.groups.groups().map((group) => [group.name, group.tabIds])).toEqual([
+      ['Later', ['b1', 'b2']],
+      ['Sport', ['a1', 'a2']]
+    ])
   })
 })
 

@@ -32,6 +32,16 @@ import type { TabGroupBook } from '../data/TabGroupStore.js'
  * accident of the current call graph. Nothing here creates, dissolves or re-members a group because
  * the tiling changed. A group outlives the split it came from: it lives until the user dissolves it
  * or its last member closes.
+ *
+ * ## A tiled view joins and leaves as one
+ *
+ * Every tab of a tiled view is in the same group or in none (R10, KTD4). Groups stay sets of tab
+ * ids, so that is kept here rather than by a second kind of member: `create`, `addTab` and
+ * `removeTab` widen a request that names one member of a view to the whole view, its members in
+ * tile order and as one run. The view's members are a read of `arrangements()` — nothing here
+ * changes one — and a user acting on a view or on one of its tiles is a grouping act for the whole
+ * view, which is the plan's amendment to "every write starts with a user action" rather than an
+ * exception to it. Ending a view, or taking one tab out of it, leaves every tab's group as it was.
  */
 
 export interface TabGroupHost {
@@ -65,8 +75,8 @@ export interface TabGroupHost {
   broadcast(): void
   /**
    * This window's tiled views — `ArrangementController.summaries()` — so the strip order holds each
-   * one as a run (KTD6). A read of the arrangements' answer, never a write to them: nothing here
-   * changes a view's membership.
+   * one as a run (KTD6), and so a request naming one member reaches the whole view (R10). A read of
+   * the arrangements' answer, never a write to them: nothing here changes a view's membership.
    */
   arrangements(): readonly StripArrangement[]
 }
@@ -114,7 +124,9 @@ export class TabGroupController {
    */
   create(input: { tabIds: readonly string[]; name?: string; color?: TabGroupColor }): TabGroup {
     const live = new Set(this.host.liveTabIds())
-    const tabIds = input.tabIds.filter((tabId) => live.has(tabId))
+    const tabIds = this.#withViews(input.tabIds.filter((tabId) => live.has(tabId))).filter(
+      (tabId) => live.has(tabId)
+    )
     if (tabIds.length === 0) {
       throw new Error('none of those tabs are in this window')
     }
@@ -212,18 +224,52 @@ export class TabGroupController {
     this.host.broadcast()
   }
 
-  /** Same rule as `create`: a tab this window does not have cannot join a group. */
+  /**
+   * Same rule as `create`: a tab this window does not have cannot join a group.
+   *
+   * A member of a tiled view brings the whole view, in tile order and as one run starting at
+   * `index` — counted, as for a single tab, among the group's members that are not moving. That
+   * takes two passes when an index is asked for, because the store places one tab at a time: the
+   * view's members are first sent to the end of the group, so none of them is left standing before
+   * the index to shift it, and then placed one after another from the index. The target is never
+   * emptied on the way, so a group that holds little besides the view is not dissolved by it.
+   */
   addTab(groupId: string, tabId: string, index?: number): void {
     if (!this.host.liveTabIds().includes(tabId)) {
       throw new Error(`no tab ${tabId} in this window`)
     }
-    this.host.book.addTab(groupId, tabId, index)
+    const members = this.#withViews([tabId])
+    if (index === undefined) {
+      for (const member of members) this.host.book.addTab(groupId, member)
+    } else {
+      if (members.length > 1) {
+        for (const member of members) {
+          this.host.book.addTab(groupId, member, Number.MAX_SAFE_INTEGER)
+        }
+      }
+      members.forEach((member, offset) => this.host.book.addTab(groupId, member, index + offset))
+    }
     this.#settle()
   }
 
+  /** A member of a tiled view takes the whole view out with it (R10). */
   removeTab(tabId: string): void {
-    this.host.book.removeTab(tabId)
+    for (const member of this.#withViews([tabId])) this.host.book.removeTab(member)
     this.#settle()
+  }
+
+  /**
+   * These tabs with each one that belongs to a tiled view replaced by all of that view's members, in
+   * tile order, without repeats. A tab of no view stands for itself.
+   */
+  #withViews(tabIds: readonly string[]): string[] {
+    const views = this.host.arrangements()
+    const widened = new Set<string>()
+    for (const tabId of tabIds) {
+      const view = views.find((arrangement) => arrangement.tabIds.includes(tabId))
+      for (const member of view?.tabIds ?? [tabId]) widened.add(member)
+    }
+    return [...widened]
   }
 
   /** Rewrites the order so every group is one run, then publishes. */

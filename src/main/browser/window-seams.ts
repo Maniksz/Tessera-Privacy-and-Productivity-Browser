@@ -2,8 +2,9 @@ import type { LayoutId, Rect } from '@shared/split/layout.js'
 import { TILE_BOUND_KINDS, type OverlayPresentation } from '@shared/overlay/surface.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { effectiveZoomPercent } from '@shared/zoom/model.js'
-import { isTabHidden } from '@shared/tabgroups/model.js'
-import { defaultArrangementView } from '@shared/arrangements/model.js'
+import { groupOfTab, isTabHidden } from '@shared/tabgroups/model.js'
+import { defaultArrangementView, seatedTabs } from '@shared/arrangements/model.js'
+import type { DropZone } from '@shared/split/dropzones.js'
 import { isStartPageTile } from '@shared/split/tile-fill.js'
 import type { ArrangementBook } from '../data/ArrangementStore.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
@@ -137,7 +138,13 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     titleOf: (tabId) => internals.tab(tabId)?.toState().title ?? null,
     present: (presentation) => internals.presentOverlay(presentation),
     dismiss: () => internals.overlay.dismiss(),
-    drop: (tabId, zone) => occupancy?.applyDrop(tabId, zone)
+    /*
+      `arrangements` and `groups` are declared further down and read here only when a drop lands,
+      which is a user action and so never happens during construction. See `dropTab`.
+    */
+    drop: (tabId, zone) => {
+      if (occupancy !== null) dropTab(internals, { occupancy, arrangements, groups }, tabId, zone)
+    }
   })
 
   const fullscreen = new TileFullscreenController({
@@ -457,6 +464,54 @@ function releaseTiles(
   internals.relayout()
   internals.broadcast()
   return true
+}
+
+/**
+ * A tab dragged from the strip and let go over a tile (R9, R12, KTD4).
+ *
+ * The placing is the occupancy controller's (`applyDrop`); this adds the two things a drop means for
+ * the tab's other memberships, which neither the occupancy controller nor the arrangement controller
+ * may know about:
+ *
+ *   1. **It leaves the tiled view it was in**, when that is not the one on screen. A tab is in at most
+ *      one view (R4), so a member of a put-away view that is dropped onto a tile is taken out of that
+ *      view first — through the book, which empties its seat and ends a view left with fewer than two
+ *      pages, the way a closing tab does. Without it the next settle's update of the visible view is
+ *      refused for a seat held elsewhere, and the entry on screen goes stale.
+ *   2. **It takes the group of the view it lands in** (R10, R12). Whatever the other pages on screen
+ *      are in — the view it joins, or the page an edge drop has just made a view with — the dropped
+ *      tab is put in too, or taken out of its own group when they are in none. Through the groups'
+ *      own `addTab` and `removeTab`, so the strip settles in one pass. A drop that leaves a single page
+ *      on screen makes no view and changes no group.
+ *
+ * Read off the screen rather than the book, because the book learns of the new seating only at the
+ * next settle. The view's group is its first other page's, which R10 makes every page's.
+ */
+function dropTab(
+  internals: WindowInternals,
+  seams: {
+    occupancy: TileOccupancyController
+    arrangements: ArrangementController
+    groups: TabGroupController
+  },
+  tabId: string,
+  zone: DropZone
+): void {
+  const owner = internals.arrangements.list().find((held) => held.seats.includes(tabId))
+  const onScreen = internals.split.tileOfTab(tabId) !== null
+  if (owner !== undefined && owner.id !== seams.arrangements.liveId && !onScreen) {
+    internals.arrangements.removeTab(tabId)
+  }
+
+  seams.occupancy.applyDrop(tabId, zone)
+
+  const beside = seatedTabs(internals.split.toState().tileTabIds).filter((id) => id !== tabId)
+  if (beside.length === 0) return
+  const groups = seams.groups.groups()
+  const target = groupOfTab(groups, beside[0]!)
+  if (target?.id === groupOfTab(groups, tabId)?.id) return
+  if (target === undefined) seams.groups.removeTab(tabId)
+  else seams.groups.addTab(target.id, tabId)
 }
 
 /**
