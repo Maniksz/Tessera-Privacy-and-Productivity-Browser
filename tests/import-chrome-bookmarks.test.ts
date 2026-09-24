@@ -163,12 +163,21 @@ describe('reading a Chrome profile’s bookmarks', () => {
   })
 
   it('does not overflow the stack on a deeply nested file', () => {
-    let deepest: ChromeNode = { type: 'url', name: 'Bottom', url: 'https://bottom.example/' }
-    for (let level = 0; level < 5_000; level += 1) {
-      deepest = { type: 'folder', name: 'F', children: [deepest] }
-    }
-    const report = parseChromeBookmarks(file({ other: { type: 'folder', children: [deepest] } }))
+    /*
+      Written as text, not built and stringified: `JSON.stringify` recurses, and at this depth it
+      overflows a smaller stack — the CI runner's — before the parser is ever reached. The file is
+      what arrives from disk anyway.
+    */
+    const depth = 5_000
+    const bottom = JSON.stringify({ type: 'url', name: 'Bottom', url: 'https://bottom.example/' })
+    const deepest = `${'{"type":"folder","name":"F","children":['.repeat(depth)}${bottom}${']}'.repeat(depth)}`
+    const json = `{"checksum":"x","roots":{"other":{"type":"folder","children":[${deepest}]}},"version":1}`
+    const report = parseChromeBookmarks(json)
     expect(report?.nodes).toHaveLength(1)
+    // The chain was read to its end, not cut short: the bookmark at the bottom is there.
+    let node = report?.nodes[0]
+    for (let level = 1; level < depth; level += 1) node = node?.children[0]
+    expect(node?.children[0]?.url).toBe('https://bottom.example/')
   })
 
   it('answers null for a file that is not a Chrome bookmarks file', () => {
