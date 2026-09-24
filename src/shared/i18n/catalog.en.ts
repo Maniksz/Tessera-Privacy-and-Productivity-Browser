@@ -153,10 +153,8 @@ export const en = {
   'tabgroup.removeTab': 'Remove from group',
   'tabgroup.addTo': 'Add to group',
   'tabgroup.recolor': 'Group colour',
-  /*
-    The colours have names because a submenu of eight unlabelled swatches is unusable with a screen
-    reader, and because an unnamed group is identified in a menu by its colour alone.
-  */
+  // The colours have names because a submenu of eight unlabelled swatches is unusable with a
+  // screen reader, and because an unnamed group is identified in a menu by its colour alone.
   'tabgroup.color.blue': 'Blue',
   'tabgroup.color.cyan': 'Cyan',
   'tabgroup.color.green': 'Green',
@@ -170,6 +168,7 @@ export const en = {
   'split.tile': 'Tile {index}',
   'split.activeTile': 'Active tile',
   'split.maximize': 'Maximize tile',
+  'split.release': 'Release from tiled view',
   'split.restore': 'Restore layout',
   'split.dropHere': 'Drop tab here',
   'split.dropLeft': 'Open on the left',

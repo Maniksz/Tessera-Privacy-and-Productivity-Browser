@@ -105,6 +105,7 @@ export const INVOKE_CHANNELS = [
   'arrangements:close',
   'arrangements:contextMenu',
   'arrangements:setMuted',
+  'arrangements:releaseTab',
   /*
     What the blocker made of the user's lists.
 

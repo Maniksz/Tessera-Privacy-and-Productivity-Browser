@@ -50,6 +50,8 @@ function tab(id: string, overrides: Partial<TileBarTab> = {}): TileBarTab {
     // A pane nobody has zoomed, which is every pane until a test says otherwise.
     zoomPercent: 100,
     zoomed: false,
+    // A tab in a tiled view unless a test says otherwise: a bar only appears where there are tiles.
+    releasable: true,
     ...overrides
   }
 }
@@ -311,6 +313,28 @@ describe('the bar for a tile', () => {
     })
   })
 
+  it('offers the release only for a tab seated in a tiled view (U10, R9)', () => {
+    /*
+      The bar also stands over a split that is no tiled view — one page beside an empty pane, with
+      adaptation off. A release there would have no view to take the page out of, and a button that
+      does nothing is indistinguishable from a broken one.
+    */
+    const member = tileBarPresentation({
+      tileIndex: 1,
+      rects,
+      tab: tab('t2'),
+      invokedBy: 'pointer'
+    })
+    const loose = tileBarPresentation({
+      tileIndex: 1,
+      rects,
+      tab: tab('t2', { releasable: false }),
+      invokedBy: 'pointer'
+    })
+    expect(member?.releasable).toBe(true)
+    expect(loose?.releasable).toBe(false)
+  })
+
   it('gives a tile with no tab no bar at all', () => {
     // Every control would be a no-op, and a no-op button is indistinguishable from a broken one.
     expect(tileBarPresentation({ tileIndex: 0, rects, tab: null, invokedBy: 'pointer' })).toBeNull()
@@ -392,6 +416,16 @@ describe('the step the core takes', () => {
     const action = step(null, { invokedBy: 'pointer', tileIndex: 1, y: 2 })
     expect(action.do).toBe('present')
     expect(action.do === 'present' && action.presentation.tabId).toBe('t2')
+  })
+
+  it('presents the release to the keyboard route as well (U10)', () => {
+    // The shortcut is how the bar is reached without a mouse, so the release must be on that bar too.
+    const action = step(null, { invokedBy: 'keyboard', tileIndex: 0 })
+    expect(action.do === 'present' && action.presentation).toMatchObject({
+      tabId: 't1',
+      invokedBy: 'keyboard',
+      releasable: true
+    })
   })
 
   it('hides when the pointer leaves the tile that has the bar', () => {
@@ -601,6 +635,27 @@ describe('refreshing a bar that is already up', () => {
       tabOf: tabOf({ ...tab('a'), url: 'https://example.com/elsewhere' })
     })
     expect(action.do).toBe('present')
+  })
+
+  it('follows the tab into or out of a tiled view, so the release is never offered stale', () => {
+    // A drop onto a tile makes a split a tiled view without touching the page; a release by another
+    // route takes it out again. Only this field changes, and a comparison without it would miss both.
+    expect(
+      tileBarRefresh({
+        current: barFor(tab('a', { releasable: false })),
+        mode: 'hover',
+        rects,
+        tabOf: tabOf(tab('a'))
+      }).do
+    ).toBe('present')
+    expect(
+      tileBarRefresh({
+        current: barFor(tab('a')),
+        mode: 'hover',
+        rects,
+        tabOf: tabOf(tab('a', { releasable: false }))
+      }).do
+    ).toBe('present')
   })
 
   it('takes the bar down when the tab left the tile', () => {

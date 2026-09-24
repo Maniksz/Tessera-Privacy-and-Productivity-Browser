@@ -329,6 +329,8 @@ export interface TileBarPresentation {
   zoomPercent: number
   /** False for a pane still following `appearance.defaultZoom`; see `PaneZoom`. */
   zoomed: boolean
+  /** Offers "Release from tiled view": the tab sits in one (U10, R9); see `TileBarTab`. */
+  releasable: boolean
   invokedBy: OverlayInvocation
 }
 

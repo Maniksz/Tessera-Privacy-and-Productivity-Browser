@@ -864,6 +864,65 @@ describe('a member closing (KTD2)', () => {
   })
 })
 
+describe('releasing a tab from the view on screen (U10, R9)', () => {
+  it('lets the tab go under the same id, and the settle after the panes close ranks keeps it', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x3', tiles: ['t1', 't2', 't3'] })
+    h.controller.keep()
+
+    expect(h.controller.releaseTab('t2')).toBe(true)
+    expect(h.controller.isMember('t2')).toBe(false)
+    expect(h.controller.liveId).toBe('a1')
+
+    h.showing('1x2', ['t1', 't3'])
+    h.controller.keep()
+    expect(h.book.list()).toMatchObject([{ id: 'a1', layoutId: '1x2', seats: ['t1', 't3'] }])
+
+    await h.cleanup()
+  })
+
+  it('ends a view of two, so neither tab is a member any more', async () => {
+    // Without this the record would outlive the screen: fewer than two panes only lets go of the id,
+    // and a click on either tab would bring the view back that the user has just taken apart.
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    expect(h.controller.releaseTab('t2')).toBe(true)
+
+    expect(h.book.list()).toEqual([])
+    expect(h.controller.liveId).toBeNull()
+    expect(h.controller.isMember('t1')).toBe(false)
+
+    await h.cleanup()
+  })
+
+  it('writes the screen down first, so a tab dropped in since the last settle can be released', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.showing('1+2', ['t1', 't3', 't2'])
+
+    expect(h.controller.releaseTab('t3')).toBe(true)
+    expect(h.book.list()).toMatchObject([{ id: 'a1', seats: ['t1', null, 't2'] }])
+
+    await h.cleanup()
+  })
+
+  it('refuses a tab that is not on screen in a tiled view, and changes nothing', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.controller.putAway()
+    h.showing('1x2', ['t3', 't4'])
+    h.controller.keep()
+    const before = h.book.list()
+
+    // A member of the view put away, and a tab in no view at all.
+    expect(h.controller.releaseTab('t1')).toBe(false)
+    expect(h.controller.releaseTab('loose')).toBe(false)
+    expect(h.book.list()).toEqual(before)
+
+    await h.cleanup()
+  })
+})
+
 describe('the restart (KTD3)', () => {
   it('keeps the arrangement the session slot names as the visible one', async () => {
     const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })

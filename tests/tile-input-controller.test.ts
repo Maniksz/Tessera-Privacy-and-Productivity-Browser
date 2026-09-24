@@ -57,6 +57,8 @@ function tab(id: string, overrides: Partial<TileBarTab> = {}): TileBarTab {
     // A pane nobody has zoomed, which is every pane until a test says otherwise.
     zoomPercent: 100,
     zoomed: false,
+    // A tab in a tiled view unless a test says otherwise: a bar only appears where there are tiles.
+    releasable: true,
     ...overrides
   }
 }
@@ -238,6 +240,17 @@ describe('carrying out what a bar request decided', () => {
     h.input.requestTileBar({ invokedBy: 'keyboard', tileIndex: 0 })
 
     expect(lastBar(h).invokedBy).toBe('keyboard')
+  })
+
+  it('offers the release as the host answers it for that tile’s tab (U10)', () => {
+    // Whether a tab is in a tiled view is the host's to say: the book of arrangements is behind it.
+    const h = harness({ tabs: [tab('tab-a'), tab('tab-b', { releasable: false })] })
+
+    h.input.requestTileBar({ invokedBy: 'keyboard', tileIndex: 0 })
+    expect(lastBar(h).releasable).toBe(true)
+
+    h.input.requestTileBar({ invokedBy: 'keyboard', tileIndex: 1 })
+    expect(lastBar(h).releasable).toBe(false)
   })
 
   it('takes a departed bar down by kind and does nothing else', () => {

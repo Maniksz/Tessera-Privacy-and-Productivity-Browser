@@ -327,6 +327,44 @@ export class TileOccupancyController {
   }
 
   /**
+   * Takes a tab out of the tiled view on screen, from its tile bar (U10, R9).
+   *
+   * The panes' half of a release; the entry lets go first (`ArrangementController.releaseTab`), which
+   * is also what decides the tab is a member of the view at all. Here the tab stands right behind the
+   * entry in the strip, leaves its tile, and the view closes its ranks — with adaptation off too,
+   * because the switch governs the browser reshaping the panes on its own and this is the user asking.
+   * A view of two comes down to one pane, and the page left in it shows the window.
+   *
+   * Only the released tab moves in the strip. The rest of the view is placed in the strip order it
+   * already had, so the entry stands where it stood (`orderWithRunAtEntry`), and the released tab is
+   * the first thing after it. No start page closes, whichever tile holds one: this is not a change of
+   * layout the user chose (R8), so `#closeRanks` asks for none. No group changes either — a released
+   * member keeps the group it was in, which is the group's business and not reachable from here.
+   *
+   * When the released tab was active, the page that takes its tile — or the one before it, when it
+   * was last — becomes active through the window's own method, so the focus lands in the view rather
+   * than on a pane index that the shrink may have taken away.
+   */
+  releaseTab(tabId: string): void {
+    const { split } = this.host
+    const tile = split.tileOfTab(tabId)
+    if (tile === null || split.layout === '1x1') return
+
+    const members = split.toState().tileTabIds.filter((id): id is string => id !== null)
+    const staying = members.filter((id) => id !== tabId)
+    const inStrip = this.host.tabOrder().filter((id) => staying.includes(id))
+    this.host.setTabOrder(orderWithRunAtEntry(this.host.tabOrder(), members, [...inStrip, tabId]))
+
+    const successor =
+      split.activeTabId() === tabId ? staying[Math.min(tile, staying.length - 1)] : undefined
+    this.host.assignTabToTile(tabId, null)
+    this.#closeRanks()
+
+    const next = successor === undefined ? null : split.tileOfTab(successor)
+    if (next !== null) this.host.setActiveTile(next)
+  }
+
+  /**
    * Gives every still-empty tile a tab of its own.
    *
    * Only for a layout the user chose — which, since a new tab no longer moves into a pane, is now
@@ -626,7 +664,8 @@ export class TileOccupancyController {
    * page that moved up into it, the neighbour the strip would pick too.
    *
    * This was the shrink a folded group asked for (`shrinkAfterRelease`). A fold now puts its tiled view
-   * away whole (R11), so the one caller left is a closed tab, and the method went private with it.
+   * away whole (R11), so the callers left are a closed tab and a released one (`releaseTab`), and the
+   * method went private with the fold.
    */
   #closeRanks(): void {
     const occupants = this.host.split

@@ -222,6 +222,7 @@ const overlaySurfaceSchemas = [
     zoomPercent: z.number().int(),
     /** Whether the pane holds a zoom of its own, which is what Reset has to act on. */
     zoomed: z.boolean(),
+    releasable: z.boolean(),
     /** Keyboard invocation moves focus into the bar; a hover must not steal the caret. */
     invokedBy: z.enum(['pointer', 'keyboard'])
   }),

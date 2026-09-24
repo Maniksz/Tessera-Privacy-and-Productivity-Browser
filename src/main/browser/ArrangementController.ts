@@ -325,6 +325,25 @@ export class ArrangementController {
   }
 
   /**
+   * Takes a tab out of the view on screen, from its tile bar (U10, R9). Answers whether it was one.
+   *
+   * The entry's half of a release; the panes' half — closing ranks, the tab behind the entry — is
+   * `TileOccupancyController.releaseTab`, and only runs when this says yes. The seat goes the way a
+   * closed tab's does (KTD2): named, under the same id, and a view of two ends with it. That last part
+   * is why this is more than letting the next settle notice: one page on screen only lets go of the
+   * id, and the record left behind would bring the view back at the next click on either page.
+   *
+   * The screen is written down first, so a tab dropped into the view since the last settle is a
+   * member here too — the tile bar offers the release as soon as the view seats it.
+   */
+  releaseTab(tabId: string): boolean {
+    this.keep()
+    if (this.#live(this.#host.book.list())?.seats.includes(tabId) !== true) return false
+    this.tabClosed(tabId)
+    return true
+  }
+
+  /**
    * Settles a restored window's screen with the arrangements that came back (KTD3).
    *
    * Called once per window by `applySessionRestore`, after the tabs exist and the start-up passes

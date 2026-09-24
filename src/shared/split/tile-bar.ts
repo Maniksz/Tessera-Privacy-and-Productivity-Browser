@@ -150,6 +150,14 @@ export interface TileBarTab {
   zoomPercent: number
   /** Whether that differs from the setting — which is the same as "reset would change something". */
   zoomed: boolean
+  /**
+   * Whether the tab is seated in a tiled view, and so has one to be released from (U10, R9).
+   *
+   * Not implied by the bar being up: a split with one page beside an empty pane shows a bar and is no
+   * tiled view, and a release there would be a button that does nothing. The host answers it from
+   * the book of arrangements, which is why it arrives with the tab rather than being worked out here.
+   */
+  releasable: boolean
 }
 
 /**
@@ -193,6 +201,7 @@ export function tileBarPresentation(input: {
     loading: tab.loading,
     zoomPercent: tab.zoomPercent,
     zoomed: tab.zoomed,
+    releasable: tab.releasable,
     invokedBy: input.invokedBy
   }
 }
@@ -283,6 +292,8 @@ function sameTileBar(a: TileBarPresentation, b: TileBarPresentation): boolean {
     */
     a.zoomPercent === b.zoomPercent &&
     a.zoomed === b.zoomed &&
+    // A drop onto a tile makes a split a tiled view without touching the page, so nothing else moves.
+    a.releasable === b.releasable &&
     a.bounds.x === b.bounds.x &&
     a.bounds.y === b.bounds.y &&
     a.bounds.width === b.bounds.width &&

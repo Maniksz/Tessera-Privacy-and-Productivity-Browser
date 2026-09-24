@@ -360,6 +360,7 @@ describe('registration', () => {
       'arrangements:activate',
       'arrangements:close',
       'arrangements:contextMenu',
+      'arrangements:releaseTab',
       'arrangements:setMuted'
     ])
   })
@@ -367,7 +368,7 @@ describe('registration', () => {
   it('answers every channel for a sender with no window, doing nothing', () => {
     const { call, menus } = register(undefined)
     for (const channel of Object.keys(arrangementInvokeContract)) {
-      expect(call(channel, { id: 'a', muted: true }), channel).toEqual({ ok: true })
+      expect(call(channel, { id: 'a', muted: true, tabId: 'a' }), channel).toEqual({ ok: true })
     }
     expect(menus).toEqual([])
   })
@@ -392,6 +393,10 @@ describe('registration', () => {
     expect(
       contract['arrangements:setMuted'].request.safeParse({ id: 'a', muted: true }).success
     ).toBe(true)
+    // A tab, not an entry: the tile bar names the page it sits over.
+    expect(contract['arrangements:releaseTab'].request.safeParse({ tabId: 't' }).success).toBe(true)
+    expect(contract['arrangements:releaseTab'].request.safeParse({ tabId: '' }).success).toBe(false)
+    expect(contract['arrangements:releaseTab'].request.safeParse({ id: 'a' }).success).toBe(false)
   })
 })
 
@@ -684,5 +689,87 @@ describe('the group actions of the entry (R10)', () => {
     click(menus[0], 'Add to group', 'Sport')
 
     expect(h.window.groupCalls.at(-1)).toEqual(['addTab', other.id, 'b1'])
+  })
+})
+
+describe('arrangements:releaseTab — the tile bar’s release (U10, R9)', () => {
+  it('takes one page out of a 1x3: the view stays on screen as a 1x2, the page right behind it', async () => {
+    const h = await harness(['x', 'b1', 'b2', 'b3', 'y'])
+    h.show('1x3', ['b1', 'b2', 'b3'])
+    h.split.setActiveTile(1)
+    h.round()
+    const [b] = h.window.arrangements.summaries().map((summary) => summary.id)
+    const { call } = register(h.window)
+
+    expect(call('arrangements:releaseTab', { tabId: 'b2' })).toEqual({ ok: true })
+    h.round()
+
+    expect(entries(h)).toEqual([{ id: b, layoutId: '1x2', tabIds: ['b1', 'b3'], visible: true }])
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b3'])
+    expect(h.order()).toEqual(['x', 'b1', 'b3', 'b2', 'y'])
+    // The released page was the active one; a tile of the view is active now, not an empty one.
+    expect(['b1', 'b3']).toContain(h.split.activeTabId())
+    expect(h.window.arrangements.isMember('b2')).toBe(false)
+  })
+
+  it('ends a 1x2: both pages are ordinary tabs and the one left shows the window', async () => {
+    const h = await harness(['b1', 'b2'])
+    h.show('1x2', ['b1', 'b2'])
+    h.round()
+    const { call } = register(h.window)
+
+    call('arrangements:releaseTab', { tabId: 'b1' })
+    h.round()
+
+    expect(entries(h)).toEqual([])
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['b2'])
+    expect(h.window.arrangements.isMember('b1')).toBe(false)
+    expect(h.window.arrangements.isMember('b2')).toBe(false)
+  })
+
+  it('leaves a grouped member in its group (R10 keeps the group state)', async () => {
+    const h = await harness(['b1', 'b2', 'b3'])
+    h.show('1x3', ['b1', 'b2', 'b3'])
+    h.round()
+    const group = h.window.groups.create({ tabIds: ['b1'] })
+    const { call } = register(h.window)
+
+    call('arrangements:releaseTab', { tabId: 'b3' })
+    h.round()
+
+    const after = h.window.groups.groups().find((candidate) => candidate.id === group.id)
+    expect(after?.tabIds).toEqual(expect.arrayContaining(['b1', 'b2', 'b3']))
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b2'])
+  })
+
+  it('closes no start page, even one in another tile (R8)', async () => {
+    const h = await harness(['b1', 'b2'])
+    h.addStartPage('s')
+    h.show('1x3', ['b1', 's', 'b2'])
+    h.round()
+    const { call } = register(h.window)
+
+    call('arrangements:releaseTab', { tabId: 'b1' })
+    h.round()
+
+    expect(h.closed()).toEqual([])
+    expect(h.split.toState().tileTabIds).toEqual(['s', 'b2'])
+  })
+
+  it('does nothing for a member of a view put away, or a tab in no view', async () => {
+    const { h, a, b } = await twoViews()
+    const { call } = register(h.window)
+    const before = entries(h)
+
+    call('arrangements:releaseTab', { tabId: 'a1' })
+    call('arrangements:releaseTab', { tabId: 'x' })
+    call('arrangements:releaseTab', { tabId: 'gone' })
+    h.round()
+
+    expect(entries(h)).toEqual(before)
+    expect(entries(h).map((entry) => entry.id)).toEqual([a, b])
+    expect(h.split.toState().tileTabIds).toEqual(['b1', 'b2'])
+    expect(h.order()).toEqual(['x', 'a1', 'a2', 'b1', 'b2'])
   })
 })

@@ -62,6 +62,7 @@ function presentation(overrides: Partial<TileBarPresentation> = {}): TileBarPres
     loading: false,
     zoomPercent: 100,
     zoomed: false,
+    releasable: true,
     invokedBy: 'pointer',
     ...overrides
   }
@@ -144,6 +145,23 @@ describe('the bar acts on its own tile', () => {
     expect(calls).toEqual([{ channel: 'tabs:close', payload: { tabId: 't2' } }])
   })
 
+  it('releases its own tab from the tiled view, not the active one (U10, R9)', () => {
+    // By tab, like close: the page leaving the view is the one under this bar, and `tileIndex` would
+    // name a pane whose occupant changes the moment the ranks close.
+    const calls = installBridge()
+    render(<TileBarSurface presentation={presentation({ tabId: 't2' })} />)
+
+    screen.getByRole('button', { name: /release from tiled view/i }).click()
+    expect(calls).toEqual([{ channel: 'arrangements:releaseTab', payload: { tabId: 't2' } }])
+  })
+
+  it('offers no release for a tab that is in no tiled view', () => {
+    installBridge()
+    render(<TileBarSurface presentation={presentation({ releasable: false })} />)
+
+    expect(screen.queryByRole('button', { name: /release/i })).toBeNull()
+  })
+
   it('navigates its own tab from the address field', () => {
     const calls = installBridge()
     render(<TileBarSurface presentation={presentation()} />)
@@ -173,7 +191,9 @@ describe('the bar acts on its own tile', () => {
 
   it('offers no back button to press when there is no history behind it', () => {
     installBridge()
-    render(<TileBarSurface presentation={presentation({ canGoBack: false, canGoForward: false })} />)
+    render(
+      <TileBarSurface presentation={presentation({ canGoBack: false, canGoForward: false })} />
+    )
     expect(screen.getByRole('button', { name: /back/i }).hasAttribute('disabled')).toBe(true)
     expect(screen.getByRole('button', { name: /forward/i }).hasAttribute('disabled')).toBe(true)
   })
@@ -266,7 +286,16 @@ describe('the keyboard route', () => {
     // The zoom cluster sits between maximise and the address field: out, the level, in. Its level
     // button is disabled at the default zoom this fixture uses, so it is not a stop — which is the
     // same rule the disabled back button is held to two tests down.
-    for (const name of [/forward/i, /reload/i, /home/i, /maximize/i, /zoom out/i, /zoom in/i]) {
+    // Release sits beside maximise: both are about the tile's place in the view, not about its page.
+    for (const name of [
+      /forward/i,
+      /reload/i,
+      /home/i,
+      /maximize/i,
+      /release from tiled view/i,
+      /zoom out/i,
+      /zoom in/i
+    ]) {
       fireEvent.keyDown(document.activeElement!, { key: 'Tab' })
       expect(document.activeElement).toBe(screen.getByRole('button', { name }))
     }
@@ -289,7 +318,11 @@ describe('the keyboard route', () => {
     installBridge()
     render(
       <TileBarSurface
-        presentation={presentation({ invokedBy: 'keyboard', canGoBack: false, canGoForward: false })}
+        presentation={presentation({
+          invokedBy: 'keyboard',
+          canGoBack: false,
+          canGoForward: false
+        })}
       />
     )
     const close = screen.getByRole('button', { name: /close/i })

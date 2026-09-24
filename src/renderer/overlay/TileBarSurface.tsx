@@ -7,8 +7,8 @@ import { useI18n } from '@renderer/i18n.js'
 import './tile-bar.css'
 
 /**
- * One tile's navigation bar: back, forward, reload, home, maximise, that tile's address, and close
- * (spec 2).
+ * One tile's navigation bar: back, forward, reload, home, maximise, release from the tiled view (only
+ * for a tab in one, U10), that tile's address, and close (spec 2).
  *
  * ## The order the controls are in, which is a decision and not an accident
  *
@@ -250,6 +250,32 @@ export function TileBarSurface({
           <path d="M8 4H4v4M12 4h4v4M16 12v4h-4M4 12v4h4" />
         </svg>
       </button>
+
+      {/*
+        Release, beside maximise and for maximise's reason: both change the tile's place in the view,
+        not its page. The tab leaves the view as an ordinary tab right behind its entry, and the view
+        closes ranks (U10, R9). Not beside close: dropping the tab on a tile again undoes a release,
+        so it needs none of the distance close keeps from everything else.
+
+        By `tabId`, like close, rather than by `tileIndex` like maximise: what leaves is a page, and the
+        pane it sat in has a different occupant the moment the ranks close. Absent rather than disabled
+        when the tab is in no tiled view, because there is then no view it could ever leave.
+      */}
+      {presentation.releasable && (
+        <button
+          type="button"
+          className="tilebar__button"
+          aria-label={t('split.release')}
+          title={t('split.release')}
+          onClick={() => void invoke('arrangements:releaseTab', { tabId })}
+        >
+          {/* A pane, and an arrow leaving it by its open corner: the page goes, the grid stays. */}
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M9 4.5H4.5v11h11V11" />
+            <path d="M11 9l5-5M12 4h4v4" />
+          </svg>
+        </button>
+      )}
 
       {/*
         Zoom for *this* pane, which is the only place a per-pane control can honestly live.

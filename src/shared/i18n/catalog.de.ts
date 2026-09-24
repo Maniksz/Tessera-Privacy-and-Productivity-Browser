@@ -120,6 +120,7 @@ export const de = {
   'split.tile': 'Kachel {index}',
   'split.activeTile': 'Aktive Kachel',
   'split.maximize': 'Kachel maximieren',
+  'split.release': 'Aus Kachelansicht lösen',
   'split.restore': 'Layout wiederherstellen',
   'split.dropHere': 'Tab hier ablegen',
   'split.dropLeft': 'Links öffnen',

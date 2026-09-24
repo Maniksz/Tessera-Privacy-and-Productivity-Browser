@@ -326,7 +326,8 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
           there is anything to reset.
         */
         zoomPercent: effectiveZoomPercent(state.zoomPercent, defaultZoom()),
-        zoomed: state.zoomPercent !== null && state.zoomPercent !== defaultZoom()
+        zoomed: state.zoomPercent !== null && state.zoomPercent !== defaultZoom(),
+        releasable: arrangements.isMember(state.id)
       }
     },
     cursor: () => cursorInWindow(internals),

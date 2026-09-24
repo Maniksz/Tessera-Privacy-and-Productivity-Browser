@@ -126,6 +126,17 @@ export const arrangementInvokeContract = {
   'arrangements:setMuted': {
     request: z.object({ id: z.string().min(1), muted: z.boolean() }),
     response: ok
+  },
+  /**
+   * A tile bar's "Release from tiled view": that tile's tab leaves the view on screen as an ordinary tab
+   * right behind its entry, and the view closes ranks (U10, R9).
+   *
+   * The one channel here that names a tab rather than an entry, because the bar sits over a page and
+   * knows no entry. It acts on the view on screen only: a tab that is not seated in it is refused.
+   */
+  'arrangements:releaseTab': {
+    request: z.object({ tabId: z.string().min(1) }),
+    response: ok
   }
 }
 

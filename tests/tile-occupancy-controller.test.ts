@@ -819,6 +819,103 @@ describe('the only tab of a single view closing', () => {
   })
 })
 
+describe('releasing a tab from the tiled view on screen (U10, R9)', () => {
+  it('closes the ranks of a 1x3 and puts the tab right behind the entry', () => {
+    // `x` before the view and `y` after it: the released page lands between the entry and `y`.
+    const h = harness('1x3', ['x', 'a', 'b', 'c', 'y'])
+    seed(h, ['a', 'b', 'c'])
+    h.split.setActiveTile(0)
+
+    h.occupancy.releaseTab('b')
+
+    expect(h.split.layout).toBe('1x2')
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'c'])
+    expect(h.split.tileOfTab('b')).toBeNull()
+    expect(h.order).toEqual(['x', 'a', 'c', 'b', 'y'])
+    expect(h.split.activeTabId()).toBe('a')
+    expect(h.closed).toEqual([])
+  })
+
+  it('keeps a tile of the view active when the released tab was the active one', () => {
+    const h = harness('1x3', ['a', 'b', 'c'])
+    seed(h, ['a', 'b', 'c'])
+    h.split.setActiveTile(2)
+
+    h.occupancy.releaseTab('c')
+
+    expect(h.split.toState().tileTabIds).toEqual(['a', 'b'])
+    expect(h.split.activeTabId()).toBe('b')
+    // Through the window's own method, so the focus and the audio move with it.
+    expect(h.activated.at(-1)).toBe(1)
+  })
+
+  it('follows the active page when it moves up into the gap', () => {
+    const h = harness('1x3', ['a', 'b', 'c'])
+    seed(h, ['a', 'b', 'c'])
+    h.split.setActiveTile(2)
+
+    h.occupancy.releaseTab('a')
+
+    expect(h.split.toState().tileTabIds).toEqual(['b', 'c'])
+    expect(h.split.activeTabId()).toBe('c')
+  })
+
+  it('ends a 1x2: the page left shows the window and both are ordinary tabs', () => {
+    const h = harness('1x2', ['a', 'b', 'z'])
+    seed(h, ['a', 'b'])
+    h.split.setActiveTile(1)
+
+    h.occupancy.releaseTab('b')
+
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['a'])
+    expect(h.split.activeTabId()).toBe('a')
+    expect(h.order).toEqual(['a', 'b', 'z'])
+    expect(h.closed).toEqual([])
+  })
+
+  it('closes ranks with adaptation off too, because the user asked for this one', () => {
+    // The switch governs the browser reshaping the panes on its own; a release is the user's act.
+    const h = harness('1x3', ['a', 'b', 'c'])
+    seed(h, ['a', 'b', 'c'])
+    h.adapt = false
+
+    h.occupancy.releaseTab('a')
+
+    expect(h.split.layout).toBe('1x2')
+    expect(h.split.toState().tileTabIds).toEqual(['b', 'c'])
+  })
+
+  it('closes no start page, not even one in another tile (R8)', () => {
+    const h = harness('2x2', ['a', 'home-1', 'b', 'home-2'])
+    seed(h, ['a', 'home-1', 'b', 'home-2'])
+    h.startPages.add('home-1')
+    h.startPages.add('home-2')
+    h.ephemeral.add('home-2')
+
+    h.occupancy.releaseTab('a')
+
+    expect(h.closed).toEqual([])
+    expect(h.split.toState().tileTabIds).toEqual(['home-1', 'b', 'home-2'])
+    expect(h.layoutChanges.every(({ options }) => !options.closeStartPages && !options.fill)).toBe(
+      true
+    )
+  })
+
+  it('does nothing for a tab that has no tile, or in a window showing one page', () => {
+    const tiled = harness('1x2', ['a', 'b', 'loose'])
+    seed(tiled, ['a', 'b'])
+    tiled.occupancy.releaseTab('loose')
+    expect(tiled.split.toState().tileTabIds).toEqual(['a', 'b'])
+    expect(tiled.order).toEqual(['a', 'b', 'loose'])
+
+    const single = harness('1x1', ['a', 'b'])
+    seed(single, ['a'])
+    single.occupancy.releaseTab('a')
+    expect(single.split.toState().tileTabIds).toEqual(['a'])
+  })
+})
+
 describe('where a new tab goes', () => {
   it('takes the whole window rather than a pane', () => {
     /*
