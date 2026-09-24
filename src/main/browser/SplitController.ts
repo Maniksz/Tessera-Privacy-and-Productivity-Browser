@@ -23,6 +23,19 @@ import { tileHeaders, viewRects } from '@shared/split/tile-header.js'
 
 export type TileDirection = 'left' | 'right' | 'up' | 'down'
 
+/**
+ * The rung `SplitController.escape` took, and whatever the caller needs to carry it out.
+ *
+ * Only leaving a tile's fullscreen carries anything: the caller has to ask that tile's page to let
+ * go, and by the time it does, the tile has been cleared. Handing the tile back with the verdict
+ * means the caller never reads `fullscreenTile` to find out what the verdict already knew.
+ */
+export type EscapeStep =
+  | { step: 'exit-tile-fullscreen'; tile: number }
+  | { step: 'restore-tile' }
+  | { step: 'exit-window-fullscreen' }
+  | { step: 'none' }
+
 export interface SplitSnapshotForPersistence {
   layout: LayoutId
   fractions: Record<string, number>
@@ -254,7 +267,8 @@ export class SplitController {
   /**
    * One rung back down the ladder, from the **inside** out. Returns the step that was taken so the
    * caller can carry out the side effect it owns — leaving a page's fullscreen needs the tab,
-   * leaving window fullscreen needs the window.
+   * leaving window fullscreen needs the window. The tile-fullscreen step names its tile, because
+   * that is the one side effect that needs to know which.
    *
    * ## Why the innermost rung comes off first
    *
@@ -277,14 +291,15 @@ export class SplitController {
    *
    * `escalation` above reads from the other end. That is not a disagreement; see there.
    */
-  escape(): 'exit-tile-fullscreen' | 'restore-tile' | 'exit-window-fullscreen' | 'none' {
-    if (this.#fullscreenTile !== null) return 'exit-tile-fullscreen'
+  escape(): EscapeStep {
+    const tile = this.#fullscreenTile
+    if (tile !== null) return { step: 'exit-tile-fullscreen', tile }
     if (this.#maximizedTile !== null) {
       this.#maximizedTile = null
-      return 'restore-tile'
+      return { step: 'restore-tile' }
     }
-    if (this.#windowFullscreen) return 'exit-window-fullscreen'
-    return 'none'
+    if (this.#windowFullscreen) return { step: 'exit-window-fullscreen' }
+    return { step: 'none' }
   }
 
   // --- geometry ------------------------------------------------------------

@@ -126,7 +126,7 @@ When('I focus tile {int}', (state: unknown, tile: number) => {
 })
 
 When('I press Escape', (state: unknown) => {
-  const step = splitController(state).escape()
+  const { step } = splitController(state).escape()
   // The controller reports the step and the caller performs it; leaving tile
   // fullscreen is the one that needs an outside effect.
   if (step === 'exit-tile-fullscreen') splitController(state).leaveTileFullscreen()
