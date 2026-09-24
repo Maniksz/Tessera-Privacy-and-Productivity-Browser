@@ -17,13 +17,14 @@ import { DEFAULT_BINDINGS } from '@shared/shortcuts/bindings.js'
 import { nextZoomPercent } from '@shared/gestures/zoom.js'
 import { probeSystemProxy } from '../session/proxy.js'
 import type { HistoryStore } from '../data/HistoryStore.js'
-import { buildTabContextMenu } from '../menu/tabContextMenu.js'
+import { popupTabMenu } from '../menu/tabContextMenu.js'
 import { registerPermissionHandlers } from './permission-handlers.js'
 import { registerMediaHandlers } from './media-handlers.js'
 import { registerUpdateHandlers } from './update-handlers.js'
 import { registerDownloadHandlers } from './download-handlers.js'
 import { registerPasswordHandlers } from './password-handlers.js'
 import { registerSiteHandlers } from './site-handlers.js'
+import { registerTabGroupHandlers } from './tabgroup-handlers.js'
 import { registerOmniboxHandlers } from './omnibox-handlers.js'
 import { registerImportHandlers } from './import-handlers.js'
 import { registerWorkspaceHandlers, type WorkspaceHandlerDeps } from './workspace-handlers.js'
@@ -461,83 +462,12 @@ export function registerIpcHandlers(deps: {
   })
 
   // --- tab groups ----------------------------------------------------------
-  /*
-    Every one of these resolves the *sending window* and acts on its groups.
-
-    A group is window state: it decides which tabs the strip draws and which of them may hold a tile.
-    Taking a window id in the request instead would let one window fold away another window's tabs,
-    and the sender is the only source a renderer cannot lie about. Same rule as the tab handlers above.
-
-    The store's errors — no such group, too many groups, a group with no tabs — travel back as
-    rejections rather than being swallowed, because each one is something the user did and can undo.
-  */
-  handle('tabgroups:create', ({ tabIds, name, color }, event) => {
-    const controller = windows.resolve(event)
-    if (controller === undefined) throw new Error('no window for this sender')
-    return controller.groups.create({
-      tabIds,
-      ...(name === undefined ? {} : { name }),
-      ...(color === undefined ? {} : { color })
-    })
-  })
-
-  handle('tabgroups:rename', ({ id, name }, event) => {
-    windows.resolve(event)?.groups.rename(id, name)
-    return OK
-  })
-
-  handle('tabgroups:recolor', ({ id, color }, event) => {
-    windows.resolve(event)?.groups.recolor(id, color)
-    return OK
-  })
-
-  handle('tabgroups:setCollapsed', ({ id, collapsed }, event) => {
-    windows.resolve(event)?.groups.setCollapsed(id, collapsed)
-    return OK
-  })
-
-  handle('tabgroups:dissolve', ({ id }, event) => {
-    windows.resolve(event)?.groups.dissolve(id)
-    return OK
-  })
-
-  handle('tabgroups:addTab', ({ groupId, tabId, index }, event) => {
-    windows.resolve(event)?.groups.addTab(groupId, tabId, index)
-    return OK
-  })
-
-  handle('tabgroups:removeTab', ({ tabId }, event) => {
-    windows.resolve(event)?.groups.removeTab(tabId)
-    return OK
-  })
-
-  /*
-    The menu is built here rather than in the window, because this is where the locale lives.
-
-    Every action is a closure over the same controller the channels above use, so a menu item and a
-    keyboard-driven call cannot end up doing different things — which is exactly what a second code
-    path for the same operations would produce.
-  */
-  handle('tabs:contextMenu', ({ tabId }, event) => {
-    const controller = windows.resolve(event)
-    if (controller === undefined) return OK
-    const groups = controller.groups
-    buildTabContextMenu({
-      locale: activeLocale(settings.get('appearance.uiLanguage')),
-      tabId,
-      groups: groups.groups(),
-      onCreateGroup: (tabIds, color) => {
-        groups.create({ tabIds, ...(color === undefined ? {} : { color }) })
-      },
-      onAddToGroup: (groupId, id) => groups.addTab(groupId, id),
-      onRemoveFromGroup: (id) => groups.removeTab(id),
-      onRecolor: (groupId, color) => groups.recolor(groupId, color),
-      onDissolve: (groupId) => groups.dissolve(groupId),
-      onCloseTab: (id) => controller.closeTab(id),
-      onSetPinned: (id, pinned) => controller.setTabPinned(id, pinned),
-      isPinned: (id) => controller.resolveTab(id)?.pinned === true
-    }).popup({ window: controller.window })
-    return OK
+  // Their channels and both menus — a tab's and a group chip's; testable against a fake window there.
+  registerTabGroupHandlers({
+    handle,
+    windows,
+    locale: uiLocale,
+    showMenu: (template, window) => popupTabMenu(template, window.window)
   })
 
   // --- navigation ----------------------------------------------------------

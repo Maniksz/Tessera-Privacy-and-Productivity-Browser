@@ -412,6 +412,67 @@ describe('bringing an arrangement back', () => {
   })
 })
 
+describe('ending the tiling on screen for a single page', () => {
+  it('forgets it, so a click on the page that lost its pane gives that page the window', async () => {
+    /*
+      The user chose "single". Kept, the recording would be the way back, and the next click on the
+      other page would put the split straight back — "single" would last until the user touched a tab.
+    */
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+
+    h.controller.endTiling()
+    h.showing('1x1', ['t1'])
+    h.controller.restoreFor('t2')
+
+    expect(h.book.list()).toEqual([])
+    expect(h.applied()).toEqual([])
+
+    await h.cleanup()
+  })
+
+  it('leaves the store alone when there is nothing to end', async () => {
+    // The usual case — a window already showing one page — must not cost a publish.
+    const h = await harness({ live: ['t1'], layout: '1x1', tiles: ['t1'] })
+
+    h.controller.endTiling()
+
+    expect(h.writes()).toBe(0)
+
+    await h.cleanup()
+  })
+
+  it('keeps the way back to a tiling a new tab put away earlier', async () => {
+    const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.showing('1x1', ['t3'])
+
+    h.controller.endTiling()
+    h.controller.restoreFor('t2')
+
+    expect(h.applied()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'], activatedTabId: 't2' }])
+
+    await h.cleanup()
+  })
+
+  it('records afresh when the same tabs are tiled again', async () => {
+    // No orphan, and no reuse either: the next split is a new recording from the next settle.
+    const h = await harness({ live: ['t1', 't2'], layout: '1x2', tiles: ['t1', 't2'] })
+    h.controller.keep()
+    h.controller.endTiling()
+    h.showing('1x1', ['t1'])
+
+    h.showing('1x2', ['t1', 't2'])
+    h.controller.keep()
+
+    expect(h.book.list()).toEqual([
+      { id: 'a2', layoutId: '1x2', seats: ['t1', 't2'], recordedAt: T0 + 2_000 }
+    ])
+
+    await h.cleanup()
+  })
+})
+
 describe('reconciling with the tabs that are still there', () => {
   it('drops a recording that loses too many tabs to be one', async () => {
     const h = await harness({ live: ['t1', 't2', 't3', 't4'], layout: '1x2', tiles: ['t1', 't2'] })

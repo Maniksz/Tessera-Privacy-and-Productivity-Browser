@@ -85,6 +85,7 @@ export const INVOKE_CHANNELS = [
   'tabgroups:dissolve',
   'tabgroups:addTab',
   'tabgroups:removeTab',
+  'tabgroups:contextMenu',
   /*
     Opens the native context menu for a tab.
 

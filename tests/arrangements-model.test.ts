@@ -5,6 +5,7 @@ import {
   arrangementIsCurrent,
   arrangementIsProtected,
   arrangementOfTab,
+  arrangementsEndedBy,
   cloneArrangements,
   emptyArrangementDocument,
   forgetArrangement,
@@ -276,6 +277,44 @@ describe('arrangementIsCurrent', () => {
 
   it('is false when the seating has a different number of tiles', () => {
     expect(arrangementIsCurrent(entry, '2x2', ['a', 'b', null, null, null])).toBe(false)
+  })
+})
+
+describe('arrangementsEndedBy: choosing the single layout', () => {
+  it('ends the recording of the tiling on screen', () => {
+    const held = [arrangement('r1', ['a', 'b', 'c', 'd'])]
+    const ended = arrangementsEndedBy(held, ['a', 'b', 'c', 'd'], windowWith(['a', 'b', 'c', 'd']))
+    expect(ended.map((entry) => entry.id)).toEqual(['r1'])
+  })
+
+  it('ends an older recording of the same tabs the last settle has not superseded yet', () => {
+    // A drag and the menu in one turn of the loop: the recording is of the seating before the drag.
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    const ended = arrangementsEndedBy(held, ['a', 'c', null, null], windowWith(['a', 'b', 'c']))
+    expect(ended.map((entry) => entry.id)).toEqual(['r1'])
+  })
+
+  it('spares a tiling put away earlier that shares no tab with the one on screen', () => {
+    // A new tab took the window from a|b; choosing "single" for that tab is not a word about a|b.
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    expect(arrangementsEndedBy(held, ['fresh'], windowWith(['a', 'b', 'fresh']))).toEqual([])
+  })
+
+  it('spares a recording a collapsed group still needs (R15)', () => {
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    expect(arrangementsEndedBy(held, ['a', null], windowWith(['a', 'b'], ['b']))).toEqual([])
+  })
+
+  it("spares another window's recording (R16)", () => {
+    const held = [arrangement('r1', ['a', 'elsewhere', null, null])]
+    expect(arrangementsEndedBy(held, ['a', 'b'], windowWith(['a', 'b']))).toEqual([])
+  })
+
+  it('hands out copies, so forgetting through them cannot reach the document', () => {
+    const held = [arrangement('r1', ['a', 'b', null, null])]
+    const [ended] = arrangementsEndedBy(held, ['a', 'b'], windowWith(['a', 'b']))
+    ended?.seats.splice(0, 1)
+    expect(held[0]?.seats).toEqual(['a', 'b', null, null])
   })
 })
 

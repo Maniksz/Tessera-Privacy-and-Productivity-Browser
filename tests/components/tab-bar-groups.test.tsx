@@ -236,6 +236,22 @@ describe('reaching the group commands at all', () => {
     expect(calls).toContainEqual({ channel: 'tabs:contextMenu', payload: { tabId: 't1' } })
     expect(event.defaultPrevented).toBe(true)
   })
+
+  it("opens the group's own menu on a right-click of a folded group's chip", () => {
+    /*
+      A folded group draws no member, so a tab's menu is out of reach and the chip's is the only way
+      to ungroup without unfolding first. It names the group, not a member: there is none to name.
+    */
+    const calls = installBridge()
+    renderBar([tab('t1')], [group({ id: 'g1', tabIds: ['t1'], collapsed: true, name: 'Work' })])
+
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    document.querySelector('[data-tab-group-id="g1"]')?.dispatchEvent(event)
+
+    expect(calls).toContainEqual({ channel: 'tabgroups:contextMenu', payload: { id: 'g1' } })
+    expect(calls.some((call) => call.channel === 'tabs:contextMenu')).toBe(false)
+    expect(event.defaultPrevented).toBe(true)
+  })
 })
 
 describe("a tab's icon", () => {

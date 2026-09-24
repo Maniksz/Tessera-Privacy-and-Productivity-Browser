@@ -72,7 +72,8 @@ class FakeWindow implements WorkspaceWindow {
       applyLayout: (next, options) => {
         this.occupancy.afterLayoutChange(this.split.setLayout(next), options)
       },
-      keepTiling: () => {}
+      keepTiling: () => {},
+      endTiling: () => {}
     })
   }
 

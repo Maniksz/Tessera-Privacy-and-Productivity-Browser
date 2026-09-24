@@ -892,15 +892,11 @@ export class BrowserWindowController implements PermissionHost {
 
   setLayout(layout: LayoutId): void {
     /*
-      The one explicit layout change there is, and therefore the only one that fills.
-
-      A layout the user picked gets its empty tiles filled — first from whatever is already loaded
-      and hidden, then with start pages. Every other route here is the browser changing the layout on
-      its way to something else: a shrink after a close, a drop, a new tab taking the window. Filling
-      those would conjure a replacement for the very tab that was just closed, or open pages nobody
-      asked for alongside a page somebody did.
+      The layout the user picked: the one explicit layout change there is, the only one that fills, and
+      — for the single layout — the one that ends the tiling on screen instead of putting it away. All
+      three are decided in `TileOccupancyController.chooseLayout`, which comes back through `#applyLayout`.
     */
-    this.#applyLayout(layout, { fill: true, rehome: true })
+    this.#seams.occupancy.chooseLayout(layout)
   }
 
   #applyLayout(layout: LayoutId, options: LayoutChangeOptions): void {

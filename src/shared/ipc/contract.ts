@@ -14,7 +14,7 @@ import { LAYOUT_IDS } from '../split/layout.js'
 import { localeSchema } from '../i18n/schema.js'
 import { isInternalScheme } from '../product.js'
 import { quickLinkCardSchema, quickLinkKindSchema, quickLinkSchema } from '../quicklinks/schema.js'
-import { tabGroupColorSchema, tabGroupSchema } from '../tabgroups/schema.js'
+import { tabGroupInvokeContract, tabGroupSchema } from '../tabgroups/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
@@ -46,7 +46,6 @@ import {
   mediaListRequestSchema,
   mediaManifestReportSchema
 } from '../media/schema.js'
-import { MAX_TAB_GROUP_NAME_LENGTH } from '../tabgroups/model.js'
 import { BOOKMARK_KINDS, type Bookmark } from '../bookmarks/model.js'
 import { DOWNLOAD_STATES, type DownloadEntry } from '../downloads/model.js'
 import { DOWNLOAD_MARKERS, type DownloadButtonSummary } from '../downloads/summary.js'
@@ -900,50 +899,7 @@ export const invokeContract = {
   },
 
   // --- tab groups ----------------------------------------------------------
-  /**
-   * Groups the given tabs, in the order given.
-   *
-   * Takes the members up front rather than creating an empty group and filling it: a group with no
-   * tabs is a chip with nothing behind it, and the model refuses one outright. The name may be
-   * empty — an unnamed group draws as a bare colour, which is the useful state while the user is
-   * still deciding, and demanding a name first would mean a dialogue before the group exists.
-   */
-  'tabgroups:create': {
-    request: z.object({
-      tabIds: z.array(z.string()).min(1),
-      name: z.string().optional(),
-      color: tabGroupColorSchema.optional()
-    }),
-    response: tabGroupSchema
-  },
-  'tabgroups:rename': {
-    // Bounded here as well as trimmed by the model: a request is untrusted input, and the bound is
-    // about what the strip can draw rather than about what the document may hold.
-    request: z.object({ id: z.string(), name: z.string().max(MAX_TAB_GROUP_NAME_LENGTH) }),
-    response: ok
-  },
-  'tabgroups:recolor': {
-    request: z.object({ id: z.string(), color: tabGroupColorSchema }),
-    response: ok
-  },
-  /** Folding a group hides its tabs and takes them out of their tiles; they stay loaded (spec 2). */
-  'tabgroups:setCollapsed': {
-    request: z.object({ id: z.string(), collapsed: z.boolean() }),
-    response: ok
-  },
-  /** Removes the group and leaves its tabs alone, ungrouped. */
-  'tabgroups:dissolve': { request: z.object({ id: z.string() }), response: ok },
-  'tabgroups:addTab': {
-    request: z.object({
-      groupId: z.string(),
-      tabId: z.string(),
-      /** Position within the group; appended when omitted. */
-      index: z.number().int().nonnegative().optional()
-    }),
-    response: ok
-  },
-  /** Takes one tab out. A group left with no members goes with it. */
-  'tabgroups:removeTab': { request: z.object({ tabId: z.string() }), response: ok },
+  // The `tabgroups:*` channels are `tabGroupInvokeContract`, spread in below.
   /**
    * Opens the tab's context menu at the pointer.
    *
@@ -1240,7 +1196,8 @@ export const invokeContract = {
   ...omniboxInvokeContract,
   ...backupInvokeContract,
   ...importInvokeContract,
-  ...workspaceInvokeContract
+  ...workspaceInvokeContract,
+  ...tabGroupInvokeContract
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract

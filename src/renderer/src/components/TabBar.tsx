@@ -166,6 +166,15 @@ function GroupChip({
         void invoke('tabgroups:setCollapsed', { id: group.id, collapsed: !group.collapsed })
       }
       onDoubleClick={() => setDraft(group.name)}
+      /*
+        The group's own menu — its colour, and ungrouping it — opened by the core like a tab's. The
+        chip is the one control a folded group has, so without this a folded group could only be
+        ended by unfolding it first. See `tabGroupMenuTemplate`.
+      */
+      onContextMenu={(event) => {
+        event.preventDefault()
+        void invoke('tabgroups:contextMenu', { id: group.id })
+      }}
     >
       <span className="tabgroup__dot" aria-hidden="true" />
       {group.name !== '' && <span className="tabgroup__name">{group.name}</span>}
