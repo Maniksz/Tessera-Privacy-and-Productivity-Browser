@@ -57,7 +57,8 @@ async function fakeWindow(tabIds: readonly string[]): Promise<FakeWindow> {
     activeTabId: () => null,
     activateTab: () => {},
     liveTabIds: () => order,
-    broadcast: () => {}
+    broadcast: () => {},
+    arrangements: () => []
   })
   return {
     groups,

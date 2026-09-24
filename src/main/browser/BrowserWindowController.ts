@@ -46,9 +46,9 @@ import { SplitController, type TileDirection } from './SplitController.js'
 import { currentPlatform, preloadFile, preloadRoleArgument } from '../paths.js'
 import { devServerUrl } from '../startup-flags.js'
 import { isInternalPageUrl } from '../ipc/sender-policy.js'
-import { tabsHiddenByCollapse } from '@shared/tabgroups/model.js'
 import { planViews } from '@shared/browser/view-visibility.js'
-import { tabForStripPosition, type StripPosition } from './tab-strip-position.js'
+import { entryForStripPosition, type StripPosition } from './tab-strip-position.js'
+import { focusTabOf } from '@shared/strip/model.js'
 import { CloseTabFallback, pageKeyAction, type PageKeystroke } from './page-keys.js'
 import { CloseContract, askToLeave, hostOf, preventDefaultOf } from './unload-guard.js'
 import { TabDiscards } from './tab-unloader.js'
@@ -764,19 +764,20 @@ export class BrowserWindowController implements PermissionHost {
    * The positional tab keys: `Ctrl+1`…`Ctrl+8` and `Ctrl+9` (spec 9).
    *
    * Registered as hidden menu items in `tab-position-accelerators.ts`; which tab a position names is
-   * `tabForStripPosition`, and that module says why it is neither the tile index nor `#tabOrder` as it
+   * `entryForStripPosition`, and that module says why it is neither the tile index nor `#tabOrder` as it
    * stands. A key naming a tab that is not there does nothing, as it does in every browser that has
    * this feature.
    */
   activateTabAtStripPosition(position: StripPosition): void {
     const groups = this.#seams.groups
-    const tabId = tabForStripPosition(
+    const entry = entryForStripPosition(
       groups.displayOrder(),
-      tabsHiddenByCollapse(groups.groups()),
+      groups.groups(),
+      this.#seams.arrangements.summaries(),
       position
     )
-    if (tabId === null) return
-    this.activateTab(tabId)
+    if (entry === null) return
+    this.activateTab(focusTabOf(entry))
   }
 
   moveTab(tabId: string, toIndex: number): void {

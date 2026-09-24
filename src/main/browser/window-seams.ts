@@ -179,7 +179,7 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     a group and pulling loose tabs into it. Membership changed because panes moved. That edge now goes
     to `arrangements` below, whose host has no book of groups to reach (R1, R2, R3).
   */
-  const groups = new TabGroupController({
+  const groups: TabGroupController = new TabGroupController({
     book: internals.tabGroups,
     tabOrder: () => internals.tabOrder(),
     setTabOrder: (order) => internals.setTabOrder(order),
@@ -189,6 +189,9 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
       nothing calls it during construction, and by the first call the constant exists.
     */
     releaseTiles: (tabIds) => releaseTiles(internals, () => arrangements.putAway(), tabIds),
+    // Lazy for the same reason. `summaries()` reads the book and the groups, never `displayOrder`,
+    // so asking for it from inside `displayOrder` cannot loop.
+    arrangements: () => arrangements.summaries(),
     activeTabId: () => internals.split.activeTabId(),
     activateTab: (tabId) => internals.activateTab(tabId),
     liveTabIds: () => internals.tabIds(),
@@ -226,7 +229,7 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     set of ids, so hiddenness arrives at the arrangement controller as a *conclusion* about tabs
     rather than as a capability to ask about groups (KTD1).
   */
-  const arrangements = new ArrangementController({
+  const arrangements: ArrangementController = new ArrangementController({
     book: internals.arrangements,
     liveTabIds: () => internals.tabIds(),
     hiddenTabIds: () => {

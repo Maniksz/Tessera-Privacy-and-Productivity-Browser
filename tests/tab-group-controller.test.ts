@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { TabGroupController, type TabGroupHost } from '@main/browser/TabGroupController.js'
 import { TabGroupStore } from '@main/data/TabGroupStore.js'
+import type { StripArrangement } from '@shared/strip/model.js'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -44,7 +45,7 @@ interface Harness {
 
 async function harness(
   initialOrder: string[],
-  options: { tiled?: string[]; activeTab?: string } = {}
+  options: { tiled?: string[]; activeTab?: string; arrangements?: StripArrangement[] } = {}
 ): Promise<Harness> {
   const directory = await mkdtemp(join(tmpdir(), 'tessera-groups-'))
   // A real store rather than a fake book: the interesting behaviour is the *interaction* between the
@@ -88,7 +89,8 @@ async function harness(
     liveTabIds: () => liveTabs,
     broadcast: () => {
       broadcasts += 1
-    }
+    },
+    arrangements: () => options.arrangements ?? []
   }
 
   return {
@@ -415,6 +417,37 @@ describe('adding a tab to an existing group', () => {
 
     const order = h.order()
     expect(Math.abs(order.indexOf('t1') - order.indexOf('t4'))).toBe(1)
+    await h.cleanup()
+  })
+})
+
+describe('the strip order with tiled views in it', () => {
+  /*
+    `displayOrder` is what the window sends as `tabs:changed` and what `#settle` writes back as its
+    order, so the tiled views have to be in it (KTD6): each one a run at its first member, in tile
+    order, inside its group's run. Which order that is, exactly, is `stripOrder`'s and tested there;
+    what is tested here is that the controller asks for it with the window's views.
+  */
+  it('gathers a tiled view into one run', async () => {
+    const h = await harness(['X', 'A1', 'Y', 'A2'], {
+      arrangements: [{ id: 'A', tabIds: ['A1', 'A2'], activeTabId: 'A1' }]
+    })
+    expect(h.controller.displayOrder()).toEqual(['X', 'A1', 'A2', 'Y'])
+    await h.cleanup()
+  })
+
+  it('writes that order back when a group settles', async () => {
+    const h = await harness(['X', 'A1', 'Y', 'A2'], {
+      arrangements: [{ id: 'A', tabIds: ['A1', 'A2'], activeTabId: 'A1' }]
+    })
+    h.controller.create({ tabIds: ['Y'] })
+    expect(h.order()).toEqual(['X', 'A1', 'A2', 'Y'])
+    await h.cleanup()
+  })
+
+  it('is the group order alone for a window with no tiled views', async () => {
+    const h = await harness(['X', 'A1', 'Y', 'A2'])
+    expect(h.controller.displayOrder()).toEqual(['X', 'A1', 'Y', 'A2'])
     await h.cleanup()
   })
 })

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { tabForStripPosition } from '@main/browser/tab-strip-position.js'
+import { entryForStripPosition } from '@main/browser/tab-strip-position.js'
+import type { StripArrangement } from '@shared/strip/model.js'
+import type { TabGroup } from '@shared/tabgroups/model.js'
 
 /**
  * Which tab `Ctrl+1`…`Ctrl+9` names (spec 9).
@@ -16,73 +18,73 @@ import { tabForStripPosition } from '@main/browser/tab-strip-position.js'
  *     the moment a group is created, because a group is drawn as one run of tabs.
  */
 
-describe('tabForStripPosition', () => {
-  const order = ['tab-1', 'tab-2', 'tab-3', 'tab-4']
+/**
+ * The same keys once a tiled view is one entry (U5, R13).
+ *
+ * A tiled view is drawn as one entry, so it is one position: with X, the view A and Y drawn, `Ctrl+3` is
+ * Y — counting tabs would make it A's second member, a key for something the strip does not draw as a
+ * place of its own. The entry comes back whole, so the window can bring the view back rather than pull
+ * one page out of it.
+ */
+describe('entryForStripPosition', () => {
+  const view: StripArrangement = { id: 'A', tabIds: ['A1', 'A2'], activeTabId: 'A2' }
+  const folded: TabGroup = {
+    id: 'F',
+    name: '',
+    color: 'blue',
+    collapsed: true,
+    tabIds: ['f1', 'f2'],
+    createdAt: 1
+  }
+  const order = ['X', 'A1', 'A2', 'Y']
 
-  it('counts from one, left to right', () => {
-    expect(tabForStripPosition(order, [], 1)).toBe('tab-1')
-    expect(tabForStripPosition(order, [], 3)).toBe('tab-3')
+  it('counts a tiled view as one position', () => {
+    // The plan's scenario: Ctrl+3 on X, entry A, Y is Y, and Ctrl+2 is A.
+    expect(entryForStripPosition(order, [], [view], 3)).toEqual({
+      kind: 'tab',
+      tabId: 'Y',
+      group: null,
+      position: null
+    })
+    expect(entryForStripPosition(order, [], [view], 2)).toEqual({
+      kind: 'split',
+      arrangementId: 'A',
+      tabIds: ['A1', 'A2'],
+      activeTabId: 'A2',
+      group: null,
+      position: null
+    })
   })
 
-  it('answers the last drawn tab for the ninth key', () => {
-    expect(tabForStripPosition(order, [], 'last')).toBe('tab-4')
+  it('reads the order through the strip model, so members apart in the order are one entry', () => {
+    expect(entryForStripPosition(['A1', 'X', 'A2'], [], [view], 2)).toMatchObject({ tabId: 'X' })
+  })
+
+  it('answers the last entry for the ninth key, a tiled view included', () => {
+    expect(entryForStripPosition(['X', 'A1', 'A2'], [], [view], 'last')).toMatchObject({
+      kind: 'split',
+      arrangementId: 'A'
+    })
+    expect(entryForStripPosition(order, [], [view], 'last')).toMatchObject({ tabId: 'Y' })
+  })
+
+  it('counts neither a chip nor the tabs a folded group hides', () => {
+    const withFold = ['X', 'f1', 'f2', 'A1', 'A2']
+    expect(entryForStripPosition(withFold, [folded], [view], 2)).toMatchObject({ kind: 'split' })
+    expect(entryForStripPosition(withFold, [folded], [view], 3)).toBeNull()
+    expect(entryForStripPosition(['f1', 'f2'], [folded], [], 'last')).toBeNull()
   })
 
   it('does nothing for a position the strip does not have', () => {
-    expect(tabForStripPosition(order, [], 5)).toBeNull()
-    expect(tabForStripPosition(['tab-1'], [], 8)).toBeNull()
+    expect(entryForStripPosition(order, [], [view], 4)).toBeNull()
+    expect(entryForStripPosition(order, [], [view], 0)).toBeNull()
+    expect(entryForStripPosition(order, [], [view], -1)).toBeNull()
+    expect(entryForStripPosition([], [], [], 1)).toBeNull()
+    expect(entryForStripPosition([], [], [], 'last')).toBeNull()
   })
 
-  it('skips the tabs a collapsed group hides', () => {
-    /*
-      The rule that matters. With `tab-2` and `tab-3` folded away, the strip draws two tabs and
-      `Ctrl+2` must be the second of *those* — not the second entry of an order that still contains
-      the hidden pair.
-    */
-    expect(tabForStripPosition(order, ['tab-2', 'tab-3'], 2)).toBe('tab-4')
-  })
-
-  it('never names a hidden tab, whichever position is asked for', () => {
-    const hidden = ['tab-2', 'tab-3']
-    const named = [1, 2, 3, 4, 'last' as const].map((position) =>
-      tabForStripPosition(order, hidden, position)
-    )
-    expect(named).toEqual(['tab-1', 'tab-4', null, null, 'tab-4'])
-  })
-
-  it('answers the last drawn tab, not the last one in the order', () => {
-    // A collapsed group at the right-hand end of the strip: `Ctrl+9` must land on the last tab the
-    // user can see, which is the one before it.
-    expect(tabForStripPosition(order, ['tab-4'], 'last')).toBe('tab-3')
-  })
-
-  it('does nothing when every tab is hidden', () => {
-    expect(tabForStripPosition(order, order, 'last')).toBeNull()
-    expect(tabForStripPosition(order, order, 1)).toBeNull()
-  })
-
-  it('does nothing for a position below one', () => {
-    /*
-      Not reachable from the menu items, which pass 1…8, and asserted because the arithmetic makes the
-      wrong answer plausible rather than absent: an index of −2 handed to `slice` would count backwards
-      from the right-hand end and quietly return the second-to-last tab.
-    */
-    expect(tabForStripPosition(order, [], 0)).toBeNull()
-    expect(tabForStripPosition(order, [], -1)).toBeNull()
-  })
-
-  it('does nothing in a window whose strip is empty', () => {
-    // A window mid-teardown, or one whose last tab has just closed and whose replacement is not there
-    // yet. `Ctrl+9` in it must be silence rather than an id nobody holds.
-    expect(tabForStripPosition([], [], 'last')).toBeNull()
-    expect(tabForStripPosition([], [], 1)).toBeNull()
-  })
-
-  it('reads the order it is given rather than sorting it', () => {
-    // The display order is already the answer to "what does the strip look like" — a group gathered
-    // into one run, a dragged tab where the user dropped it. Re-deriving anything here would be a
-    // second opinion about the strip.
-    expect(tabForStripPosition(['tab-9', 'tab-2', 'tab-40'], [], 1)).toBe('tab-9')
-    expect(tabForStripPosition(['tab-9', 'tab-2', 'tab-40'], [], 'last')).toBe('tab-40')
+  it('counts from one, left to right, when there is no tiled view', () => {
+    expect(entryForStripPosition(order, [], [], 1)).toMatchObject({ tabId: 'X' })
+    expect(entryForStripPosition(order, [], [], 3)).toMatchObject({ tabId: 'A2' })
   })
 })

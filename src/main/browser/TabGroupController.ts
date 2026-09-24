@@ -1,9 +1,5 @@
-import {
-  contiguousOrder,
-  isTabHidden,
-  tabsHiddenByCollapse,
-  type TabGroup
-} from '@shared/tabgroups/model.js'
+import { stripOrder, type StripArrangement } from '@shared/strip/model.js'
+import { isTabHidden, tabsHiddenByCollapse, type TabGroup } from '@shared/tabgroups/model.js'
 import type { TabGroupColor } from '@shared/tabgroups/palette.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 
@@ -67,6 +63,12 @@ export interface TabGroupHost {
   liveTabIds(): readonly string[]
   /** Push the new state to the renderer. */
   broadcast(): void
+  /**
+   * This window's tiled views — `ArrangementController.summaries()` — so the strip order holds each
+   * one as a run (KTD6). A read of the arrangements' answer, never a write to them: nothing here
+   * changes a view's membership.
+   */
+  arrangements(): readonly StripArrangement[]
 }
 
 export class TabGroupController {
@@ -81,14 +83,15 @@ export class TabGroupController {
   }
 
   /**
-   * The strip's order with every group's members gathered into one run.
+   * The strip's order with every group's members gathered into one run, and every tiled view's
+   * members into one run inside it (`stripOrder`, KTD6).
    *
    * Derived on every read rather than stored. A group's position is decided by where its members
    * already sit, so a rank kept alongside would be a second source of ordering truth — and the two
    * would disagree the first time a tab was dragged.
    */
   displayOrder(): string[] {
-    return contiguousOrder(this.host.tabOrder(), this.groups())
+    return stripOrder(this.host.tabOrder(), this.groups(), this.host.arrangements())
   }
 
   /** True for a tab inside a collapsed group: still loaded and running, just not drawn. */

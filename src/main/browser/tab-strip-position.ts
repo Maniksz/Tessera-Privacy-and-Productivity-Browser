@@ -1,3 +1,11 @@
+import {
+  stripEntries,
+  stripItems,
+  type StripArrangement,
+  type StripEntry
+} from '@shared/strip/model.js'
+import type { TabGroup } from '@shared/tabgroups/model.js'
+
 /**
  * Which tab a positional key names (spec 9).
  *
@@ -32,32 +40,35 @@
 export type StripPosition = number | 'last'
 
 /**
- * The tab at a position, or `null` when the strip is shorter than that.
+ * The entry at a position, counting entries rather than tabs (U5, R13) — or `null` when the strip is
+ * shorter than that.
  *
- * `null` for a position past the end rather than the last tab: `Control+5` with three tabs open is a
- * key for a tab that is not there, and every browser that has this feature does nothing. Clamping
- * would make one key mean two different tabs depending on how many are open.
+ * A tiled view is one entry, so it is one position: with X, the view A and Y drawn, `Control+3` is Y.
+ * Counting its members would make the key land on the second page of a view as though it had a place
+ * of its own. The chips are not positions and a folded group's members are not drawn, both as above.
  *
- * `hiddenByCollapse` is the ids `tabsHiddenByCollapse` reports — the same shared function the strip
- * hides them with, so the two cannot disagree about what is on screen.
+ * The entry comes back whole rather than as a tab, so the window can tell a view from a page. Landing
+ * on either is activating `focusTabOf(entry)` — for a view, the member of its active tile, which is
+ * how a put-away view comes back with that tile focused (R4). The order goes through the strip model,
+ * so the key counts exactly what the strip draws from the same inputs.
  */
-export function tabForStripPosition(
-  displayOrder: readonly string[],
-  hiddenByCollapse: readonly string[],
+export function entryForStripPosition(
+  order: readonly string[],
+  groups: readonly TabGroup[],
+  arrangements: readonly StripArrangement[],
   position: StripPosition
-): string | null {
-  const away = new Set(hiddenByCollapse)
-  const drawn = displayOrder.filter((tabId) => !away.has(tabId))
-
-  const index = position === 'last' ? drawn.length - 1 : position - 1
+): StripEntry | null {
+  const entries = stripEntries(stripItems(order, groups, arrangements))
+  const index = position === 'last' ? entries.length - 1 : position - 1
   /*
     Before the slice, and not merely tidiness: `slice(-1, 0)` is empty but `slice(-2, -1)` is the
     second-to-last element, so a position below one would count backwards from the right-hand end
     instead of answering "not there". `last` on an empty strip arrives here too.
+
+    `null` for a position past the end rather than the last entry: `Control+5` with three entries is a
+    key for something that is not there, and every browser that has this feature does nothing.
   */
   if (index < 0) return null
-  // A slice rather than an index and a null check, so a position past the end has one answer instead
-  // of a second branch that says the same thing.
-  const [tabId] = drawn.slice(index, index + 1)
-  return tabId ?? null
+  const [entry] = entries.slice(index, index + 1)
+  return entry ?? null
 }

@@ -236,6 +236,13 @@ export default defineConfig({
         'src/shared/favicons/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/history/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         'src/shared/tabgroups/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        /*
+          The strip model (U5, KTD6), entered with the directory: which order the strip has and which
+          entries it draws. The positional keys, Ctrl+Tab and a folded chip's count all read its
+          entries, so a wrong branch here is a key that lands on the wrong place — or on a page the
+          strip does not draw. The drop resolution (U9) joins it in the same directory.
+        */
+        'src/shared/strip/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
         // The local ranker (U17): pure, and every suggestion row the address bar shows is its answer.
         // The tab search's list (U22, `tab-search.ts`) is held here with it.
         'src/shared/search/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
