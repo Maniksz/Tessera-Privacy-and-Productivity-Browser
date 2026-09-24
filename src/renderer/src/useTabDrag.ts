@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { StripDropSide, StripDropSubject, StripDropTarget } from '@shared/strip/drop.js'
+import { DRAG_THRESHOLD } from '@renderer-shared/drag-threshold.js'
 import { invoke, subscribe } from './bridge.js'
 import { rafThrottle } from './rafThrottle.js'
 
@@ -31,9 +32,6 @@ import { rafThrottle } from './rafThrottle.js'
  * under the pointer instead, the pointer is heard here directly, and reported to the core the way the
  * overlay would have reported it — so both ways the core ends the drag and hands the release back.
  */
-
-/** Movement before a press becomes a drag, so a click with a shaky hand stays a click. */
-const DRAG_THRESHOLD = 6
 
 /** How far in from either end of the strip a dragged tab starts scrolling it. */
 export const EDGE_SCROLL_ZONE = 32

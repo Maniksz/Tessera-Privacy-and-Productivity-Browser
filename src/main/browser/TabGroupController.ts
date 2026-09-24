@@ -1,7 +1,8 @@
 import { resolveStripDrop, type StripDrop } from '@shared/strip/drop.js'
-import { stripOrder, type StripArrangement } from '@shared/strip/model.js'
+import { stripOrder, viewOfTab, type StripArrangement } from '@shared/strip/model.js'
 import {
   findGroup,
+  groupInsertionSteps,
   groupOfTab,
   isTabHidden,
   tabsHiddenByCollapse,
@@ -106,9 +107,12 @@ export class TabGroupController {
    * Derived on every read rather than stored. A group's position is decided by where its members
    * already sit, so a rank kept alongside would be a second source of ordering truth — and the two
    * would disagree the first time a tab was dragged.
+   *
+   * The tiled views are the host's unless handed in: the window's broadcast round reads them once
+   * after `keep()` and sends the same answer as `arrangements:changed`, rather than asking twice.
    */
-  displayOrder(): string[] {
-    return stripOrder(this.host.tabOrder(), this.groups(), this.host.arrangements())
+  displayOrder(arrangements: readonly StripArrangement[] = this.host.arrangements()): string[] {
+    return stripOrder(this.host.tabOrder(), this.groups(), arrangements)
   }
 
   /** True for a tab inside a collapsed group: still loaded and running, just not drawn. */
@@ -277,17 +281,17 @@ export class TabGroupController {
    *
    * Two passes when an index is asked for, because the store places one tab at a time: a view's members
    * are first sent to the end of the group, so none of them is left standing before the index to shift
-   * it, and then placed one after another from the index. The target is never emptied on the way.
+   * it, and then placed one after another from the index. The target is never emptied on the way. The
+   * steps are `groupInsertionSteps`, the same ones `resolveStripDrop` plans a drop with.
    */
   #join(groupId: string, members: readonly string[], index: number | undefined): void {
     if (index === undefined) {
       for (const member of members) this.host.book.addTab(groupId, member)
       return
     }
-    if (members.length > 1) {
-      for (const member of members) this.host.book.addTab(groupId, member, Number.MAX_SAFE_INTEGER)
+    for (const step of groupInsertionSteps(members, index)) {
+      this.host.book.addTab(groupId, step.tabId, step.index)
     }
-    members.forEach((member, offset) => this.host.book.addTab(groupId, member, index + offset))
   }
 
   /**
@@ -319,8 +323,7 @@ export class TabGroupController {
     const views = this.host.arrangements()
     const widened = new Set<string>()
     for (const tabId of tabIds) {
-      const view = views.find((arrangement) => arrangement.tabIds.includes(tabId))
-      for (const member of view?.tabIds ?? [tabId]) widened.add(member)
+      for (const member of viewOfTab(views, tabId)?.tabIds ?? [tabId]) widened.add(member)
     }
     return [...widened]
   }

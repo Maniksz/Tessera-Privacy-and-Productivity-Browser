@@ -1,5 +1,11 @@
-import { addTabToGroup, groupOfTab, removeTabFromGroup, type TabGroup } from '../tabgroups/model.js'
-import { stripOrder, type StripArrangement } from './model.js'
+import {
+  addTabToGroup,
+  groupInsertionSteps,
+  groupOfTab,
+  removeTabFromGroup,
+  type TabGroup
+} from '../tabgroups/model.js'
+import { stripOrder, viewOfTab, type StripArrangement } from './model.js'
 
 /**
  * A drop in the tab strip, resolved (U9, R12, KTD7): where a dragged tab or tiled view goes, and which
@@ -112,7 +118,7 @@ function subjectTabs(
   const view =
     subject.kind === 'split'
       ? arrangements.find((arrangement) => arrangement.id === subject.arrangementId)
-      : arrangements.find((arrangement) => arrangement.tabIds.includes(subject.tabId))
+      : viewOfTab(arrangements, subject.tabId)
   const tabIds = view?.tabIds ?? (subject.kind === 'tab' ? [subject.tabId] : [])
   return [...new Set(tabIds)].filter((tabId) => order.includes(tabId))
 }
@@ -175,10 +181,8 @@ function besideChip(
 
 /**
  * The groups with these tabs placed in one of them, from `index` among its members that are not
- * moving, as `TabGroupController.addTab` places them.
- *
- * Two passes for more than one tab: they are sent to the end first, so none still standing before the
- * index shifts it, and then placed one after another. The target is never emptied on the way.
+ * moving, as `TabGroupController.addTab` places them: the same `groupInsertionSteps`, applied here to
+ * the groups instead of the book. See there for why a tiled view takes two passes.
  */
 function joined(
   groups: readonly TabGroup[],
@@ -187,11 +191,8 @@ function joined(
   index: number
 ): TabGroup[] {
   let next = [...groups]
-  if (tabIds.length > 1) {
-    for (const tabId of tabIds) next = addTabToGroup(next, groupId, tabId, Number.MAX_SAFE_INTEGER)
+  for (const step of groupInsertionSteps(tabIds, index)) {
+    next = addTabToGroup(next, groupId, step.tabId, step.index)
   }
-  tabIds.forEach((tabId, offset) => {
-    next = addTabToGroup(next, groupId, tabId, index + offset)
-  })
   return next
 }

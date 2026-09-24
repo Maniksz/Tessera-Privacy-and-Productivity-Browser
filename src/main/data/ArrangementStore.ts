@@ -57,10 +57,10 @@ import type { BrowsingMode } from './HistoryStore.js'
  *
  * ## Window scoping is carried, never assumed
  *
- * Every recording of every ordinary window lives in one document, so which tabs the caller owns
+ * Every arrangement of every ordinary window lives in one document, so which tabs the caller owns
  * and which of them are hidden cannot be read off the document. They arrive as a `WindowTabs`
  * on each call and are handed straight to the model. This store must not default them, fill
- * them in, or drop them: doing so would let one window change or apply another's recording,
+ * them in, or drop them: doing so would let one window change or apply another's arrangement,
  * which is the whole of R16.
  */
 
@@ -84,6 +84,11 @@ import type { BrowsingMode } from './HistoryStore.js'
  */
 export interface ArrangementBook {
   list(): Arrangement[]
+  /**
+   * Whether any arrangement seats this tab. A read of the live list rather than of a `list()` copy:
+   * asked by the automatic paths for every candidate tab, and it hands nothing out to be mutated.
+   */
+  hasTab(tabId: string): boolean
   /** The recording a click on this tab should bring back, if there is one that may be applied. */
   arrangementOfTab(tabId: string, window: WindowTabs): Arrangement | undefined
   /** A new arrangement for a tiling that has just come into being; its id, or `undefined` if refused. */
@@ -247,6 +252,11 @@ export class ArrangementStore implements ArrangementBook {
 
   list(): Arrangement[] {
     return snapshot(this.#cell.read())
+  }
+
+  /** The gate `removeTab` uses, asked as a question: nothing is copied and nothing is written. */
+  hasTab(tabId: string): boolean {
+    return this.#seatsAny([tabId])
   }
 
   /**

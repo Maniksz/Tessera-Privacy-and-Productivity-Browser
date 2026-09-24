@@ -1360,8 +1360,9 @@ export class BrowserWindowController implements PermissionHost {
     setImmediate(() => {
       this.#broadcastScheduled = false
       if (this.window.isDestroyed()) return
-      // The tiling on screen, written down on every settle; see `ArrangementController.keep` for why here.
+      // The tiling, kept on every settle (`ArrangementController.keep` says why here), then read once (KTD5).
       this.#seams.arrangements.keep()
+      const arrangements = this.#seams.arrangements.summaries()
       /*
         Sent in group order, with every group as one run of tabs.
 
@@ -1371,7 +1372,7 @@ export class BrowserWindowController implements PermissionHost {
         function, so the two cannot disagree.
       */
       const tabs = this.#seams.groups
-        .displayOrder()
+        .displayOrder(arrangements)
         .map((id) => this.#tabs.get(id))
         .filter((tab): tab is Tab => tab !== undefined)
         .map((tab) => tab.toState())
@@ -1401,8 +1402,7 @@ export class BrowserWindowController implements PermissionHost {
         tabs
       })
       this.emit('tabgroups:changed', { groups: this.#seams.groups.groups() })
-      // After `keep()` above, from this round's book, so no write schedules a second round (KTD5).
-      this.emit('arrangements:changed', { arrangements: this.#seams.arrangements.summaries() })
+      this.emit('arrangements:changed', { arrangements })
       this.emit('split:changed', this.split.toState())
     })
   }

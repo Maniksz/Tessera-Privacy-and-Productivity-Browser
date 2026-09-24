@@ -414,9 +414,15 @@ export function TabBar({
     nothing about `TabState` — while the drag reports positions as indices into `tabs`, which is the
     order the core sent. A drop is reported as the target under the pointer and a side (KTD7), so
     neither chips nor folded tabs can shift it.
+
+    Memoized on the three inputs, `order` on `tabs` so it is as stable as they are: a drag re-renders
+    the strip on every pointer frame, and the sequence only changes when the core sends a new one.
   */
-  const order = tabs.map((tab) => tab.id)
-  const items = stripItems(order, groups, arrangements)
+  const order = useMemo(() => tabs.map((tab) => tab.id), [tabs])
+  const items = useMemo(
+    () => stripItems(order, groups, arrangements),
+    [order, groups, arrangements]
+  )
   const stateOf = new Map(tabs.map((tab) => [tab.id, tab]))
   // Whether the drop under the pointer joins a group, by the rule the core applies it with; `null`
   // while there is no drop, or it would move nothing.

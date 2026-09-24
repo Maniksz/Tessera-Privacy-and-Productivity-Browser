@@ -13,6 +13,7 @@ import {
   dissolveGroup,
   emptyTabGroupDocument,
   findGroup,
+  groupInsertionSteps,
   groupOfTab,
   isContiguous,
   isTabHidden,
@@ -380,6 +381,26 @@ describe('adding a tab to a group', () => {
 
   it('reports a group it does not have', () => {
     expect(() => addTabToGroup([group('a', ['t1'])], 'zz', 't1')).toThrow(TabGroupNotFoundError)
+  })
+})
+
+describe('placing several tabs as one run (groupInsertionSteps)', () => {
+  const apply = (groups: TabGroup[], tabIds: string[], index: number): TabGroup[] =>
+    groupInsertionSteps(tabIds, index).reduce(
+      (next, step) => addTabToGroup(next, 'g', step.tabId, step.index),
+      groups
+    )
+
+  it('places a tiled view as one run from the index, counted among the members that stay', () => {
+    // v2 stands before the index, and would shift v1's place by one if it were not sent to the end
+    // first: placed one at a time, the run comes out as v1, a, v2, b.
+    const next = apply([group('g', ['v2', 'a', 'b', 'v1'])], ['v1', 'v2'], 1)
+    expect(findGroup(next, 'g')?.tabIds).toEqual(['a', 'v1', 'v2', 'b'])
+  })
+
+  it('places one tab with one step, since each step is a write to the book of groups', () => {
+    expect(groupInsertionSteps(['t1'], 2)).toEqual([{ tabId: 't1', index: 2 }])
+    expect(groupInsertionSteps([], 0)).toEqual([])
   })
 })
 

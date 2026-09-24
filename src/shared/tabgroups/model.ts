@@ -433,6 +433,35 @@ export function addTabToGroup(
   })
 }
 
+/** One call of `addTabToGroup` in a run that places several tabs: this tab, at this index. */
+export interface GroupInsertionStep {
+  tabId: string
+  index: number
+}
+
+/**
+ * The `addTabToGroup` calls, in order, that put these tabs in one group as one run from `index` —
+ * counted among the group's members that are not moving.
+ *
+ * Two passes for more than one tab, because a group takes one tab at a time: every one of them is
+ * sent to the end first, so none still standing before the index shifts it, and then they are placed
+ * one after another from the index. The target is never emptied on the way, since every step adds to
+ * it. One tab needs only the second pass — nothing of its own can stand in its way.
+ *
+ * A sequence rather than a function over the groups, because two callers apply it to different
+ * things: `resolveStripDrop` to the groups it plans with, and `TabGroupController` to the book that
+ * stores them. Both walking the same steps is what keeps the plan the strip marks and the write the
+ * core makes from placing a tiled view differently.
+ */
+export function groupInsertionSteps(
+  tabIds: readonly string[],
+  index: number
+): GroupInsertionStep[] {
+  const toEnd =
+    tabIds.length > 1 ? tabIds.map((tabId) => ({ tabId, index: Number.MAX_SAFE_INTEGER })) : []
+  return [...toEnd, ...tabIds.map((tabId, offset) => ({ tabId, index: index + offset }))]
+}
+
 /**
  * Takes a tab out of whatever group holds it, dissolving a group left empty.
  *

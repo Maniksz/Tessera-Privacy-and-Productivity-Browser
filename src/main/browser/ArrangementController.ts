@@ -306,10 +306,11 @@ export class ArrangementController {
    * closed, a workspace looking for an open tab to reuse (U3, KTD10) — so that none of them takes a
    * member out of its entry. Any window's rather than only this one's because tab ids are unique:
    * a tab of another window is never among the candidates, so asking about it costs nothing, and
-   * leaving `WindowTabs` out keeps the answer a plain fact about the book.
+   * leaving `WindowTabs` out keeps the answer a plain fact about the book — `hasTab`, which reads the
+   * book in place rather than copying every arrangement to ask about one tab.
    */
   isMember(tabId: string): boolean {
-    return this.#host.book.list().some((arrangement) => arrangement.seats.includes(tabId))
+    return this.#host.book.hasTab(tabId)
   }
 
   /**

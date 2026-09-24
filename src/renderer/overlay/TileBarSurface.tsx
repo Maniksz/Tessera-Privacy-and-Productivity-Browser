@@ -3,6 +3,7 @@ import type { TileBarPresentation } from '@shared/overlay/surface.js'
 import { TILE_BAR_POINTER_AWAY } from '@shared/split/tile-bar.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
 import { invoke } from '@renderer/bridge.js'
+import { DRAG_THRESHOLD } from '@renderer-shared/drag-threshold.js'
 import { useI18n } from '@renderer/i18n.js'
 import './tile-bar.css'
 
@@ -50,12 +51,6 @@ import './tile-bar.css'
  * The layer is sized to the strip, so this component *is* the bar — there is no outside to click,
  * and no room for a backdrop. That is what keeps the rest of the page live while the bar is up.
  */
-
-/**
- * Movement before a press on the grip becomes a drag, as in the strip: a click with a shaky hand stays
- * a click, and presents no drop zones over four pages for nothing.
- */
-const GRIP_DRAG_THRESHOLD = 6
 
 export function TileBarSurface({
   presentation
@@ -312,7 +307,9 @@ export function TileBarSurface({
             const press = gripPress.current
             if (press === null) return
             const travelled = Math.hypot(event.clientX - press.x, event.clientY - press.y)
-            if (travelled < GRIP_DRAG_THRESHOLD) return
+            // The strip's threshold (`DRAG_THRESHOLD`): a shaky click on the grip stays a click, and
+            // presents no drop zones over four pages for nothing.
+            if (travelled < DRAG_THRESHOLD) return
             gripPress.current = null
             void invoke('drag:start', { tabId, fromTile: true })
           }}

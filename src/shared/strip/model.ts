@@ -148,6 +148,22 @@ export function stripItems(
   })
 }
 
+/**
+ * The tiled view a tab is a member of, or `undefined` for a tab of none — the first view that names it,
+ * as `groupOfTab` answers for groups.
+ *
+ * What the core and the strip both ask when a request names one tab but is about the whole view it sits
+ * in (R10): `TabGroupController` widening a grouping act to the view, `resolveStripDrop` moving the view
+ * whole when one of its tabs is dragged. Each caller keeps its own filtering over the answer; the lookup
+ * itself is one question with one answer.
+ */
+export function viewOfTab(
+  arrangements: readonly StripArrangement[],
+  tabId: string
+): StripArrangement | undefined {
+  return arrangements.find((arrangement) => arrangement.tabIds.includes(tabId))
+}
+
 /** The entries of a strip: what it draws that can be landed on, chips and folded members left out. */
 export function stripEntries(items: readonly StripItem[]): StripEntry[] {
   return items.filter((item): item is StripEntry => item.kind !== 'group')
