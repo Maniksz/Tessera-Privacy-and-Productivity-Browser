@@ -293,7 +293,10 @@ describe('the stage behind a -20', () => {
       filterEngine: null
     })
     const answer = vi.fn()
-    listener?.(
+    // Assigned inside the fake, so the checker cannot see it is set; read it through a helper.
+    const fire = (details: unknown, callback: (r: unknown) => void): void =>
+      listener?.(details, callback)
+    fire(
       {
         url: 'https://safebrowsing.googleapis.com/x',
         resourceType: 'mainFrame',
