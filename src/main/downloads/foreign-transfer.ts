@@ -5,7 +5,7 @@ import {
   isTerminalDownloadState,
   type DownloadRecord
 } from '@shared/downloads/model.js'
-import type { DownloadItemLike, DownloadSession } from './DownloadManager.js'
+import type { DownloadItemLike, DownloadSession } from './seams.js'
 
 /**
  * Transfers that did not come through Chromium's `will-download`, made to look like one that did.

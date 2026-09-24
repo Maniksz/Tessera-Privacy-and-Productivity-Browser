@@ -1,5 +1,5 @@
-// Types only, so this module still runs under plain Node in a test — the seams below are what
-// the manager actually talks to.
+// Types only, so this module still runs under plain Node in a test — the seams in `seams.ts` are
+// what the manager actually talks to.
 import type { DownloadItem, Session } from 'electron'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { downloadFileNameFor } from '@shared/downloads/filename.js'
@@ -17,6 +17,23 @@ import type { BrowsingMode } from '../data/HistoryStore.js'
 import { resolveSavePath } from './target-path.js'
 import * as foreign from './foreign-transfer.js'
 import { DownloadOwnership } from './window-ownership.js'
+import type {
+  DownloadBook,
+  DownloadItemLike,
+  DownloadSession,
+  DownloadShell,
+  DownloadSource,
+  DownloadViewer
+} from './seams.js'
+
+export type {
+  DownloadBook,
+  DownloadItemLike,
+  DownloadSession,
+  DownloadShell,
+  DownloadSource,
+  DownloadViewer
+} from './seams.js'
 
 /**
  * The Electron-bound half of downloads: subscribing to `will-download`, deciding where each
@@ -56,99 +73,6 @@ import { DownloadOwnership } from './window-ownership.js'
  * bookmark file. Taking the time from the injected clock avoids the question and keeps a
  * download's timestamp comparable with a history entry's.
  */
-
-/**
- * The part of Electron's `DownloadItem` this feature uses.
- *
- * Structural on purpose, so a test drives a download with a dozen plain functions and
- * Electron is never loaded. The assignment at the bottom of this file is what keeps that
- * honest — it stops compiling if Electron's item stops satisfying the shape.
- *
- * The event listeners deliberately take no arguments. Electron passes the new state as the
- * second one, but `item.getState()` and `item.isPaused()` answer the same question and are
- * the item's own view rather than a snapshot from when the event was queued. One source of
- * truth, and a fake in a test does not have to reproduce Electron's argument list.
- */
-export interface DownloadItemLike {
-  getURL(): string
-  getFilename(): string
-  getMimeType(): string
-  getContentDisposition(): string
-  getTotalBytes(): number
-  getReceivedBytes(): number
-  getState(): 'progressing' | 'completed' | 'cancelled' | 'interrupted'
-  getSavePath(): string
-  isPaused(): boolean
-  canResume(): boolean
-  setSavePath(path: string): void
-  pause(): void
-  resume(): void
-  cancel(): void
-  /*
-    One signature over the union rather than an overload per event.
-
-    Two overloads with identical parameter types say nothing the union does not, and the linter is right that
-    they only look more precise. Electron's own `DownloadItem` is wider than this; the narrowing to two names is
-    the point, and it survives.
-  */
-  on(event: 'updated' | 'done', listener: () => void): void
-  removeListener(event: 'updated' | 'done', listener: () => void): void
-}
-
-/**
- * The web contents Electron names as having started a download — a tab's page, usually.
- *
- * Only its id, which is all the window registry needs to find the tab and so the window. Optional in
- * the listener although Electron's types say otherwise: a download with no page behind it still
- * arrives, and the fallback for it is decided by the resolver rather than by a crash here.
- */
-export interface DownloadSource {
-  readonly id: number
-}
-
-/** The part of Electron's `Session` this feature uses. */
-export interface DownloadSession {
-  on(
-    event: 'will-download',
-    listener: (event: unknown, item: DownloadItemLike, source: DownloadSource | undefined) => void
-  ): void
-}
-
-/**
- * The window asking what it may see, as the manager needs to know it.
- *
- * The session, not the mode, is what decides which live rows belong to it. A private session is a
- * fresh partition per window, so "private" names every private window at once, and filtering on it
- * showed each private window the downloads of every other.
- */
-export interface DownloadViewer {
-  /** `BrowserWindow.id`; see `DownloadOwnership` for why it is never written down. */
-  readonly windowId: number
-  readonly mode: BrowsingMode
-  readonly session: DownloadSession
-}
-
-/** What the manager needs from the store. `DownloadStore` satisfies it. */
-export interface DownloadBook {
-  list(): DownloadRecord[]
-  find(id: string): DownloadRecord | undefined
-  remove(id: string): number
-  clear(): number
-  recorderFor(mode: BrowsingMode): DownloadRecorder
-}
-
-/**
- * Opening a file and showing it in its folder.
- *
- * A seam rather than an `electron` import, for the usual reason: a test must be able to
- * assert that a missing file is *not* handed to the operating system, and that assertion
- * cannot involve actually opening one.
- */
-export interface DownloadShell {
-  /** Electron's contract: an empty string means success, anything else is the reason. */
-  openPath(path: string): Promise<string>
-  showItemInFolder(path: string): void
-}
 
 export interface DownloadManagerOptions {
   store: DownloadBook
@@ -786,7 +710,7 @@ export class DownloadManager {
 }
 
 /*
-  Electron really does satisfy the two seams above.
+  Electron really does satisfy the two seams in `seams.ts`.
 
   This is what makes a structural seam trustworthy rather than hopeful: a test can drive the
   manager with plain objects, and if Electron's `DownloadItem` ever stops matching — a method

@@ -1,4 +1,3 @@
-import type { DownloadEntry } from '../downloads/model.js'
 import type { LayoutId } from '../split/layout.js'
 import type { DropZone } from '../split/dropzones.js'
 import type {
@@ -7,15 +6,23 @@ import type {
   MasterPasswordStep
 } from '../passwords/prompt.js'
 import type { Rect, Size } from '../ui/anchor.js'
-/*
-  Type-only, and it has to stay that way. `fill-policy.ts` imports the public-suffix table, and this
-  module is reachable from both renderers at runtime — a value import here would put four kilobytes of
-  eTLD suffixes into a bundle that never consults one. See the bundle-weight fitness functions.
-*/
-import type { FillRefusal } from '../passwords/fill-policy.js'
 import type { OmniboxSuggestionsPresentation } from '../omnibox/model.js'
 import type { PermissionDevice, PermissionSubject } from './permission.js'
-import type { PickerBarMode } from './picker-bar.js'
+import type { AutofillSuggestPresentation } from './autofill-suggest.js'
+import type { DownloadsPanelPresentation, DownloadsPanelRequest } from './downloads-panel.js'
+import type { PickerBarPresentation } from './picker-bar.js'
+export type {
+  AutofillSuggestContent,
+  AutofillSuggestEntry,
+  AutofillSuggestPresentation
+} from './autofill-suggest.js'
+export type { DownloadsPanelPresentation, DownloadsPanelRequest } from './downloads-panel.js'
+export {
+  DOWNLOADS_PANEL_ROWS,
+  downloadsPanelPresentation,
+  downloadsPanelUpdate
+} from './downloads-panel.js'
+export type { PickerBarPresentation } from './picker-bar.js'
 
 /**
  * What the chrome UI can put on the window's topmost layer.
@@ -258,45 +265,6 @@ export interface PermissionRequestPresentation {
 }
 
 /**
- * How many downloads the panel lists: the newest few, and the page for the rest (KTD7).
- */
-export const DOWNLOADS_PANEL_ROWS = 6
-
-/**
- * The toolbar's downloads panel: the newest few rows of the list the downloads page shows this window.
- *
- * ## Why the rows are here and not in the request
- *
- * The chrome UI asks for the panel with a kind and an anchor and nothing else (`DownloadsPanelRequest`);
- * the core puts the rows in. Two reasons, both about where the list is allowed to go (KTD2). The chrome UI
- * is never sent the list — its button is told numbers and states, not names — so it has no rows to give;
- * and a panel whose rows came from the asker would be a panel that could show a list the window may not
- * see. The core builds the rows from the window's own snapshot, the same one the page and the button are
- * computed from, so the three views cannot describe two different moments (R9).
- *
- * ## Why it is re-sent while it is open
- *
- * A download moves while somebody watches it, and the core owns what is on screen here as everywhere
- * else on this layer. So the core re-presents the panel on every coalesced change while the panel is the
- * window's current surface — the find bar's rule, for the find bar's reason. The identity never changes
- * (`surfaceIdentity`), so each of those is an update and not a departure, and the layer leaves the
- * keyboard where it is (`OVERLAY_REFOCUSES_ON_UPDATE`).
- */
-export interface DownloadsPanelPresentation {
-  kind: 'downloads-panel'
-  /** The button's rect in window coordinates, kept by the core for every re-presentation. */
-  anchor: Rect
-  /** Newest first, at most `DOWNLOADS_PANEL_ROWS`. Empty is a real state: everything was removed. */
-  downloads: DownloadEntry[]
-}
-
-/** What the chrome UI sends to open the panel: which kind, and where its button is. Never rows. */
-export interface DownloadsPanelRequest {
-  kind: 'downloads-panel'
-  anchor: Rect
-}
-
-/**
  * What `overlay:present` accepts: every presentation as it is, except the downloads panel, which is
  * asked for by kind and anchor and filled in by the core. See `DownloadsPanelPresentation`.
  */
@@ -490,202 +458,6 @@ export interface NavigationRequestPresentation {
   url: string
   /** The host of that address, so the dialogue can lead with the part that decides the answer. */
   host: string
-}
-
-/**
- * "Block this element": what has been chosen, what it would hide, and what became of it.
- *
- * ## Why the result appears here rather than in the page
- *
- * The picker used to draw its own bar into the document it was picking in, and that is the reason a
- * click could fail five different ways without anybody finding out: the surface that would have carried
- * the news tore itself down in the same breath as the message that asked for the rule. It also cannot
- * work everywhere it is needed — a document that carries no picker surface at all is exactly the kind
- * of document a refusal has to be reported on.
- *
- * So the news arrives on the window's own layer, where the browser can always speak, and the page is
- * left to do the one thing only it can do: show what disappeared.
- *
- * ## Why the whole visible state is one message
- *
- * The bar holds no opinion of its own. Every field below is the core's answer to "what should be on
- * screen right now", and the surface renders it — the find bar's rule, for the find bar's reason: two
- * places accumulating the same state eventually disagree, and the one that is wrong is always the one
- * the user is looking at. The cost is that the presentation is re-sent as the selection is refined and
- * as measurements arrive, which is what `sessionId` is for; see `surfaceIdentity`.
- */
-export interface PickerBarPresentation {
-  kind: 'picker-bar'
-  /**
-   * Identity of the *picking session*, not of the bar.
-   *
-   * Two jobs, both load-bearing, and both taken from the find bar. The layer tells an update from a
-   * departure by it, so a new match count does not read as the bar leaving — which here would end the
-   * session the moment it had something to report. And the session that owns a departed bar is found by
-   * it, which is how a bar the layer took down for reasons of its own still gets its provisional rule
-   * lifted off the page.
-   */
-  sessionId: string
-  /** The tile picked in. Also its label: "block an element in tile 2" is what a screen reader reads. */
-  tileIndex: number
-  /** The box, in window coordinates — the bounds the layer takes while this is up. */
-  bounds: Rect
-  /** The tab picked in. Never empty: there is no picker session without a document to pick in. */
-  tabId: string
-  mode: PickerBarMode
-  /**
-   * The selector that would be written, in the form the user is being asked to accept.
-   *
-   * Shown at every stage rather than only once frozen: a person cannot judge "wider" and "narrower"
-   * without seeing what changed, and a confirmation that hides what it confirms is not one.
-   */
-  selector: string
-  /**
-   * How many elements the selector hits in the open document, or `null` while nothing has been measured.
-   *
-   * `null` rather than `0`, and the difference is the whole point of measuring at all: zero means "this
-   * rule changes nothing here", which is a real and reportable finding, while "not yet counted" is the
-   * absence of a finding. Collapsed into one value, a measurement in flight would announce the finding
-   * before it was made.
-   */
-  matches: number | null
-  /**
-   * Whether the selection can still be pulled outwards, and inwards.
-   *
-   * Carried rather than left for the surface to guess, because the core is the only side that holds the
-   * ancestor chain — and because a control that silently does nothing at the end of the chain is the
-   * defect this feature is being rebuilt to remove, reproduced in miniature. `canWiden` is false once the
-   * selection has reached the outermost element the chain allows, which stops below `body`: a step past
-   * that selects the document itself, and a rule for it empties the page.
-   */
-  canWiden: boolean
-  canNarrow: boolean
-  /**
-   * What became of the attempt, as a key, or `null` while it is still going on.
-   *
-   * A key rather than a sentence: the sentence is looked up in `text` below, under `outcome.${outcome}`.
-   * A key rather than an enum declared here, too, and that is deliberate — the set of outcomes belongs to
-   * the picking session, which is where they are produced and where they are held to being exhaustive.
-   * Two lists of the same eight names in two modules is how a ninth outcome comes to render as nothing at
-   * all; the surface renders the key itself if it does not recognise it, which is a name on screen
-   * instead of an empty bar.
-   */
-  outcome: string | null
-  /**
-   * Whether there is a written rule to take back.
-   *
-   * The one thing about an outcome the bar cannot work out from an opaque key, and the difference
-   * matters: "already there, disabled" and "saved but it changes nothing here" both name a rule that
-   * exists, while "no host" and "limit reached" name one that was never written. Offering Undo for the
-   * second pair would be a button that removes something the user never added.
-   */
-  canUndo: boolean
-  /**
-   * Every word the bar can say, already in the language the interface is in.
-   *
-   * The core's, like every other field here: the prose lives in `main/privacy/picker-bar-text.ts` rather
-   * than in the renderer's catalogue, and that module says why — the catalogue is one measured chunk that
-   * every renderer parses, and only this surface ever shows these sentences. The whole table travels,
-   * not just the sentence the current mode needs, so the surface still chooses which one a mode says and
-   * still resolves an outcome by its key.
-   *
-   * A record of strings rather than a type naming each key, on the precedent of `userrules:list`: a word
-   * missing from it renders as its own key, which is a name on screen rather than an unlabelled button.
-   * `{index}` and `{count}` arrive as placeholders and are filled in by the surface.
-   */
-  text: Readonly<Record<string, string>>
-}
-
-/**
- * One saved credential, as the suggestion list is allowed to know it.
- *
- * An id and a username, and the absence of everything else is the point: this travels to a renderer
- * because the user pressed the badge, so it is the *only* place in this feature where names of saved
- * accounts leave the vault. No password, no address, no note, no date.
- */
-export interface AutofillSuggestEntry {
-  /** Opaque, and echoed back with the choice. Never a username used as a key. */
-  id: string
-  /** May be empty: some sites authenticate on a password alone, and the surface says so in words. */
-  username: string
-}
-
-/**
- * What the list has to say, which on most presses of the badge is not a list.
- *
- * ## Why every refusal is a state here rather than an absent surface
- *
- * Pressing the badge has to produce a visible answer, and "nothing happened" is the answer a user
- * cannot tell apart from a broken browser. So the four ways there is nothing to offer are each a
- * value the surface can render a sentence for, instead of a reason the core silently declines to
- * present anything.
- *
- * `refused` carries the rule that said no rather than a translated sentence. The wording belongs in
- * the chrome's catalogue — it is a wordlist, and a wordlist in a presentation is a wordlist on the
- * wire — and the distinction between "this page is not encrypted" and "this is not the site the
- * password was saved for" is exactly what makes the refusal honest instead of "nothing found".
- */
-export type AutofillSuggestContent =
-  /** Never empty. An offer of nothing is `empty`, which reads as a sentence rather than as a blank box. */
-  | { state: 'entries'; entries: AutofillSuggestEntry[] }
-  /**
-   * The vault is locked, and the surface offers to unlock it.
-   *
-   * Not the master-password prompt itself: that surface is raised by the user pressing *this* one's
-   * button, which is an action in browser chrome. Raised straight from the badge it would be the
-   * highest-ranked surface on this layer being summoned by a message from a page view.
-   */
-  | { state: 'locked' }
-  /** Unlocked, the rules allow it, and there is nothing saved for this site. */
-  | { state: 'empty' }
-  /** A fill rule said no, and which one is what the surface turns into a sentence. */
-  | { state: 'refused'; reason: FillRefusal }
-  /** Autofill is switched off. The one state whose remedy is a setting rather than an action here. */
-  | { state: 'disabled' }
-
-/**
- * The account picker for one password field (R5).
- *
- * ## Why it is drawn here rather than in the page
- *
- * A list of the user's account names, drawn in the document, teaches the page which account the user
- * expects here — and a page that knows that can build its own mask to match. The list shows no
- * password either way, so the leak is not the secret; it is the *expectation*. Only the chrome can
- * draw a surface the page can neither read nor imitate into, which is the one step this browser can
- * take that a password-manager extension cannot.
- *
- * ## Why the request id and not a tab id
- *
- * The find bar carries a tab because every message it sends acts on that tab's document. This surface
- * sends exactly one thing back — a choice — and the core resolves the view from the request the badge
- * press opened. A tab id here would be a second name for the same thing, and the two disagree the
- * moment a tab is reassigned under an open list. The request id is also the whole of the consent that
- * authorises the fill (`shared/passwords/consent.ts`), so binding the surface to it is what makes a
- * choice unable to authorise anything but the press it came from.
- *
- * ## Why the bounds are here
- *
- * The tile-region reason, plus one this surface has alone: the rectangle depends on where a *field* is
- * inside a page, which is a fact only the core can assemble — the page reports CSS pixels, the tile
- * holds the zoom, the view holds its own bounds. See `shared/passwords/suggest-bounds.ts`, which is
- * where those four facts are turned into one rectangle, once.
- */
-export interface AutofillSuggestPresentation {
-  kind: 'autofill-suggest'
-  /**
-   * The fill request this list belongs to.
-   *
-   * Echoed back with the choice, for the rule every prompt on this layer follows: an answer may only
-   * resolve the question it was shown for. Here it is stronger than elsewhere — the core spends this
-   * id as one-shot consent, so a choice carrying a stale one authorises nothing at all rather than
-   * filling the wrong form.
-   */
-  requestId: string
-  /** The tile the field is in. Also its label: "passwords for tile 2" is what a screen reader reads. */
-  tileIndex: number
-  /** The list, in window coordinates — the bounds the layer takes while this is up. */
-  bounds: Rect
-  content: AutofillSuggestContent
 }
 
 export type OverlayPresentation =
@@ -1258,36 +1030,6 @@ export function movesFocus(incoming: OverlayPresentation, outgoing: OverlayState
   if (!takesFocus(incoming)) return false
   if (outgoing === null || surfaceIdentity(outgoing) !== surfaceIdentity(incoming)) return true
   return OVERLAY_REFOCUSES_ON_UPDATE[incoming.kind]
-}
-
-/**
- * The panel for a window's list: its newest rows, hung from the button at `anchor`.
- *
- * `entries` is the window's list as the downloads page is shown it, newest first — the manager's order —
- * so the panel is the head of the page and never a second opinion about it (KTD7).
- */
-export function downloadsPanelPresentation(
-  anchor: Rect,
-  entries: readonly DownloadEntry[]
-): DownloadsPanelPresentation {
-  return { kind: 'downloads-panel', anchor, downloads: entries.slice(0, DOWNLOADS_PANEL_ROWS) }
-}
-
-/**
- * The panel re-presented with fresh rows, or `null` when there is no panel up to re-present.
- *
- * `null` for everything but the panel itself, and that is the rule rather than a shortcut (KTD8). A
- * coalesced change arrives whether or not anybody is looking: a closed panel that came back on the next
- * progress tick would be a panel nobody asked for, and because equal ranks replace, one presented over a
- * menu would take the menu down — while one presented over a find bar would destroy a search somebody
- * typed. The anchor is the one the user opened it at, kept by the layer rather than asked for again.
- */
-export function downloadsPanelUpdate(
-  current: OverlayState,
-  entries: readonly DownloadEntry[]
-): DownloadsPanelPresentation | null {
-  if (current?.kind !== 'downloads-panel') return null
-  return downloadsPanelPresentation(current.anchor, entries)
 }
 
 /**

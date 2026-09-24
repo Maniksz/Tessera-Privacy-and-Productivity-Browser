@@ -66,6 +66,110 @@ export const PICKER_BAR_ACTIONS = [
 export type PickerBarAction = (typeof PICKER_BAR_ACTIONS)[number]
 
 /**
+ * "Block this element": what has been chosen, what it would hide, and what became of it.
+ *
+ * ## Why the result appears here rather than in the page
+ *
+ * The picker used to draw its own bar into the document it was picking in, and that is the reason a
+ * click could fail five different ways without anybody finding out: the surface that would have carried
+ * the news tore itself down in the same breath as the message that asked for the rule. It also cannot
+ * work everywhere it is needed — a document that carries no picker surface at all is exactly the kind
+ * of document a refusal has to be reported on.
+ *
+ * So the news arrives on the window's own layer, where the browser can always speak, and the page is
+ * left to do the one thing only it can do: show what disappeared.
+ *
+ * ## Why the whole visible state is one message
+ *
+ * The bar holds no opinion of its own. Every field below is the core's answer to "what should be on
+ * screen right now", and the surface renders it — the find bar's rule, for the find bar's reason: two
+ * places accumulating the same state eventually disagree, and the one that is wrong is always the one
+ * the user is looking at. The cost is that the presentation is re-sent as the selection is refined and
+ * as measurements arrive, which is what `sessionId` is for; see `surfaceIdentity`.
+ */
+export interface PickerBarPresentation {
+  kind: 'picker-bar'
+  /**
+   * Identity of the *picking session*, not of the bar.
+   *
+   * Two jobs, both load-bearing, and both taken from the find bar. The layer tells an update from a
+   * departure by it, so a new match count does not read as the bar leaving — which here would end the
+   * session the moment it had something to report. And the session that owns a departed bar is found by
+   * it, which is how a bar the layer took down for reasons of its own still gets its provisional rule
+   * lifted off the page.
+   */
+  sessionId: string
+  /** The tile picked in. Also its label: "block an element in tile 2" is what a screen reader reads. */
+  tileIndex: number
+  /** The box, in window coordinates — the bounds the layer takes while this is up. */
+  bounds: Rect
+  /** The tab picked in. Never empty: there is no picker session without a document to pick in. */
+  tabId: string
+  mode: PickerBarMode
+  /**
+   * The selector that would be written, in the form the user is being asked to accept.
+   *
+   * Shown at every stage rather than only once frozen: a person cannot judge "wider" and "narrower"
+   * without seeing what changed, and a confirmation that hides what it confirms is not one.
+   */
+  selector: string
+  /**
+   * How many elements the selector hits in the open document, or `null` while nothing has been measured.
+   *
+   * `null` rather than `0`, and the difference is the whole point of measuring at all: zero means "this
+   * rule changes nothing here", which is a real and reportable finding, while "not yet counted" is the
+   * absence of a finding. Collapsed into one value, a measurement in flight would announce the finding
+   * before it was made.
+   */
+  matches: number | null
+  /**
+   * Whether the selection can still be pulled outwards, and inwards.
+   *
+   * Carried rather than left for the surface to guess, because the core is the only side that holds the
+   * ancestor chain — and because a control that silently does nothing at the end of the chain is the
+   * defect this feature is being rebuilt to remove, reproduced in miniature. `canWiden` is false once the
+   * selection has reached the outermost element the chain allows, which stops below `body`: a step past
+   * that selects the document itself, and a rule for it empties the page.
+   */
+  canWiden: boolean
+  canNarrow: boolean
+  /**
+   * What became of the attempt, as a key, or `null` while it is still going on.
+   *
+   * A key rather than a sentence: the sentence is looked up in `text` below, under `outcome.${outcome}`.
+   * A key rather than an enum declared here, too, and that is deliberate — the set of outcomes belongs to
+   * the picking session, which is where they are produced and where they are held to being exhaustive.
+   * Two lists of the same eight names in two modules is how a ninth outcome comes to render as nothing at
+   * all; the surface renders the key itself if it does not recognise it, which is a name on screen
+   * instead of an empty bar.
+   */
+  outcome: string | null
+  /**
+   * Whether there is a written rule to take back.
+   *
+   * The one thing about an outcome the bar cannot work out from an opaque key, and the difference
+   * matters: "already there, disabled" and "saved but it changes nothing here" both name a rule that
+   * exists, while "no host" and "limit reached" name one that was never written. Offering Undo for the
+   * second pair would be a button that removes something the user never added.
+   */
+  canUndo: boolean
+  /**
+   * Every word the bar can say, already in the language the interface is in.
+   *
+   * The core's, like every other field here: the prose lives in `main/privacy/picker-bar-text.ts` rather
+   * than in the renderer's catalogue, and that module says why — the catalogue is one measured chunk that
+   * every renderer parses, and only this surface ever shows these sentences. The whole table travels,
+   * not just the sentence the current mode needs, so the surface still chooses which one a mode says and
+   * still resolves an outcome by its key.
+   *
+   * A record of strings rather than a type naming each key, on the precedent of `userrules:list`: a word
+   * missing from it renders as its own key, which is a name on screen rather than an unlabelled button.
+   * `{index}` and `{count}` arrive as placeholders and are filled in by the surface.
+   */
+  text: Readonly<Record<string, string>>
+}
+
+/**
  * Tall enough for the selector, the match count and a row of controls.
  *
  * Two rows rather than the find bar's one, because this bar has to *say* things: a selector long enough
