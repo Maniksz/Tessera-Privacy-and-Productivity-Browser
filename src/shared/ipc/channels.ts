@@ -95,25 +95,13 @@ export const INVOKE_CHANNELS = [
     a real menu. See `menu/tabContextMenu.ts`.
   */
   'tabs:contextMenu',
-  /*
-    A tiled view's entry in the strip (U6): bringing it back, closing its tabs, its menu, its speaker.
-
-    Chrome-only for the reason the group channels are, and more so: these close tabs and rearrange the
-    panes, which no `tessera://` document may do. See `arrangementInvokeContract`.
-  */
+  // A tiled view's entry (U6). Chrome-only like the group channels, and more so: these close tabs and
+  // rearrange panes, which no `tessera://` document may do. See `arrangementInvokeContract`.
   'arrangements:activate',
   'arrangements:close',
   'arrangements:contextMenu',
   'arrangements:setMuted',
   'arrangements:releaseTab',
-  /*
-    What the blocker made of the user's lists.
-
-    Not a nicety. A hand-written filter engine understands a subset of the syntax, and without a way
-    to see *which* subset, "the blocker does not work on this site" is not a diagnosis anybody can
-    act on — the counters are the difference between that and "eleven thousand lines declined, all of
-    them `$popup`".
-  */
   /**
    * The answer to a permission prompt.
    *
