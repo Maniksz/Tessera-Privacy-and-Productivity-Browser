@@ -12,13 +12,14 @@ import {
 import type { TabState } from '@shared/model.js'
 import type { ArrangementSummary } from '@shared/arrangements/screen.js'
 import { stripEntryOf, stripItems, type SplitStripItem } from '@shared/strip/model.js'
+import { resolveStripDrop, type StripDropTarget } from '@shared/strip/drop.js'
 import { MAX_TAB_GROUP_NAME_LENGTH, type TabGroup } from '@shared/tabgroups/model.js'
 import { tabGroupColorToken, type TabGroupColor } from '@shared/tabgroups/palette.js'
 import type { ShortcutTitle } from '@shared/shortcuts/format.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
-import { useTabDrag } from '../useTabDrag.js'
+import { useTabDrag, type StripSpot, type TabDrag } from '../useTabDrag.js'
 import { Icon } from '../../shared/Icon.js'
 import { TabFavicon } from './TabFavicon.js'
 
@@ -30,8 +31,9 @@ import { TabFavicon } from './TabFavicon.js'
  * to say which pages belong together. `stripItems` decides the sequence.
  *
  * Dragging is pointer-based rather than HTML5 drag and drop; see `useTabDrag` for why. One
- * gesture serves both purposes: released over the strip it reorders, released over a tile it
- * moves the tab there.
+ * gesture serves both purposes: released over the strip it reorders — into a group, out of one, or
+ * within the strip (U9, R12) — and released over a tile it moves the tab there. A tiled view's entry
+ * drags too, but only within the strip.
  */
 
 interface TabBarProps {
@@ -77,6 +79,54 @@ function groupColorStyle(color: TabGroupColor): CSSProperties {
 
 type Translate = (key: MessageKey, params?: Record<string, string | number>) => string
 
+/**
+ * What an element offers as a drop target, as `useTabDrag` reads it back (`stripSpotAt`). Folded is
+ * said separately, because most of a folded chip is "onto" it rather than its right half (KTD7).
+ */
+function stripTargetProps(
+  kind: Exclude<StripDropTarget['kind'], 'end'>,
+  id: string,
+  folded = false
+): Record<string, string> {
+  return {
+    'data-strip-target': kind,
+    'data-strip-id': id,
+    ...(folded ? { 'data-strip-folded': 'true' } : {})
+  }
+}
+
+/** One key per target, so the marker can find the element the pointer is over. */
+function targetKey(target: StripDropTarget): string {
+  switch (target.kind) {
+    case 'tab':
+      return `tab:${target.tabId}`
+    case 'split':
+      return `split:${target.arrangementId}`
+    case 'group':
+      return `group:${target.groupId}`
+    case 'end':
+      return 'end'
+  }
+}
+
+/**
+ * The insertion marker's classes for one target: which side the drop lands on, and whether it joins a
+ * group there (U9). Nothing for a target the pointer is not over, or for a drop that moves nothing.
+ *
+ * The same `resolveStripDrop` the core applies the drop with answers "joins", so the marker cannot
+ * promise a group the drop will not give.
+ */
+function dropMarker(
+  spot: StripSpot | null,
+  joins: boolean | null,
+  target: StripDropTarget
+): string {
+  if (joins === null || spot === null || targetKey(spot.target) !== targetKey(target)) return ''
+  // The end of the strip marks the new-tab button, which stands after the last target: its left side.
+  const side = spot.side === 'after' && target.kind !== 'end' ? 'tab--dropafter' : 'tab--dropbefore'
+  return joins ? `${side} tab--dropjoin` : side
+}
+
 /** Which ends of the strip have tabs scrolled past them. */
 interface StripOverflow {
   left: boolean
@@ -106,10 +156,13 @@ function overflowOf(strip: HTMLElement): StripOverflow {
 function GroupChip({
   group,
   hiddenCount,
+  marker,
   t
 }: {
   group: TabGroup
   hiddenCount: number
+  /** The insertion marker's classes while a drag is over the chip; see `dropMarker`. */
+  marker: string
   t: Translate
 }): React.ReactNode {
   const [draft, setDraft] = useState<string | null>(null)
@@ -157,8 +210,11 @@ function GroupChip({
   return (
     <button
       type="button"
-      className={`tabgroup${group.collapsed ? ' tabgroup--collapsed' : ''}`}
+      className={['tabgroup', group.collapsed ? 'tabgroup--collapsed' : '', marker]
+        .filter(Boolean)
+        .join(' ')}
       data-tab-group-id={group.id}
+      {...stripTargetProps('group', group.id, group.collapsed)}
       aria-expanded={!group.collapsed}
       aria-label={
         group.collapsed
@@ -200,13 +256,15 @@ function GroupChip({
  * tile included — and a close ends every page in it; neither is a question about one tab. The core
  * owns both (`arrangement-handlers.ts`), so this only reports what was pressed.
  *
- * No drag yet: a pointer press on the entry starts nothing, and it carries `data-arrangement-id`
- * rather than `data-tab-id`, so `useTabDrag` neither counts it as a tab nor drops onto it.
+ * It drags as the whole view (U9): into a group, out of one, along the strip — never onto the tiles,
+ * which would merge two views. A tab dropped on it is placed beside it and does not join it.
  */
 function SplitEntry({
   item,
   members,
   selected,
+  drag,
+  marker,
   listFormat,
   t
 }: {
@@ -214,6 +272,9 @@ function SplitEntry({
   /** The members this window has, in tile order. */
   members: TabState[]
   selected: boolean
+  drag: TabDrag
+  /** The insertion marker's classes while a drag is over the entry; see `dropMarker`. */
+  marker: string
   listFormat: Intl.ListFormat
   t: Translate
 }): React.ReactNode {
@@ -235,6 +296,7 @@ function SplitEntry({
   return (
     <div
       data-arrangement-id={item.arrangementId}
+      {...stripTargetProps('split', item.arrangementId)}
       role="tab"
       tabIndex={selected ? 0 : -1}
       aria-selected={selected}
@@ -250,12 +312,19 @@ function SplitEntry({
         'tab',
         'tab--split',
         selected ? 'tab--active' : '',
+        drag.dragging?.kind === 'split' && drag.dragging.arrangementId === item.arrangementId
+          ? 'tab--dragging'
+          : '',
+        marker,
         item.group === null ? '' : 'tab--grouped',
         item.position === null ? '' : `tab--group-${item.position}`
       ]
         .filter(Boolean)
         .join(' ')}
       style={item.group === null ? undefined : groupColorStyle(item.group.color)}
+      onPointerDown={(event) =>
+        drag.begin(event, { kind: 'split', arrangementId: item.arrangementId })
+      }
       onClick={activate}
       onAuxClick={(event) => {
         // Middle-click closes, as on a tab — here the whole view (R5).
@@ -343,15 +412,20 @@ export function TabBar({
     tiled view's entry. The lookups below
     exist because it works in tab *ids* — it is shared with anything else that draws a strip and knows
     nothing about `TabState` — while the drag reports positions as indices into `tabs`, which is the
-    order the core sent. Keeping the drag on that index means group chips cannot shift a drop target.
+    order the core sent. A drop is reported as the target under the pointer and a side (KTD7), so
+    neither chips nor folded tabs can shift it.
   */
-  const items = stripItems(
-    tabs.map((tab) => tab.id),
-    groups,
-    arrangements
-  )
+  const order = tabs.map((tab) => tab.id)
+  const items = stripItems(order, groups, arrangements)
   const stateOf = new Map(tabs.map((tab) => [tab.id, tab]))
-  const indexOf = new Map(tabs.map((tab, index) => [tab.id, index]))
+  // Whether the drop under the pointer joins a group, by the rule the core applies it with; `null`
+  // while there is no drop, or it would move nothing.
+  const dropPlan =
+    drag.dragging === null || drag.spot === null
+      ? null
+      : resolveStripDrop(order, groups, arrangements, { subject: drag.dragging, ...drag.spot })
+  const joins = dropPlan === null ? null : dropPlan.groupId !== null
+  const markerOf = (target: StripDropTarget): string => dropMarker(drag.spot, joins, target)
   // The entry the active tab is drawn in: its own, or its tiled view's whichever tile has focus.
   const activeEntry = stripEntryOf(items, activeTabId)
   const activeDrawn = activeEntry !== null
@@ -445,6 +519,7 @@ export function TabBar({
                 key={`group-${item.group.id}`}
                 group={item.group}
                 hiddenCount={item.hiddenCount}
+                marker={markerOf({ kind: 'group', groupId: item.group.id })}
                 t={t}
               />
             )
@@ -457,6 +532,8 @@ export function TabBar({
                 item={item}
                 members={item.tabIds.flatMap((tabId) => stateOf.get(tabId) ?? [])}
                 selected={item === activeEntry}
+                drag={drag}
+                marker={markerOf({ kind: 'split', arrangementId: item.arrangementId })}
                 listFormat={listFormat}
                 t={t}
               />
@@ -464,7 +541,6 @@ export function TabBar({
           }
 
           const tab = stateOf.get(item.tabId)
-          const index = indexOf.get(item.tabId) ?? 0
           // Cannot happen — the items were built from `tabs` — but a strip that threw would take the
           // whole window's UI with it, and one missing tab is recoverable.
           if (tab === undefined) return null
@@ -475,6 +551,7 @@ export function TabBar({
             <div
               key={tab.id}
               data-tab-id={tab.id}
+              {...stripTargetProps('tab', tab.id)}
               role="tab"
               tabIndex={isActive ? 0 : -1}
               aria-selected={isActive}
@@ -486,15 +563,17 @@ export function TabBar({
                 isActive ? 'tab--active' : '',
                 tab.pinned ? 'tab--pinned' : '',
                 tab.unloaded ? 'tab--unloaded' : '',
-                drag.draggingId === tab.id ? 'tab--dragging' : '',
-                drag.draggingId !== null && drag.reorderIndex === index ? 'tab--dropbefore' : '',
+                drag.dragging?.kind === 'tab' && drag.dragging.tabId === tab.id
+                  ? 'tab--dragging'
+                  : '',
+                markerOf({ kind: 'tab', tabId: tab.id }),
                 item.group === null ? '' : 'tab--grouped',
                 item.position === null ? '' : `tab--group-${item.position}`
               ]
                 .filter(Boolean)
                 .join(' ')}
               style={item.group === null ? undefined : groupColorStyle(item.group.color)}
-              onPointerDown={(event) => drag.begin(event, tab.id)}
+              onPointerDown={(event) => drag.begin(event, { kind: 'tab', tabId: tab.id })}
               onClick={() => void invoke('tabs:activate', { tabId: tab.id })}
               onAuxClick={(event) => onAuxClick(event, tab.id)}
               /*
@@ -558,7 +637,7 @@ export function TabBar({
 
         <button
           type="button"
-          className="tabbar__new"
+          className={['tabbar__new', markerOf({ kind: 'end' })].filter(Boolean).join(' ')}
           aria-label={t('tab.newTab')}
           title={titleWithShortcut(t('tab.newTab'), 'newTab')}
           onClick={() => void invoke('tabs:create', {})}

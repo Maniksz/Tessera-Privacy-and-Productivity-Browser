@@ -16,6 +16,7 @@ import { isInternalScheme } from '../product.js'
 import { quickLinkCardSchema, quickLinkKindSchema, quickLinkSchema } from '../quicklinks/schema.js'
 import { tabGroupInvokeContract, tabGroupSchema } from '../tabgroups/schema.js'
 import { arrangementInvokeContract, arrangementsChangedSchema } from '../arrangements/schema.js'
+import { stripInvokeContract } from '../strip/schema.js'
 import { filterStatusSchema } from '../filters/status.js'
 import { readerGetRequestSchema, readerOutcomeSchema } from '../reader/schema.js'
 import { userRuleSchema } from '../filters/user-rules-schema.js'
@@ -631,10 +632,6 @@ export const invokeContract = {
   },
   'tabs:close': { request: z.object({ tabId: z.string() }), response: ok },
   'tabs:activate': { request: z.object({ tabId: z.string() }), response: ok },
-  'tabs:move': {
-    request: z.object({ tabId: z.string(), toIndex: z.number().int().nonnegative() }),
-    response: ok
-  },
   'tabs:setPinned': {
     request: z.object({ tabId: z.string(), pinned: z.boolean() }),
     response: ok
@@ -1199,7 +1196,8 @@ export const invokeContract = {
   ...importInvokeContract,
   ...workspaceInvokeContract,
   ...tabGroupInvokeContract,
-  ...arrangementInvokeContract
+  ...arrangementInvokeContract,
+  ...stripInvokeContract
 } satisfies Record<InvokeChannel, InvokeDefinition>
 
 export type InvokeContract = typeof invokeContract

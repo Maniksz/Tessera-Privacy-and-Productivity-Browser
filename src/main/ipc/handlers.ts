@@ -26,6 +26,7 @@ import { registerPasswordHandlers } from './password-handlers.js'
 import { registerSiteHandlers } from './site-handlers.js'
 import { registerTabGroupHandlers } from './tabgroup-handlers.js'
 import { registerArrangementHandlers } from './arrangement-handlers.js'
+import { registerStripHandlers } from './strip-handlers.js'
 import { registerOmniboxHandlers } from './omnibox-handlers.js'
 import { registerImportHandlers } from './import-handlers.js'
 import { registerWorkspaceHandlers, type WorkspaceHandlerDeps } from './workspace-handlers.js'
@@ -238,11 +239,6 @@ export function registerIpcHandlers(deps: {
 
   handle('tabs:activate', ({ tabId }, event) => {
     windows.resolve(event)?.activateTab(tabId)
-    return OK
-  })
-
-  handle('tabs:move', ({ tabId, toIndex }, event) => {
-    windows.resolve(event)?.moveTab(tabId, toIndex)
     return OK
   })
 
@@ -476,6 +472,7 @@ export function registerIpcHandlers(deps: {
     locale: uiLocale,
     showMenu: (template, window) => popupTabMenu(template, window.window)
   })
+  registerStripHandlers({ handle, windows })
 
   // --- navigation ----------------------------------------------------------
   handle('nav:goBack', ({ tabId }, event) => {

@@ -780,15 +780,6 @@ export class BrowserWindowController implements PermissionHost {
     this.activateTab(focusTabOf(entry))
   }
 
-  moveTab(tabId: string, toIndex: number): void {
-    const from = this.#tabOrder.indexOf(tabId)
-    if (from === -1) return
-    const clamped = Math.min(Math.max(toIndex, 0), this.#tabOrder.length - 1)
-    this.#tabOrder.splice(from, 1)
-    this.#tabOrder.splice(clamped, 0, tabId)
-    this.#scheduleBroadcast()
-  }
-
   setTabPinned(tabId: string, pinned: boolean): void {
     this.#tabs.get(tabId)?.setPinned(pinned)
   }

@@ -68,7 +68,6 @@ export const INVOKE_CHANNELS = [
   'tabs:create',
   'tabs:close',
   'tabs:activate',
-  'tabs:move',
   'tabs:setPinned',
   'tabs:reopenClosed',
   /*
@@ -86,6 +85,7 @@ export const INVOKE_CHANNELS = [
   'tabgroups:addTab',
   'tabgroups:removeTab',
   'tabgroups:contextMenu',
+  'strip:drop', // a drop in the strip as target and side (U9, KTD7); chrome-only, like the groups
   /*
     Opens the native context menu for a tab.
 

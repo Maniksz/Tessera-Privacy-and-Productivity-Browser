@@ -182,6 +182,33 @@ body {
   box-shadow: -2px 0 0 0 var(--accent);
 }
 
+/*
+  The same line on the other side (U9): a drop reads as target and side, so the line sits on the side
+  of whatever the pointer is over — a tab, a tiled view's entry, a chip, or the new-tab button for the
+  end of the strip. The classes are shared by all four, which is why they are not scoped to `.tab`.
+*/
+.tab--dropafter {
+  box-shadow: 2px 0 0 0 var(--accent);
+}
+
+/*
+  A drop that joins a group draws the line in the group's colour and a little heavier, so "into the
+  group" and "beside it" are told apart before letting go (R12). The colour is the target's own
+  `--tab-group-current`, which every member and chip carries.
+*/
+.tab--dropjoin.tab--dropbefore {
+  box-shadow: -3px 0 0 0 var(--tab-group-current, var(--accent));
+}
+
+.tab--dropjoin.tab--dropafter {
+  box-shadow: 3px 0 0 0 var(--tab-group-current, var(--accent));
+}
+
+/* Onto a folded chip: the drop goes in behind it, so the whole chip is outlined rather than one side. */
+.tabgroup--collapsed.tab--dropjoin {
+  box-shadow: inset 0 0 0 2px var(--tab-group-current, var(--accent));
+}
+
 .tab__title {
   flex: 1;
   min-width: 0;

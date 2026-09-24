@@ -543,3 +543,114 @@ describe('a tiled view is grouped as one (U8, R10)', () => {
     await h.cleanup()
   })
 })
+
+describe('a drop in the strip (U9, R12, KTD7)', () => {
+  /*
+    `strip:drop` lands here: the pure `resolveStripDrop` decides, and this writes its answer through the
+    store and the window's order in one settle. What only this layer can get wrong is the writing — a
+    membership that disagrees with the order it was resolved with, a second broadcast, or a tab folded
+    away with its tile still held.
+  */
+  const A = { id: 'A', tabIds: ['A1', 'A2'], activeTabId: 'A1' }
+
+  const members = (h: Harness, groupId: string): string[] =>
+    h.controller.groups().find((group) => group.id === groupId)?.tabIds ?? []
+
+  it('takes a loose tab dropped between two members into the group, once published', async () => {
+    const h = await harness(['X', 'Y', 'a', 'b'], { tiled: [] })
+    const group = h.controller.create({ tabIds: ['a', 'b'] })
+    const before = h.broadcasts()
+
+    h.controller.dropInStrip({
+      subject: { kind: 'tab', tabId: 'X' },
+      target: { kind: 'tab', tabId: 'b' },
+      side: 'before'
+    })
+
+    expect(members(h, group.id)).toEqual(['a', 'X', 'b'])
+    expect(h.order()).toEqual(['Y', 'a', 'X', 'b'])
+    expect(h.broadcasts()).toBe(before + 1)
+    await h.cleanup()
+  })
+
+  it('takes a member dropped before its chip out of the group', async () => {
+    const h = await harness(['Y', 'a', 'b'], { tiled: [] })
+    const group = h.controller.create({ tabIds: ['a', 'b'] })
+
+    h.controller.dropInStrip({
+      subject: { kind: 'tab', tabId: 'b' },
+      target: { kind: 'group', groupId: group.id },
+      side: 'before'
+    })
+
+    expect(members(h, group.id)).toEqual(['a'])
+    expect(h.order()).toEqual(['Y', 'b', 'a'])
+    await h.cleanup()
+  })
+
+  it('reorders a loose tab without touching any group', async () => {
+    const h = await harness(['a', 'b', 'X', 'Y'], { tiled: [] })
+    const group = h.controller.create({ tabIds: ['a', 'b'] })
+    h.controller.setCollapsed(group.id, true)
+
+    // The index bug: a folded group left of the pointer used to shift this drop in front of it.
+    h.controller.dropInStrip({
+      subject: { kind: 'tab', tabId: 'Y' },
+      target: { kind: 'tab', tabId: 'X' },
+      side: 'before'
+    })
+
+    expect(h.order()).toEqual(['a', 'b', 'Y', 'X'])
+    expect(members(h, group.id)).toEqual(['a', 'b'])
+    await h.cleanup()
+  })
+
+  it('moves a tiled view into a group as one run, in tile order', async () => {
+    const h = await harness(['A1', 'A2', 'X', 'a', 'b'], { tiled: [], arrangements: [A] })
+    const group = h.controller.create({ tabIds: ['a', 'b'] })
+
+    h.controller.dropInStrip({
+      subject: { kind: 'split', arrangementId: 'A' },
+      target: { kind: 'tab', tabId: 'a' },
+      side: 'after'
+    })
+
+    expect(members(h, group.id)).toEqual(['a', 'A1', 'A2', 'b'])
+    expect(h.order()).toEqual(['X', 'a', 'A1', 'A2', 'b'])
+    await h.cleanup()
+  })
+
+  it('folds away a tab dropped onto a folded chip, and gives the window another tab', async () => {
+    // The tab on screen is hidden by the drop, so it must give up its tile as a fold would (R11).
+    const h = await harness(['a', 'b', 'X', 'Y'], { tiled: ['X'], activeTab: 'X' })
+    const group = h.controller.create({ tabIds: ['a', 'b'] })
+    h.controller.setCollapsed(group.id, true)
+    const releasesBefore = h.releaseCalls().length
+
+    h.controller.dropInStrip({
+      subject: { kind: 'tab', tabId: 'X' },
+      target: { kind: 'group', groupId: group.id },
+      side: 'after'
+    })
+
+    expect(members(h, group.id)).toEqual(['a', 'b', 'X'])
+    expect(h.releaseCalls().slice(releasesBefore)).toEqual([['a', 'b', 'X']])
+    expect(h.activated()).toEqual(['Y'])
+    await h.cleanup()
+  })
+
+  it('does nothing, and publishes nothing, for a drop that moves nothing', async () => {
+    const h = await harness(['X', 'Y'])
+    const before = h.broadcasts()
+
+    h.controller.dropInStrip({
+      subject: { kind: 'tab', tabId: 'X' },
+      target: { kind: 'tab', tabId: 'X' },
+      side: 'after'
+    })
+
+    expect(h.order()).toEqual(['X', 'Y'])
+    expect(h.broadcasts()).toBe(before)
+    await h.cleanup()
+  })
+})

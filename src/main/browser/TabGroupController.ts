@@ -1,5 +1,12 @@
+import { resolveStripDrop, type StripDrop } from '@shared/strip/drop.js'
 import { stripOrder, type StripArrangement } from '@shared/strip/model.js'
-import { isTabHidden, tabsHiddenByCollapse, type TabGroup } from '@shared/tabgroups/model.js'
+import {
+  findGroup,
+  groupOfTab,
+  isTabHidden,
+  tabsHiddenByCollapse,
+  type TabGroup
+} from '@shared/tabgroups/model.js'
 import type { TabGroupColor } from '@shared/tabgroups/palette.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 
@@ -200,23 +207,7 @@ export class TabGroupController {
     const wasActive = this.host.activeTabId()
 
     this.host.book.setCollapsed(id, collapsed)
-
-    /*
-      Every hidden tab in the window, not just this group's, and one call rather than a loop.
-
-      Every hidden tab because the set is what must be true afterwards rather than a diff of this one
-      change, and a member of another folded group that has somehow acquired a tile is a bug either
-      way. One call because the grid should not be observable half-released; see `releaseTiles`.
-    */
-    const hidden = tabsHiddenByCollapse(this.groups())
-    const cleared = this.host.releaseTiles(hidden)
-
-    this.#settle()
-
-    if (!cleared) return
-    const stays = wasActive !== null && !hidden.includes(wasActive) ? wasActive : undefined
-    const visible = stays ?? this.displayOrder().find((tabId) => !hidden.includes(tabId))
-    if (visible !== undefined) this.host.activateTab(visible)
+    this.#settleFolded(wasActive)
   }
 
   dissolve(id: string): void {
@@ -228,27 +219,14 @@ export class TabGroupController {
    * Same rule as `create`: a tab this window does not have cannot join a group.
    *
    * A member of a tiled view brings the whole view, in tile order and as one run starting at
-   * `index` — counted, as for a single tab, among the group's members that are not moving. That
-   * takes two passes when an index is asked for, because the store places one tab at a time: the
-   * view's members are first sent to the end of the group, so none of them is left standing before
-   * the index to shift it, and then placed one after another from the index. The target is never
-   * emptied on the way, so a group that holds little besides the view is not dissolved by it.
+   * `index` — counted, as for a single tab, among the group's members that are not moving. See
+   * `#join` for why that takes two passes, and why a group holding little besides the view survives.
    */
   addTab(groupId: string, tabId: string, index?: number): void {
     if (!this.host.liveTabIds().includes(tabId)) {
       throw new Error(`no tab ${tabId} in this window`)
     }
-    const members = this.#withViews([tabId])
-    if (index === undefined) {
-      for (const member of members) this.host.book.addTab(groupId, member)
-    } else {
-      if (members.length > 1) {
-        for (const member of members) {
-          this.host.book.addTab(groupId, member, Number.MAX_SAFE_INTEGER)
-        }
-      }
-      members.forEach((member, offset) => this.host.book.addTab(groupId, member, index + offset))
-    }
+    this.#join(groupId, this.#withViews([tabId]), index)
     this.#settle()
   }
 
@@ -256,6 +234,81 @@ export class TabGroupController {
   removeTab(tabId: string): void {
     for (const member of this.#withViews([tabId])) this.host.book.removeTab(member)
     this.#settle()
+  }
+
+  /**
+   * A tab or a tiled view's entry let go in the strip: before or after a tab, an entry or a chip, or at
+   * the end (`strip:drop`, R12, KTD7).
+   *
+   * `resolveStripDrop` decides where it goes and which group it is in afterwards; this writes that
+   * through the store and the window's order and settles once. A drop onto a folded chip folds the
+   * dropped tabs away with the group, so it ends the way a fold does: whatever of them held a tile gives
+   * it up, and the window gets a tab it can still show (R11). A drop that moves nothing writes nothing
+   * and publishes nothing.
+   */
+  dropInStrip(drop: StripDrop): void {
+    const wasActive = this.host.activeTabId()
+    const plan = resolveStripDrop(
+      this.host.tabOrder(),
+      this.groups(),
+      this.host.arrangements(),
+      drop
+    )
+    if (plan === null) return
+
+    if (plan.groupId === null) {
+      for (const tabId of plan.tabIds) {
+        if (groupOfTab(this.groups(), tabId) !== undefined) this.host.book.removeTab(tabId)
+      }
+    } else {
+      this.#join(plan.groupId, plan.tabIds, plan.index)
+    }
+    this.host.setTabOrder(plan.order)
+
+    const folded =
+      plan.groupId !== null && findGroup(this.groups(), plan.groupId)?.collapsed === true
+    if (folded) this.#settleFolded(wasActive)
+    else this.#settle()
+  }
+
+  /**
+   * Puts these tabs — already widened to their views — in a group, from `index` among its members that
+   * are not moving, or appended when there is no index.
+   *
+   * Two passes when an index is asked for, because the store places one tab at a time: a view's members
+   * are first sent to the end of the group, so none of them is left standing before the index to shift
+   * it, and then placed one after another from the index. The target is never emptied on the way.
+   */
+  #join(groupId: string, members: readonly string[], index: number | undefined): void {
+    if (index === undefined) {
+      for (const member of members) this.host.book.addTab(groupId, member)
+      return
+    }
+    if (members.length > 1) {
+      for (const member of members) this.host.book.addTab(groupId, member, Number.MAX_SAFE_INTEGER)
+    }
+    members.forEach((member, offset) => this.host.book.addTab(groupId, member, index + offset))
+  }
+
+  /**
+   * Settles after something was folded away: every hidden tab gives up its tile, and a window left with
+   * an empty screen gets back the tab that was active if it is still visible, or the first one that is.
+   *
+   * Every hidden tab in the window, not just this group's, and one call rather than a loop. Every
+   * hidden tab because the set is what must be true afterwards rather than a diff of this one change,
+   * and a member of another folded group that has somehow acquired a tile is a bug either way. One
+   * call because the grid should not be observable half-released; see `releaseTiles`.
+   */
+  #settleFolded(wasActive: string | null): void {
+    const hidden = tabsHiddenByCollapse(this.groups())
+    const cleared = this.host.releaseTiles(hidden)
+
+    this.#settle()
+
+    if (!cleared) return
+    const stays = wasActive !== null && !hidden.includes(wasActive) ? wasActive : undefined
+    const visible = stays ?? this.displayOrder().find((tabId) => !hidden.includes(tabId))
+    if (visible !== undefined) this.host.activateTab(visible)
   }
 
   /**

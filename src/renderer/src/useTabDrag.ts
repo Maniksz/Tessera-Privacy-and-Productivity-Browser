@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import type { StripDropSide, StripDropSubject, StripDropTarget } from '@shared/strip/drop.js'
 import { invoke, subscribe } from './bridge.js'
 import { rafThrottle } from './rafThrottle.js'
 
 /**
- * Dragging a tab, either to reorder it in the strip or to drop it into a tile.
+ * Dragging a tab, either to reorder it in the strip or to drop it into a tile — and dragging a tiled
+ * view's entry, which only ever reorders (U9).
  *
  * ## Why pointer events rather than HTML5 drag and drop
  *
@@ -54,38 +56,94 @@ export function edgeScrollStep(
 }
 
 /**
- * Insertion index within the strip, or null when the pointer is outside it.
+ * How much of a folded chip, from its left edge, counts as before it.
  *
- * From each tab's own rectangle, which is in viewport coordinates, so the answer stays right while the
- * strip is scrolled: the rectangles move with the scroll, and the pointer is compared with where each
- * tab is drawn now rather than with where it would be unscrolled.
+ * The rest of the chip is "onto" it, which puts the drop last in its group (KTD7). A narrow strip
+ * rather than half, because the chip is the whole of a folded group and dropping onto it is the point;
+ * before it is still reachable, for placing a tab just in front of the group.
  */
-function stripIndexAt(strip: HTMLElement | null, clientX: number, clientY: number): number | null {
+const FOLDED_CHIP_BEFORE_SHARE = 0.25
+
+/** Where a drop would land: the target under the pointer and the side of it (KTD7). */
+export interface StripSpot {
+  target: StripDropTarget
+  side: StripDropSide
+}
+
+/**
+ * What a drawn element offers as a drop target, read from its `data-strip-target` and `data-strip-id`.
+ * The strip writes both; see `stripTargetProps` in `TabBar`.
+ */
+function targetOf(element: HTMLElement): StripDropTarget | null {
+  const id = element.dataset['stripId'] ?? ''
+  switch (element.dataset['stripTarget']) {
+    case 'tab':
+      return { kind: 'tab', tabId: id }
+    case 'split':
+      return { kind: 'split', arrangementId: id }
+    case 'group':
+      return { kind: 'group', groupId: id }
+    default:
+      return null
+  }
+}
+
+/**
+ * The target and side under the pointer, or null when the pointer is not over the strip.
+ *
+ * The first target whose right edge is past the pointer, and its left or right half — a folded chip
+ * split by `FOLDED_CHIP_BEFORE_SHARE` instead. Past the last target is the end of the strip. Targets
+ * rather than an index, so a folded group's hidden tabs and a tiled view's members cannot be
+ * miscounted: the core resolves the spot against its own order (`resolveStripDrop`).
+ *
+ * From each target's own rectangle, which is in viewport coordinates, so the answer stays right while
+ * the strip is scrolled: the rectangles move with the scroll, and the pointer is compared with where
+ * each target is drawn now rather than with where it would be unscrolled.
+ */
+export function stripSpotAt(
+  strip: HTMLElement | null,
+  clientX: number,
+  clientY: number
+): StripSpot | null {
   if (strip === null) return null
   const box = strip.getBoundingClientRect()
   if (clientY < box.top || clientY > box.bottom) return null
 
-  const tabs = [...strip.querySelectorAll<HTMLElement>('[data-tab-id]')]
-  if (tabs.length === 0) return 0
-  for (const [index, element] of tabs.entries()) {
+  for (const element of strip.querySelectorAll<HTMLElement>('[data-strip-target]')) {
+    const target = targetOf(element)
     const rect = element.getBoundingClientRect()
-    if (clientX < rect.left + rect.width / 2) return index
+    if (target === null || clientX >= rect.right) continue
+    const share = element.dataset['stripFolded'] === 'true' ? FOLDED_CHIP_BEFORE_SHARE : 0.5
+    return { target, side: clientX < rect.left + rect.width * share ? 'before' : 'after' }
   }
-  return tabs.length - 1
+  return { target: { kind: 'end' }, side: 'after' }
+}
+
+/** Two spots are the same drop, so a pointer moving within one half re-renders nothing. */
+function sameSpot(a: StripSpot | null, b: StripSpot | null): boolean {
+  return a === b || (a !== null && b !== null && JSON.stringify(a) === JSON.stringify(b))
 }
 
 export interface TabDrag {
-  /** The tab being dragged, once the press has passed the threshold. */
-  draggingId: string | null
-  /** Where it would be inserted in the strip, or null while it is over the tiles. */
-  reorderIndex: number | null
-  begin(event: ReactPointerEvent<HTMLElement>, tabId: string): void
+  /** The tab or entry being dragged, once the press has passed the threshold. */
+  dragging: StripDropSubject | null
+  /** Where it would land in the strip, or null while it is over the tiles. */
+  spot: StripSpot | null
+  begin(event: ReactPointerEvent<HTMLElement>, subject: StripDropSubject): void
 }
 
 export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDrag {
-  const press = useRef<{ tabId: string; x: number; y: number; active: boolean } | null>(null)
-  const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [reorderIndex, setReorderIndex] = useState<number | null>(null)
+  const press = useRef<{ subject: StripDropSubject; x: number; y: number; active: boolean } | null>(
+    null
+  )
+  const [dragging, setDragging] = useState<StripDropSubject | null>(null)
+  const [spot, setSpotState] = useState<StripSpot | null>(null)
+  const setSpot = useMemo(
+    () =>
+      (next: StripSpot | null): void =>
+        setSpotState((previous) => (sameSpot(previous, next) ? previous : next)),
+    []
+  )
 
   const moves = useMemo(
     () =>
@@ -109,10 +167,10 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
       if (presentation?.kind === 'tab-drop') return
       press.current = null
       moves.cancel()
-      setDraggingId(null)
-      setReorderIndex(null)
+      setDragging(null)
+      setSpot(null)
     })
-  }, [moves])
+  }, [moves, setSpot])
 
   useEffect(() => {
     /*
@@ -138,7 +196,7 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
       const strip = stripRef.current
       if (edge === null || strip === null || press.current?.active !== true) return
       strip.scrollLeft += edge.step
-      setReorderIndex(stripIndexAt(strip, edge.x, edge.y))
+      setSpot(stripSpotAt(strip, edge.x, edge.y))
       frame = requestAnimationFrame(tick)
     }
 
@@ -157,16 +215,22 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
       const current = press.current
       if (current === null) return
 
+      const { subject } = current
       if (!current.active) {
         const travelled = Math.hypot(event.clientX - current.x, event.clientY - current.y)
         if (travelled < DRAG_THRESHOLD) return
         current.active = true
-        setDraggingId(current.tabId)
-        void invoke('drag:start', { tabId: current.tabId })
+        setDragging(subject)
+        /*
+          Only a tab starts the tile drag. A tiled view's entry has nowhere to go among the tiles —
+          dropping it there would merge two views, which the plan rules out — so the core is not told,
+          and no drop zone appears over the tiles.
+        */
+        if (subject.kind === 'tab') void invoke('drag:start', { tabId: subject.tabId })
       }
 
-      moves.post({ x: event.clientX, y: event.clientY })
-      setReorderIndex(stripIndexAt(stripRef.current, event.clientX, event.clientY))
+      if (subject.kind === 'tab') moves.post({ x: event.clientX, y: event.clientY })
+      setSpot(stripSpotAt(stripRef.current, event.clientX, event.clientY))
       steer(event.clientX, event.clientY)
     }
 
@@ -178,16 +242,18 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
       if (current?.active !== true) return
 
       moves.cancel()
-      setDraggingId(null)
-      const target = stripIndexAt(stripRef.current, event.clientX, event.clientY)
-      setReorderIndex(null)
+      setDragging(null)
+      const landed = stripSpotAt(stripRef.current, event.clientX, event.clientY)
+      setSpot(null)
 
       // Released over the strip: this was a reorder, so the tile drag is cancelled and the
       // tab keeps whatever tile it already had.
-      const dropInTile = commit && target === null
-      void invoke('drag:end', { x: event.clientX, y: event.clientY, commit: dropInTile })
-      if (commit && target !== null) {
-        void invoke('tabs:move', { tabId: current.tabId, toIndex: target })
+      if (current.subject.kind === 'tab') {
+        const dropInTile = commit && landed === null
+        void invoke('drag:end', { x: event.clientX, y: event.clientY, commit: dropInTile })
+      }
+      if (commit && landed !== null) {
+        void invoke('strip:drop', { subject: current.subject, ...landed })
       }
     }
 
@@ -204,17 +270,17 @@ export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDr
       moves.cancel()
       stopEdgeScroll()
     }
-  }, [moves, stripRef])
+  }, [moves, setSpot, stripRef])
 
   return {
-    draggingId,
-    reorderIndex,
-    begin: (event, tabId) => {
+    dragging,
+    spot,
+    begin: (event, subject) => {
       // Left button only, and never from a control inside the tab: the close and mute
       // buttons have their own jobs and must not start a drag.
       if (event.button !== 0) return
       if ((event.target as HTMLElement).closest('button') !== null) return
-      press.current = { tabId, x: event.clientX, y: event.clientY, active: false }
+      press.current = { subject, x: event.clientX, y: event.clientY, active: false }
     }
   }
 }
