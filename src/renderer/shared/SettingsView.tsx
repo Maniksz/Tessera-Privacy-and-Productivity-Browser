@@ -207,12 +207,12 @@ export function SettingsView({
   }
 
   /*
-    The one case where the button's answer would be a lie, admitted next to the button.
+    The one case where the button can never find anything, said next to the button.
 
-    `updates.channel` defaults to `alpha`; a user who chooses `stable` is told "No new version"
-    forever, because every version this project has published is a prerelease and GitHub's "latest
-    release" excludes those. That was a tolerable footnote while the only way to ask was a Help-menu
-    item nobody finds. A button at the top of the settings page makes a wrong answer far easier to
+    `updates.channel` defaults to `alpha`; a user who chooses `stable` is offered nothing, ever,
+    because every version this project has published is a prerelease and GitHub's "latest release"
+    excludes those. That was a tolerable footnote while the only way to ask was a Help-menu
+    item nobody finds. A button at the top of the settings page makes that dead end far easier to
     reach, so this surface must not present it without the caveat.
 
     The sentence is the descriptor's own — the same text the `updates.channel` row renders nine
@@ -220,8 +220,9 @@ export function SettingsView({
     would be a second wording of the same fact in two locales, a new catalogue key the budget has no
     room for, and one more place to forget when the first stable release makes it untrue.
 
-    This is a mitigation and not the fix. The dialog still says "No new version" to that user, and
-    correcting *that* needs wording and an outcome this component cannot see; see the report.
+    The dialog says the same since it got its own outcome (`no-stable-release` in `UpdateService`):
+    no stable version yet, and Alpha for the current releases. This keeps the caveat visible before
+    anybody presses the button.
   */
   const channelCaveat = useMemo(() => {
     if (settings?.['updates.channel'] !== 'stable') return null

@@ -23,7 +23,8 @@ import { isUpgrade, type UpdateChannel } from './version.js'
  *
  *   - `GET /<owner>/<repo>/releases.atom` — the public Atom feed of releases.
  *   - `GET /<owner>/<repo>/releases/latest` — only when the channel is `stable`, to resolve which
- *     tag GitHub considers the newest *release*.
+ *     tag GitHub considers the newest *release*. Prereleases do not count, so while every release is
+ *     one GitHub has no answer, and the check says `no-stable-release` rather than "no new version".
  *   - `GET /<owner>/<repo>/releases/download/<tag>/<channel>-<platform>.yml` — the version, the file
  *     names and the checksums.
  *
@@ -254,6 +255,8 @@ export function updatePolicyFor(channel: UpdateChannel): UpdatePolicy {
 export type UpdateFeedResult =
   | { readonly kind: 'offer'; readonly version: string }
   | { readonly kind: 'nothing-published' }
+  /** Channel `stable`, and every published release is a prerelease: GitHub has no "latest". */
+  | { readonly kind: 'no-stable-release' }
   | { readonly kind: 'unreachable'; readonly detail: string }
   /** Not installed from a release — run from source, or an unpacked build. */
   | { readonly kind: 'no-feed' }
@@ -292,6 +295,7 @@ export type UpdatePromptKind =
   | 'ready'
   | 'up-to-date'
   | 'nothing-published'
+  | 'no-stable-release'
   | 'check-failed'
   | 'download-failed'
   | 'no-feed'
@@ -324,6 +328,7 @@ export type UpdateOutcome =
   | { readonly kind: 'no-feed' }
   | { readonly kind: 'check-failed' }
   | { readonly kind: 'nothing-published' }
+  | { readonly kind: 'no-stable-release' }
   | { readonly kind: 'up-to-date'; readonly version: string }
   | { readonly kind: 'declined'; readonly version: string }
   | { readonly kind: 'sent-to-release-page'; readonly version: string }
@@ -503,20 +508,15 @@ export class UpdateService {
     await this.#options.networkReady?.()
     const found = await updater.check()
 
-    if (found.kind === 'unreachable') {
-      // One line, and only when nobody asked. The detail is the library's message, which names the
-      // URL and the status — useful in a terminal, useless in a dialog.
-      console.warn('[updates] the check could not be completed:', found.detail)
-      await this.#announceNotice('check-failed', current)
-      return { kind: 'check-failed' }
-    }
-    if (found.kind === 'nothing-published') {
-      await this.#announceNotice('nothing-published', current)
-      return { kind: 'nothing-published' }
-    }
-    if (found.kind === 'no-feed') {
-      await this.#announceNotice('no-feed', current)
-      return { kind: 'no-feed' }
+    if (found.kind !== 'offer') {
+      // One line for a failure, and in a dialog only when somebody asked. The detail is the library's
+      // message, which names the URL and the status — useful in a terminal, useless in a dialog.
+      if (found.kind === 'unreachable') {
+        console.warn('[updates] the check could not be completed:', found.detail)
+      }
+      const kind = found.kind === 'unreachable' ? 'check-failed' : found.kind
+      await this.#announceNotice(kind, current)
+      return { kind }
     }
 
     const version = found.version
@@ -624,10 +624,7 @@ export class UpdateService {
 }
 
 /** The results that are reported as a sentence rather than acted on. */
-export type NoticeKind = Extract<
-  UpdatePromptKind,
-  'up-to-date' | 'nothing-published' | 'check-failed' | 'download-failed' | 'no-feed'
->
+export type NoticeKind = Exclude<UpdatePromptKind, 'offer' | 'ready'>
 
 /**
  * Consent one, as a message box.
@@ -737,6 +734,7 @@ export function noticePrompt(input: {
  * A table rather than a chain of `if`s so that adding an outcome without wording it is a compile
  * error. "Nothing published" shares the *title* of "up to date" because that is what it means to a
  * user — there is no newer version — while the sentence underneath is honest about the difference.
+ * "No stable release" does not: "no new version" was the stable channel's wrong answer, not a fact.
  */
 const NOTICE_WORDING: Readonly<
   Record<
@@ -756,6 +754,11 @@ const NOTICE_WORDING: Readonly<
   'nothing-published': {
     title: 'upToDateTitle',
     message: 'nothingPublishedMessage',
+    severity: 'info'
+  },
+  'no-stable-release': {
+    title: 'noStableReleaseTitle',
+    message: 'noStableReleaseMessage',
     severity: 'info'
   },
   'check-failed': {

@@ -665,4 +665,13 @@ describe('the kill switch in words (U13, R23)', () => {
       }
     }
   })
+
+  it('tells a stable-channel user there is no stable version yet, and where the releases are', () => {
+    // The settings page shows this sentence beside "Check for updates" while the channel is
+    // `stable`; the dialog that button raises says the same (`no-stable-release`).
+    expect(describeSetting('updates.channel', EN).description).toMatch(/no stable version yet/)
+    expect(describeSetting('updates.channel', EN).description).toMatch(/Alpha gets the current/)
+    expect(describeSetting('updates.channel', DE).description).toMatch(/stabile Version gibt es/)
+    expect(describeSetting('updates.channel', DE).description).toMatch(/bekommt „Alpha“/)
+  })
 })

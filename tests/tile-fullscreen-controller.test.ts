@@ -307,6 +307,250 @@ describe('a page giving up fullscreen inside a tile', () => {
   })
 })
 
+/** The window reporting that it entered fullscreen, the way `window-events.ts` passes it on. */
+function windowEntered(h: Harness): void {
+  h.split.setWindowFullscreen(true)
+  h.controller.onWindowEnteredFullscreen()
+}
+
+/** The window reporting that it left fullscreen, the way `window-events.ts` passes it on. */
+function windowLeft(h: Harness): void {
+  h.split.setWindowFullscreen(false)
+  h.controller.onWindowLeftFullscreen()
+}
+
+/**
+ * The same rule where nothing confines the page: a single pane, or window scope.
+ *
+ * ## What was reported
+ *
+ * F11, a video to fullscreen, the video left again through *the player's own button* — and sometimes
+ * the F11 went with it ("passiert manchmal"). No key is pressed on the way out, so the ladder is not
+ * involved; what decides it is Electron's record of whether the window was fullscreen before the page
+ * asked, which is C++ in the binary. These cases pin the outcome instead of that record: the window's
+ * fullscreen that predates the page is kept, one the page took is given back, and every exit the user
+ * asks for is one they get.
+ */
+describe('a page giving up fullscreen that took no confinement', () => {
+  /** F11 in a single pane, settled, and then a video going fullscreen inside it. */
+  function videoUnderF11(layout: LayoutId = '1x1'): Harness {
+    const h = harness(layout)
+    h.split.assignTab('tab-a', 0)
+    windowEntered(h)
+    h.settle()
+    h.controller.onPageEnter('tab-a')
+    return h
+  }
+
+  it("keeps the user's fullscreen when the page reports first, as on macOS", () => {
+    const h = videoUnderF11()
+
+    // The player's button. The window's exit, if Electron starts one, is still animating.
+    h.controller.onPageLeave()
+    expect(h.enteredWindowFullscreen, 'the re-entry was not asked for in time').toBe(1)
+
+    windowLeft(h)
+    h.settle()
+    windowEntered(h)
+    expect(h.enteredWindowFullscreen, 'the exit was answered twice').toBe(1)
+    expect(h.fullScreenable.at(-1)).toBe(true)
+  })
+
+  it("keeps the user's fullscreen when the window reports first, as on Windows and Linux", () => {
+    const h = videoUnderF11()
+
+    windowLeft(h)
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.enteredWindowFullscreen, 'F11 went with the video').toBe(1)
+  })
+
+  it('keeps it under window scope in a split layout too', () => {
+    // Window scope lifts the confinement in every layout, and with it the protection that used to
+    // depend on the confinement.
+    const h = harness('2x2')
+    h.scope = 'window'
+    h.split.assignTab('tab-a', 0)
+    windowEntered(h)
+    h.settle()
+    h.controller.onPageEnter('tab-a')
+
+    windowLeft(h)
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.enteredWindowFullscreen).toBe(1)
+  })
+
+  it('gives a window the page took back to windowed, reported window first', () => {
+    /*
+      The case the one-turn marker exists for. On Windows and Linux the page's request takes the window
+      synchronously, so `enter-full-screen` arrives before the page's own event, from the same stack.
+      Read without the marker, the page would seem to have found the window fullscreen already — and
+      the user would be kept in a fullscreen they never asked for.
+    */
+    const h = harness('1x1')
+    h.split.assignTab('tab-a', 0)
+    windowEntered(h)
+    h.controller.onPageEnter('tab-a')
+    h.settle()
+
+    windowLeft(h)
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.enteredWindowFullscreen, 'the page took the window and it was kept').toBe(0)
+  })
+
+  it('gives a window the page took back to windowed, reported page first', () => {
+    // macOS: the page's event arrives at once, the window's after the animation.
+    const h = harness('1x1')
+    h.split.assignTab('tab-a', 0)
+    h.controller.onPageEnter('tab-a')
+    windowEntered(h)
+    h.settle()
+
+    h.controller.onPageLeave()
+    windowLeft(h)
+    h.settle()
+
+    expect(h.enteredWindowFullscreen).toBe(0)
+  })
+
+  it('lets the user out by the key while the video is still fullscreen', () => {
+    /*
+      The exit that looks most like the defect: the window leaves, and the page may give up its
+      fullscreen in the same breath. It is the user's by definition, because they asked, and it is
+      recorded before the window is flipped so the platforms that report from inside the flip see it.
+    */
+    const h = videoUnderF11()
+
+    h.controller.toggleFullscreen()
+    windowLeft(h)
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.toggledWindowFullscreen).toBe(1)
+    expect(h.enteredWindowFullscreen, 'the user was put back into a fullscreen they left').toBe(0)
+  })
+
+  it('lets the user out by the key when the page reports first, as on macOS', () => {
+    // The window's exit is still animating when the page lets go, so the split still says fullscreen.
+    const h = videoUnderF11()
+
+    h.controller.toggleFullscreen()
+    h.controller.onPageLeave()
+    windowLeft(h)
+    h.settle()
+
+    expect(h.enteredWindowFullscreen).toBe(0)
+  })
+
+  it('lets the user out by the ladder past a player that ignored the first press', () => {
+    /*
+      The first rung asks the page to leave and the page does not, so the second press reaches the
+      window with the page still fullscreen — and the page may let go in the same breath as the
+      window. Without the ladder saying so, that is indistinguishable from Chromium taking the window.
+    */
+    const h = videoUnderF11()
+
+    h.controller.escape()
+    h.controller.escape()
+    expect(h.exitedWindowFullscreen).toBe(1)
+    windowLeft(h)
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.enteredWindowFullscreen).toBe(0)
+  })
+
+  it('lets the user out by the ladder once the video is small again', () => {
+    const h = videoUnderF11()
+
+    h.controller.escape()
+    expect(h.askedPages).toEqual(['tab-a'])
+    h.controller.onPageLeave()
+    const askedBack = h.enteredWindowFullscreen
+
+    h.controller.escape()
+    expect(h.exitedWindowFullscreen).toBe(1)
+    windowLeft(h)
+    h.settle()
+
+    expect(h.enteredWindowFullscreen, 'the last rung was answered by going back up').toBe(askedBack)
+  })
+
+  it('lets the user out by the green button while the video carries on', () => {
+    // Not through this controller, so not marked — told apart by the page keeping its fullscreen.
+    const h = videoUnderF11()
+
+    windowLeft(h)
+    h.settle()
+
+    expect(h.enteredWindowFullscreen).toBe(0)
+    expect(h.fullScreenable.at(-1)).toBe(true)
+  })
+
+  it('does not fight the green button with a request Electron never needed', () => {
+    /*
+      When Electron gets it right the window never leaves, and the re-entry `onPageLeave` asked for
+      is a no-op on a fullscreen window — but it is still recorded as awaited. The next exit is then
+      the user's, and has to be read as theirs.
+    */
+    const h = videoUnderF11()
+    h.controller.onPageLeave()
+    const askedBack = h.enteredWindowFullscreen
+
+    windowLeft(h)
+    h.settle()
+
+    expect(h.enteredWindowFullscreen).toBe(askedBack)
+  })
+
+  it("does not let an earlier video's request swallow the next one's exit", () => {
+    /*
+      The same left-over request, one video later. On Windows and Linux the window's exit is reported
+      first, and read as the answer to that stale request it would skip the check that puts the
+      window back — so a new page's fullscreen starts with nothing awaited.
+    */
+    const h = videoUnderF11()
+    h.controller.onPageLeave()
+    const askedBack = h.enteredWindowFullscreen
+
+    h.controller.onPageEnter('tab-a')
+    windowLeft(h)
+    h.controller.onPageLeave()
+    h.settle()
+
+    expect(h.enteredWindowFullscreen).toBe(askedBack + 1)
+  })
+})
+
+describe('a window entering fullscreen', () => {
+  it('is fullscreenable once it is there, whatever order the policy arrived in', () => {
+    /*
+      macOS, confined: the page's exit asks for the window back, the exit completes, the deferred policy
+      runs while the re-entry is still animating and marks the window un-fullscreenable. Arriving
+      fullscreen like that, the ladder's last rung would be silence. Lifting it on arrival closes that.
+    */
+    const h = harness('2x2')
+    h.split.assignTab('tab-a', 1)
+    h.controller.onPageEnter('tab-a')
+    h.controller.toggleFullscreen()
+    windowEntered(h)
+
+    h.controller.onPageLeave()
+    windowLeft(h)
+    h.settle()
+    expect(h.fullScreenable.at(-1), 'the policy did not run after the exit').toBe(false)
+
+    windowEntered(h)
+    expect(h.fullScreenable.at(-1)).toBe(true)
+    expect(h.enteredWindowFullscreen).toBe(1)
+  })
+})
+
 describe('the fullscreen key', () => {
   /*
     F11 takes the *window*, in every layout. Reported in exactly those words — "with F11 I meant the

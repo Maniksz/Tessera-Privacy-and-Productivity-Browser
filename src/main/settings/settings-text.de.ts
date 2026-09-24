@@ -453,7 +453,7 @@ export const de: SettingTextTable = {
     channel: {
       label: 'Über welche Veröffentlichungen du erfährst',
       description:
-        'Jede bisher veröffentlichte Version ist eine Vorabversion, und GitHubs „neueste Veröffentlichung“ schließt genau die aus – „nur stabile“ heißt heute also: Dir wird nie etwas angeboten. Das ändert sich mit der ersten Veröffentlichung, die keine Vorabversion ist.',
+        'Jede bisher veröffentlichte Version ist eine Vorabversion, und GitHubs „neueste Veröffentlichung“ schließt genau die aus – eine stabile Version gibt es also noch nicht, und mit „nur stabile“ wird dir nichts angeboten, bis die erste Veröffentlichung erscheint, die keine Vorabversion ist. Die aktuellen Versionen bekommt „Alpha“.',
       choices: { stable: 'Nur stabile Versionen', alpha: 'Alpha, mit Vorabversionen' }
     }
   }

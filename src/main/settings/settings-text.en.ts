@@ -480,7 +480,7 @@ export const en = {
     channel: {
       label: 'Which releases you are told about',
       description:
-        'Every version published so far is a prerelease, and GitHub’s "latest release" excludes those — so choosing stable today means never being offered anything at all. That changes with the first release that is not a prerelease.',
+        'Every version published so far is a prerelease, and GitHub’s "latest release" excludes those — so there is no stable version yet, and choosing stable means being offered nothing until the first release that is not a prerelease. Alpha gets the current releases.',
       choices: { stable: 'Stable versions only', alpha: 'Alpha, including prereleases' }
     }
   }

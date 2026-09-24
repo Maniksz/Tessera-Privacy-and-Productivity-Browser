@@ -6,6 +6,7 @@ import type { Locale } from '@shared/i18n/catalog.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { currentPlatform } from '../paths.js'
 import { updaterNetworkReady } from '../session/proxy.js'
+import { classifyCheckFailure } from './check-failure.js'
 import {
   UpdateService,
   type UpdateAnswer,
@@ -163,25 +164,6 @@ function electronUpdaterPort(): UpdaterPort {
       autoUpdater.quitAndInstall(false, true)
     }
   }
-}
-
-/**
- * Which of the ordinary failures this was.
- *
- * Matched on `electron-updater`'s own error codes, which is the brittle part and the reason it is
- * here rather than in the service: a renamed code degrades to "unreachable", which is a true
- * sentence about every one of these cases. The two named separately are the ones where "GitHub could
- * not be reached" would be a lie — the repository was reached and has nothing to offer.
- */
-function classifyCheckFailure(error: unknown): UpdateFeedResult {
-  const code = error instanceof Error ? (error as Error & { code?: unknown }).code : undefined
-  if (
-    code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS' ||
-    code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND'
-  ) {
-    return { kind: 'nothing-published' }
-  }
-  return { kind: 'unreachable', detail: String(error) }
 }
 
 async function showPrompt(

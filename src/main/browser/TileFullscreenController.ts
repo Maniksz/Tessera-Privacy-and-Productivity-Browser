@@ -80,6 +80,37 @@ export class TileFullscreenController {
    */
   #awaitingWindowFullscreen = false
 
+  /**
+   * Whether the page now in fullscreen found the window already fullscreen when it asked.
+   *
+   * Only read where the confinement is lifted. There a page's request *does* take the window, so a
+   * fullscreen window alone says nothing about whose it is; what says it is the order — a window that
+   * was fullscreen before the page asked is the user's, and the page's exit must leave it alone.
+   * Electron keeps the same record for the same reason, and the report is that its copy is sometimes
+   * wrong ("passiert manchmal"). This one is ours to read, so the rule no longer rests on theirs.
+   */
+  #pageFoundWindowFullscreen = false
+
+  /**
+   * True for the rest of the turn in which the window entered fullscreen.
+   *
+   * What keeps `#pageFoundWindowFullscreen` honest on Windows and Linux. There a page's request takes
+   * the window synchronously, so the window's `enter-full-screen` arrives *before* the page's own
+   * event, from the same stack — and read naively the window would look as if it had been fullscreen
+   * all along. A window fullscreen since this very turn was taken by whatever is asking now.
+   */
+  #windowJustEntered = false
+
+  /**
+   * True from the user asking to leave the window's fullscreen until the window reports it has.
+   *
+   * The one exit that needs no guessing. The key, the menu and the ladder's last rung all come through
+   * here, so their `leave-full-screen` is known to be the user's even when a page gives up its own
+   * fullscreen in the same breath — which is exactly the pattern that otherwise reads as Chromium
+   * taking the window away, and would be answered by putting it back.
+   */
+  #userLeaving = false
+
   constructor(host: TileFullscreenHost) {
     this.host = host
   }
@@ -87,6 +118,17 @@ export class TileFullscreenController {
   /** Whether a page's fullscreen is confined to its tile, which is when the window's own is the user's. */
   get #confined(): boolean {
     return !windowFullscreenPermitted(this.host.split.layout, this.host.fullscreenScope())
+  }
+
+  /**
+   * Whether the window's fullscreen, right now, is one the user put there rather than a page.
+   *
+   * Confined, that is every fullscreen the window has: the confinement is what stops a page's request
+   * from moving the window, so only the user — or this controller, putting back what the user had —
+   * can have taken it. With the confinement lifted it is the order recorded at the page's request.
+   */
+  get #windowFullscreenIsUsers(): boolean {
+    return this.#confined || this.#pageFoundWindowFullscreen
   }
 
   /**
@@ -155,8 +197,32 @@ export class TileFullscreenController {
    * confinement has to be back.
    */
   toggleFullscreen(): void {
+    // Marked before the flip: on Windows and Linux the window's exit is reported from inside it.
+    if (this.host.split.isWindowFullscreen) this.#userLeaving = true
     this.host.setFullScreenable(true)
     this.host.toggleWindowFullscreen()
+  }
+
+  /**
+   * The window entered fullscreen — the user's doing, a page's, or this controller putting it back.
+   *
+   * ## Why the flag is lifted here
+   *
+   * A fullscreen window has to stay fullscreenable, or the way out is silence (see `applyPolicy`). Every
+   * way in that this controller starts already lifts it, but one arrives with the flag down: on macOS
+   * the re-entry `onPageLeave` asks for is queued behind the exit it is racing, and the deferred
+   * `applyPolicy` after that exit runs before the re-entry has landed — onto a window that is not
+   * fullscreen *yet*. Lifting it again on arrival makes the invariant hold whichever order that was.
+   * It confines nothing away: a page asking for fullscreen now finds the window fullscreen already.
+   */
+  onWindowEnteredFullscreen(): void {
+    this.#userLeaving = false
+    this.#awaitingWindowFullscreen = false
+    this.#windowJustEntered = true
+    this.host.defer(() => {
+      this.#windowJustEntered = false
+    })
+    this.host.setFullScreenable(true)
   }
 
   /** A page asked for fullscreen. The tile it lives in becomes the fullscreen one. */
@@ -164,6 +230,14 @@ export class TileFullscreenController {
     const tile = this.host.split.tileOfTab(tabId)
     if (tile === null) return
     this.#pageInFullscreen = tabId
+    this.#pageFoundWindowFullscreen = this.host.split.isWindowFullscreen && !this.#windowJustEntered
+    /*
+      A re-entry asked for on behalf of an earlier page, and never needed because Electron left the
+      window alone, would otherwise still be waiting — and the next `leave-full-screen` would be read as
+      its answer. That is the one reading the misattribution below must not get: the window's exit
+      arriving first is how this page's giving up its fullscreen looks on Windows and Linux.
+    */
+    this.#awaitingWindowFullscreen = false
     this.host.split.enterTileFullscreen(tile)
     this.host.split.setActiveTile(tile)
     this.host.changed()
@@ -196,8 +270,18 @@ export class TileFullscreenController {
    * There is nothing to prevent: no event stands between the page's exit and Chromium acting on it, and
    * the record that misattributes the window's fullscreen is Electron's own. So the rule is stated as an
    * outcome instead — **a page giving up its fullscreen never changes the window's** — and enforced by
-   * putting back what was taken. Confined layouts only: with the confinement lifted a page's fullscreen
-   * genuinely *is* the window's, and there Chromium's own bookkeeping is right.
+   * putting back what was taken.
+   *
+   * ## With the confinement lifted
+   *
+   * In a single pane, or under window scope, a page's fullscreen request takes the window, and this
+   * used to be left to Chromium on the grounds that its bookkeeping is right there. The report says it
+   * is not always: F11, a video to fullscreen, the video left again through *the player's own button* —
+   * and sometimes the F11 went with it. No key is involved, so nothing on the ladder can be at fault;
+   * what remains is Electron's record of whether the window was already fullscreen, which is C++ in
+   * the binary and cannot be read from here. So the same outcome is enforced here too, from a record of
+   * our own: `#pageFoundWindowFullscreen`. A page that found the window windowed still takes it back
+   * there on the way out, which is what the user expects of a video they made fullscreen themselves.
    *
    * The two events can arrive in either order, which is why the same rule is written twice. Here it is
    * read from `isWindowFullscreen`, for the platforms where the window's `leave-full-screen` has not
@@ -205,8 +289,10 @@ export class TileFullscreenController {
    * already has.
    */
   onPageLeave(): void {
-    const heldWindowFullscreen = this.#confined && this.host.split.isWindowFullscreen
+    const heldWindowFullscreen =
+      !this.#userLeaving && this.host.split.isWindowFullscreen && this.#windowFullscreenIsUsers
     this.#pageInFullscreen = null
+    this.#pageFoundWindowFullscreen = false
     this.host.split.leaveTileFullscreen()
     if (heldWindowFullscreen) {
       this.#awaitingWindowFullscreen = true
@@ -218,26 +304,35 @@ export class TileFullscreenController {
   /**
    * The window left fullscreen. Whose doing that was is not yet knowable.
    *
-   * Three cases, and only the first two can be told apart in the moment:
+   * Four cases, and only the first three can be told apart in the moment:
    *
+   *   - **The user asked to leave**, by the key, the menu or the ladder. Theirs by definition, whatever a
+   *     page does alongside it, so the confinement goes straight back and nothing is put back.
    *   - **We asked for it back.** `onPageLeave` has already requested the re-entry and the exit it is
    *     racing is the one being reported here. The confinement stays lifted until Chromium has settled,
    *     and `applyPolicy` is deferred rather than skipped so that a re-entry which never happens still
    *     ends with the window confined.
-   *   - **A page is still in fullscreen.** Then this exit may be Chromium giving the window up on that
-   *     page's behalf — or it may be the user, by the key or the green button, with a fullscreen video
-   *     carrying on inside a tile. The difference is whether the page releases its fullscreen in the
-   *     same breath, which is a question only the next turn can answer.
+   *   - **A page is still in fullscreen, and the window's fullscreen was the user's.** Then this exit
+   *     may be Chromium giving the window up on that page's behalf — or it may be the user, by the
+   *     green button or the window manager, with a fullscreen video carrying on inside the window.
+   *     The difference is whether the page releases its fullscreen in the same breath, which is a
+   *     question only the next turn can answer.
    *   - **Anything else** is the plain case, and the confinement goes straight back.
    */
   onWindowLeftFullscreen(): void {
+    if (this.#userLeaving) {
+      this.#userLeaving = false
+      this.applyPolicy()
+      return
+    }
+
     if (this.#awaitingWindowFullscreen) {
       this.#awaitingWindowFullscreen = false
       this.host.defer(() => this.applyPolicy())
       return
     }
 
-    if (this.#confined && this.#pageInFullscreen !== null) {
+    if (this.#pageInFullscreen !== null && this.#windowFullscreenIsUsers) {
       this.host.defer(() => {
         // Released in the same breath: the page was giving up its fullscreen, so this exit was not the
         // user's and the window goes back where they left it.
@@ -266,6 +361,7 @@ export class TileFullscreenController {
     const step = this.host.split.escape()
     switch (step) {
       case 'exit-window-fullscreen':
+        this.#userLeaving = true
         this.host.exitWindowFullscreen()
         break
       case 'exit-tile-fullscreen': {
