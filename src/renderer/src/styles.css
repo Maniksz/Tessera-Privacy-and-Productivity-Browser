@@ -907,6 +907,36 @@ body {
   margin: 0;
 }
 
+/*
+  A tile's header (U20), in the strip the core left free above the view (`tile-header.ts`). Only
+  that strip, at the tile's own rect: the gutters beside it stay the divider handles'. Its height is
+  set inline from the shared rule, never here.
+*/
+.tile-header {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.tile-header__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tile-header__muted {
+  display: inline-flex;
+  flex: none;
+}
+
 /* A failed page or a gone renderer, in the tile whose view the core hid (`TabFailure`). */
 .tab-failure {
   display: grid;

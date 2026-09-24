@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { SplitController } from '@main/browser/SplitController.js'
-import { TILE_COUNT, type Rect } from '@shared/split/layout.js'
+import { TILE_COUNT, TILE_GUTTER, computeTileRects, type Rect } from '@shared/split/layout.js'
+import { TILE_HEADER_HEIGHT, tileHeaders, viewRects } from '@shared/split/tile-header.js'
+import { planViews } from '@shared/browser/view-visibility.js'
 
 /**
  * `SplitController` — the split-view state machine.
@@ -508,5 +510,79 @@ describe('resetFractions', () => {
     split.setFractions({ v: 0.8 }, CONTENT)
     split.resetFractions()
     expect(split.toState().fractions['v']).toBe(0.6)
+  })
+})
+
+describe('tile headers (U20)', () => {
+  /*
+    `relayout` places every view from `tiles()` through `planViews`, so this is the core's half of the
+    geometry: the same pair the window controller calls, asked without a window.
+  */
+  function twoRows(): SplitController {
+    const split = new SplitController({ layout: '2x1' })
+    split.assignTab('a', 0)
+    split.assignTab('b', 1)
+    return split
+  }
+  const tabs = new Map([
+    ['a', {}],
+    ['b', {}]
+  ])
+
+  it('places each view of a 2x1 one header lower and one header shorter than its tile', () => {
+    const split = twoRows()
+    const tiles = split.tileRects(CONTENT)
+    const plan = planViews(split.tiles(CONTENT, true), tabs)
+    ;['a', 'b'].forEach((tabId, index) => {
+      const tile = tiles[index]!
+      const view = plan.get(tabId)!.rect!
+      expect(view).toEqual({
+        x: tile.x,
+        y: tile.y + TILE_HEADER_HEIGHT,
+        width: tile.width,
+        height: tile.height - TILE_HEADER_HEIGHT
+      })
+    })
+    expect(split.viewRects(CONTENT, true)).toEqual([plan.get('a')!.rect, plan.get('b')!.rect])
+  })
+
+  it('answers with the shared pipeline the renderer derives its rectangles from', () => {
+    /*
+      The core half of "core and renderer agree". The renderer cannot import this class, so
+      `tests/components/tile-headers.test.tsx` compares `useTileRects` against this same pipeline —
+      and this pins that the controller is that pipeline and nothing of its own.
+    */
+    const split = twoRows()
+    split.setFractions({ h: 0.4 }, CONTENT)
+    const state = split.toState()
+    const shared = viewRects(
+      computeTileRects(state.layout, state.fractions, CONTENT, { gutter: TILE_GUTTER }),
+      tileHeaders(true, state)
+    )
+    expect(split.viewRects(CONTENT, true)).toEqual(shared)
+    expect(split.tiles(CONTENT, true).map(({ header }) => header)).toEqual(tileHeaders(true, state))
+  })
+
+  it('gives 1x1 and a maximised tile their whole tile', () => {
+    const single = new SplitController()
+    single.assignTab('a', 0)
+    expect(planViews(single.tiles(CONTENT, true), tabs).get('a')!.rect).toEqual(CONTENT)
+
+    const split = twoRows()
+    split.toggleTileMaximized(1)
+    const plan = planViews(split.tiles(CONTENT, true), tabs)
+    expect(plan.get('b')!.rect).toEqual(CONTENT)
+    expect(plan.get('a')).toEqual({ visible: false, rect: null })
+    expect(split.viewRects(CONTENT, true)).toEqual([null, CONTENT])
+  })
+
+  it('places exactly what it placed before headers existed with the setting off', () => {
+    const split = twoRows()
+    const before = split.tileRects(CONTENT).map((rect, index) => ({
+      rect,
+      tabId: split.tabIdAt(index)
+    }))
+    expect(planViews(split.tiles(CONTENT, false), tabs)).toStrictEqual(planViews(before, tabs))
+    expect(split.viewRects(CONTENT, false)).toStrictEqual(split.tileRects(CONTENT))
   })
 })

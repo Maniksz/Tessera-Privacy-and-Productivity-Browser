@@ -106,6 +106,8 @@ function findBarOn(tileIndex: number): FindBarPresentation {
 interface Harness {
   input: TileInputController
   rects: Array<Rect | null>
+  /** Where the views sit; the tile rectangles themselves unless a test gives the tiles headers. */
+  views?: Array<Rect | null>
   activeTile: number
   mode: TileBarMode
   overlay: OverlayState
@@ -140,6 +142,7 @@ function harness(overrides: Partial<Harness> = {}): Harness {
 
   const host: TileInputHost = {
     tileRects: () => state.rects!,
+    viewRects: () => state.views ?? state.rects!,
     activeTile: () => state.activeTile!,
     tileBarMode: () => state.mode!,
     overlayPresentation: () => state.overlay!,
@@ -335,6 +338,40 @@ describe('reading a tab’s state back into the bar that is up', () => {
     h.input.refreshTileBar()
 
     expect(h.calls).toEqual([])
+  })
+})
+
+describe('the bar under tile headers (U20)', () => {
+  /*
+    With headers on, each view starts 28 px below its tile. The pointer report arrives from the view,
+    so its `y` counts from there, and the bar has to be laid out from the same rectangle or the band
+    that reveals it and the strip it covers would be a header apart.
+  */
+  const views = COLUMNS.map((rect) => ({ ...rect, y: rect.y + 28, height: rect.height - 28 }))
+
+  it('lays a revealed bar over the top of the view, below the header', () => {
+    const h = harness({ views })
+
+    h.input.requestTileBar({ invokedBy: 'pointer', tileIndex: 1, y: 0 })
+
+    expect(lastBar(h).bounds).toEqual({ ...views[1]!, height: TILE_BAR_HEIGHT })
+  })
+
+  it('refreshes a bar that is up into the view rectangle as well', () => {
+    const h = harness({ views, overlay: barOn(0, tab('tab-a')) })
+
+    h.input.refreshTileBar()
+
+    expect(lastBar(h).bounds).toEqual({ ...views[0]!, height: TILE_BAR_HEIGHT })
+  })
+
+  it('still routes a gesture by the whole tile, header included', () => {
+    const header = { x: tileRect(1).x + 20, y: tileRect(1).y + 4 }
+    const h = harness({ views, cursor: header, activeTile: 0 })
+
+    h.input.navigateByGesture('app-command', 'browser-backward')
+
+    expect(h.navigated).toEqual([{ intent: 'back', tileIndex: 1 }])
   })
 })
 

@@ -87,7 +87,11 @@ export const settingDefinitions = {
   // --- Split View ----------------------------------------------------------
   'splitView.defaultLayout': def(z.enum(LAYOUT_IDS), '1x1', 'splitView'),
   'splitView.restoreLayoutOnStart': def(z.boolean(), true, 'splitView'),
-  'splitView.showTileHeaders': def(z.boolean(), true, 'splitView'),
+  /**
+   * A header strip above each tile's page with its favicon and title (U20). Off by default: the header
+   * costs every tile 28 px of page, and the tile bar was built so that tiles spend no permanent space.
+   */
+  'splitView.showTileHeaders': def(z.boolean(), false, 'splitView'),
   /**
    * Keep the tiles matched to the tabs in them.
    *

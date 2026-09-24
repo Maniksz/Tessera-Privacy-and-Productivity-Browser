@@ -83,27 +83,31 @@ export function TabFailure({
  * One `TabFailure` per tile whose tab has one, each in that tile's rectangle.
  *
  * Where to draw comes from `placeView`, the rule the core hides the view with, so the panel and the
- * hidden view cannot disagree. A maximised tile covers the whole content area, as the core lays it out.
+ * hidden view cannot disagree — below the tile's header when it has one (U20). A maximised tile covers
+ * the whole content area, as the core lays it out.
  */
 export function TileFailures({
   split,
   tabs,
   rects,
+  headers = [],
   exemptSites
 }: {
   split: SplitState
   tabs: readonly TabState[]
   rects: readonly Rect[]
+  /** Which tiles carry a header, from `useTileRects`. */
+  headers?: readonly boolean[]
   exemptSites: readonly string[]
 }): React.ReactNode {
   return split.tileTabIds.map((tabId, index) => {
     const maximized = split.maximizedTile
     if (tabId === null || (maximized !== null && maximized !== index)) return null
     const tab = tabs.find((candidate) => candidate.id === tabId)
-    const rect = rects[index] ?? null
-    if (tab?.failure === undefined || !placeView(rect, tab).showsFailure || rect === null) {
-      return null
-    }
+    if (tab?.failure === undefined) return null
+    const placed = placeView(rects[index] ?? null, tab, headers[index] === true)
+    const rect = placed.rect
+    if (!placed.showsFailure || rect === null) return null
     const style =
       maximized === index
         ? { inset: 0 }

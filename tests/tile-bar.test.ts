@@ -16,6 +16,12 @@ import {
 } from '@shared/split/tile-bar.js'
 import { LAYOUT_IDS, TILE_COUNT, computeTileRects, type Rect } from '@shared/split/layout.js'
 import { takesFocus } from '@shared/overlay/surface.js'
+import {
+  TILE_HEADER_HEIGHT,
+  headerRectOf,
+  tileHeaders,
+  viewRects
+} from '@shared/split/tile-header.js'
 
 /**
  * The navigation bar at the top edge of a tile.
@@ -183,6 +189,52 @@ describe('where the bar sits', () => {
         }
       })
     }
+  })
+})
+
+describe('the bar under a tile header (U20)', () => {
+  it('lies over the top of the view, below the header and never on it', () => {
+    /*
+      The bar is laid out from the view rectangles, and the pointer that reveals it is reported by the
+      view — so its reveal band starts where the view starts, under the header. A bar laid out from the
+      tile instead would cover the header it is meant to sit beneath, and its band would be 28 px off
+      from the positions the view reports.
+    */
+    for (const layout of LAYOUT_IDS) {
+      if (layout === '1x1') continue
+      const tiles = computeTileRects(layout, {}, CONTENT, { gutter: 8 })
+      const flags = tileHeaders(true, { layout, maximizedTile: null, fullscreenTile: null })
+      const views = viewRects(tiles, flags)
+      tiles.forEach((tile, index) => {
+        const bar = tileBarBounds(views[index]!)
+        const header = headerRectOf(tile)
+        expect(bar.y, `${layout} tile ${index}`).toBe(tile.y + TILE_HEADER_HEIGHT)
+        expect(bar.y, `${layout} tile ${index}`).toBe(header.y + header.height)
+        expect(bar.y + bar.height, `${layout} tile ${index}`).toBeLessThanOrEqual(
+          tile.y + tile.height
+        )
+      })
+    }
+  })
+
+  it('presents at the top of the view when handed the view rectangles', () => {
+    const tiles = computeTileRects('1x2', {}, CONTENT, { gutter: 8 })
+    const views = viewRects(tiles, [true, true])
+    const action = tileBarStep({
+      current: null,
+      mode: 'hover',
+      request: { invokedBy: 'pointer', tileIndex: 1, y: 0 },
+      rects: views,
+      tabOf: (index) => tab(`t${index}`)
+    })
+    expect(action.do).toBe('present')
+    if (action.do !== 'present') return
+    expect(action.presentation.bounds).toEqual({
+      x: tiles[1]!.x,
+      y: tiles[1]!.y + TILE_HEADER_HEIGHT,
+      width: tiles[1]!.width,
+      height: TILE_BAR_HEIGHT
+    })
   })
 })
 

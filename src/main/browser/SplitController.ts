@@ -10,6 +10,7 @@ import {
   type LayoutId,
   type Rect
 } from '@shared/split/layout.js'
+import { tileHeaders, viewRects } from '@shared/split/tile-header.js'
 
 /**
  * Split-view state machine (spec 2).
@@ -305,6 +306,34 @@ export class SplitController {
       )
     }
     return computeTileRects(this.#layout, this.#fractions, content, { gutter: TILE_GUTTER })
+  }
+
+  /**
+   * Each tile with its tab and whether it carries a header (U20) — what `relayout` hands `planViews`.
+   *
+   * The rectangles are the tiles', header included; `planViews` moves each view below its header, so
+   * the one rule that places views stays the one place that shrinks them.
+   */
+  tiles(
+    content: Rect,
+    headersOn: boolean
+  ): Array<{ rect: Rect | null; tabId: string | null; header: boolean }> {
+    const headers = tileHeaders(headersOn, this)
+    return this.tileRects(content).map((rect, index) => ({
+      rect,
+      tabId: this.tabIdAt(index),
+      header: headers[index] === true
+    }))
+  }
+
+  /**
+   * Where each tile's view sits: the tile less its header strip (U20).
+   *
+   * The tile bar is laid out from these rather than from the tiles, because the pointer that reveals
+   * it is reported by the view — both count from the view's top edge, which is below the header.
+   */
+  viewRects(content: Rect, headersOn: boolean): Array<Rect | null> {
+    return viewRects(this.tileRects(content), tileHeaders(headersOn, this))
   }
 
   toState(): SplitState {

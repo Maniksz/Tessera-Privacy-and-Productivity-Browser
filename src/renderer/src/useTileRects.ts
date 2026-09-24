@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState } from 'react'
 import type { SplitState } from '@shared/model.js'
 import { TILE_GUTTER, computeTileRects, type Rect } from '@shared/split/layout.js'
+import { tileHeaders } from '@shared/split/tile-header.js'
 
 /**
  * Where each tile's edges actually fall, in this element's own pixel space.
@@ -27,10 +28,23 @@ import { TILE_GUTTER, computeTileRects, type Rect } from '@shared/split/layout.j
  *
  * A callback ref is state, so mounting the element *is* the dependency change. The element arriving
  * late, leaving, or being replaced each re-runs the effect on its own.
+ *
+ * ## Tile headers (U20)
+ *
+ * `headers` says which tiles carry one, from `tileHeaders` — the function `SplitController` asks when
+ * it places the views. The rectangles stay the tiles'; the header strip and the view below it come from
+ * `headerRectOf` and `placeView`, so no height is restated here. And because this hook measures the one
+ * element `App` always renders, a header needs no measurement of its own: the ring that was removed
+ * from `SplitDividers` died of exactly that, a measurement installed on an element not yet there.
  */
-export function useTileRects(split: SplitState | null): {
+export function useTileRects(
+  split: SplitState | null,
+  headersOn = false
+): {
   ref: (element: HTMLDivElement | null) => void
   rects: Rect[]
+  /** Whether each tile carries a header; empty while there are no rects. */
+  headers: boolean[]
 } {
   const [element, setElement] = useState<HTMLDivElement | null>(null)
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
@@ -57,7 +71,9 @@ export function useTileRects(split: SplitState | null): {
     means a stale size is simply never read: no rects while nothing is mounted, and the first real
     measurement replaces it before anything can be drawn from it.
   */
-  if (split === null || size === null || element === null) return { ref: setElement, rects: [] }
+  if (split === null || size === null || element === null) {
+    return { ref: setElement, rects: [], headers: [] }
+  }
   return {
     ref: setElement,
     rects: computeTileRects(
@@ -65,6 +81,7 @@ export function useTileRects(split: SplitState | null): {
       split.fractions,
       { x: 0, y: 0, ...size },
       { gutter: TILE_GUTTER }
-    )
+    ),
+    headers: tileHeaders(headersOn, split)
   }
 }

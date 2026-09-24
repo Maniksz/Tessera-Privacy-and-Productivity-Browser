@@ -86,7 +86,7 @@ export const de: SettingTextTable = {
     showTileHeaders: {
       label: 'Kopfzeile je Kachel anzeigen',
       description:
-        'Noch ohne Wirkung: Kacheln haben keine Kopfzeile. Was eine Kachel heute zeigt, ist die Kachelleiste weiter unten.'
+        'Symbol und Titel der Seite jeder Kachel in einem Streifen darüber, solange mehr als eine Kachel zu sehen ist. Der Streifen nimmt der Seite Platz weg, statt sie zu verdecken.'
     },
     adaptLayoutToTabs: {
       label: 'Kacheln gefüllt halten',

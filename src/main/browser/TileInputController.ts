@@ -31,6 +31,14 @@ import type { TileBarTab } from '@shared/split/tile-bar.js'
 export interface TileInputHost {
   /** Tile rectangles in content coordinates, `null` for a tile the layout does not have. */
   tileRects(): ReadonlyArray<Rect | null>
+  /**
+   * Where each tile's view sits: the tile less its header when it carries one (U20).
+   *
+   * The bar is laid out from these, not from the tiles. The pointer report that reveals it comes from
+   * the view and counts from the view's top edge, so the bar has to start there too — below the
+   * header, never on it. A gesture still goes by the whole tile, header included.
+   */
+  viewRects(): ReadonlyArray<Rect | null>
   activeTile(): number
   /** Whether each tile shows its own bar, and on what. */
   tileBarMode(): TileBarMode
@@ -69,7 +77,7 @@ export class TileInputController {
           : null,
       mode: this.host.tileBarMode(),
       request,
-      rects: this.host.tileRects(),
+      rects: this.host.viewRects(),
       tabOf: (tileIndex) => this.host.tabIn(tileIndex)
     })
 
@@ -95,7 +103,7 @@ export class TileInputController {
     const action = tileBarRefresh({
       current: current?.kind === 'tile-bar' ? current : null,
       mode: this.host.tileBarMode(),
-      rects: this.host.tileRects(),
+      rects: this.host.viewRects(),
       tabOf: (tileIndex) => this.host.tabIn(tileIndex)
     })
 

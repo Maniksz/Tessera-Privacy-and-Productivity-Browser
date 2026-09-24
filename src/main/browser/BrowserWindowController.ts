@@ -1276,10 +1276,8 @@ export class BrowserWindowController implements PermissionHost {
       return
     }
 
-    // One rule for every view (KTD22): a tab with no tile, or with a failure, stays hidden through this.
-    const tiles = this.split
-      .tileRects(contentRect)
-      .map((rect, index) => ({ rect, tabId: this.split.tabIdAt(index) }))
+    // One rule for every view (KTD22): no tile or a failure hides it, a tile header (U20) shrinks it.
+    const tiles = this.split.tiles(contentRect, this.getSettings()['splitView.showTileHeaders'])
     for (const [tabId, { visible, rect }] of planViews(tiles, this.#tabs)) {
       const tab = this.#tabs.get(tabId)
       if (rect !== null) tab?.setBounds(rect)

@@ -254,6 +254,11 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
 
   const tileInput = new TileInputController({
     tileRects: () => internals.split.tileRects(internals.contentRect()),
+    viewRects: () =>
+      internals.split.viewRects(
+        internals.contentRect(),
+        internals.getSettings()['splitView.showTileHeaders']
+      ),
     activeTile: () => internals.split.activeTile,
     tileBarMode: () => internals.getSettings()['splitView.tileBarMode'],
     overlayPresentation: () => internals.overlay.presentation,

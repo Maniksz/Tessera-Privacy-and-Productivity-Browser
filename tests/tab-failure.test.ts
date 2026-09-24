@@ -9,6 +9,7 @@ import {
   type TabFailure
 } from '@shared/browser/tab-failure.js'
 import { placeView, planViews } from '@shared/browser/view-visibility.js'
+import { TILE_HEADER_HEIGHT } from '@shared/split/tile-header.js'
 import { eventContract } from '@shared/ipc/contract.js'
 import type { TabState } from '@shared/model.js'
 import { captureWindow } from '@shared/session/model.js'
@@ -304,6 +305,33 @@ describe('view visibility (KTD22)', () => {
     expect([...plan.keys()]).toEqual(['a', 'off'])
     expect(plan.get('a')).toEqual({ visible: true, rect })
     expect(plan.get('off')).toEqual({ visible: false, rect: null })
+  })
+
+  it('places a view below its tile header, and the failure in that same smaller rectangle (U20)', () => {
+    const below = { x: 0, y: TILE_HEADER_HEIGHT, width: 400, height: 300 - TILE_HEADER_HEIGHT }
+    expect(placeView(rect, {}, true)).toEqual({ visible: true, rect: below, showsFailure: false })
+    expect(placeView(rect, { failure: crashed }, true)).toEqual({
+      visible: false,
+      rect: below,
+      showsFailure: true
+    })
+    const plan = planViews(
+      [
+        { tabId: 'a', rect, header: true },
+        { tabId: 'b', rect: { ...rect, x: 404 }, header: false }
+      ],
+      new Map([
+        ['a', {}],
+        ['b', {}]
+      ])
+    )
+    expect(plan.get('a')).toEqual({ visible: true, rect: below })
+    expect(plan.get('b')).toEqual({ visible: true, rect: { ...rect, x: 404 } })
+  })
+
+  it('hands back the tile rectangle itself when the tile has no header', () => {
+    expect(placeView(rect, {}, false).rect).toBe(rect)
+    expect(placeView(rect, {}).rect).toBe(rect)
   })
 
   it('hides both tiles when two tabs of one renderer crash', () => {

@@ -16,6 +16,7 @@ import { mediaPortFor, useMediaFindingCount } from './components/MediaButton.js'
 import { SplitDividers } from './components/SplitDividers.js'
 import { ExtensionsPanel } from './components/ExtensionsPanel.js'
 import { TileFailures } from './components/TabFailure.js'
+import { TileHeaders } from './components/TileHeaders.js'
 
 /**
  * Settings opens a tab; it is not a panel any more.
@@ -58,8 +59,12 @@ export function App(): React.ReactNode {
   const [overlay, setOverlay] = useState<OverlayState>(null)
   /** What the toolbar's download button says; pulled once, then pushed on every change. */
   const downloads = useDownloadSummary()
-  /** Where each tile's edges fall, for U1's active-tile frame and the per-tile empty placeholder below. */
-  const { ref: contentRef, rects: tileRects } = useTileRects(state.split)
+  /** Where each tile's edges fall, and which tiles carry a header (U20), for everything drawn per tile. */
+  const {
+    ref: contentRef,
+    rects: tileRects,
+    headers: tileHeaders
+  } = useTileRects(state.split, state.settings?.['splitView.showTileHeaders'] ?? false)
 
   const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId)
   /** What the media button counts: the active tab's finds, following the tab (media plan R3). */
@@ -366,7 +371,17 @@ export function App(): React.ReactNode {
             split={state.split}
             tabs={state.tabs}
             rects={tileRects}
+            headers={tileHeaders}
             exemptSites={state.settings?.['privacy.blockerOffForSites'] ?? []}
+          />
+        )}
+        {/* Favicon and title in the strip above each view, which the core left free for it (U20). */}
+        {state.split !== null && (
+          <TileHeaders
+            split={state.split}
+            tabs={state.tabs}
+            rects={tileRects}
+            headers={tileHeaders}
           />
         )}
       </div>

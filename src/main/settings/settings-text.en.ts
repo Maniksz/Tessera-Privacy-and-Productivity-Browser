@@ -123,7 +123,7 @@ export const en = {
     showTileHeaders: {
       label: 'Show a header on each tile',
       description:
-        'Not applied yet: tiles have no header. The tile bar further down is what a tile shows today.'
+        'The icon and title of each tile’s page, in a strip above it, while more than one tile is on screen. The strip takes its height from the page rather than covering it.'
     },
     adaptLayoutToTabs: {
       label: 'Keep every tile filled',

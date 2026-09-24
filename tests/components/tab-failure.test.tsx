@@ -238,4 +238,20 @@ describe('TileFailures', () => {
     expect(tiles[0]?.dataset.tileIndex).toBe('1')
     expect(tiles[0]?.style.left).toBe('')
   })
+
+  it('draws in the view rectangle below a tile header, where the core hid the view (U20)', () => {
+    const { container } = render(
+      <TileFailures
+        split={split(['a', 'b'])}
+        tabs={[tab('a', 0, crashed), tab('b', 1)]}
+        rects={rects}
+        headers={[true, true]}
+        exemptSites={[]}
+      />
+    )
+    const [panel] = [...container.querySelectorAll<HTMLElement>('.content__tile')]
+    const tile = rects[0]!
+    expect(panel?.style.top).toBe(`${tile.y + 28}px`)
+    expect(panel?.style.height).toBe(`${tile.height - 28}px`)
+  })
 })

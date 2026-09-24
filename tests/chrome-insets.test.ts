@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { NO_CHROME_INSETS, chromeHiddenAt, chromeInsetsFor } from '@shared/split/chrome-insets.js'
 import { escalationLevelSchema } from '@shared/model.js'
 import { computeTileRects, dividersFor, TILE_GUTTER } from '@shared/split/layout.js'
+import { headerRectOf, tileHeaders, viewRects } from '@shared/split/tile-header.js'
 
 /**
  * Where the content area begins, which is the number the divider handles are placed from.
@@ -205,5 +206,65 @@ describe('one rule, not two', () => {
         /chromeInsetsFor|chromeHiddenAt/
       )
     }
+  })
+})
+
+describe('tile headers are the same rule twice over (U20)', () => {
+  /*
+    The header strip is the next number both sides need. The core shrinks each view by it, and the
+    renderer draws the header in the gap — so a renderer that measured the strip its own way would draw
+    a header over the top of a page, or leave a stripe of bare chrome under it. Same lesson, same shape
+    of test: the geometry agrees in both states, and neither side restates the rule.
+  */
+  const size = { width: 1440, height: 900 }
+  const split = { layout: '1x2', maximizedTile: null, fullscreenTile: null } as const
+
+  it('puts each header directly above its view, fullscreen or not', () => {
+    for (const escalation of ['none', 'window-fullscreen'] as const) {
+      const insets = chromeInsetsFor(escalation, measured)
+      const content = {
+        x: insets.left,
+        y: insets.top,
+        width: size.width - insets.left - insets.right,
+        height: size.height - insets.top - insets.bottom
+      }
+      // The core, in window coordinates.
+      const tiles = computeTileRects('1x2', {}, content, { gutter: TILE_GUTTER })
+      const views = viewRects(tiles, tileHeaders(true, split))
+      // The renderer, in its own layer's coordinates, which start at `insets.top`.
+      const layer = computeTileRects(
+        '1x2',
+        {},
+        { x: 0, y: 0, width: content.width, height: content.height },
+        { gutter: TILE_GUTTER }
+      )
+      layer.forEach((tile, index) => {
+        const header = headerRectOf(tile)
+        expect(header.y + insets.top + header.height, escalation).toBe(views[index]!.y)
+        expect(header.x, escalation).toBe(views[index]!.x)
+        expect(header.width, escalation).toBe(views[index]!.width)
+      })
+    }
+  })
+
+  it('leaves the header arithmetic to the shared module on both sides', () => {
+    const strip = (relative: string): string =>
+      readFileSync(join(ROOT, relative), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1')
+    for (const relative of [
+      'src/main/browser/BrowserWindowController.ts',
+      'src/main/browser/SplitController.ts',
+      'src/renderer/src/useTileRects.ts',
+      'src/renderer/src/components/TileHeaders.tsx',
+      'src/renderer/src/components/TabFailure.tsx'
+    ]) {
+      expect(strip(relative), `${relative} works out the header strip itself`).not.toMatch(
+        /TILE_HEADER_HEIGHT/
+      )
+    }
+    expect(strip('src/renderer/src/useTileRects.ts')).toMatch(/tileHeaders\(/)
+    expect(strip('src/main/browser/SplitController.ts')).toMatch(/tileHeaders\(/)
+    expect(strip('src/renderer/src/components/TileHeaders.tsx')).toMatch(/headerRectOf\(/)
   })
 })
