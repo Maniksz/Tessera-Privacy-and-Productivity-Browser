@@ -93,16 +93,25 @@ export interface FillContext {
 /**
  * Why a fill was refused. One value per attack, so a test can name the attack and a
  * diagnostic can say something true without naming the credential.
+ *
+ * A list rather than a bare union, because a refusal is no longer only a diagnostic: it travels to the
+ * suggestion surface, which turns it into the honest sentence the user reads instead of "nothing found"
+ * (KTD6). That means the IPC contract has to enumerate these at runtime, and a second enumeration
+ * written out beside the schema is how a ninth reason ends up unrenderable — accepted by neither the
+ * validator nor the wordlist, and silently dropped.
  */
-export type FillRefusal =
-  | 'no-user-gesture'
-  | 'unsupported-scheme'
-  | 'insecure-page'
-  | 'scheme-downgrade'
-  | 'different-site'
-  | 'cross-origin-frame'
-  | 'cross-origin-form-action'
-  | 'no-password-field'
+export const FILL_REFUSALS = [
+  'no-user-gesture',
+  'unsupported-scheme',
+  'insecure-page',
+  'scheme-downgrade',
+  'different-site',
+  'cross-origin-frame',
+  'cross-origin-form-action',
+  'no-password-field'
+] as const
+
+export type FillRefusal = (typeof FILL_REFUSALS)[number]
 
 export type FillDecision =
   { readonly allowed: true } | { readonly allowed: false; readonly reason: FillRefusal }

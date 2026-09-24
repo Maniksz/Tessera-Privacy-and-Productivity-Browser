@@ -21,6 +21,7 @@ import {
   regionOf,
   surfaceIdentity,
   takesFocus,
+  type AutofillSuggestPresentation,
   type DownloadsPanelPresentation,
   type OverlayKind,
   type OverlayPresentation,
@@ -32,6 +33,11 @@ import { invokeContract, eventContract } from '@shared/ipc/contract.js'
 import { TILE_BAR_HEIGHT } from '@shared/split/tile-bar.js'
 import { FIND_BAR_HEIGHT, FIND_BAR_WIDTH } from '@shared/find/bar.js'
 import { PICKER_BAR_HEIGHT, PICKER_BAR_WIDTH } from '@shared/overlay/picker-bar.js'
+import {
+  AUTOFILL_SUGGEST_PADDING,
+  AUTOFILL_SUGGEST_ROW_HEIGHT,
+  AUTOFILL_SUGGEST_WIDTH
+} from '@shared/passwords/suggest-bounds.js'
 import { MIN_MASTER_PASSWORD_LENGTH } from '@shared/passwords/vault.js'
 import { downloadEntry } from './download-fakes.js'
 
@@ -85,6 +91,18 @@ function pickerBarSample(overrides: Partial<PickerBarPresentation> = {}): Picker
     throw new Error('the picker-bar sample is no longer a picker bar')
   return { ...sample, ...overrides }
 }
+
+/** And on the account picker, the other kind that carries its own rectangle. */
+function suggestSample(
+  overrides: Partial<AutofillSuggestPresentation> = {}
+): AutofillSuggestPresentation {
+  const sample = SAMPLES['autofill-suggest']
+  if (sample.kind !== 'autofill-suggest') throw new Error('the suggest sample is no longer a list')
+  return { ...sample, ...overrides }
+}
+
+/** Two rows and the frame's padding, which is what `autofillSuggestHeight` produces for two entries. */
+const SUGGEST_HEIGHT = AUTOFILL_SUGGEST_ROW_HEIGHT * 2 + AUTOFILL_SUGGEST_PADDING * 2
 
 const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
   'layout-menu': {
@@ -176,6 +194,20 @@ const SAMPLES: Readonly<Record<OverlayKind, OverlayPresentation>> = {
     kind: 'downloads-panel',
     anchor: { x: 1300, y: 44, width: 32, height: 32 },
     downloads: [downloadEntry('a')]
+  },
+  'autofill-suggest': {
+    kind: 'autofill-suggest',
+    requestId: 'fill-1',
+    tileIndex: 1,
+    bounds: { x: 760, y: 320, width: AUTOFILL_SUGGEST_WIDTH, height: SUGGEST_HEIGHT },
+    content: {
+      state: 'entries',
+      // The second entry has no username on purpose: some sites authenticate on a password alone.
+      entries: [
+        { id: 'p1', username: 'ada@example.com' },
+        { id: 'p2', username: '' }
+      ]
+    }
   }
 }
 
@@ -242,6 +274,22 @@ describe('overlay regions', () => {
       y: 96,
       width: FIND_BAR_WIDTH,
       height: FIND_BAR_HEIGHT
+    })
+  })
+
+  it('gives the account picker a box against its own field', () => {
+    /*
+      The third surface the window cannot size, and the only one whose rectangle depends on something
+      inside a *document*: where the password field is. It is cut to the list rather than to the tile so
+      that a click beside it lands in the page instead of being swallowed by a layer that has nothing to
+      do with it — which is also why this surface needs no dismiss-on-click-outside.
+    */
+    expect(regionOf('autofill-suggest')).toBe('tile')
+    expect(overlayBounds(SAMPLES['autofill-suggest'], WINDOW, CONTENT)).toEqual({
+      x: 760,
+      y: 320,
+      width: AUTOFILL_SUGGEST_WIDTH,
+      height: SUGGEST_HEIGHT
     })
   })
 
@@ -375,22 +423,121 @@ describe('two claims on one layer', () => {
     // Equal replaces, and this is what carries a new count onto the layer.
     expect(mayPresentOver('find-bar', SAMPLES['find-bar'])).toBe(true)
   })
+
+  it('never lets a drifting pointer take down the account picker', () => {
+    /*
+      The find bar's protection, and the cost of losing it is larger here than a search term: this
+      surface's departure discards the fill request, and the request id *is* the one-shot consent the
+      badge press earned. A pointer near a tile's top edge would therefore not merely redraw something —
+      it would make the user press the badge again to get their consent back.
+    */
+    expect(mayPresentOver('tile-bar', SAMPLES['autofill-suggest'])).toBe(false)
+    expect(mayPresentOver('autofill-suggest', SAMPLES['tile-bar'])).toBe(true)
+  })
+
+  it('lets a search take the layer from the account picker, and never the other way round', () => {
+    /*
+      Inverted by the merge with the picker's bar, and stated here rather than quietly dropped.
+
+      This asserted the opposite while the list ranked with the menu. The find bar and the picker bar
+      share a rank, and the list must not outrank the picker bar (see the next test), so it cannot outrank
+      the find bar either. What the user loses is a second press of the badge; what a page's badge can no
+      longer do is end a search somebody typed.
+    */
+    expect(mayPresentOver('find-bar', SAMPLES['autofill-suggest'])).toBe(true)
+    expect(mayPresentOver('autofill-suggest', SAMPLES['find-bar'])).toBe(false)
+  })
+
+  it('pins which of the account picker, the picker bar and the downloads panel may present over which', () => {
+    /*
+      Three surfaces that arrived on two branches, ranked against each other in one place.
+
+      The account picker yields to both. A picker bar is somebody's work in progress — a frozen selection
+      and a provisional rule hiding part of a page — and a badge press reported from a page view must not
+      be what ends it and lifts the preview. The downloads panel was opened from the toolbar on purpose and
+      covers the window, so a click on a badge reaches its layer first anyway.
+
+      Between the picker bar and the downloads panel, main's answer stands: the panel ranks with the menu
+      and takes the layer from the bar; the bar does not take it from the panel.
+    */
+    const over = (incoming: OverlayKind, current: OverlayKind): boolean =>
+      mayPresentOver(incoming, SAMPLES[current])
+
+    expect(over('autofill-suggest', 'picker-bar')).toBe(false)
+    expect(over('picker-bar', 'autofill-suggest')).toBe(true)
+
+    expect(over('autofill-suggest', 'downloads-panel')).toBe(false)
+    expect(over('downloads-panel', 'autofill-suggest')).toBe(true)
+
+    expect(over('downloads-panel', 'picker-bar')).toBe(true)
+    expect(over('picker-bar', 'downloads-panel')).toBe(false)
+
+    // And the order that produces those answers, so a rank moved on one side shows up here by name.
+    expect(OVERLAY_PRECEDENCE['autofill-suggest']).toBeGreaterThan(OVERLAY_PRECEDENCE['tile-bar'])
+    expect(OVERLAY_PRECEDENCE['autofill-suggest']).toBeLessThan(OVERLAY_PRECEDENCE['picker-bar'])
+    expect(OVERLAY_PRECEDENCE['picker-bar']).toBeLessThan(OVERLAY_PRECEDENCE['downloads-panel'])
+  })
+
+  it('never lets the account picker displace anything a person is being asked', () => {
+    /*
+      The half that matters for security. This surface is raised by a press reported from a *page view*,
+      so ranking it above a prompt would hand a page's own badge the power to displace a consent dialogue
+      the user was reading — the answering-on-the-user's-behalf this whole table exists to prevent.
+
+      Below the master-password prompt for a second reason of its own: this surface's unlock button is
+      what raises that prompt, and a picker that outranked it would take the layer straight back.
+    */
+    for (const kind of ['permission-request', 'navigation-request', 'master-password'] as const) {
+      expect(mayPresentOver('autofill-suggest', SAMPLES[kind]), kind).toBe(false)
+      expect(mayPresentOver(kind, SAMPLES['autofill-suggest']), kind).toBe(true)
+    }
+  })
+
+  it('lets a menu and a drag take the layer, as they do from a find bar', () => {
+    // Deliberate, and the price is named in the plan: sometimes the layer is not available when the
+    // badge is pressed, and nothing appears. The core checks before it opens a request.
+    expect(mayPresentOver('layout-menu', SAMPLES['autofill-suggest'])).toBe(true)
+    expect(mayPresentOver('tab-drop', SAMPLES['autofill-suggest'])).toBe(true)
+  })
+
+  it('lets the picker replace itself, which is how the locked state becomes the list', () => {
+    // Equal replaces. One press of the badge legitimately presents twice — locked, then the list once
+    // the vault is open — and the second must not read as the first having left.
+    expect(mayPresentOver('autofill-suggest', SAMPLES['autofill-suggest'])).toBe(true)
+  })
 })
 
 describe('surfaces whose departure is not free', () => {
-  it('marks the page for exactly the two surfaces that reach into a document', () => {
+  it('marks the page for exactly the kinds that leave something drawn in it', () => {
     /*
       Driven off the set rather than off one name, which is what the second entry cost.
 
       This asserted `kind === 'find-bar'` while the find bar was the only surface that changed anything in
-      a page. The picker's confirmation bar is the second, and a worse case: it leaves a provisional rule
-      *injected* into the document rather than a highlight, so its unannounced departure hides part of a
-      page with nothing on disk to remove and nothing on screen to explain it.
+      a page. There are three now, and they leave different things behind: a find bar leaves Chromium's own
+      match highlight; the picker's confirmation bar leaves a provisional rule *injected* into the document,
+      so its unannounced departure hides part of a page with nothing on disk to remove and nothing on screen
+      to explain it; and a suggestion list leaves the badge in the page lit as "open". Driven off the table
+      so a fourth such surface has to answer the question rather than inherit an answer.
     */
-    const marking = new Set(['find-bar', 'picker-bar'])
+    const marking = new Set(['find-bar', 'picker-bar', 'autofill-suggest'])
     for (const kind of OVERLAY_KINDS) {
       expect(OVERLAY_MARKS_THE_PAGE[kind], kind).toBe(marking.has(kind))
     }
+  })
+
+  it('announces a departed account picker, which un-lights a badge and drops a consent', () => {
+    /*
+      Nothing holds a promise for a chosen account, so this is not an awaiting surface — and its
+      departure is still not free, which is the whole reason the two facts are separate tables.
+
+      Two things have to be undone. The badge in the page stays drawn while its list is open (R1), so a
+      layer taken down by a resize would otherwise leave it lit against a field with nothing in front of
+      it. And the fill request has to be discarded: while it is open the view satisfies `no-user-gesture`
+      for ever, which is precisely the standing permission the one-shot chrome consent exists to deny.
+    */
+    expect(awaitsAnswer(SAMPLES['autofill-suggest'])).toBe(false)
+    expect(marksThePage(SAMPLES['autofill-suggest'])).toBe(true)
+    expect(departureMatters(SAMPLES['autofill-suggest'])).toBe(true)
   })
 
   it('knows that a find bar leaves a highlight behind', () => {
@@ -491,6 +638,24 @@ describe('telling an update from a replacement', () => {
     expect(new Set(names).size).toBe(names.length)
   })
 
+  it('gives the same fill request the same identity when its content changes', () => {
+    /*
+      The path this has to survive: the badge is pressed while the vault is locked, the surface says so,
+      the user unlocks, and the list of accounts is presented for the *same* request. Keyed on anything
+      but the request, that second presentation would announce the first as gone — and the announcement
+      discards the request, which is the consent the fill was about to be authorised by.
+    */
+    expect(surfaceIdentity(suggestSample({ content: { state: 'locked' } }))).toBe(
+      surfaceIdentity(SAMPLES['autofill-suggest'])
+    )
+  })
+
+  it('gives a second press of the badge a different one', () => {
+    expect(surfaceIdentity(suggestSample({ requestId: 'fill-2' }))).not.toBe(
+      surfaceIdentity(SAMPLES['autofill-suggest'])
+    )
+  })
+
   it("distinguishes one tile's bar from the next", () => {
     expect(surfaceIdentity(tileBarSample({ tileIndex: 2 }))).not.toBe(
       surfaceIdentity(SAMPLES['tile-bar'])
@@ -533,6 +698,16 @@ describe('which surfaces take the keyboard', () => {
       worst case, which then remembers them.
     */
     expect(takesFocus(SAMPLES['master-password'])).toBe(true)
+  })
+
+  it('gives it to the account picker, which R3 requires to be walkable by arrow key', () => {
+    /*
+      And the cost is real rather than free: focusing this renderer takes focus off the very field the
+      list belongs to, so the document sees `focusout` on it. That is why the badge's visibility hangs on
+      "focused *or* its list is open" and not on focus alone — otherwise the badge would disappear at the
+      exact moment its own list appeared.
+    */
+    expect(takesFocus(SAMPLES['autofill-suggest'])).toBe(true)
   })
 })
 

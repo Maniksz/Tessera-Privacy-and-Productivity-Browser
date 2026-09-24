@@ -7,6 +7,12 @@ import type {
   MasterPasswordStep
 } from '../passwords/prompt.js'
 import type { Rect, Size } from '../ui/anchor.js'
+/*
+  Type-only, and it has to stay that way. `fill-policy.ts` imports the public-suffix table, and this
+  module is reachable from both renderers at runtime — a value import here would put four kilobytes of
+  eTLD suffixes into a bundle that never consults one. See the bundle-weight fitness functions.
+*/
+import type { FillRefusal } from '../passwords/fill-policy.js'
 import type { PermissionDevice, PermissionSubject } from './permission.js'
 import type { PickerBarMode } from './picker-bar.js'
 
@@ -45,7 +51,8 @@ export const OVERLAY_KINDS = [
   'master-password',
   'navigation-request',
   'picker-bar',
-  'downloads-panel'
+  'downloads-panel',
+  'autofill-suggest'
 ] as const
 
 export type OverlayKind = (typeof OVERLAY_KINDS)[number]
@@ -145,7 +152,22 @@ export const OVERLAY_REGION = {
    * outside it is the gesture that closes it. The panel itself is a box placed against the button; the
    * rest of the layer is transparent, so the pages stay visible behind it.
    */
-  'downloads-panel': 'window'
+  'downloads-panel': 'window',
+  /**
+   * A box against one password field, and nothing else in the window.
+   *
+   * The find bar's reasoning with a third argument on top of it. The first two hold unchanged: the layer
+   * swallows every pointer event inside its bounds, so a region sized to the content area would make the
+   * other three pages unclickable while somebody picked an account in one of them, and only the
+   * presentation knows which tile the field is in.
+   *
+   * The third is what the region *buys*, and it is the reason this surface needs no dismiss-on-outside-click.
+   * Cut to its own rectangle, a click beside the list is not a click on an unhandled part of the layer — it
+   * lands in the page view, which is where the user was aiming. A window-sized region would have to
+   * reimplement "clicked outside" and would swallow the click while doing it, so choosing an account and
+   * then reaching for a link would cost two clicks.
+   */
+  'autofill-suggest': 'tile'
 } as const satisfies Record<OverlayKind, OverlayRegion>
 
 /** The layout menu carries the current layout so it can render its radio state at once. */
@@ -564,6 +586,98 @@ export interface PickerBarPresentation {
   text: Readonly<Record<string, string>>
 }
 
+/**
+ * One saved credential, as the suggestion list is allowed to know it.
+ *
+ * An id and a username, and the absence of everything else is the point: this travels to a renderer
+ * because the user pressed the badge, so it is the *only* place in this feature where names of saved
+ * accounts leave the vault. No password, no address, no note, no date.
+ */
+export interface AutofillSuggestEntry {
+  /** Opaque, and echoed back with the choice. Never a username used as a key. */
+  id: string
+  /** May be empty: some sites authenticate on a password alone, and the surface says so in words. */
+  username: string
+}
+
+/**
+ * What the list has to say, which on most presses of the badge is not a list.
+ *
+ * ## Why every refusal is a state here rather than an absent surface
+ *
+ * Pressing the badge has to produce a visible answer, and "nothing happened" is the answer a user
+ * cannot tell apart from a broken browser. So the four ways there is nothing to offer are each a
+ * value the surface can render a sentence for, instead of a reason the core silently declines to
+ * present anything.
+ *
+ * `refused` carries the rule that said no rather than a translated sentence. The wording belongs in
+ * the chrome's catalogue — it is a wordlist, and a wordlist in a presentation is a wordlist on the
+ * wire — and the distinction between "this page is not encrypted" and "this is not the site the
+ * password was saved for" is exactly what makes the refusal honest instead of "nothing found".
+ */
+export type AutofillSuggestContent =
+  /** Never empty. An offer of nothing is `empty`, which reads as a sentence rather than as a blank box. */
+  | { state: 'entries'; entries: AutofillSuggestEntry[] }
+  /**
+   * The vault is locked, and the surface offers to unlock it.
+   *
+   * Not the master-password prompt itself: that surface is raised by the user pressing *this* one's
+   * button, which is an action in browser chrome. Raised straight from the badge it would be the
+   * highest-ranked surface on this layer being summoned by a message from a page view.
+   */
+  | { state: 'locked' }
+  /** Unlocked, the rules allow it, and there is nothing saved for this site. */
+  | { state: 'empty' }
+  /** A fill rule said no, and which one is what the surface turns into a sentence. */
+  | { state: 'refused'; reason: FillRefusal }
+  /** Autofill is switched off. The one state whose remedy is a setting rather than an action here. */
+  | { state: 'disabled' }
+
+/**
+ * The account picker for one password field (R5).
+ *
+ * ## Why it is drawn here rather than in the page
+ *
+ * A list of the user's account names, drawn in the document, teaches the page which account the user
+ * expects here — and a page that knows that can build its own mask to match. The list shows no
+ * password either way, so the leak is not the secret; it is the *expectation*. Only the chrome can
+ * draw a surface the page can neither read nor imitate into, which is the one step this browser can
+ * take that a password-manager extension cannot.
+ *
+ * ## Why the request id and not a tab id
+ *
+ * The find bar carries a tab because every message it sends acts on that tab's document. This surface
+ * sends exactly one thing back — a choice — and the core resolves the view from the request the badge
+ * press opened. A tab id here would be a second name for the same thing, and the two disagree the
+ * moment a tab is reassigned under an open list. The request id is also the whole of the consent that
+ * authorises the fill (`shared/passwords/consent.ts`), so binding the surface to it is what makes a
+ * choice unable to authorise anything but the press it came from.
+ *
+ * ## Why the bounds are here
+ *
+ * The tile-region reason, plus one this surface has alone: the rectangle depends on where a *field* is
+ * inside a page, which is a fact only the core can assemble — the page reports CSS pixels, the tile
+ * holds the zoom, the view holds its own bounds. See `shared/passwords/suggest-bounds.ts`, which is
+ * where those four facts are turned into one rectangle, once.
+ */
+export interface AutofillSuggestPresentation {
+  kind: 'autofill-suggest'
+  /**
+   * The fill request this list belongs to.
+   *
+   * Echoed back with the choice, for the rule every prompt on this layer follows: an answer may only
+   * resolve the question it was shown for. Here it is stronger than elsewhere — the core spends this
+   * id as one-shot consent, so a choice carrying a stale one authorises nothing at all rather than
+   * filling the wrong form.
+   */
+  requestId: string
+  /** The tile the field is in. Also its label: "passwords for tile 2" is what a screen reader reads. */
+  tileIndex: number
+  /** The list, in window coordinates — the bounds the layer takes while this is up. */
+  bounds: Rect
+  content: AutofillSuggestContent
+}
+
 export type OverlayPresentation =
   | LayoutMenuPresentation
   | TabDropPresentation
@@ -574,6 +688,7 @@ export type OverlayPresentation =
   | NavigationRequestPresentation
   | PickerBarPresentation
   | DownloadsPanelPresentation
+  | AutofillSuggestPresentation
 
 /** Nothing presented is a first-class state, not an absent one. */
 export type OverlayState = OverlayPresentation | null
@@ -629,7 +744,19 @@ export const OVERLAY_AWAITS_ANSWER = {
    */
   'picker-bar': false,
   /** A list to look at and act on. Nothing is pending when it goes; the downloads carry on regardless. */
-  'downloads-panel': false
+  'downloads-panel': false,
+  /**
+   * Nothing is holding a promise for a chosen account.
+   *
+   * The page is not waiting: it asked nothing, and its badge is a button that has already done its job.
+   * The core is not waiting either — the fill request it opened is state it can drop, not a callback it
+   * must settle. A list that vanished on a resize costs the user a second press of the badge, which is
+   * the same price a dismissed menu charges.
+   *
+   * Its departure is not free all the same, and that fact lives in `OVERLAY_MARKS_THE_PAGE` rather than
+   * being smuggled in here: what has to be undone is a mark on a page, not a promise.
+   */
+  'autofill-suggest': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function awaitsAnswer(presentation: OverlayPresentation): boolean {
@@ -676,7 +803,25 @@ export const OVERLAY_MARKS_THE_PAGE = {
    * session lifts the preview at the one place it is lifted from.
    */
   'picker-bar': true,
-  'downloads-panel': false
+  'downloads-panel': false,
+  /**
+   * The second surface whose disappearance leaves something behind, and the mark is a badge rather than
+   * a highlight.
+   *
+   * A password field's badge stays drawn while its own list is open — it has to, or the badge would
+   * vanish at the exact moment the overlay renderer took the focus away from the field, which is to say
+   * every time it worked. So the page is holding an "open" state that only this surface's departure can
+   * take back, and the layer is taken down constantly by things that know nothing about autofill: a
+   * resize, a lost focus, a layout change, a permission prompt claiming the layer, the renderer crashing.
+   * Without the announcement, every one of those leaves a badge lit against a field with no list in front
+   * of it.
+   *
+   * The same announcement is what discards the open fill request, and that is the security half of the
+   * answer rather than a tidy-up: the request id *is* the chrome consent (`shared/passwords/consent.ts`),
+   * so a request left open after its surface has gone is a view that satisfies `no-user-gesture`
+   * indefinitely — which is exactly the standing permission the one-shot rule exists to deny.
+   */
+  'autofill-suggest': true
 } as const satisfies Record<OverlayKind, boolean>
 
 export function marksThePage(presentation: OverlayPresentation): boolean {
@@ -710,9 +855,9 @@ export function departureMatters(presentation: OverlayPresentation): boolean {
  * its own highlight on its first result.
  *
  * So the layer compares identities rather than kinds: same surface means an update, and an update is
- * not a departure. An exhaustive switch rather than a table, because two of the five kinds have an
- * identity of their own and three are singletons — a menu, a drag and a tile's bar can each only be
- * one thing at a time on one layer.
+ * not a departure. An exhaustive switch rather than a table, because the answer differs in *kind* from
+ * one surface to the next: some carry an identity of their own, a bar is named by its tile, and a menu
+ * or a drag is a singleton — each can only be one thing at a time on one layer.
  */
 export function surfaceIdentity(presentation: OverlayPresentation): string {
   switch (presentation.kind) {
@@ -744,6 +889,16 @@ export function surfaceIdentity(presentation: OverlayPresentation): string {
     */
     case 'downloads-panel':
       return presentation.kind
+    /*
+      Keyed on the request rather than on the tile or the field, so that re-presenting the *same* request
+      is an update and not a departure. That matters more here than for a find bar's match count: this
+      surface's departure discards the request, and one press of the badge legitimately re-presents twice
+      — locked, then the list, once the vault is open — with nothing in between but the user unlocking it.
+      Keyed on anything coarser, the second presentation would announce the first as gone and throw away
+      the consent it was about to spend.
+    */
+    case 'autofill-suggest':
+      return `autofill-suggest:${presentation.requestId}`
   }
 }
 
@@ -759,12 +914,12 @@ export function surfaceIdentity(presentation: OverlayPresentation): string {
  * on — while the guarantee this feature is sold on is that no such channel exists.
  *
  * So for this one kind the layer intercepts every keystroke in the main process and **does not pass
- * it on**. The renderer draws a count of bullets it was given and never sees a character. The other
- * five kinds must not be treated that way: a find bar is a real text field, and taking its keys in
+ * it on**. The renderer draws a count of bullets it was given and never sees a character. Every other
+ * kind must not be treated that way: a find bar is a real text field, and taking its keys in
  * the core would mean hand-implementing text editing for a search box.
  *
  * A table rather than a check inside the layer, for the reason the regions are: `satisfies` makes a
- * seventh kind that nobody considered a build failure rather than a surface that quietly loses every
+ * new kind that nobody considered a build failure rather than a surface that quietly loses every
  * keystroke — or quietly keeps one it should not have.
  */
 export const OVERLAY_CAPTURES_KEYBOARD = {
@@ -789,7 +944,15 @@ export const OVERLAY_CAPTURES_KEYBOARD = {
    */
   'picker-bar': false,
   /** Buttons, reached by Tab and pressed with Return or Space, in the renderer. */
-  'downloads-panel': false
+  'downloads-panel': false,
+  /**
+   * Arrow keys, Return and Escape over a list of names, in the renderer, as a menu should be.
+   *
+   * Nothing typed into this surface is a secret: the names came *from* the vault to be shown, and the
+   * password is fetched in the core after the choice and never reaches this renderer. Capturing here
+   * would buy nothing and cost the list its keyboard behaviour, which R3 requires it to have.
+   */
+  'autofill-suggest': false
 } as const satisfies Record<OverlayKind, boolean>
 
 export function capturesKeyboard(presentation: OverlayPresentation): boolean {
@@ -829,6 +992,9 @@ export function capturesKeyboard(presentation: OverlayPresentation): boolean {
  *    both of those cannot function without the layer: a drag with no drop indicator is a drop
  *    landing blind. Losing a search term to a gesture the user deliberately started is a fair
  *    trade; the term comes back, because the core remembers it and the shortcut restores it.
+ *  - **The account picker sits just above the tile bar**, below every surface a person opened from
+ *    the browser's own interface. It is raised by a press reported from a page view, so it may take the
+ *    layer from a hovered bar and from nothing anybody built on purpose; see its entry below.
  *  - **The master-password prompt outranks even a permission prompt**, and it is the only surface
  *    that does. Both await an answer, so displacing either costs something real, and the question is
  *    which cost is worse — the two directions are not symmetrical:
@@ -853,11 +1019,52 @@ export function capturesKeyboard(presentation: OverlayPresentation): boolean {
  *    its own match count, and what lets this prompt redraw its bullet count on every keystroke.
  *
  * Data rather than a chain of `if`s inside the layer, and `satisfies` rather than a lookup with a
- * fallback: a seventh kind that nobody ranked is a build failure instead of a surface that silently
+ * fallback: a new kind that nobody ranked is a build failure instead of a surface that silently
  * displaces a consent dialogue.
  */
 export const OVERLAY_PRECEDENCE = {
   'tile-bar': 0,
+  /**
+   * Above the tile bar and below everything else, and the second half of that is what the merge with the
+   * picker's bar decided.
+   *
+   * *Above the tile bar*, because this list is the answer to a deliberate press on a badge and a tile bar
+   * can be claimed without one: a pointer drifting towards a tile's top edge must not take down the account
+   * picker somebody is reading, or the same accident that is barred from refusing a consent dialogue would
+   * instead throw away a fill request — and with it the one-shot consent that press had earned.
+   *
+   * *Below the picker's bar*, and that is the rank the other half had to give way to. The presses that
+   * raise this surface come from a page view, over a channel the page's own preload uses, while a picker
+   * bar exists only because somebody chose "block an element" in the browser's own interface and has since
+   * built something on it — a frozen selection, a widening, a provisional rule hiding part of a page. Equal
+   * or higher, a badge press in any tile would end that session and lift its preview: a page deciding when
+   * the user's own work on the layer is thrown away. So the list waits for the bar instead.
+   *
+   * *Below the find bar* as a consequence rather than as a choice. The find bar and the picker bar share a
+   * rank on purpose (see `picker-bar` below), so no number sits above one and beneath the other; and a
+   * search somebody typed is protected from a page-view press for the picker bar's reason, one surface
+   * over. Before the merge this list ranked with the menu and outranked the find bar; that is the one
+   * behaviour the union had to give up, and a find bar may now take the layer from the list, costing the
+   * user a second press of the badge.
+   *
+   * *Below the menu, the drag and the downloads panel*, as it already was in effect: those took the layer
+   * from the list before and still do. The reverse never arises in practice for the two window-sized
+   * ones — a click on a badge lands on their layer first, and a click outside a menu is what closes it.
+   *
+   * *Not above a permission, navigation or master-password prompt*, and that is the load-bearing half.
+   * Ranking it higher would make "the page's badge" a way to displace a consent dialogue the user was
+   * reading, which is precisely the answering-on-the-user's-behalf that this table exists to stop. Below
+   * `master-password` for the further reason that this surface's own unlock button *raises* that prompt: a
+   * picker that outranked the prompt it summons would take the layer back from it.
+   *
+   * A fraction rather than a renumbering, so the ranks every other kind has carried since it arrived stay
+   * the numbers their docblocks and tests were written against.
+   *
+   * The cost of being displaceable is stated rather than hidden: sometimes the layer is not available
+   * when the badge is pressed, and nothing appears. That is the second named exception to R8, and the
+   * core checks `mayPresentOver` before it opens a request rather than discovering it afterwards.
+   */
+  'autofill-suggest': 0.5,
   'find-bar': 1,
   /**
    * Level with the find bar, and the tie is the answer to a question the plan left open rather than an
@@ -914,7 +1121,7 @@ export function mayPresentOver(incoming: OverlayKind, current: OverlayState): bo
 /**
  * Whether presenting this surface should move the keyboard into it.
  *
- * Five of the six kinds always should: each is the direct result of the user asking for it, and
+ * Every kind but one always should: each is the direct result of the user asking for it, and
  * a menu or a dialogue that did not take the keyboard would be unusable without a mouse (spec 7).
  * The find bar is the strongest case of all — it is a text field, reached only by shortcut, and its
  * entire purpose is to receive typing. A find bar that did not take focus would be a search box you
@@ -956,10 +1163,19 @@ export function takesFocus(presentation: OverlayPresentation): boolean {
       The comment sits above the group rather than between the two cases: a comment between them reads as
       an intentional fallthrough to `no-fallthrough`, which then wants a `break` that would change the
       behaviour.
+
+      `autofill-suggest` takes it for the find bar's reason and pays a price the find bar does not. R3
+      requires the list to be walkable by arrow key, and a list that did not hold the keyboard would be a
+      menu you can only click — which for the user who reached the badge by Tab is no route at all. The
+      price is that focusing this renderer takes focus off the very field the list is about, so the
+      document sees `focusout` on it. That is why R1 hangs the badge's visibility on "focused *or* its
+      list is open" rather than on focus alone, and why the fill puts the caret back in the field
+      afterwards.
     */
     case 'navigation-request':
     case 'picker-bar':
     case 'downloads-panel':
+    case 'autofill-suggest':
       return true
     case 'tile-bar':
       return presentation.invokedBy === 'keyboard'
@@ -993,7 +1209,14 @@ export const OVERLAY_REFOCUSES_ON_UPDATE = {
   'master-password': true,
   'navigation-request': true,
   'picker-bar': true,
-  'downloads-panel': false
+  'downloads-panel': false,
+  /**
+   * Yes, which is what every presentation of it did before this table existed. Its one update is the same
+   * request re-presented — the locked state becoming the list — and nothing is re-sent on a timer, so there
+   * is no keyboard for it to steal back; what the update does need is the keyboard in the list, whose rows
+   * are walked with the arrow keys (R3).
+   */
+  'autofill-suggest': true
 } as const satisfies Record<OverlayKind, boolean>
 
 /**
@@ -1062,9 +1285,12 @@ export function overlayRegionRect(
  * separately is how a surface ends up drawn in one place and hit-tested in another.
  *
  * The `tile` surfaces carry their own rectangle rather than being handed a tile index to resolve. Each is
- * computed where the tiles are: the tile bar's from the same function that positions the views, the find
- * bar's from the searched view's own bounds, the picker bar's from the picked view's. A second resolution
- * here would be a second opinion about where a tile is, and the two eventually disagree.
+ * computed where the facts are: the tile bar's from the same function that positions the views, the find
+ * bar's from the searched view's own bounds, the picker bar's from the picked view's, and the suggestion
+ * list's from a field rectangle the page reported and the zoom and bounds of the view it sits in
+ * (`passwords/suggest-bounds.ts`). A second resolution here would be a second opinion about where a tile
+ * is, and the two eventually disagree — and for the list there is nothing to have an opinion *with*: this
+ * module has never heard of a field.
  *
  * A kind left out of the list below does not fall through to a wrong rectangle: `overlayRegionRect` takes
  * a `OverlayWindowRegion`, so a `tile` kind that is not narrowed away first fails the build. The check is
@@ -1079,7 +1305,8 @@ export function overlayBounds(
   if (
     presentation.kind === 'tile-bar' ||
     presentation.kind === 'find-bar' ||
-    presentation.kind === 'picker-bar'
+    presentation.kind === 'picker-bar' ||
+    presentation.kind === 'autofill-suggest'
   ) {
     return presentation.bounds
   }

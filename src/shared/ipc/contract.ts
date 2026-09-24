@@ -56,6 +56,13 @@ import {
   MASTER_PASSWORD_STEPS
 } from '../passwords/prompt.js'
 /*
+  A value import, and the only place in this feature that may make one: `fill-policy.ts` carries the
+  public-suffix table, and this file is linked into the main process alone — the renderers and the
+  preload hold the contract by `import type` and build their allowlists from `channels.ts`, which is
+  dependency-free. The bundle-weight fitness functions are what keep that true.
+*/
+import { FILL_REFUSALS } from '../passwords/fill-policy.js'
+/*
   Every password wire shape, from that feature's own `schema.ts`.
 
   The `model.ts` / `schema.ts` split `quicklinks`, `media` and `reader` already use, applied here for a
@@ -317,6 +324,46 @@ const overlaySurfaceSchemas = [
      * for why they are not in the renderer's catalogue. A record like `userrules:list`'s, for its reason.
      */
     text: z.record(z.string(), z.string())
+  }),
+  /**
+   * The account picker for one password field (R5).
+   *
+   * ## What this schema is worth reading for
+   *
+   * The same thing the master-password one is: what it will not admit. There is no password field here
+   * in either direction, and there is no `origin` and no `url` — the surface renders names the user
+   * asked to see and nothing that would make this message a description of where they were. The only
+   * secret-adjacent value that crosses is a username, and only after a press on the badge.
+   *
+   * `entries` carries opaque ids beside those names because the choice comes back as an id. The id is
+   * not a capability: the core will not fill from it without the request this presentation names, and
+   * that request is spent by the first fill it authorises.
+   */
+  z.object({
+    kind: z.literal('autofill-suggest'),
+    /** Echoed back with the choice. Also the consent the fill is authorised by; see `consent.ts`. */
+    requestId: z.string().min(1),
+    tileIndex: z.number().int().nonnegative(),
+    bounds: rectSchema,
+    /**
+     * The list, or the reason there is not one.
+     *
+     * Discriminated for the same reason the presentations themselves are: a locked vault and an
+     * unsupported page are different sentences, and a single nullable list would make them the same
+     * blank box. `refused` names the rule from `fill-policy.ts` rather than carrying its wording — the
+     * wordlist belongs in the chrome's catalogue, not on the wire.
+     */
+    content: z.discriminatedUnion('state', [
+      z.object({
+        state: z.literal('entries'),
+        /** Never empty: an offer of nothing is `empty`, which the surface renders as a sentence. */
+        entries: z.array(z.object({ id: z.string().min(1), username: z.string() })).min(1)
+      }),
+      z.object({ state: z.literal('locked') }),
+      z.object({ state: z.literal('empty') }),
+      z.object({ state: z.literal('refused'), reason: z.enum(FILL_REFUSALS) }),
+      z.object({ state: z.literal('disabled') })
+    ])
   })
 ] as const
 

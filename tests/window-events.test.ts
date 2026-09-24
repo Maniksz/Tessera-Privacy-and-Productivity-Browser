@@ -112,6 +112,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(find-bar)',
       'overlay.dismissKind(picker-bar)',
       'overlay.dismissKind(downloads-panel)',
+      'overlay.dismissKind(autofill-suggest)',
       'relayout',
       'rememberPlacement'
     ])
@@ -129,6 +130,7 @@ describe('window event wiring', () => {
       'overlay.dismissKind(find-bar)',
       'overlay.dismissKind(picker-bar)',
       'overlay.dismissKind(downloads-panel)',
+      'overlay.dismissKind(autofill-suggest)',
       'broadcastWindowState'
     ])
   })
@@ -177,8 +179,10 @@ describe('window event wiring', () => {
     /*
       The other half, and the reason the fix is a filter rather than an exemption for two kinds: the
       protection must not spread. A menu left hanging over a window the user has resized is the
-      original complaint, and all three tile surfaces carry the rectangle of a tile that a resize has just
-      moved — kept, they would sit over a neighbour's page.
+      original complaint, and all four tile surfaces carry the rectangle of a tile that a resize has just
+      moved — kept, they would sit over a neighbour's page. The account picker is the strongest case of
+      that: it is anchored to a field whose position a resize has just changed, and closing on a resize
+      is what its own design asks for rather than something it merely tolerates.
 
       The picker's confirmation bar joined the list by being declared, which is the property this filter was
       built for: it awaits no answer, so an interruption may take it, and what its departure *does* cost —
@@ -187,6 +191,11 @@ describe('window event wiring', () => {
 
       The downloads panel joined the same way. It awaits no answer, it is anchored to a toolbar button a
       resize moves, and nothing is lost when it goes: the list it shows is the downloads page's list.
+
+      Pinned twice. The written-out list says which kinds an interruption takes today, so a kind that
+      silently changed its answer shows up as a diff here; the derived one says the rule, so a surface
+      nobody waits on that somebody forgot to list would be a menu left hanging, found by a user rather
+      than here.
     */
     const window = harness()
     window.emit('resize')
@@ -199,8 +208,10 @@ describe('window event wiring', () => {
       'tile-bar',
       'find-bar',
       'picker-bar',
-      'downloads-panel'
+      'downloads-panel',
+      'autofill-suggest'
     ])
+    expect(dismissed).toEqual(OVERLAY_KINDS.filter((kind) => !OVERLAY_AWAITS_ANSWER[kind]))
   })
 
   it('tells the chrome UI about maximise, unmaximise and focus, and remembers the placement', () => {
