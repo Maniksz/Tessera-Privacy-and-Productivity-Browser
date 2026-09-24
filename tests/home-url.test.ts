@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { HOME_URL, isHomeUrl, omniboxDisplayValue } from '@shared/url/omnibox.js'
+import { interstitialUrl, withoutToken } from '@shared/privacy/https-token.js'
 
 /**
  * The home address and what the address bar shows for it.
@@ -61,5 +62,17 @@ describe('omniboxDisplayValue', () => {
   it('shows the address everywhere else', () => {
     expect(omniboxDisplayValue('https://example.com/page')).toBe('https://example.com/page')
     expect(omniboxDisplayValue('tessera://history')).toBe('tessera://history')
+  })
+
+  it('shows the target on the HTTPS-only interstitial, not the interstitial (R7)', () => {
+    const interstitial = interstitialUrl('http://bank.example/login?next=1', 'A'.repeat(43), 'de')
+    expect(omniboxDisplayValue(interstitial)).toBe('http://bank.example/login?next=1')
+    // And after the page has dropped its token, which is the address the tab reports from then on.
+    expect(omniboxDisplayValue(withoutToken(interstitial))).toBe('http://bank.example/login?next=1')
+  })
+
+  it('shows the interstitial’s own address when it names no target it would go to', () => {
+    const forged = interstitialUrl('javascript:alert(1)', null, 'en')
+    expect(omniboxDisplayValue(forged)).toBe(forged)
   })
 })

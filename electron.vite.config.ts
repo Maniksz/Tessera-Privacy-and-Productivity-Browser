@@ -226,7 +226,8 @@ export default defineConfig({
           'internal/downloads': resolve(projectRoot, 'src/renderer/internal/downloads.html'),
           'internal/passwords': resolve(projectRoot, 'src/renderer/internal/passwords.html'),
           // Served without privileges: not in `INTERNAL_PAGES`, so the preload gives it no bridge.
-          'internal/about': resolve(projectRoot, 'src/renderer/internal/about.html')
+          'internal/about': resolve(projectRoot, 'src/renderer/internal/about.html'),
+          'internal/https-only': resolve(projectRoot, 'src/renderer/internal/https-only.html')
         },
         output: {
           /**

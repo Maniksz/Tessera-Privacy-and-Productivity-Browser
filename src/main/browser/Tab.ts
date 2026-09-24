@@ -35,6 +35,7 @@ import {
 import { decideAutomaticNavigation, withinGestureWindow } from './automatic-navigation.js'
 import { isFillGestureInput } from '@shared/passwords/gesture.js'
 import { watchTabFailure, type TabFailureWatch } from './tab-failure-watch.js'
+import { followInterstitial } from '../privacy/https-exemptions.js'
 
 /**
  * One tab: a full `WebContentsView` with its own renderer process.
@@ -662,16 +663,13 @@ export class Tab {
     on('leave-html-full-screen', () => this.callbacks.onLeaveHtmlFullscreen(this))
 
     /*
-      Navigation to an internal address that this browser did not start.
+      Navigation to an internal address that this browser did not start. The decision is in
+      `navigation-policy.ts`, for the reason `page-keys.ts` was split off one subscription up: this file
+      is excluded from coverage, so a security rule written here would be one no test can question.
 
-      The decision is in `navigation-policy.ts` rather than here, and for the reason `page-keys.ts` was
-      split off one subscription up: this file cannot run outside a browser process and is excluded from
-      coverage, so a security rule written here would be a rule no test can put a question to.
-
-      Two events, judged differently — `will-frame-navigate` for the main frame and every subframe,
-      `will-redirect` for a `Location:` header, which is also how this browser's own HTTPS-only
-      interstitial arrives. That module argues all of it, including why nothing the core itself
-      navigates ever reaches this handler.
+      Two events, judged differently — `will-frame-navigate` for every frame, `will-redirect` for a
+      `Location:` header, which is how the HTTPS-only interstitial arrives. A refused navigation may be
+      that interstitial's own "Continue" or "Go back", which the core carries out (KTD3).
     */
     const guardNavigation =
       (source: NavigationSource) =>
@@ -681,10 +679,12 @@ export class Tab {
         const decision = decideTabNavigation(pending)
         if (decision.allowed) return
         pending.prevent()
+        const step = followInterstitial(pending, wc)
+        if (step?.kind === 'back') this.goBack()
+        else if (step !== null) this.loadUrl(step.url)
         // Silent to the page on purpose — a site must not learn what this browser serves — but never
-        // silent to a developer. The rule `decideAccess` set: a refusal that says nothing is a refusal
-        // nobody can tell from a bug.
-        console.warn(`[navigation] refused: ${decision.reason}`)
+        // silent to a developer: a refusal that says nothing is a refusal nobody can tell from a bug.
+        else console.warn(`[navigation] refused: ${decision.reason}`)
       }
 
     on('will-frame-navigate', guardNavigation('frame'))
@@ -693,9 +693,8 @@ export class Tab {
     /*
       The page sending itself somewhere, gated on whether anybody asked for it.
 
-      Registered *after* the privilege guard above and reached only if that one let the navigation
-      through, which is the right order: an internal address is refused outright and never becomes a
-      question for the user.
+      Registered *after* the privilege guard above, which is the right order: an internal address is
+      refused outright and never becomes a question for the user.
 
       ## Why the navigation is stopped first and re-issued afterwards
 

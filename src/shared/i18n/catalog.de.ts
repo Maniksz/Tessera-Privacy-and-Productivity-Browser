@@ -491,6 +491,8 @@ export const de = {
   'error.crashed': 'Diese Seite funktioniert nicht mehr.',
   'error.openAnyway': 'Trotzdem öffnen',
   'error.httpsOnly': '{host} bietet keine verschlüsselte Verbindung an.',
+  'error.httpsOnly.tryHttps': 'Über HTTPS versuchen',
   'error.httpsOnly.continue': 'Unverschlüsselt fortfahren',
-  'error.httpsOnly.back': 'Zurück'
+  'error.httpsOnly.back': 'Zurück',
+  'error.httpsOnly.noTarget': 'Diese Seite wurde ohne Zieladresse geöffnet.'
 } as const satisfies Catalog

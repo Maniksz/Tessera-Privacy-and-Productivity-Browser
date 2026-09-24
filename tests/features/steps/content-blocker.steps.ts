@@ -206,7 +206,8 @@ function matched(state: unknown, url: string): boolean {
     resourceType: 'script',
     documentUrl: 'https://site.example/page',
     method: 'GET',
-    settings: defaultSettings()
+    settings: defaultSettings(),
+    webContentsId: null
   })
 }
 

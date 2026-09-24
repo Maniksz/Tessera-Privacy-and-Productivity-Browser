@@ -256,4 +256,48 @@ describe('pendingNavigationOf', () => {
       expect(pendingNavigationOf(details, 'frame'), String(details)).toBeNull()
     }
   })
+
+  it('reads the initiator frame’s address, for the interstitial’s own "Continue" (KTD3)', () => {
+    const initiator = { url: 'tessera://https-only/?target=http%3A%2F%2Fa.example%2F' }
+    const pending = pendingNavigationOf(
+      { url: 'tessera://https-only/continue', initiator },
+      'frame'
+    )
+    expect(pending?.initiatorUrl).toBe(initiator.url)
+  })
+
+  it('reads no initiator where there is none to read, including a frame that is gone', () => {
+    /*
+      A disposed `WebFrameMain` throws when it is read. The handler runs for every navigation, so the throw
+      must not escape — and "no initiator" is the answer that refuses the grant.
+    */
+    const disposed = {
+      get url(): string {
+        throw new Error('Render frame was disposed before WebFrameMain could be accessed')
+      }
+    }
+    const initiators = [undefined, null, 'tessera://https-only/', { url: 42 }, disposed]
+    initiators.forEach((initiator, index) => {
+      const pending = pendingNavigationOf({ url: 'https://example.com/', initiator }, 'frame')
+      expect(pending?.initiatorUrl, `initiator #${index}`).toBeNull()
+    })
+  })
+})
+
+describe('the HTTPS-only interstitial', () => {
+  it('stays off the privilege list, or the pipeline’s redirect onto it would be refused', () => {
+    expect(INTERNAL_PAGES as readonly string[]).not.toContain('https-only')
+    const redirect = attempt(
+      internalUrl('https-only', { target: 'http://a.example/', t: 'x' }),
+      'redirect'
+    )
+    expect(decideTabNavigation(redirect).allowed).toBe(true)
+  })
+
+  it('cannot be reached by page content, including its continue route', () => {
+    // Always stopped, whoever navigates there; the core then carries out only the interstitial's own.
+    for (const url of ['tessera://https-only/continue?t=x', 'tessera://https-only/back']) {
+      expect(decideTabNavigation(attempt(url, 'frame')).allowed, url).toBe(false)
+    }
+  })
 })

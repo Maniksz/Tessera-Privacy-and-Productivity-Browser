@@ -1,4 +1,5 @@
 import { INTERNAL_SCHEME, internalUrl } from '../product.js'
+import { interstitialTargetOf } from '../privacy/https-token.js'
 /**
  * Address-bar input classification (spec 1).
  *
@@ -184,11 +185,14 @@ export function isHomeUrl(url: string): boolean {
 /**
  * What the address bar should display for a given page address.
  *
- * Returns an empty string for the home page so the field is ready to type in, and
- * the address itself for everything else.
+ * Returns an empty string for the home page so the field is ready to type in, the address the
+ * HTTPS-only interstitial is about while it is shown (R7), and the address itself for everything
+ * else. The interstitial's own address carries nothing a person needs, and the target is what
+ * pressing Enter should retry.
  */
 export function omniboxDisplayValue(url: string): string {
-  return isHomeUrl(url) ? '' : url
+  if (isHomeUrl(url)) return ''
+  return interstitialTargetOf(url) ?? url
 }
 
 export interface SearchConfig {

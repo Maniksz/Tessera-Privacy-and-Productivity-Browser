@@ -62,6 +62,15 @@ describe('what the about page says', () => {
     expect(document.title).toBe(`Über ${PRODUCT_NAME}`)
   })
 
+  it('follows the language the core put in its address over a masked navigator.language', () => {
+    // Help › About opens `tessera://about?lang=…`; with fingerprint masking the page reads `en-US`.
+    setLanguage('en-US')
+    vi.stubGlobal('location', new URL('tessera://about?lang=de'))
+    render(<AboutPage />)
+    expect(document.body.textContent).toContain('Freie Software')
+    expect(document.documentElement.lang).toBe('de')
+  })
+
   it('falls back to English for a language it has no catalogue for', () => {
     setLanguage('fr')
     render(<AboutPage />)

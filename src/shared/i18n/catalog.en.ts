@@ -669,8 +669,10 @@ export const en = {
   'error.crashed': 'This page stopped working.',
   'error.openAnyway': 'Open anyway',
   'error.httpsOnly': '{host} does not offer an encrypted connection.',
+  'error.httpsOnly.tryHttps': 'Try HTTPS',
   'error.httpsOnly.continue': 'Continue unencrypted',
-  'error.httpsOnly.back': 'Go back'
+  'error.httpsOnly.back': 'Go back',
+  'error.httpsOnly.noTarget': 'This page was opened without an address to go to.'
 } as const satisfies Record<string, string>
 
 export type MessageKey = keyof typeof en

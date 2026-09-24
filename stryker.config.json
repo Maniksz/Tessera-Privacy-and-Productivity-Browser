@@ -143,6 +143,8 @@
     "src/main/browser/tab-failure-watch.ts",
     "src/shared/data/inventory.ts",
     "src/main/data/clear-data.ts",
+    "src/shared/privacy/https-token.ts",
+    "src/main/privacy/https-exemptions.ts",
     "!**/*.d.ts"
   ],
   "checkers": ["typescript"],

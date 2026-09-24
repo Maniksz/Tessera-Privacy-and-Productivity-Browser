@@ -47,6 +47,9 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
   const { windows, settings, locale, platform } = deps
   const overrides = settings.get('advanced.customShortcuts')
   const t = (key: MenuLabelKey): string => menuLabel(locale, key)
+  // The page has no bridge to ask for the language, and its `navigator.language` is masked; see
+  // `bundled-i18n.ts`. The menu is rebuilt when the language changes, so this follows it.
+  const aboutUrl = internalUrl('about', { lang: locale })
   const accel = (action: ShortcutAction): string => acceleratorFor(platform, action, overrides)
 
   /** Runs a command against the window the user is actually looking at. */
@@ -447,7 +450,7 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       { type: 'separator' },
       {
         label: t('menu.help.about'),
-        click: () => focused()?.createTab({ url: internalUrl('about') })
+        click: () => focused()?.createTab({ url: aboutUrl })
       }
     ]
   }
@@ -461,7 +464,7 @@ export function buildApplicationMenu(deps: MenuDeps): Menu {
       submenu: [
         {
           label: t('menu.help.about'),
-          click: () => focused()?.createTab({ url: internalUrl('about') })
+          click: () => focused()?.createTab({ url: aboutUrl })
         },
         { type: 'separator' },
         {

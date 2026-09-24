@@ -106,6 +106,14 @@ export interface NavigationAttempt {
 export interface PendingNavigation extends NavigationAttempt {
   /** Electron's own `event.preventDefault`, already bound to its event. */
   prevent: () => void
+  /**
+   * The address of the frame that started the navigation, or `null`.
+   *
+   * Not read by `decideTabNavigation` — see "Why `initiator` is not consulted" above. It is read by the one
+   * decision where a missing initiator fails safe: the HTTPS-only interstitial's own "Continue", which is
+   * granted only to a navigation this proves the interstitial started (`interstitialActionOf`).
+   */
+  initiatorUrl: string | null
 }
 
 /** Why it was refused, for the log and for the tests. The shape `decideAccess` uses. */
@@ -137,7 +145,12 @@ export function pendingNavigationOf(
 ): PendingNavigation | null {
   if (typeof details !== 'object' || details === null) return null
 
-  const event: { url?: unknown; isMainFrame?: unknown; preventDefault?: () => void } = details
+  const event: {
+    url?: unknown
+    isMainFrame?: unknown
+    initiator?: unknown
+    preventDefault?: () => void
+  } = details
   const { url } = event
   if (typeof url !== 'string') return null
 
@@ -145,6 +158,7 @@ export function pendingNavigationOf(
     url,
     source,
     isMainFrame: event.isMainFrame === true,
+    initiatorUrl: initiatorUrlOf(event.initiator),
     /*
       Called as a method on its own event, so Electron's `preventDefault` sets `defaultPrevented` on the
       object it belongs to. A detached reference would set it on nothing and the navigation would
@@ -158,6 +172,23 @@ export function pendingNavigationOf(
     prevent: () => {
       event.preventDefault?.()
     }
+  }
+}
+
+/**
+ * The initiator frame's address, or `null` when there is none to read.
+ *
+ * A `WebFrameMain` throws when it is read after its frame was disposed, and this runs in a navigation handler
+ * every navigation passes through — so a frame that is gone is a frame that started nothing.
+ */
+function initiatorUrlOf(initiator: unknown): string | null {
+  if (typeof initiator !== 'object' || initiator === null) return null
+  const frame: { url?: unknown } = initiator
+  try {
+    const { url } = frame
+    return typeof url === 'string' ? url : null
+  } catch {
+    return null
   }
 }
 

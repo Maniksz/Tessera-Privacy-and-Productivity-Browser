@@ -2028,11 +2028,11 @@ describe('content security', () => {
     */
 
     /**
-     * Served, but allowed to have no page yet. **U8 must empty this list** when it builds the HTTPS-only
-     * interstitial; the second test below fails the moment an entry here gets its page, so the
+     * Served, but allowed to have no page yet. Empty since U8 built the HTTPS-only interstitial, and meant
+     * to stay that way; the second test below fails the moment an entry here gets its page, so an
      * allowance cannot outlive the gap it excuses.
      */
-    const PENDING_PAGES: readonly string[] = ['https-only']
+    const PENDING_PAGES: readonly string[] = []
 
     const quotedNames = (block: string): string[] =>
       (block.match(/'([a-z-]+)'/g) ?? []).map((quoted) => quoted.slice(1, -1))

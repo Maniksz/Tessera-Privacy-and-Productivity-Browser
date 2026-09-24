@@ -554,7 +554,23 @@ export default defineConfig({
           functions: 100,
           branches: 100,
           statements: 100
-        }
+        },
+        /*
+          HTTPS-only's way past the interstitial (U8, KTD3), whole.
+
+          Every branch in these is a refusal — a redirect, a subframe, a stranger's initiator, another view's
+          token, an expired or spent one, another session's exemption, another host's image — and a refusal
+          that stops being taken looks exactly like "Continue" working. `idn.ts` is held with them because it
+          decides whether a look-alike host reads as the real one on that page.
+        */
+        'src/shared/privacy/**': { lines: 100, functions: 100, branches: 100, statements: 100 },
+        'src/main/privacy/https-exemptions.ts': {
+          lines: 100,
+          functions: 100,
+          branches: 100,
+          statements: 100
+        },
+        'src/shared/url/idn.ts': { lines: 100, functions: 100, branches: 100, statements: 100 }
       }
     }
   }

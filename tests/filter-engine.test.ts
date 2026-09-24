@@ -52,6 +52,7 @@ function context(overrides: Partial<RequestContext> = {}): RequestContext {
     documentUrl: 'https://news.example.org/article',
     method: 'GET',
     settings: defaultSettings(),
+    webContentsId: null,
     ...overrides
   }
 }

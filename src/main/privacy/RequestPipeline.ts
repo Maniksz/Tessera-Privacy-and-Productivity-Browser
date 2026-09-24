@@ -3,6 +3,14 @@ import { registrableDomain, hostMatchesRule, isIpAddress } from '@shared/url/dom
 import { stripTrackingParams } from '@shared/url/tracking-params.js'
 import { filteringExemptFor } from '@shared/filters/site-exemption.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
+import { DEFAULT_LOCALE, type Locale } from '@shared/i18n/catalog.js'
+import { interstitialUrl, type ContinueTokens } from '@shared/privacy/https-token.js'
+import {
+  HttpsExemptions,
+  continueTokens,
+  httpsExemptionsFor,
+  type ContinueGrant
+} from './https-exemptions.js'
 
 /**
  * The single network interception point (spec 4).
@@ -47,6 +55,8 @@ export interface RequestContext {
   documentUrl: string | null
   method: string
   settings: SettingsSnapshot
+  /** The view that made the request, which a continue token is bound to. `null` for none (a worker). */
+  webContentsId: number | null
 }
 
 export interface RequestStage {
@@ -221,7 +231,15 @@ const trackingParamStage: RequestStage = {
   }
 }
 
-const httpsUpgradeStage: RequestStage = {
+/** What the HTTPS stage needs beyond the request: its session's exemptions, the token ledger, the language. */
+export interface HttpsOnlyWiring {
+  readonly exemptions: HttpsExemptions
+  readonly tokens: ContinueTokens<ContinueGrant>
+  /** The interface language, resolved; the interstitial cannot ask for it (see `interstitialUrl`). */
+  uiLocale(): Locale
+}
+
+const httpsUpgradeStage = (https: HttpsOnlyWiring): RequestStage => ({
   id: 'https-upgrade',
   isEnabled: (settings) => settings['privacy.httpsOnlyMode'],
   evaluate: (context) => {
@@ -243,14 +261,28 @@ const httpsUpgradeStage: RequestStage = {
       return { action: 'continue' }
     }
 
-    // Subresources are upgraded silently. A top-level navigation goes to the
-    // interstitial instead, because spec 4 requires a real page explaining the
-    // situation rather than a silent switch — that page then decides whether to
-    // retry over HTTPS or offer to continue.
+    // A host the user chose to continue to, in this session — and only on its own pages (KTD3).
+    if (https.exemptions.exempts(context)) return { action: 'continue' }
+
+    /*
+      Subresources are upgraded silently. A top-level navigation goes to the interstitial instead, because
+      spec 4 requires a real page explaining the situation rather than a silent switch.
+
+      The redirect carries a token bound to this view, and only the token: the target it lets the user
+      continue to stays in the core's record, so a forged address can neither mint one nor aim one elsewhere.
+      No view, no token — the page then offers "Try HTTPS" alone.
+    */
     if (context.resourceType === 'mainFrame') {
+      const token =
+        context.webContentsId === null
+          ? null
+          : https.tokens.issue(context.webContentsId, {
+              target: context.url,
+              exemptions: https.exemptions
+            })
       return {
         action: 'redirect',
-        url: `tessera://https-only?target=${encodeURIComponent(context.url)}`,
+        url: interstitialUrl(context.url, token, https.uiLocale()),
         reason: 'https-upgrade'
       }
     }
@@ -260,7 +292,7 @@ const httpsUpgradeStage: RequestStage = {
       reason: 'https-upgrade'
     }
   }
-}
+})
 
 function hostOf(url: string): string | null {
   try {
@@ -346,6 +378,8 @@ export interface PipelineOptions {
   getSettings(): SettingsSnapshot
   filterEngine?: FilterListEngine | null
   hooks?: Partial<PipelineHooks>
+  /** The interface language, resolved, for the interstitial's text. English when not given. */
+  uiLocale?: () => Locale
 }
 
 /** What the pipeline needs from Electron's `details`, copied while the request is still live. */
@@ -433,13 +467,12 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
   const onBlockedNavigation = options.hooks?.onBlockedNavigation ?? (() => {})
   const onRequest = options.hooks?.onRequest ?? (() => {})
 
-  const stages: readonly RequestStage[] = [
-    telemetryStage,
-    blockerStage(engine),
-    redirectStage,
-    trackingParamStage,
-    httpsUpgradeStage
-  ]
+  const stages = stagesFor(engine, {
+    // This session's own set, so a private window's exemptions stay in the private window (AE2).
+    exemptions: httpsExemptionsFor(session),
+    tokens: continueTokens,
+    uiLocale: options.uiLocale ?? (() => DEFAULT_LOCALE)
+  })
 
   // Guards the ordering invariant at startup rather than in review.
   const actualOrder = stages.map((stage) => stage.id)
@@ -458,7 +491,8 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
       resourceType: facts.resourceType,
       documentUrl: facts.documentUrl,
       method: facts.method,
-      settings
+      settings,
+      webContentsId: facts.webContentsId
     }
 
     for (const stage of stages) {
@@ -529,18 +563,35 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
   }
 }
 
-/** Exposed for tests: run the stage chain without an Electron session. */
-export function evaluateStages(
-  context: RequestContext,
-  engine: FilterListEngine | null = null
-): StageOutcome {
-  const stages: readonly RequestStage[] = [
+function stagesFor(
+  engine: FilterListEngine | null,
+  https: HttpsOnlyWiring
+): readonly RequestStage[] {
+  return [
     telemetryStage,
     blockerStage(engine),
     redirectStage,
     trackingParamStage,
-    httpsUpgradeStage
+    httpsUpgradeStage(https)
   ]
+}
+
+/**
+ * Exposed for tests: run the stage chain without an Electron session.
+ *
+ * Without `https`, the HTTPS stage gets an empty set of its own and the process ledger — which a context with
+ * no `webContentsId` never writes to.
+ */
+export function evaluateStages(
+  context: RequestContext,
+  engine: FilterListEngine | null = null,
+  https: HttpsOnlyWiring = {
+    exemptions: new HttpsExemptions(),
+    tokens: continueTokens,
+    uiLocale: () => DEFAULT_LOCALE
+  }
+): StageOutcome {
+  const stages = stagesFor(engine, https)
   for (const stage of stages) {
     if (!stage.isEnabled(context.settings)) continue
     const outcome = stage.evaluate(context)

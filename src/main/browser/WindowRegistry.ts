@@ -23,6 +23,7 @@ import { applySessionHardening } from '../session/hardening.js'
 import type { PermissionCheck, PermissionRequestDetails } from '../session/permission-policy.js'
 import type { PermissionHost } from '../permissions/PermissionArbiter.js'
 import { installRequestPipeline } from '../privacy/RequestPipeline.js'
+import { forgetHttpsExemptions } from '../privacy/https-exemptions.js'
 import { BrowserWindowController } from './BrowserWindowController.js'
 import { WindowRecency, downloadWindowFor } from './window-recency.js'
 import { windowOfSender, windowOfTab } from './sender-window.js'
@@ -377,6 +378,8 @@ export class WindowRegistry {
           this.#deps.downloads.releaseSession(session)
           void session.clearStorageData()
           void session.clearCache()
+          // And the hosts the user continued to over plain HTTP, which lived only in memory (R8).
+          forgetHttpsExemptions(session)
           /*
             And the rules the picker wrote in that window, which are the third thing a private session
             leaves in memory rather than on disk.
@@ -591,6 +594,8 @@ export class WindowRegistry {
         it, which is the failure mode `RequestPipeline` exists to prevent.
       */
       filterEngine: this.#deps.filters.engine,
+      // The interstitial's language; it has no bridge to ask for it.
+      uiLocale: this.#deps.uiLocale,
       hooks: {
         onBlocked: (documentUrl) => this.#noteBlockedRequest(documentUrl),
         onBlockedNavigation: noteBlockedNavigation

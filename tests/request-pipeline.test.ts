@@ -5,9 +5,21 @@ import {
   holdMainFrameRequests,
   installRequestPipeline,
   type FilterListEngine,
+  type HttpsOnlyWiring,
   type RequestContext
 } from '@main/privacy/RequestPipeline.js'
 import { FilterEngine } from '@main/privacy/FilterEngine.js'
+import {
+  HttpsExemptions,
+  httpsExemptionsFor,
+  type ContinueGrant
+} from '@main/privacy/https-exemptions.js'
+import {
+  ContinueTokens,
+  interstitialTargetOf,
+  interstitialTokenOf
+} from '@shared/privacy/https-token.js'
+import type { Locale } from '@shared/i18n/catalog.js'
 import { defaultSettings, type SettingsSnapshot } from '@shared/settings/definitions.js'
 
 /**
@@ -24,6 +36,7 @@ function context(overrides: Partial<RequestContext> = {}): RequestContext {
     documentUrl: 'https://example.com/',
     method: 'GET',
     settings: defaultSettings(),
+    webContentsId: null,
     ...overrides
   }
 }
@@ -474,7 +487,103 @@ describe('https upgrade stage', () => {
     expect(outcome.action).toBe('redirect')
     if (outcome.action !== 'redirect') return
     expect(outcome.url.startsWith('tessera://https-only?target=')).toBe(true)
-    expect(decodeURIComponent(outcome.url.split('target=')[1]!)).toBe('http://example.com/page')
+    expect(interstitialTargetOf(outcome.url)).toBe('http://example.com/page')
+  })
+
+  describe('the interstitial redirect', () => {
+    function wiring(uiLocale: Locale = 'en'): HttpsOnlyWiring & {
+      tokens: ContinueTokens<ContinueGrant>
+    } {
+      let minted = 0
+      return {
+        exemptions: new HttpsExemptions(),
+        tokens: new ContinueTokens<ContinueGrant>({
+          mint: () => `${(minted += 1)}`.padStart(43, 'T'),
+          same: (a, b) => a === b,
+          now: () => 0
+        }),
+        uiLocale: () => uiLocale
+      }
+    }
+
+    it('carries a token bound to the view, and only the token', () => {
+      const https = wiring()
+      const outcome = evaluateStages(
+        context({ url: 'http://example.com/page', webContentsId: 4 }),
+        null,
+        https
+      )
+      if (outcome.action !== 'redirect') throw new Error('not redirected')
+      const token = interstitialTokenOf(outcome.url)
+      expect(token).not.toBeNull()
+      // The record behind it holds the full target, for this view and no other.
+      expect(https.tokens.redeem(5, token!)).toBeNull()
+      const again = evaluateStages(
+        context({ url: 'http://example.com/page', webContentsId: 4 }),
+        null,
+        https
+      )
+      if (again.action !== 'redirect') throw new Error('not redirected')
+      expect(https.tokens.redeem(4, interstitialTokenOf(again.url)!)?.target).toBe(
+        'http://example.com/page'
+      )
+    })
+
+    it('carries no token for a request no view made', () => {
+      const outcome = evaluateStages(
+        context({ url: 'http://example.com/page', webContentsId: null }),
+        null,
+        wiring()
+      )
+      if (outcome.action !== 'redirect') throw new Error('not redirected')
+      expect(interstitialTokenOf(outcome.url)).toBeNull()
+      expect(interstitialTargetOf(outcome.url)).toBe('http://example.com/page')
+    })
+
+    it('carries the interface language, since the page cannot ask for it', () => {
+      const outcome = evaluateStages(
+        context({ url: 'http://example.com/page' }),
+        null,
+        wiring('de')
+      )
+      if (outcome.action !== 'redirect') throw new Error('not redirected')
+      expect(new URL(outcome.url).searchParams.get('lang')).toBe('de')
+    })
+
+    it('says English when nobody told the pipeline the language', () => {
+      const outcome = evaluateStages(context({ url: 'http://example.com/page' }))
+      if (outcome.action !== 'redirect') throw new Error('not redirected')
+      expect(new URL(outcome.url).searchParams.get('lang')).toBe('en')
+    })
+
+    it('is skipped for an exempted host, on its own pages only', () => {
+      const https = wiring()
+      https.exemptions.add('http://example.com/')
+      expect(evaluateStages(context({ url: 'http://example.com/page' }), null, https)).toEqual({
+        action: 'continue'
+      })
+      const foreignImage = context({
+        url: 'http://cdn.example.net/a.png',
+        resourceType: 'image',
+        documentUrl: 'http://example.com/page'
+      })
+      expect(evaluateStages(foreignImage, null, https)).toEqual({
+        action: 'redirect',
+        url: 'https://cdn.example.net/a.png',
+        reason: 'https-upgrade'
+      })
+    })
+
+    it('never sends loopback or an address literal to the interstitial', () => {
+      const https = wiring()
+      for (const url of ['http://localhost/', 'http://app.localhost/', 'http://127.0.0.1/']) {
+        expect(evaluateStages(context({ url, webContentsId: 4 }), null, https), url).toEqual({
+          action: 'continue'
+        })
+      }
+      // So no token was issued for them either.
+      expect(https.tokens.redeem(4, '1'.padStart(43, 'T'))).toBeNull()
+    })
   })
 
   it('upgrades subresources silently', () => {
@@ -676,5 +785,69 @@ describe('holding navigations until the lists compile', () => {
     await vi.waitFor(() => {
       expect(answer).toHaveBeenCalledWith({})
     })
+  })
+})
+
+/**
+ * The HTTPS stage as the installed listener runs it: the view id from Electron's `details`, the language
+ * from the registry, and the exemptions of the session the listener was installed on (KTD3, AE2).
+ */
+describe('the HTTPS stage on an installed session', () => {
+  type Listener = (details: unknown, callback: (r: unknown) => void) => void
+
+  function install(uiLocale?: () => Locale): { session: object; listener: Listener } {
+    const registered: Listener[] = []
+    const session = {
+      webRequest: {
+        onBeforeRequest(listener: Listener | null) {
+          if (listener !== null) registered.push(listener)
+        }
+      }
+    }
+    installRequestPipeline({
+      session: session as never,
+      getSettings: () => defaultSettings(),
+      filterEngine: null,
+      ...(uiLocale === undefined ? {} : { uiLocale })
+    })
+    const listener = registered[0]
+    if (listener === undefined) throw new Error('no listener registered')
+    return { session, listener }
+  }
+
+  function answer(listener: Listener, details: Record<string, unknown>): { redirectURL?: string } {
+    const callback = vi.fn()
+    listener({ method: 'GET', resourceType: 'mainFrame', ...details }, callback)
+    expect(callback).toHaveBeenCalledTimes(1)
+    return callback.mock.calls[0]![0] as { redirectURL?: string }
+  }
+
+  it('binds the token to the requesting view and names the interface language', () => {
+    const { listener } = install(() => 'de')
+    const response = answer(listener, { url: 'http://printer.lan/', webContentsId: 12 })
+    const redirect = response.redirectURL ?? ''
+    expect(interstitialTargetOf(redirect)).toBe('http://printer.lan/')
+    expect(interstitialTokenOf(redirect)).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(new URL(redirect).searchParams.get('lang')).toBe('de')
+  })
+
+  it('offers no token for a request with no view, and speaks English by default', () => {
+    const { listener } = install()
+    const redirect = answer(listener, { url: 'http://printer.lan/' }).redirectURL ?? ''
+    expect(interstitialTokenOf(redirect)).toBeNull()
+    expect(new URL(redirect).searchParams.get('lang')).toBe('en')
+  })
+
+  it('reads the exemptions of its own session and no other', () => {
+    const normal = install()
+    const privateWindow = install()
+    httpsExemptionsFor(privateWindow.session).add('http://printer.lan/')
+
+    expect(
+      answer(privateWindow.listener, { url: 'http://printer.lan/', webContentsId: 3 })
+    ).toEqual({})
+    expect(
+      answer(normal.listener, { url: 'http://printer.lan/', webContentsId: 4 }).redirectURL
+    ).toMatch(/^tessera:\/\/https-only\?/)
   })
 })

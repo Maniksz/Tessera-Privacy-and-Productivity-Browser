@@ -43,7 +43,8 @@ When(
       resourceType,
       documentUrl: target.documentUrl,
       method: 'GET',
-      settings: target.settings
+      settings: target.settings,
+      webContentsId: null
     })
   }
 )

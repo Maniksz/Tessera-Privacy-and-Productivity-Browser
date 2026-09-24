@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      No remote origin, no connection, nothing to submit, and no framing.
+
+      The interstitial is served without a bridge and needs nothing but its own bundle: every way off it is
+      a navigation, and the one that matters ("Continue unencrypted") is carried out by the core, not by
+      anything this page could fetch. `frame-ancestors` is ignored in a <meta> policy by specification and
+      stated here for the reader; `protocol.ts` sends it as a header, which is what enforces it.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    />
+    <!-- The address briefly carries the token; nothing this page opens may be told it. -->
+    <meta name="referrer" content="no-referrer" />
+    <!-- A placeholder, replaced from the bundled catalogue as soon as the page runs. -->
+    <title>HTTPS</title>
+  </head>
+  <body>
+    <div id="https-only-root"></div>
+    <script type="module" src="./https-only.tsx"></script>
+  </body>
+</html>

@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { PRODUCT_NAME, PRODUCT_SCHEME } from '@shared/product.js'
 import { FAVICON_PAGE, faviconSiteOf, faviconTokenMatches } from '@shared/favicons/model.js'
 import { THUMBNAIL_PAGE, thumbnailPageOf, thumbnailTokenMatches } from '@shared/thumbnails/model.js'
+import { HTTPS_ONLY_PAGE, isInterstitialAction } from '@shared/privacy/https-token.js'
 import { devServerUrl } from './startup-flags.js'
 import { devServerPathFor } from './internal-dev-path.js'
 
@@ -140,6 +141,17 @@ export function registerInternalProtocol(options: {
       return notFound(page)
     }
 
+    /*
+      The interstitial's "Continue" and "Go back" routes, which do nothing here — by design (KTD3).
+
+      Any page can reach this handler with `fetch` or an `<img>`, and it cannot tell which view asked, so a
+      route with an effect here would be one every site could trigger. The core acts on these addresses in
+      the tab's navigation hook instead, where the initiator and the view are known; `Tab.ts` stops the
+      navigation before it gets this far. What does get here is a foreign redirect or a subresource, and
+      "no content" leaves the page it came from where it was.
+    */
+    if (isInterstitialAction(request.url)) return new Response(null, { status: 204 })
+
     // A path other than the root is an asset request; the root is the document.
     const isAsset = url.pathname !== '' && url.pathname !== '/'
     const relativePath = isAsset ? url.pathname : `internal/${page}.html`
@@ -152,7 +164,8 @@ export function registerInternalProtocol(options: {
         `devServerPathFor`.
       */
       const target = isAsset ? `${devServerPathFor(url.pathname)}${url.search}` : relativePath
-      return net.fetch(new URL(target, devServer).toString())
+      const response = await net.fetch(new URL(target, devServer).toString())
+      return page === HTTPS_ONLY_PAGE && !isAsset ? unframeable(response) : response
     }
 
     const target = normalize(join(rootDir, relativePath))
@@ -165,7 +178,7 @@ export function registerInternalProtocol(options: {
     try {
       const response = await net.fetch(pathToFileURL(target).toString())
       if (response.status === 404) return notFound(page)
-      return response
+      return page === HTTPS_ONLY_PAGE && !isAsset ? unframeable(response) : response
     } catch {
       return notFound(page)
     }
@@ -232,6 +245,24 @@ async function serveCachedImage(url: string, route: ImageRoute): Promise<Respons
  */
 function noImage(): Response {
   return new Response(null, { status: 204 })
+}
+
+/**
+ * The interstitial's document, with the two policies a `<meta>` element cannot deliver.
+ *
+ * `frame-ancestors` is ignored in a `<meta>` CSP by specification, and a site that frames the interstitial
+ * with a target of its choosing would put this browser's warning under its own controls. A subframe
+ * *navigating* there is refused by `navigation-policy.ts` already; a subframe *redirected* there is not —
+ * redirects to unprivileged pages are let through for the interstitial's own sake — and this is what stops
+ * that one. `no-referrer` keeps the interstitial's address, which briefly carries the token, out of whatever
+ * "Try HTTPS" loads.
+ */
+function unframeable(response: Response): Response {
+  const headers = new Headers(response.headers)
+  headers.set('content-security-policy', "frame-ancestors 'none'")
+  headers.set('x-frame-options', 'DENY')
+  headers.set('referrer-policy', 'no-referrer')
+  return new Response(response.body, { status: response.status, headers })
 }
 
 /**
