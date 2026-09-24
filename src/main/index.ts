@@ -45,6 +45,7 @@ import {
   registerInternalSchemePrivileges
 } from './protocol.js'
 import {
+  arrangementsFile,
   currentPlatform,
   extensionsFile,
   bookmarksFile,
@@ -76,12 +77,17 @@ import { HistoryStore } from './data/HistoryStore.js'
 import { FaviconStore } from './data/FaviconStore.js'
 import { ThumbnailStore } from './data/ThumbnailStore.js'
 import { TabGroupStore } from './data/TabGroupStore.js'
+import { ArrangementStore } from './data/ArrangementStore.js'
 import { SessionStore } from './data/SessionStore.js'
 import { WindowPlacementStore } from './data/WindowPlacementStore.js'
 import { BookmarkStore } from './data/BookmarkStore.js'
 import { DownloadStore } from './data/DownloadStore.js'
 import { removeTempFilesOf, writeFileAtomically } from './data/atomic-write.js'
-import { applySessionRestore } from './session-restore/apply.js'
+import {
+  applySessionRestore,
+  restoredTabOptions,
+  type RestoreHost
+} from './session-restore/apply.js'
 import { restoreSettingsFrom } from './session-restore/settings.js'
 import { FilterSubscription } from './privacy/FilterSubscription.js'
 import { CosmeticInjector } from './privacy/CosmeticInjector.js'
@@ -223,6 +229,7 @@ let history: HistoryStore | null = null
 let favicons: FaviconStore | null = null
 let thumbnails: ThumbnailStore | null = null
 let tabGroups: TabGroupStore | null = null
+let arrangements: ArrangementStore | null = null
 let sessionStore: SessionStore | null = null
 let windowPlacement: WindowPlacementStore | null = null
 let bookmarks: BookmarkStore | null = null
@@ -476,12 +483,12 @@ async function main(): Promise<void> {
   if (tabGroups.recoveredFromInvalidFile) {
     console.warn('[tabgroups] file could not be used; started with no groups')
   }
-  /*
-    The session, opened before the first window so the plan can be read before anything exists.
-
-    `retainTabs` used to be called here with nothing, and every stored group was emptied on every launch — the
-    honest cost of a missing feature. It now happens once the restored ids are known; see the restore below.
-  */
+  arrangements = await ArrangementStore.open({
+    filePath: arrangementsFile(),
+    codec: protection.codec // sealed like the group file: which pages sat beside which (KTD9)
+  })
+  flushOnExit.push(() => arrangements?.flush() ?? Promise.resolve(), 'arrangements')
+  warnAboutStoreLoad('arrangements', arrangements.loadReport)
   /*
     Bookmarks, downloads and saved passwords.
 
@@ -969,6 +976,7 @@ async function main(): Promise<void> {
     favicons,
     thumbnails,
     tabGroups,
+    arrangements,
     filters: filterSubscription,
     sessionStore,
     windowPlacement,
@@ -1107,51 +1115,43 @@ async function main(): Promise<void> {
   })
 
   /*
-    The session, and the tab-group reconciliation that depends on it.
+    The session, and the two reconciliations that depend on it.
 
     `beginRun` reads the plan out of the file and opens a fresh run in one call — the crash-loop counter is on
     disk before this line returns, which is what makes it a counter of launches that *started* a restore rather
-    than of ones that finished. `retainTabs` is then called once, with every id that actually came back.
+    than of ones that finished. Groups and arrangements are then reconciled once each, with every id that came back.
   */
   const plan = await sessionStore.beginRun(restoreSettingsFrom(settings.snapshot()))
   // No windows for a shutdown that began while the plan was being read; the session is sealed by now.
   if (quitting()) return
+  const registry = windows
+  const restoreHost: RestoreHost = {
+    openWindow: (layout, fractions) => {
+      const controller = registry.createWindow({
+        privateMode: false,
+        initialSplit: { layout, fractions: { ...fractions } }
+      })
+      return {
+        openTab: (tab) => {
+          controller.createTab(restoredTabOptions(tab))
+          if (tab.pinned) controller.setTabPinned(tab.id, true)
+        },
+        setActiveTile: (index) => controller.setActiveTile(index)
+      }
+    },
+    retainTabs: (ids) => tabGroups?.retainTabs(ids),
+    retainArrangementTabs: (ids) => arrangements?.retainTabs(ids)
+  }
   if (plan.kind === 'skip') {
     // Worth saying rather than shrugging at: a user who asked for their session and did not get it has no other
     // way to find out why, and `restore-keeps-crashing` is the reason they would most want to know.
     console.warn(`[session] not restoring the previous session: ${plan.reason}`)
-    tabGroups.retainTabs([])
+    // Off or refused says what an empty plan says — no tab came back — so the same call answers it: that
+    // empties the stored arrangements alongside the group memberships (R8).
+    applySessionRestore([], restoreHost)
     windows.createWindow({ privateMode: false }).createTab({})
   } else {
-    const registry = windows
-    const groups = tabGroups
-    applySessionRestore(plan.windows, {
-      openWindow: (layout, fractions) => {
-        const controller = registry.createWindow({
-          privateMode: false,
-          initialSplit: { layout, fractions: { ...fractions } }
-        })
-        return {
-          openTab: (tab) => {
-            controller.createTab({
-              id: tab.id,
-              url: tab.url,
-              tileIndex: tab.tileIndex,
-              // The pane comes back at the zoom it had, passed at creation rather than set
-              // afterwards: nothing applies zoom before the first paint but `Tab`'s `zoomFactor`.
-              zoomPercent: tab.zoomPercent,
-              // Every restored tab opens in the background; the active tile is chosen once, afterwards, by the
-              // plan — otherwise each tab would steal focus from the last on its way in.
-              background: true,
-              ...(tab.load === 'now' ? {} : { deferred: { url: tab.url, title: tab.title } })
-            })
-            if (tab.pinned) controller.setTabPinned(tab.id, true)
-          },
-          setActiveTile: (index) => controller.setActiveTile(index)
-        }
-      },
-      retainTabs: (ids) => groups.retainTabs(ids)
-    })
+    applySessionRestore(plan.windows, restoreHost)
   }
 
   /*

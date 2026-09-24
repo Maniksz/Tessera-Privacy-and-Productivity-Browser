@@ -1,5 +1,4 @@
 import { z } from 'zod'
-import { LAYOUT_IDS } from '@shared/split/layout.js'
 import {
   addGroup,
   addTabToGroup,
@@ -15,11 +14,9 @@ import {
   repairGroups,
   retainTabs,
   setGroupCollapsed,
-  setGroupLayout,
   type CreateGroupInput,
   type TabGroup,
-  type TabGroupDocument,
-  type TabGroupLayout
+  type TabGroupDocument
 } from '@shared/tabgroups/model.js'
 import {
   FALLBACK_TAB_GROUP_COLOR,
@@ -28,7 +25,7 @@ import {
 } from '@shared/tabgroups/palette.js'
 import { JsonStore, type DocumentCodec } from './JsonStore.js'
 import type { KnownFields } from '@shared/known-fields.js'
-import type { StoreLoadReport } from './store-load.js'
+import type { StoreLoadReport, StoreMigrations } from './store-load.js'
 // The same named pair, imported rather than redeclared, so `'private'` means one thing
 // across the core. `recorderFor` there and `bookFor` here are the same idea.
 import type { BrowsingMode } from './HistoryStore.js'
@@ -62,14 +59,17 @@ import type { BrowsingMode } from './HistoryStore.js'
  *   - **Name length** and **group count** are quantities and are trimmed by
  *     `repairGroups`, never capped here. `.max()` in a schema turns "grew larger than
  *     expected" into "lost every group".
- *   - A **layout** that is not of this shape heals to nothing. It is the one field that is
- *     pure convenience: losing it costs the user one arrangement they can rebuild with a
- *     drag, and rejecting the document over it would cost them every group they have. The
- *     cross-field facts it also has to obey — the tile count matching the layout, the
- *     members being members — cannot be stated here at all and belong to `repairGroups`.
  *
  * What stays strict is identity: `id` and the member ids. A group whose id is a number
  * is not a document this browser wrote, and defaults are the only safe answer.
+ *
+ * ## The `layout` a file written by an older build still carries
+ *
+ * A group used to carry the arrangement its tabs were shown in; the arrangement now lives in
+ * its own document. Version 2 is the file without it, and `TAB_GROUP_MIGRATIONS` is the step
+ * there. The schema cannot do that part: it is a `z.looseObject`, which keeps a key it does
+ * not declare so that a newer build's field survives an older build's write — and would keep
+ * the dead `layout` in the file for ever by the same rule.
  *
  * The healing also applies on the way *out*, because `JsonStore.update` re-validates
  * what it is about to store. That is harmless — the types make a bad colour
@@ -82,20 +82,39 @@ const tabGroupSchema = z.looseObject({
   color: z.enum(TAB_GROUP_COLORS).catch(FALLBACK_TAB_GROUP_COLOR),
   collapsed: z.boolean().catch(false),
   tabIds: z.array(z.string().min(1)),
-  createdAt: z.number().int().nonnegative().catch(0),
-  layout: z
-    .looseObject({ id: z.enum(LAYOUT_IDS), tiles: z.array(z.string().min(1).nullable()) })
-    .optional()
-    // Placed on the whole object rather than on its fields, because half an arrangement is
-    // not a lesser arrangement: a layout id with no tiles, or tiles with no layout, would
-    // move pages on the next click. Either it is one or it is not there.
-    .catch(undefined)
+  createdAt: z.number().int().nonnegative().catch(0)
 })
 
 const tabGroupDocumentSchema = z.looseObject({
-  version: z.literal(1),
+  version: z.literal(2),
   groups: z.array(tabGroupSchema)
 })
+
+/**
+ * The steps from each older `tab-groups.json` to the version this build writes. See `StoreMigrations`.
+ *
+ * 1 → 2 takes `layout` off every group (R12 of the ownership plan): the arrangement a group's tabs
+ * were shown in moved to `arrangements.json`, and a group keeps its name, colour and members. As a
+ * migration rather than a schema change because of what a migration brings with it — the original
+ * kept as `tab-groups.json.v1.bak` before the one write that removes the field, and a file from a
+ * newer build left alone. Anything that is not a group object is passed on untouched for the schema
+ * to judge, so this step never decides on its own that a file is broken.
+ */
+export const TAB_GROUP_MIGRATIONS: StoreMigrations = [
+  (document) => ({
+    ...document,
+    version: 2,
+    groups: Array.isArray(document['groups'])
+      ? document['groups'].map((group: unknown) => withoutLayout(group))
+      : document['groups']
+  })
+]
+
+function withoutLayout(group: unknown): unknown {
+  if (typeof group !== 'object' || group === null || Array.isArray(group)) return group
+  const { layout: _layout, ...rest } = group as Record<string, unknown>
+  return rest
+}
 
 /**
  * Keeps the schema and the interfaces from drifting apart in either direction — two
@@ -136,15 +155,6 @@ export interface TabGroupBook {
   rename(id: string, name: string): void
   recolor(id: string, color: TabGroupColor): void
   setCollapsed(id: string, collapsed: boolean): void
-  /**
-   * Writes the arrangement the group's tabs are sitting in, rewriting whatever was there.
-   *
-   * Called on every settle that changes something, which is why the caller checks first
-   * whether anything did: this reaches a debounced file. `null` clears the arrangement and
-   * has no caller in the browser any more — see `setGroupLayout` in the model for why the
-   * primitive stays.
-   */
-  setLayout(id: string, layout: TabGroupLayout | null): void
   dissolve(id: string): void
   addTab(groupId: string, tabId: string, index?: number): void
   /** Also the close path: a closed tab leaves its group like any other departure. */
@@ -200,8 +210,7 @@ export class TabGroupStore implements TabGroupBook {
       filePath: options.filePath,
       schema: tabGroupDocumentSchema,
       fallback: emptyTabGroupDocument,
-      // Version 1 is the only one there has been; see `StoreMigrations`.
-      migrations: [],
+      migrations: TAB_GROUP_MIGRATIONS,
       criticality: 'degradable',
       // A file written by an older build, edited by hand, or cut short by a crash must
       // not leave an empty group, a tab in two groups or a tab twice in one — the write
@@ -279,10 +288,6 @@ export class TabGroupStore implements TabGroupBook {
 
   setCollapsed(id: string, collapsed: boolean): void {
     this.#cell.write((groups) => setGroupCollapsed(groups, id, collapsed))
-  }
-
-  setLayout(id: string, layout: TabGroupLayout | null): void {
-    this.#cell.write((groups) => setGroupLayout(groups, id, layout))
   }
 
   dissolve(id: string): void {
@@ -372,12 +377,12 @@ function memoryCell(): GroupCell {
 }
 
 /**
- * A copy nobody else holds, member lists and arrangements included.
+ * A copy nobody else holds, member lists included.
  *
  * A shallow `[...groups]` would hand out the stored arrays, and a caller that pushed to
  * one would have changed the document without going through a rule. `cloneGroups` rather
- * than a copy written out here: this file had its own, and it was correct right up until a
- * group grew a second array.
+ * than a copy written out here: this file had its own, and it drifted the moment the model's
+ * idea of how deep a copy has to be changed.
  */
 function snapshot(groups: readonly TabGroup[]): TabGroup[] {
   return cloneGroups(groups)

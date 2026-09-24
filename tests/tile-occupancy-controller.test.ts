@@ -6,7 +6,6 @@ import {
 } from '@main/browser/TileOccupancyController.js'
 import { dropZonesFor } from '@shared/split/dropzones.js'
 import { TILE_COUNT, type LayoutId, type Rect } from '@shared/split/layout.js'
-import type { TabGroupLayout } from '@shared/tabgroups/model.js'
 
 /**
  * Keeping tiles and tabs matched.
@@ -32,13 +31,15 @@ interface Harness {
   /** Tabs whose group is folded away. The controller must leave these off the grid. */
   collapsed: Set<string>
   /**
-   * Arrangements handed over on the way out, newest last.
+   * The tiling as it stood each time this controller said "write it down now", newest last.
    *
-   * Recorded rather than acted on, because what this controller owes is the *report*: which layout it
-   * was and who sat where, taken before the panes went. Whether a group keeps it belongs to
-   * `groupToHoldArrangement` and is tested there.
+   * `keepTiling()` carries no arguments — `ArrangementController.keep` reads the layout and the
+   * seating off the same split controller — so the snapshot is taken here, at the moment of the
+   * call. That is exactly what these tests are about: what this controller owes is the *timing*, and
+   * a report taken one line later would describe the single view that replaced the arrangement.
+   * Whether the recording is worth keeping belongs to `@shared/arrangements/model.ts`.
    */
-  kept: TabGroupLayout[]
+  kept: Array<{ id: LayoutId; tiles: Array<string | null> }>
 }
 
 function harness(layout: LayoutId, tabs: string[] = []): Harness {
@@ -92,8 +93,8 @@ function harness(layout: LayoutId, tabs: string[] = []): Harness {
     applyLayout: (next, options) => {
       state.occupancy!.afterLayoutChange(split.setLayout(next), options)
     },
-    keepArrangement: (layout) => {
-      state.kept!.push(layout)
+    keepTiling: () => {
+      state.kept!.push({ id: split.layout, tiles: split.toState().tileTabIds })
     }
   }
 
@@ -412,21 +413,21 @@ describe('where a new tab goes', () => {
 /**
  * The arrangement a new tab displaces.
  *
- * The window now keeps this up to date on every settle, so by the time a new tab is asked for the group
- * usually has it already. The handover here is kept as the belt-and-braces write, and it is the reason
- * these checks stay: the settle is *scheduled*, one `setImmediate` per burst, so two messages arriving in
- * the same turn of the loop — split this window, then open a tab — reach the collapse before any round
- * could have written anything down. This is the last moment the arrangement exists.
+ * The window now records this on every settle, so by the time a new tab is asked for the book usually
+ * holds it already. The call here is kept as the belt-and-braces one, and it is the reason these checks
+ * stay: the settle is *scheduled*, one `setImmediate` per burst, so two messages arriving in the same
+ * turn of the loop — split this window, then open a tab — reach the collapse before any round could
+ * have written anything down. This is the last moment the arrangement exists.
  */
 describe('the arrangement a new tab displaces', () => {
-  it('is handed over before the panes go, layout and seating together', () => {
+  it('is written down before the panes go, layout and seating together', () => {
     /*
       What was lost before this existed. "The pages stay loaded and choosing a layout again brings them
       back" was true and not enough: they came back in the strip's order, into whichever layout was
       chosen next, so *which* arrangement it had been and who sat where was gone and unrecoverable.
 
       Both halves are asserted. Without the layout id there is nothing to apply; without the seating the
-      recording is only a set of tabs, which the group already is.
+      recording is only a set of tabs.
     */
     const h = harness('2x2', ['a', 'b', 'c', 'd'])
     seed(h, ['a', 'b', 'c', 'd'])
@@ -461,7 +462,7 @@ describe('the arrangement a new tab displaces', () => {
     expect(h.kept[0]?.tiles).toEqual(['a', null, 'c'])
   })
 
-  it('hands over nothing when the user turned adaptation off', () => {
+  it('writes nothing down when the user turned adaptation off', () => {
     // That branch does not collapse anything, so nothing is displaced. Recording here would invent an
     // arrangement to go back to for a layout that never left.
     const h = harness('1x2', ['a'])
@@ -471,13 +472,13 @@ describe('the arrangement a new tab displaces', () => {
     expect(h.kept).toEqual([])
   })
 
-  it('hands over nothing from a window whose panes are all empty', () => {
+  it('writes nothing down for a window whose panes are all empty', () => {
     const h = harness('2x2', [])
     h.occupancy.claimTileForNewTab()
     expect(h.kept).toEqual([])
   })
 
-  it('hands over nothing from a single view', () => {
+  it('writes nothing down for a single view', () => {
     const h = harness('1x1', ['a'])
     h.split.assignTab('a', 0)
     h.occupancy.claimTileForNewTab()
@@ -496,12 +497,12 @@ describe('putting a recorded arrangement back', () => {
     return h
   }
 
-  it('brings back the layout and seats every member where it was', () => {
+  it('brings back the layout and seats every tab where it was', () => {
     // The half without which the recording is a memory nobody can read.
     const h = displaced()
     const kept = h.kept[0]!
 
-    h.occupancy.restoreArrangement('c', kept)
+    h.occupancy.restoreArrangement(kept.id, kept.tiles, 'c')
 
     expect(h.split.layout).toBe('2x2')
     expect(h.split.toState().tileTabIds).toEqual(['a', 'b', 'c', 'd'])
@@ -511,25 +512,21 @@ describe('putting a recorded arrangement back', () => {
     // The tab the user clicked has to be the one they end up in. Restoring the arrangement and leaving
     // the focus in tile 0 would answer a click on the third pane by focusing the first.
     const h = displaced()
-    h.occupancy.restoreArrangement('c', h.kept[0]!)
+    h.occupancy.restoreArrangement(h.kept[0]!.id, h.kept[0]!.tiles, 'c')
     expect(h.activated).toContain(2)
     expect(h.split.activeTile).toBe(2)
   })
 
-  it('leaves a closed member’s tile empty rather than shifting the others along', () => {
+  it('leaves a closed tab’s tile empty rather than shifting the others along', () => {
     /*
-      Spelled out in the arrangement's own docblock and the reason `tiles` is positional. Closing `b` and
+      Spelled out in the recording's own docblock and the reason `seats` is positional. Closing `b` and
       sliding `c` and `d` up would answer "put it back the way it was" by rearranging two pages that
       never moved.
     */
     const h = displaced()
     const kept = h.kept[0]!
-    const withoutB: TabGroupLayout = {
-      id: kept.id,
-      tiles: kept.tiles.map((id) => (id === 'b' ? null : id))
-    }
 
-    h.occupancy.restoreArrangement('a', withoutB)
+    h.occupancy.restoreArrangement('2x2', withoutTab(kept.tiles, 'b'), 'a')
 
     expect(h.split.toState().tileTabIds).toEqual(['a', null, 'c', 'd'])
   })
@@ -538,7 +535,7 @@ describe('putting a recorded arrangement back', () => {
     // Spec 2 from the other direction, and the way back: the new tab is unassigned rather than closed,
     // stays in the strip, and one click on it takes the window again.
     const h = displaced()
-    h.occupancy.restoreArrangement('a', h.kept[0]!)
+    h.occupancy.restoreArrangement(h.kept[0]!.id, h.kept[0]!.tiles, 'a')
 
     expect(h.closed).toEqual([])
     expect(h.split.tileOfTab('fresh')).toBeNull()
@@ -554,29 +551,67 @@ describe('putting a recorded arrangement back', () => {
     */
     const h = displaced()
     const kept = h.kept[0]!
-    const withoutB: TabGroupLayout = {
-      id: kept.id,
-      tiles: kept.tiles.map((id) => (id === 'b' ? null : id))
-    }
 
-    h.occupancy.restoreArrangement('a', withoutB)
+    h.occupancy.restoreArrangement('2x2', withoutTab(kept.tiles, 'b'), 'a')
 
     expect(h.fillers).toEqual([])
   })
 
-  it('seats the members without changing a layout that already matches', () => {
-    // A group folded away and opened again is displaced without the layout changing, so the arrangement
-    // is applied by seating alone. `applyLayout` is a no-op for the same id, and depending on it would
-    // make the restore silently do nothing.
+  it('seats the tabs without changing a layout that already matches', () => {
+    // A window displaced without the layout changing — the two-pane recording is applied into a
+    // two-pane window — so the recording is applied by seating alone. `applyLayout` is a no-op for the
+    // same id, and depending on it would make the restore silently do nothing.
     const h = harness('1x2', ['a', 'b'])
     h.split.assignTab('b', 0)
 
-    h.occupancy.restoreArrangement('a', { id: '1x2', tiles: ['a', 'b'] })
+    h.occupancy.restoreArrangement('1x2', ['a', 'b'], 'a')
 
     expect(h.split.toState().tileTabIds).toEqual(['a', 'b'])
     expect(h.split.activeTile).toBe(0)
   })
+
+  it('applies nothing at all when one of the recording’s tabs is folded away (R14, KD8)', () => {
+    /*
+      Whole or nothing, and the protection that the rebuild took away.
+
+      While a recording lived on a tab group it could not name a tab of a collapsed group and be
+      applied by accident: it belonged to exactly one group, and `sanitisedLayout` dropped any tab
+      that group did not have. A recording that belongs to no group has neither guarantee, so the
+      refusal has to be written down.
+
+      Partial application is the outcome being refused, not an approximation of it: `b` folded away
+      would leave tile 1 empty, the window would never match the recording, and the next click would
+      apply the very same one again.
+    */
+    const h = harness('1x1', ['a', 'b'])
+    h.split.assignTab('a', 0)
+    h.collapsed.add('b')
+
+    h.occupancy.restoreArrangement('1x2', ['a', 'b'], 'a')
+
+    expect(h.split.layout).toBe('1x1')
+    expect(h.split.toState().tileTabIds).toEqual(['a'])
+    expect(h.activated).toEqual([])
+  })
+
+  it('applies a recording whose empty tiles sit beside a folded-away tab', () => {
+    // The refusal is about the tabs the recording *seats*, not about every tab in the window. A
+    // collapsed group elsewhere in the strip has nothing to do with this recording.
+    const h = harness('1x1', ['a', 'b', 'folded'])
+    h.split.assignTab('a', 0)
+    h.collapsed.add('folded')
+
+    h.occupancy.restoreArrangement('1x3', ['a', null, 'b'], 'b')
+
+    expect(h.split.layout).toBe('1x3')
+    expect(h.split.toState().tileTabIds).toEqual(['a', null, 'b'])
+  })
 })
+
+/** A seating with one tab taken out of it, its tile left empty. */
+function withoutTab(seats: Array<string | null>, tabId: string): Array<string | null> {
+  return seats.map((id) => (id === tabId ? null : id))
+}
 
 describe('applying a drop', () => {
   it('switches layout and puts the tab in the promised tile', () => {

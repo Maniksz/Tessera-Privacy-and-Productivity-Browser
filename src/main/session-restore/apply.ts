@@ -61,10 +61,19 @@ export interface RestoreHost {
    * happened to the others.
    */
   retainTabs(ids: readonly string[]): void
+  /**
+   * `ArrangementBook.retainTabs`, called **once** with the same ids, for the same reason.
+   *
+   * The recordings of every ordinary window live in one document too — that is why the book's
+   * `retainTabs` is the one method on it that is not window-scoped — so a call per window would
+   * empty the first window's arrangements as the second came back. A user with two tiled windows
+   * would then find one of them unable to bring its panes back, with nothing to say why.
+   */
+  retainArrangementTabs(ids: readonly string[]): void
 }
 
 /**
- * Opens every planned window and reconciles the tab groups with what came back.
+ * Opens every planned window and reconciles the tab groups and arrangements with what came back.
  *
  * What is left for this function to get right, once the layout is settled at creation:
  *
@@ -73,13 +82,17 @@ export interface RestoreHost {
  *      right.
  *   2. **The active tile after the tabs.** Activating a tile focuses the tab in it, so
  *      doing it first would focus an empty pane.
- *   3. **`retainTabs` last, and once.** Every restored id must exist before the groups are
- *      reconciled: a group naming a tab that has not been created yet would be emptied,
- *      which is precisely the loss session restore is meant to stop. And it must run
- *      before the user can see anything, so nobody watches groups appear and then vanish.
+ *   3. **Both reconciliations last, and once each.** Every restored id must exist before the
+ *      groups and the arrangements are reconciled: a group naming a tab that has not been
+ *      created yet would be emptied, and a recording naming one would lose that seat — which
+ *      is precisely the loss session restore is meant to stop. And they must run before the
+ *      user can see anything, so nobody watches groups appear and then vanish.
  *
- * Called with no windows as well — a launch that restored nothing still has to reconcile,
- * or the stored groups would keep members that do not exist in this run.
+ * Called with no windows as well — a launch that restored nothing still has to reconcile, or
+ * the stored groups would keep members that do not exist in this run and the stored recordings
+ * would seat this run's unrelated fresh tabs. That is also how a launch with session restore
+ * switched off clears both documents (R8): it is the same statement — nothing came back — and
+ * it is answered here rather than at each call site.
  *
  * Returns the ids actually brought back: the same list `retainTabs` was given, so a caller
  * can log or assert on it without recomputing it from the plan.
@@ -100,5 +113,33 @@ export function applySessionRestore(
   }
 
   host.retainTabs(restored)
+  host.retainArrangementTabs(restored)
   return restored
+}
+
+/**
+ * What a restored tab is created with: the id and the tile it had, its zoom, in the background, and
+ * discarded unless the plan says to load it now.
+ *
+ * Here rather than written out in the entry point because each field is one of the rules above. The
+ * zoom is passed at creation rather than set afterwards: nothing applies zoom before the first paint
+ * but `Tab`'s `zoomFactor`. Every tab opens in the background because the active tile is chosen once,
+ * afterwards, by the plan — otherwise each tab would steal focus from the last on its way in.
+ */
+export function restoredTabOptions(tab: PlannedTab): {
+  id: string
+  url: string
+  tileIndex: number | null
+  zoomPercent: number | null
+  background: true
+  deferred?: { url: string; title: string }
+} {
+  return {
+    id: tab.id,
+    url: tab.url,
+    tileIndex: tab.tileIndex,
+    zoomPercent: tab.zoomPercent,
+    background: true,
+    ...(tab.load === 'now' ? {} : { deferred: { url: tab.url, title: tab.title } })
+  }
 }

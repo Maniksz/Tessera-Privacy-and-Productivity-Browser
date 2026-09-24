@@ -1,7 +1,6 @@
 import { emptyTiles, shrunkLayout, tabsToCloseOnShrink } from '@shared/split/tile-fill.js'
 import type { DropZone } from '@shared/split/dropzones.js'
-import type { LayoutId } from '@shared/split/layout.js'
-import type { TabGroupLayout } from '@shared/tabgroups/model.js'
+import { TILE_COUNT, type LayoutId } from '@shared/split/layout.js'
 import type { SplitController } from './SplitController.js'
 
 /**
@@ -23,12 +22,13 @@ import type { SplitController } from './SplitController.js'
  * it displaces instead of pushing it off screen, and a new tab — see `claimTileForNewTab` — takes the
  * window rather than a pane, so it can do neither.
  *
- * Taking the window away from an arrangement is the one thing here that loses something a user cared
- * about, so it is also the one thing here that reports what it is about to destroy: `keepArrangement`
- * hands the arrangement to a tab group on the way out and `restoreArrangement` puts it back. The tabs
- * never needed saving — they stay loaded either way — but which layout they were in and who sat where
- * did. The window keeps that up to date on every settle now (`BrowserWindowController`); the call here
- * is the one write that cannot wait for a settle, because the settle it would wait for is the collapse.
+ * Taking the window away from a tiling is the one thing here that loses something a user cared about,
+ * so it is also the one thing here that reports what it is about to destroy: `keepTiling` tells the
+ * arrangement controller to write down what is on screen before the panes go, and `restoreArrangement`
+ * puts a recording back. The tabs never needed saving — they stay loaded either way — but which layout
+ * they were in and who sat where did. The window keeps that up to date on every settle now
+ * (`BrowserWindowController`); the call here is the one write that cannot wait for a settle, because
+ * the settle it would wait for is the collapse.
  *
  * Behind the host seam it is testable without a window, which matters because the rules interact:
  * shrinking a layout can close a tab, closing a tab can shrink a layout, and getting that wrong
@@ -86,20 +86,28 @@ export interface TileOccupancyHost {
   openFiller(tileIndex: number): void
   applyLayout(layout: LayoutId, options: LayoutChangeOptions): void
   /**
-   * Hand over the arrangement that is being put away, so something can keep it.
+   * Write down the tiling that is on screen, because it is about to stop being on screen.
    *
-   * Deliberately "here is what is about to be lost" rather than "make a group": this controller owns
-   * tiles, not groups, and whether the arrangement is worth keeping and where it goes is a decision
-   * about groups. See `TabGroupController.keepArrangement`.
+   * Deliberately "now is the moment" rather than "here is the arrangement": the reader of the tiling
+   * is `ArrangementController.keep`, which takes the layout and the seating off the same split
+   * controller this one holds, so passing them would be handing over a copy of what the other side
+   * is looking at. Called *before* `applyLayout`, which is the whole of its correctness — read
+   * afterwards the window is a single view and the recording would be the thing that replaced the
+   * arrangement rather than the arrangement.
    *
-   * Kept on the seam although the window now maintains the arrangement on every settle, which would
+   * It used to be `keepArrangement(layout)`, and it went to a tab group. That is the defect the
+   * rebuild removed: a group was the only place a layout could be stored, so this call created
+   * groups and pulled loose tabs into them (R1, R3). Nothing about a group is reachable from here
+   * any more, by way of `window-seams.ts` rather than by way of care.
+   *
+   * Kept on the seam although the window now maintains the recording on every settle, which would
    * make this a second write of a value that is already current. It is not removed, because the
    * settle is *scheduled* — one `setImmediate` per burst — and two IPC messages delivered in the same
    * turn of the loop ("split this window", then "new tab") would reach the collapse before the round
    * that would have written anything down. This is the only moment the arrangement still exists, and
    * in every other case the write is refused as already-current and costs a comparison.
    */
-  keepArrangement(layout: TabGroupLayout): void
+  keepTiling(): void
 }
 
 export class TileOccupancyController {
@@ -194,6 +202,59 @@ export class TileOccupancyController {
   }
 
   /**
+   * Takes away the panes a fold has just emptied, and nothing else.
+   *
+   * Deliberately **not** `afterTabClosed`, although the two look like the same shrink, and the plan
+   * that asked for this said why before it was written. That path does two things this one must not:
+   *
+   *  - It puts `#firstHiddenTab()` into the freed tile and only shrinks when there is none — the
+   *    "fill the pane with some other loaded tab" behaviour KD7 rejects outright. Folding a group away
+   *    is the user saying they want *fewer* pages on screen; answering it with a page they did not
+   *    choose is the opposite of the request (R9).
+   *  - It returns early when `adaptEnabled()` is false. That switch governs the browser *adapting* to
+   *    tabs coming and going. A fold is not an adaptation: the panes are empty because the user just
+   *    emptied them, and leaving them standing would mean the setting decides whether R9 holds — which
+   *    is exactly the window AE10 describes.
+   *
+   * So: compact, then shrink, and close nothing on the way.
+   *
+   * **Compacting first is what makes it safe.** `applyLayout` hands every tab past the new tile count
+   * to `afterLayoutChange`, which closes the browser's own untouched fillers among them — and R13
+   * forbids the fold costing even one of those. Moving the survivors down to the leading tiles before
+   * the layout changes means nothing is orphaned, so there is nothing to sweep up. It is also the only
+   * way the survivors keep a tile at all: a `2x2` holding a member, a stranger, a member and a stranger
+   * releases tiles 0 and 2, and a shrink without compaction would drop the stranger in tile 3 off the
+   * end of the grid.
+   *
+   * `fill: false, rehome: false` for the same reason: neither a start page nor a loaded tab may move
+   * into the panes on their way out.
+   *
+   * The active tile follows the tab that was in it, because compacting moves tabs between tiles and
+   * the active *tile* index would otherwise land on whoever shifted into it. A window whose active tab
+   * was one of the released members has no answer here — `activeTabId()` is already `null` — and that
+   * case belongs to `TabGroupController.setCollapsed`, which knows which tabs were hidden (R10).
+   */
+  shrinkAfterRelease(): void {
+    const occupants = this.host.split
+      .toState()
+      .tileTabIds.filter((tabId): tabId is string => tabId !== null)
+    const stayActive = this.host.split.activeTabId()
+
+    for (const [index, tabId] of occupants.entries()) {
+      if (this.host.split.tileOfTab(tabId) !== index) this.host.assignTabToTile(tabId, index)
+    }
+
+    const target = layoutFitting(this.host.split.layout, occupants.length)
+    if (target !== this.host.split.layout) {
+      this.host.applyLayout(target, { fill: false, rehome: false })
+    }
+
+    if (stayActive === null) return
+    const tile = this.host.split.tileOfTab(stayActive)
+    if (tile !== null) this.host.setActiveTile(tile)
+  }
+
+  /**
    * Gives every still-empty tile a tab of its own.
    *
    * Only for a layout the user chose — which, since a new tab no longer moves into a pane, is now
@@ -238,32 +299,28 @@ export class TileOccupancyController {
    * Also the answer for a tab that is being *opened* rather than created — clicking one that has no
    * tile, which is every member of a group that was folded away. Same question, same answer.
    *
-   * ## The arrangement is handed over before it goes
+   * ## The tiling is written down before it goes
    *
    * "The pages stay loaded and choosing a layout again brings them back" was true and not enough: it
    * brought them back in the strip's order, into whatever layout was chosen next, so *which*
-   * arrangement it had been and who sat where was gone. The panes are put away, so the arrangement is
-   * handed to `keepArrangement` first — the one moment it still exists — and a group keeps it. See
-   * `restoreArrangement` for the way back.
+   * arrangement it had been and who sat where was gone. The panes are put away, so `keepTiling` runs
+   * first — the one moment the arrangement still exists. See `restoreArrangement` for the way back.
    *
-   * Ordinarily the group already has it: the window writes it whenever the tiling settles, and by the
+   * Ordinarily it is already recorded: the window writes it whenever the tiling settles, and by the
    * time a new tab is asked for the last settle has been and gone. This call is the belt-and-braces
-   * one, for the burst where it has not — see `TileOccupancyHost.keepArrangement`.
+   * one, for the burst where it has not — see `TileOccupancyHost.keepTiling`.
    *
-   * Reported, not decided, here. Whether the arrangement is worth keeping and which group takes it are
-   * questions about groups; this controller does not know what a group is. Both branches that skip the
-   * collapse skip the handover with it, and correctly: `adaptLayoutToTabs` off never displaces
-   * anything, and a window whose tiles are all empty has no arrangement to lose.
+   * Reported, not decided, here. Whether the tiling is worth recording, what it supersedes and what
+   * may be evicted for it are the arrangement model's questions. Both branches that skip the collapse
+   * skip the report with it, and correctly: `adaptLayoutToTabs` off never displaces anything, and a
+   * window whose tiles are all empty has no arrangement to lose.
    */
   claimTileForNewTab(): number {
     if (!this.host.adaptEnabled()) {
       return this.host.split.firstEmptyTile() ?? this.host.split.activeTile
     }
     if (this.host.split.layout !== '1x1' && this.#anyTileOccupied()) {
-      this.host.keepArrangement({
-        id: this.host.split.layout,
-        tiles: this.host.split.toState().tileTabIds
-      })
+      this.host.keepTiling()
       this.host.applyLayout('1x1', { fill: false, rehome: false })
     }
     return 0
@@ -273,33 +330,55 @@ export class TileOccupancyController {
    * Puts a recorded arrangement back, and makes the tab that asked for it the active one.
    *
    * The second half of `claimTileForNewTab`. Without it the recording is a memory nobody can read.
+   * Called from `ArrangementController.restoreFor` through `ArrangementHost.applyArrangement`, whose
+   * three arguments are these three: the layout, the seating, and which tab the click was on.
    *
    * `fill: false, rehome: false` for the same reason a drop uses them: the tiles this layout change
    * creates are about to be filled by name, from the recording, and anything moved into them first
    * would have to be evicted again — which is how a page ends up leaving the screen while a pane stands
-   * empty. Every seated member is then assigned to the tile it had, and a member whose tile is `null`
-   * — one that has closed since, or a tile that was empty when the arrangement was recorded — leaves
-   * that tile empty rather than letting the others shift along. Coming back to a `2x2` minus one tab
-   * shows the other three exactly where they were.
+   * empty. Every seated tab is then assigned to the tile it had, and a seat that is `null` — a tab that
+   * has closed since, or a tile that was empty when the tiling was recorded — leaves that tile empty
+   * rather than letting the others shift along. Coming back to a `2x2` minus one tab shows the other
+   * three exactly where they were.
    *
    * Whatever was in a tile is unassigned, not closed: the new tab that caused the displacement stays
    * loaded and in the strip, which is spec 2 and also the way back — clicking it gets the window again.
    *
-   * The active tile is the one holding `tabId`, tracked while seating rather than looked up afterwards,
-   * so there is no "the tab I just placed is missing" branch. A tab the arrangement does not seat leaves
-   * the active tile where it was; `takeArrangementFor` will not hand one over in that case, and a
-   * fallback that cannot be reached is worse than one that is simply harmless.
+   * The active tile is the one holding `activatedTabId`, tracked while seating rather than looked up
+   * afterwards, so there is no "the tab I just placed is missing" branch. A recording that does not
+   * seat it leaves the active tile where it was; `arrangementOfTab` will not hand such a recording
+   * over, and a fallback that cannot be reached is worse than one that is simply harmless.
+   *
+   * ## Whole or nothing, and why that guard is here as well as in the model
+   *
+   * A recording seating a tab a collapsed group is hiding is not applied at all (R14, KD8). Seating
+   * the visible ones would put a page on screen with nothing in the strip to close it — the very
+   * state `setCollapsed` clears tiles to prevent — and would leave a tiling that never matches the
+   * recording, so the next click would apply the same one again.
+   *
+   * `arrangementOfTab` refuses such a recording too, and the duplication is deliberate rather than
+   * defensive habit. Until this rebuild the protection was a side effect of a recording belonging to
+   * exactly one group: `sanitisedLayout` dropped any tab the group did not have, and a collapsed
+   * group's own tabs could not be reached because the group carried the layout. A recording that
+   * belongs to no group has neither guarantee, and this method has a caller — `applyArrangement` —
+   * that any future controller could reach without going through the model.
    */
-  restoreArrangement(tabId: string, layout: TabGroupLayout): void {
-    if (layout.id !== this.host.split.layout) {
-      this.host.applyLayout(layout.id, { fill: false, rehome: false })
+  restoreArrangement(
+    layoutId: LayoutId,
+    seats: ReadonlyArray<string | null>,
+    activatedTabId: string
+  ): void {
+    if (seats.some((tabId) => tabId !== null && this.host.isHiddenByCollapse(tabId))) return
+
+    if (layoutId !== this.host.split.layout) {
+      this.host.applyLayout(layoutId, { fill: false, rehome: false })
     }
 
     let active = this.host.split.activeTile
-    for (const [index, member] of layout.tiles.entries()) {
-      if (member === null) continue
-      this.host.assignTabToTile(member, index)
-      if (member === tabId) active = index
+    for (const [index, seated] of seats.entries()) {
+      if (seated === null) continue
+      this.host.assignTabToTile(seated, index)
+      if (seated === activatedTabId) active = index
     }
 
     // The window's own method, so focus, audio and geometry settle the way they do for a click into a
@@ -444,5 +523,25 @@ export class TileOccupancyController {
       if (candidate === undefined) break
       this.host.assignTabToTile(candidate, index)
     }
+  }
+}
+
+/**
+ * The smallest arrangement down the shrink chain that still has room for `occupants`.
+ *
+ * Written as "how few panes will do" rather than "one step per released tile", although the two agree
+ * on every example the requirements give. The difference is a window that already had an empty pane
+ * before the fold: counting steps would leave it standing beside the ones the fold emptied, and R9's
+ * sentence is about not leaving empty panes rather than about arithmetic. `1x1` is the floor, so a
+ * window with nothing left in a tile still has one to put something back into.
+ *
+ * Every step of the chain removes exactly one tile, so this terminates on any layout.
+ */
+function layoutFitting(layout: LayoutId, occupants: number): LayoutId {
+  let current = layout
+  for (;;) {
+    const smaller = shrunkLayout(current)
+    if (smaller === null || TILE_COUNT[smaller] < Math.max(occupants, 1)) return current
+    current = smaller
   }
 }

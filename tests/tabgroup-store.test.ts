@@ -2,7 +2,7 @@ import { access, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { TabGroupStore, type TabGroupBook } from '@main/data/TabGroupStore.js'
+import { TAB_GROUP_MIGRATIONS, TabGroupStore, type TabGroupBook } from '@main/data/TabGroupStore.js'
 import { plainJsonDocumentCodec, type DocumentCodec } from '@main/data/JsonStore.js'
 import {
   MAX_TAB_GROUPS,
@@ -201,46 +201,6 @@ describe('TabGroupStore basics', () => {
     await store.flush()
     expect(store.list()).toEqual([])
     expect(await storedGroups(filePath)).toEqual([])
-  })
-
-  it('writes down the arrangement a group is in, and can clear it again', async () => {
-    /*
-      The arrangement has to reach the disk, because that is the difference between "remembered until you
-      quit" and remembered. It is also the only field whose value is a pair of facts that have to agree —
-      the layout and one entry per its tiles — so a store that flattened or reordered it would restore the
-      panes in the wrong places rather than fail.
-
-      Both directions, although only one has a caller now. `null` used to be the other half of the feature
-      — a restore spent the recording it used — and stopped being that when the arrangement became
-      something maintained on every settle. It is still the single gate for clearing the field, so it is
-      still asserted to reach the disk as an *absent* key rather than a present `undefined` one.
-    */
-    const { store, filePath } = await openStore()
-    store.create({ tabIds: ['tab-1', 'tab-2'] })
-
-    store.setLayout('g1', { id: '2x2', tiles: ['tab-1', null, 'tab-2', null] })
-    await store.flush()
-    expect((await storedGroups(filePath))[0]?.layout).toEqual({
-      id: '2x2',
-      tiles: ['tab-1', null, 'tab-2', null]
-    })
-
-    store.setLayout('g1', null)
-    await store.flush()
-    const cleared = (await storedGroups(filePath))[0]!
-    expect(Object.hasOwn(cleared, 'layout')).toBe(false)
-  })
-
-  it('hands out an arrangement a caller cannot write into', async () => {
-    // `tiles` is the second array on a group and needs what `tabIds` gets, or a window holding a snapshot
-    // could reseat the panes of a stored arrangement without going through a rule.
-    const { store } = await openStore()
-    store.create({ tabIds: ['tab-1', 'tab-2'], layout: { id: '1x2', tiles: ['tab-1', 'tab-2'] } })
-
-    store.list()[0]!.layout!.tiles[0] = 'smuggled'
-    store.group('g1')!.layout!.tiles[1] = 'smuggled'
-
-    expect(store.group('g1')?.layout).toEqual({ id: '1x2', tiles: ['tab-1', 'tab-2'] })
   })
 
   it('leaves the document untouched when an operation is refused', async () => {
@@ -512,78 +472,104 @@ describe('TabGroupStore repairing a damaged file', () => {
     expect(store.recoveredFromInvalidFile).toBe(false)
   })
 
-  it('reads a file written before arrangements existed', async () => {
-    // Every file on disk today. The field arrived after them, so its absence is the normal case and the
-    // schema must not treat it as damage — this is the assertion that would have caught a `layout` declared
-    // without `.optional()`, which would have replaced every user's groups with nothing on first launch.
-    const { store } = await openStore({
-      seed: { version: 1, groups: [stored('g-a', ['tab-1', 'tab-2'])] }
-    })
-    expect(store.group('g-a')?.tabIds).toEqual(['tab-1', 'tab-2'])
-    expect(store.group('g-a')?.layout).toBeUndefined()
-    expect(store.recoveredFromInvalidFile).toBe(false)
-  })
-
-  it('heals an arrangement of the wrong shape instead of discarding the groups', async () => {
+  it('migrates a version-1 file still carrying an arrangement, keeping every group (R12, AE7)', async () => {
     /*
-      A layout id the build no longer has, tiles that are not an array, half an arrangement. The field is
-      pure convenience: losing it costs the user one layout they can rebuild with a drag, and rejecting the
-      document over it would cost them every group they have.
+      The migration off `TabGroup.layout`. The storage schema keeps fields it does not know
+      (`z.looseObject`), so leaving `layout` out of it would change nothing: the dead arrangement
+      would be carried into every write for ever. Version 2 is the file without it, and the step
+      from 1 is what takes it off.
+
+      Both kinds of stored group are here on purpose. An unnamed group carrying an arrangement is
+      indistinguishable from an artefact the old automation created — and KD5 says it stays a group
+      anyway, because the user may well have made it by hand and never named it. A named, coloured
+      group proves the other half: nothing the user chose is touched on the way through.
     */
-    const { store } = await openStore({
+    const { store, filePath } = await openStore({
       seed: {
         version: 1,
         groups: [
-          stored('g-a', ['tab-1', 'tab-2'], { layout: { id: '9x9', tiles: ['tab-1', 'tab-2'] } }),
-          stored('g-b', ['tab-3', 'tab-4'], { layout: { id: '1x2', tiles: 'both of them' } }),
-          stored('g-c', ['tab-5', 'tab-6'], { layout: { tiles: ['tab-5', 'tab-6'] } })
+          stored('g-a', ['tab-1', 'tab-2'], {
+            layout: { id: '1x2', tiles: ['tab-1', 'tab-2'] }
+          }),
+          stored('g-b', ['tab-3', 'tab-4'], {
+            name: 'Steuererklärung 2026',
+            color: 'pink',
+            layout: { id: '2x2', tiles: ['tab-3', null, 'tab-4', null] }
+          })
         ]
       }
     })
 
-    expect(store.list().map((group) => [group.id, group.layout])).toEqual([
-      ['g-a', undefined],
-      ['g-b', undefined],
-      ['g-c', undefined]
+    expect(store.loadReport.outcome).toEqual({
+      kind: 'migrated',
+      fromVersion: 1,
+      backup: `${filePath}.v1.bak`
+    })
+    expect(store.list()).toEqual([
+      {
+        id: 'g-a',
+        name: '',
+        color: 'blue',
+        collapsed: false,
+        tabIds: ['tab-1', 'tab-2'],
+        createdAt: T0
+      },
+      {
+        id: 'g-b',
+        name: 'Steuererklärung 2026',
+        color: 'pink',
+        collapsed: false,
+        tabIds: ['tab-3', 'tab-4'],
+        createdAt: T0
+      }
     ])
-    expect(store.list().map((group) => group.tabIds.length)).toEqual([2, 2, 2])
+    // Stated separately from the deep equality above, because `toEqual` ignores a key whose value is
+    // `undefined` and would pass on a group that still carried the field.
+    expect(store.list().every((group) => !Object.hasOwn(group, 'layout'))).toBe(true)
+    // A document losing a field it no longer has is not damage, so nothing warns the user about it.
     expect(store.recoveredFromInvalidFile).toBe(false)
   })
 
-  it('drops an arrangement the repaired group can no longer honour', async () => {
+  it('writes the migrated file at open, without the arrangement, and keeps the original beside it', async () => {
     /*
-      Where the schema stops and `repairGroups` starts. This arrangement is a valid shape — a real layout id,
-      four entries for four tiles — and still unusable: `tab-9` is not a member, and honouring it would evict
-      whatever is in that tile on the way back to seat a tab that does not exist.
+      R12, the other half: the *file*. Asserted on the raw text rather than on the parsed groups,
+      because parsing is what would hide a leftover. And no `flush()` is called first — opening the
+      store is the one write the migration makes. The original goes to `.v1.bak` byte for byte
+      before that write, so a user who wants the old arrangement back still has it.
     */
-    const { store } = await openStore({
-      seed: {
-        version: 1,
-        groups: [
-          stored('g-a', ['tab-1', 'tab-2'], {
-            layout: { id: '2x2', tiles: ['tab-1', 'tab-9', 'tab-2', null] }
-          })
-        ]
+    const seed = {
+      version: 1,
+      groups: [
+        stored('g-a', ['tab-1', 'tab-2'], { layout: { id: '1x2', tiles: ['tab-1', 'tab-2'] } })
+      ]
+    }
+    const { filePath } = await openStore({ seed })
+
+    const written = await readFile(filePath, 'utf8')
+    expect(written).not.toContain('layout')
+    expect(JSON.parse(written)).toMatchObject({ version: 2 })
+    expect(await storedGroups(filePath)).toEqual([
+      {
+        id: 'g-a',
+        name: '',
+        color: 'blue',
+        collapsed: false,
+        tabIds: ['tab-1', 'tab-2'],
+        createdAt: T0
       }
-    })
-    expect(store.group('g-a')?.layout).toBeUndefined()
-    expect(store.group('g-a')?.tabIds).toEqual(['tab-1', 'tab-2'])
+    ])
+    expect(await readFile(`${filePath}.v1.bak`, 'utf8')).toBe(JSON.stringify(seed))
   })
 
-  it('brings back an arrangement that still describes its group', async () => {
-    // The counterpart of the three rejections above: a repair pass that dropped every arrangement would pass
-    // all of them and leave the feature quietly dead after the first restart.
-    const { store } = await openStore({
-      seed: {
-        version: 1,
-        groups: [
-          stored('g-a', ['tab-1', 'tab-2'], {
-            layout: { id: '1+2', tiles: ['tab-1', null, 'tab-2'] }
-          })
-        ]
-      }
-    })
-    expect(store.group('g-a')?.layout).toEqual({ id: '1+2', tiles: ['tab-1', null, 'tab-2'] })
+  it('reads a version-2 file as current and leaves it as it is', async () => {
+    const seed = { version: 2, groups: [stored('g-a', ['tab-1', 'tab-2'], { name: 'Reise' })] }
+    const { store, filePath } = await openStore({ seed })
+
+    expect(store.loadReport.outcome).toEqual({ kind: 'current' })
+    expect(store.group('g-a')?.name).toBe('Reise')
+    // Nothing to migrate, so nothing is written and no copy is made.
+    expect(await readFile(filePath, 'utf8')).toBe(JSON.stringify(seed))
+    expect(await exists(`${filePath}.v1.bak`)).toBe(false)
   })
 
   it('trims a file with more groups than the cap', async () => {
@@ -595,17 +581,69 @@ describe('TabGroupStore repairing a damaged file', () => {
   })
 
   it('starts from defaults on a newer version, without writing over its file', async () => {
-    const seed = { version: 2, groups: [] }
+    const seed = { version: 3, groups: [stored('g-a', ['tab-1'], { layout: 'kept' })] }
     const { store, filePath } = await openStore({ seed })
     expect(store.list()).toEqual([])
     expect(store.recoveredFromInvalidFile).toBe(false)
-    expect(store.loadReport.outcome).toEqual({ kind: 'newer', version: 2 })
+    expect(store.loadReport.outcome).toEqual({ kind: 'newer', version: 3 })
 
     // Kept in memory for this run, never on disk.
     store.create({ tabIds: ['tab-1'], name: 'Neu' })
     expect(store.list()).toHaveLength(1)
     await store.flush()
     expect(await readFile(filePath, 'utf8')).toBe(JSON.stringify(seed))
+  })
+})
+
+describe('the step from version 1 to 2', () => {
+  const [toVersion2] = TAB_GROUP_MIGRATIONS
+
+  it('is the only step, so the store writes version 2', () => {
+    expect(TAB_GROUP_MIGRATIONS).toHaveLength(1)
+  })
+
+  it('takes `layout` off each group and nothing else, keeping fields it does not know', () => {
+    expect(
+      toVersion2!({
+        version: 1,
+        extra: 'kept',
+        groups: [
+          { id: 'g-a', tabIds: ['tab-1'], layout: { id: '1x2', tiles: [] }, future: 1 },
+          { id: 'g-b', tabIds: ['tab-2'] }
+        ]
+      })
+    ).toEqual({
+      version: 2,
+      extra: 'kept',
+      groups: [
+        { id: 'g-a', tabIds: ['tab-1'], future: 1 },
+        { id: 'g-b', tabIds: ['tab-2'] }
+      ]
+    })
+  })
+
+  it('passes anything that is not a group object on for the schema to judge', () => {
+    /*
+      A migration that threw or "fixed" these would decide on its own that a file is broken, or
+      that it is not. Handed on untouched, the schema rejects them and the file is copied aside as
+      unreadable — the one path that keeps what the user had.
+    */
+    expect(toVersion2!({ version: 1, groups: 'none' })).toEqual({ version: 2, groups: 'none' })
+    expect(toVersion2!({ version: 1, groups: [null, 7, ['layout'], 'layout'] })).toEqual({
+      version: 2,
+      groups: [null, 7, ['layout'], 'layout']
+    })
+  })
+
+  it('copies a version-1 file aside rather than migrating what the schema cannot read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { store, filePath } = await openStore({ seed: { version: 1, groups: [null] } })
+    expect(store.list()).toEqual([])
+    expect(store.loadReport.outcome).toMatchObject({
+      kind: 'invalid',
+      copy: `${filePath}.unreadable`
+    })
+    warn.mockRestore()
   })
 })
 

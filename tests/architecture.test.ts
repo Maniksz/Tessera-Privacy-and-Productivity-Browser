@@ -330,6 +330,19 @@ describe('layer boundaries', () => {
     }
   })
 
+  it('keeps the window seams free of Electron at runtime', () => {
+    /*
+      `window-seams.ts` read the pointer through `screen` from 'electron', so no test could build the seams
+      without an Electron process — and the wiring stayed untested exactly where the fold-away defect sat
+      (ownership plan U6). The pointer is now a `WindowInternals` capability. A type import stays allowed,
+      as in `window-options.ts`: it is erased before anything runs.
+    */
+    const text = readFileSync(join(ROOT, 'src/main/browser/window-seams.ts'), 'utf8')
+    expect(valueImportsOf(text), 'window-seams.ts imports Electron at runtime').not.toContain(
+      'electron'
+    )
+  })
+
   it('keeps the window-event handlers free of Electron', () => {
     /*
       `window-events.ts` is nine OS reactions lifted out of `BrowserWindowController`, and the *only* reason
@@ -364,6 +377,144 @@ describe('layer boundaries', () => {
     const code = codeOnly(text)
     expect(code, 'a window-event handler reaches for a BrowserWindow').not.toMatch(/BrowserWindow/)
     expect(code, 'a window-event handler reaches for webContents').not.toMatch(/webContents/i)
+  })
+})
+
+describe('ownership of tab groups', () => {
+  /*
+    The two rules that stand in for the test that cannot be written.
+
+    The reported defect — dissolve a group in a tiled window, and the chip is back within a frame —
+    was in neither controller. It was in the wiring: a group was the only place a tiled layout could
+    be written down, so the automation that maintains the tiling reached into the book of groups, and
+    reaching into it meant creating one and pulling loose tabs into it. Membership changed because
+    panes moved (R1, R2, R3).
+
+    A test over the round that did it is what one would want, and it is not available: the round lives
+    in `BrowserWindowController`, which needs a browser process and is on the coverage exclude list in
+    `vitest.config.ts` for that reason. So the guarantee is moved into the *declarations* instead —
+    the capability is absent rather than unused — and these two tests are what keeps it absent. KTD1
+    chose exactly this over a behavioural test, on the grounds that a capability the host does not
+    have cannot be misused and the proof is a type check rather than a test run. That argument only
+    holds while something notices the capability coming back.
+
+    Both hosts, not one. Recording a tiling moved to `ArrangementController`, but *applying* one
+    stayed with `TileOccupancyController`, which still has a group edge — so guarding the arrangement
+    host alone would guard half the surface, and the Risks section of the plan says so in as many
+    words: "the entkopplung is a narrowing, not a separation".
+
+    Read against `codeOnly`, which strips string literals as well as comments. That is the right
+    helper here and the wrong one two assertions down: both files argue about tab groups at length in
+    their docblocks — that is the point of them — so a check over the raw text would fail on the prose
+    that explains the rule. The import check is the exception, because a module specifier *is* a
+    string literal, and it uses `withoutComments`.
+  */
+  /** Every group-flavoured identifier in a file's code, comments and literals removed. */
+  const groupWords = (code: string): string[] => [
+    ...new Set([...code.matchAll(/\w*[Gg]roup\w*/g)].map((match) => match[0]))
+  ]
+
+  it('gives the arrangement host no path to a tab group', () => {
+    const path = join(ROOT, 'src/main/browser/ArrangementController.ts')
+    expect(
+      existsSync(path),
+      'ArrangementController moved; this rule moved with it or died with it'
+    ).toBe(true)
+    const text = readFileSync(path, 'utf8')
+    const code = codeOnly(text)
+
+    // The subject has to still be here, or the rule would pass loudest on the file that no longer
+    // declares the thing it is about.
+    expect(code, 'ArrangementHost is not declared here any more').toMatch(
+      /interface ArrangementHost/
+    )
+
+    /*
+      Every group word rather than the three names KTD1 lists (`TabGroupBook`, `groups`, `TabGroup`).
+      The three are what the path looked like the first time; a fourth spelling — `tabGroups`,
+      `groupOfTab`, `GroupId` — reopens it just as well, and a rule that names its three would go on
+      passing beside it.
+    */
+    expect(groupWords(code), 'the arrangement host can reach a tab group again').toEqual([])
+
+    /*
+      And not as a type import either, which is the one form that leaves no trace above: `import type`
+      is erased before anything runs, so a `TabGroup` parameter added here would cost nothing at
+      runtime and would still be the coupling this refuses. Matched on the specifier, so it uses the
+      helper that keeps string literals.
+    */
+    for (const specifier of importsOf(withoutComments(text))) {
+      expect(specifier, `ArrangementController imports ${specifier}`).not.toMatch(
+        /tabgroups|TabGroup/i
+      )
+    }
+
+    /*
+      The carve-out, asserted rather than assumed. The host holds its own `ArrangementBook`, and a
+      blanket ban on the word "book" — the shape the plan first proposed — would have fired on it. The
+      assertion is here so the rule cannot be "satisfied" by taking the host's own carrier away.
+    */
+    expect(code, 'the host lost its own book, which is not what this rule asks for').toMatch(
+      /book:\s*ArrangementBook/
+    )
+
+    /*
+      Deliberately nothing about how many members the interface has. It is six, KTD1 said five, and
+      `liveTabIds()` is the sixth for a structural reason the docblock sets out: a recording worth
+      restoring is one whose tabs are *not* in tiles, so the live set cannot be derived from the tiled
+      and hidden ones. A count here would have made that correction look like a violation.
+    */
+  })
+
+  it('leaves the occupancy host one group question and no group answer', () => {
+    const path = join(ROOT, 'src/main/browser/TileOccupancyController.ts')
+    expect(
+      existsSync(path),
+      'TileOccupancyController moved; this rule moved with it or died with it'
+    ).toBe(true)
+    const text = readFileSync(path, 'utf8')
+    const code = codeOnly(text)
+
+    /*
+      The interface body alone for the capability rule, because that is where a capability is granted.
+      Taken out of `codeOnly` text, so the members are what is left after the docblocks go.
+    */
+    const body = /export interface TileOccupancyHost\s*\{([\s\S]*?)\n\}/.exec(code)?.[1]
+    expect(body, 'TileOccupancyHost is not declared here any more').toBeDefined()
+
+    /*
+      One predicate, and it is a question: *is this tab folded away?* Everything else about a group —
+      the book, the membership, the collapsed flag — is `TabGroupController`'s, and the fold reaches
+      the panes through `releaseTiles` in `window-seams.ts` rather than through anything here (KTD5).
+
+      Matched on "group" and on "collapse" together. Only the second one catches the member that
+      exists, and only the first catches the member that must not appear: `tabGroups: TabGroupBook`
+      would be the whole defect back, and it does not contain the word "collapse".
+    */
+    const groupCapabilities = [
+      ...new Set([...(body ?? '').matchAll(/\w*(?:[Gg]roup|[Cc]ollaps)\w*/g)].map((m) => m[0]))
+    ]
+    expect(
+      groupCapabilities,
+      'the occupancy host gained a way to read or write groups beyond the hidden-ness question'
+    ).toEqual(['isHiddenByCollapse'])
+
+    // A question, so it answers something rather than doing something. A `void` here would be a write
+    // wearing the name of a read.
+    expect(body, 'isHiddenByCollapse stopped being a predicate').toMatch(
+      /isHiddenByCollapse\([^)]*\):\s*boolean/
+    )
+
+    // And the rest of the file, so the controller cannot go round its own host — the group book is
+    // importable from `../data/TabGroupStore.js` and nothing but this stops it.
+    expect(groupWords(code), 'the occupancy controller names a tab group outside its host').toEqual(
+      []
+    )
+    for (const specifier of importsOf(withoutComments(text))) {
+      expect(specifier, `TileOccupancyController imports ${specifier}`).not.toMatch(
+        /tabgroups|TabGroup/i
+      )
+    }
   })
 })
 
@@ -2080,7 +2231,7 @@ describe('privacy invariants', () => {
     ].map((match) => match[1])
     expect(registered.length, 'expected stores to register for shutdown').toBeGreaterThan(3)
 
-    let checked = 0
+    const checked: string[] = []
     for (const file of await collect('src/main/data')) {
       // Only classes that buffer, and only ones the entry point opens. A file's *first* exported class
       // is not necessarily the store — `JsonStore.ts` leads with an error type — so the names are taken
@@ -2100,10 +2251,13 @@ describe('privacy invariants', () => {
         expect(found, `${store ?? ''} has a flush() but nothing registers it in index.ts`).toBe(
           true
         )
-        checked += 1
+        checked.push(store ?? '')
       }
     }
-    expect(checked, 'expected to have checked several stores').toBeGreaterThan(3)
+    expect(checked.length, 'expected to have checked several stores').toBeGreaterThan(3)
+    // Named, because the newest store is the one most likely to be missing and least likely to be
+    // noticed: a rename that took it out of this loop would leave the count above still passing.
+    expect(checked).toEqual(expect.arrayContaining(['ArrangementStore', 'TabGroupStore']))
   })
 
   it('never starts the crash reporter', async () => {
@@ -2722,14 +2876,22 @@ describe('store loading', () => {
   it('classes every JSON store as critical or degradable, and only bookmarks and passwords as critical', async () => {
     const critical: string[] = []
     const unclassed: string[] = []
+    const classed: string[] = []
     for (const file of await collect('src/main/data')) {
       const code = withoutComments(file.text)
       if (!/JsonStore\.open(?:<[^>]*>)?\(/.test(code)) continue
       const name = file.relative.split(sep).join('/')
       if (!code.includes('criticality:')) unclassed.push(name)
+      else classed.push(name)
       if (/criticality:\s*'critical'/.test(code)) critical.push(name)
     }
     expect(unclassed, 'a store that says nothing about what losing it costs').toEqual([])
+    expect(classed).toEqual(
+      expect.arrayContaining([
+        'src/main/data/ArrangementStore.ts',
+        'src/main/data/TabGroupStore.ts'
+      ])
+    )
     expect(critical.sort()).toEqual([
       'src/main/data/BookmarkStore.ts',
       'src/main/data/PasswordStore.ts'

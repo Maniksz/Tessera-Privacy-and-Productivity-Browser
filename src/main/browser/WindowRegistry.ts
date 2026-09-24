@@ -6,6 +6,7 @@ import type { BrowsingMode, HistoryStore } from '../data/HistoryStore.js'
 import type { FaviconStore } from '../data/FaviconStore.js'
 import type { ThumbnailStore } from '../data/ThumbnailStore.js'
 import type { TabGroupStore } from '../data/TabGroupStore.js'
+import type { ArrangementStore } from '../data/ArrangementStore.js'
 import type { SessionStore } from '../data/SessionStore.js'
 import type { WindowPlacementStore } from '../data/WindowPlacementStore.js'
 import { placeNewWindow, type OpeningPlacement } from '@shared/window-placement/model.js'
@@ -148,6 +149,11 @@ export interface WindowRegistryDeps {
   favicons: FaviconStore
   thumbnails: ThumbnailStore
   tabGroups: TabGroupStore
+  /**
+   * The tilings windows have put away. One store for every ordinary window, which is why a
+   * recording carries the calling window's tabs on each use rather than a window id (R16).
+   */
+  arrangements: ArrangementStore
   /** The saved session. One store for every window; each window gets its own slot. */
   sessionStore: SessionStore
   /** Where the last window was, for each new one to open there. One store for every window. */
@@ -337,6 +343,9 @@ export class WindowRegistry {
       // Bound the same way, and for the same reason: a private window's book keeps its groups in
       // memory and writes nothing.
       tabGroups: this.#deps.tabGroups.bookFor(mode),
+      // And again, for the same reason: a private window's book keeps its recordings in a variable
+      // and holds no file path to forget to check.
+      arrangements: this.#deps.arrangements.bookFor(mode),
       // Bound the same way and for the same reason: a private window's recorder discards, and takes no slot.
       sessionSlot: this.#deps.sessionStore.recorderFor(mode),
       // Read by every window, written only by normal ones; see `WindowPlacementStore.recorderFor`.
