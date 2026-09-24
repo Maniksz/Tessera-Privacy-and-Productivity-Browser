@@ -738,7 +738,12 @@ export function installAutofill(): void {
     */
     ipcRenderer.on(AUTOFILL_DESCRIBE_CHANNEL, () => {
       let target = fillableFocus(document.activeElement)
-      for (const input of document.querySelectorAll('input')) target ??= fillableFocus(input)
+      if (target === null) {
+        for (const input of document.querySelectorAll('input')) {
+          target = fillableFocus(input)
+          if (target !== null) break
+        }
+      }
       if (target !== null) pressBadge(target.field)
     })
 

@@ -250,11 +250,11 @@ export class PermissionStore {
    * already holds both lists.
    */
   #replace(remove: (sites: readonly SitePermission[]) => SitePermission[]): number {
-    const before = this.#store.get().sites.length
-    const after = this.#store.update((document) => ({
-      ...document,
-      sites: remove(document.sites)
-    }))
-    return before - after.sites.length
+    const current = this.#store.get().sites
+    const kept = remove(current)
+    // The same array back means nothing matched: no write, no change event.
+    if (kept === current) return 0
+    const after = this.#store.update((document) => ({ ...document, sites: kept }))
+    return current.length - after.sites.length
   }
 }

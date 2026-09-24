@@ -4,6 +4,7 @@ import { tabSearchRows } from '@shared/search/tab-search.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import { Icon } from '../../shared/Icon.js'
+import { TabFavicon } from './TabFavicon.js'
 
 /**
  * The tab search: this window's tabs, found by title or address (U22, R31).
@@ -150,21 +151,7 @@ export function TabSearchPanel({ tabs, onClose }: TabSearchPanelProps): React.Re
                   }}
                   onClick={() => activate(tab)}
                 >
-                  <span className="tab__favicon" aria-hidden="true">
-                    {tab.faviconUrl !== null && (
-                      <img
-                        // The strip's rules for the same icon; see `TabBar`.
-                        key={tab.faviconUrl}
-                        className="tab__faviconImage"
-                        src={tab.faviconUrl}
-                        alt=""
-                        draggable={false}
-                        onError={(event) => {
-                          event.currentTarget.hidden = true
-                        }}
-                      />
-                    )}
-                  </span>
+                  <TabFavicon url={tab.faviconUrl} />
                   <span className="tabsearch__title">{tab.title || t('tab.untitled')}</span>
                   <span className="tabsearch__url">{tab.url}</span>
                 </li>

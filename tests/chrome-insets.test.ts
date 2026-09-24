@@ -5,6 +5,7 @@ import { NO_CHROME_INSETS, chromeHiddenAt, chromeInsetsFor } from '@shared/split
 import { escalationLevelSchema } from '@shared/model.js'
 import { computeTileRects, dividersFor, TILE_GUTTER } from '@shared/split/layout.js'
 import { headerRectOf, tileHeaders, viewRects } from '@shared/split/tile-header.js'
+import { instrumented } from './instrumented-source.js'
 
 /**
  * Where the content area begins, which is the number the divider handles are placed from.
@@ -209,6 +210,9 @@ describe('one rule, not two', () => {
   })
 })
 
+/** Whether the mutation run reads an instrumented copy of the source checked below; see `instrumented`. */
+const INSTRUMENTED = instrumented('src/main/browser/SplitController.ts')
+
 describe('tile headers are the same rule twice over (U20)', () => {
   /*
     The header strip is the next number both sides need. The core shrinks each view by it, and the
@@ -247,7 +251,7 @@ describe('tile headers are the same rule twice over (U20)', () => {
     }
   })
 
-  it('leaves the header arithmetic to the shared module on both sides', () => {
+  it.skipIf(INSTRUMENTED)('leaves the header arithmetic to the shared module on both sides', () => {
     const strip = (relative: string): string =>
       readFileSync(join(ROOT, relative), 'utf8')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')

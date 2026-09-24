@@ -32,11 +32,11 @@ import { HOME_URL } from '@shared/url/omnibox.js'
  * No Electron import: a `Session` is only ever a key here, so every rule is a unit test away.
  */
 
-/** The exemption key of an `http:` address, or `null` for anything else. */
-export function hostKeyOf(url: string): string | null {
+/** The exemption key of an `http:` address, or `null` for anything else. Parsed already, or not. */
+export function hostKeyOf(url: string | URL): string | null {
   let parsed: URL
   try {
-    parsed = new URL(url)
+    parsed = typeof url === 'string' ? new URL(url) : url
   } catch {
     return null
   }
@@ -63,8 +63,8 @@ export class HttpsExemptions {
     return true
   }
 
-  exempts(request: ExemptionQuery): boolean {
-    const key = hostKeyOf(request.url)
+  /** `key` is `hostKeyOf(request.url)`, for a caller that has parsed the address already. */
+  exempts(request: ExemptionQuery, key: string | null = hostKeyOf(request.url)): boolean {
     if (key === null || !this.#hosts.has(key)) return false
     // The navigation *is* the document, so there is no other document to be on.
     if (request.resourceType === 'mainFrame') return true

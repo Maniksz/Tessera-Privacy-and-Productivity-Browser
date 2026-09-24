@@ -75,6 +75,24 @@ describe('tabSearchRows', () => {
     expect(tabSearchRows(tabs, 'same')).toHaveLength(MAX_RANKED_ROWS)
   })
 
+  it('expands every row into its tabs in the order given, among many tabs', () => {
+    const tabs = Array.from({ length: 200 }, (_, index) => {
+      if (index === 5 || index === 50 || index === 150) {
+        return tab(`page${index}`, `https://alpha.example/${index % 2 === 0 ? '' : '#top'}`, 'Home')
+      }
+      if (index === 10 || index === 100)
+        return tab(`notes${index}`, 'https://x.example/', 'Alpha notes')
+      return tab(`noise${index}`, `https://noise${index}.example/`, 'Noise')
+    })
+    expect(ids(tabSearchRows(tabs, 'alpha'))).toEqual([
+      'page5',
+      'page50',
+      'page150',
+      'notes10',
+      'notes100'
+    ])
+  })
+
   it('hands back the tabs it was given, so the caller keeps its own fields', () => {
     const given = { ...tab('a', 'https://a.example/'), extra: 1 }
     expect(tabSearchRows([given], 'a.example')[0]).toBe(given)

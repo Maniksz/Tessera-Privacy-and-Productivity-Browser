@@ -12,6 +12,7 @@ import {
 } from '@shared/ipc/channels.js'
 import { PASSWORD_CHANNELS } from '@shared/passwords/api.js'
 import { LOCALES, catalogs } from '@shared/i18n/catalog.js'
+import { instrumented } from './instrumented-source.js'
 
 /**
  * The wiring for `tessera://bookmarks`, `tessera://downloads` and `tessera://passwords`.
@@ -69,6 +70,9 @@ function grantedTo(page: InternalPage): string[] {
     .filter((channel) => channel !== 'i18n:getCatalog')
     .sort()
 }
+
+/** Whether the mutation run reads an instrumented copy of the source checked below; see `instrumented`. */
+const SCHEMA_INSTRUMENTED = instrumented('src/shared/passwords/schema.ts')
 
 describe('internal page privileges', () => {
   /*
@@ -240,21 +244,24 @@ describe('internal page privileges', () => {
     expect(anyInternalInvokeChannels() as readonly string[]).not.toContain('passwords:answerPrompt')
   })
 
-  it('carries no channel whose payload could hold a master password', () => {
-    /*
-      The structural half of the decision `shared/passwords/api.ts` describes, read off the contract rather
-      than promised in a comment. A request schema is where such a field would have to appear to be
-      accepted, so this greps the one file that defines them all.
+  it.skipIf(SCHEMA_INSTRUMENTED)(
+    'carries no channel whose payload could hold a master password',
+    () => {
+      /*
+        The structural half of the decision `shared/passwords/api.ts` describes, read off the contract rather
+        than promised in a comment. A request schema is where such a field would have to appear to be
+        accepted, so this greps the one file that defines them all.
 
-      It would have caught the design this replaced: `passwords:unlock { masterPassword }` and
-      `passwords:setMasterPassword { current, next }` were both declared, with an argument for why crossing
-      was unavoidable. It was not unavoidable.
-    */
-    const schema = codeOf('src/shared/passwords/schema.ts')
-    for (const field of ['masterPassword', 'current:', 'next:', 'candidate']) {
-      expect(schema, `the password wire schema names ${field}`).not.toContain(field)
+        It would have caught the design this replaced: `passwords:unlock { masterPassword }` and
+        `passwords:setMasterPassword { current, next }` were both declared, with an argument for why crossing
+        was unavoidable. It was not unavoidable.
+      */
+      const schema = codeOf('src/shared/passwords/schema.ts')
+      for (const field of ['masterPassword', 'current:', 'next:', 'candidate']) {
+        expect(schema, `the password wire schema names ${field}`).not.toContain(field)
+      }
     }
-  })
+  )
 
   it('gives the download list to the downloads page and to no other', () => {
     const hearers = Object.entries(INTERNAL_PAGE_EVENT_CHANNELS)
@@ -321,6 +328,9 @@ describe('internal page privileges', () => {
   })
 })
 
+/** Whether the mutation run reads an instrumented copy of the source checked below; see `instrumented`. */
+const SAVE_BAR_INSTRUMENTED = instrumented('src/main/passwords/chrome.ts')
+
 describe('internal page messages', () => {
   /*
     The two pages whose text is settled.
@@ -363,28 +373,31 @@ describe('internal page messages', () => {
     }
   })
 
-  it('translates the save bar and the suggestion list in every locale', () => {
-    /*
-      Read from the module that builds them, so the list cannot drift from what is drawn.
+  it.skipIf(SAVE_BAR_INSTRUMENTED)(
+    'translates the save bar and the suggestion list in every locale',
+    () => {
+      /*
+        Read from the module that builds them, so the list cannot drift from what is drawn.
 
-      These six matter more than their number suggests: they are rendered *inside a visited page* by
-      the preload, which has no catalogue of its own and takes every word from the core — that is what
-      makes a language change reach the next sign-in form rather than the next restart. A missing one
-      would put a raw identifier on top of somebody's login.
-    */
-    const chrome = source('src/main/passwords/chrome.ts')
-    const keys = [
-      ...new Set([...chrome.matchAll(/'(passwords\.[a-zA-Z.]+)'/g)].map((match) => match[1]!))
-    ]
-    expect(keys.length, 'expected the save bar to name its own strings').toBeGreaterThan(4)
+        These six matter more than their number suggests: they are rendered *inside a visited page* by
+        the preload, which has no catalogue of its own and takes every word from the core — that is what
+        makes a language change reach the next sign-in form rather than the next restart. A missing one
+        would put a raw identifier on top of somebody's login.
+      */
+      const chrome = source('src/main/passwords/chrome.ts')
+      const keys = [
+        ...new Set([...chrome.matchAll(/'(passwords\.[a-zA-Z.]+)'/g)].map((match) => match[1]!))
+      ]
+      expect(keys.length, 'expected the save bar to name its own strings').toBeGreaterThan(4)
 
-    for (const locale of LOCALES) {
-      const catalog: Readonly<Record<string, string>> = catalogs[locale]
-      for (const key of keys) {
-        expect(catalog[key], `${locale} is missing ${key}`).toBeDefined()
+      for (const locale of LOCALES) {
+        const catalog: Readonly<Record<string, string>> = catalogs[locale]
+        for (const key of keys) {
+          expect(catalog[key], `${locale} is missing ${key}`).toBeDefined()
+        }
       }
     }
-  })
+  )
 })
 
 describe('the language before the first render', () => {

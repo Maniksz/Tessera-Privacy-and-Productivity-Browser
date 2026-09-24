@@ -435,6 +435,24 @@ describe('TabUnloader', () => {
     expect(window.discarded).toEqual([])
   })
 
+  it('gathers no facts about any tab with `advanced.unloadInactiveTabs` off', () => {
+    const window = fakeWindow([fakeTab('a', { lastActiveAt: 0 })])
+    const overlayPresentation = vi.spyOn(window, 'overlayPresentation')
+    const windows = vi.fn(() => [window])
+    new TabUnloader({
+      windows,
+      settings: {
+        snapshot: () => ({ ...defaultSettings(), 'advanced.unloadInactiveTabs': false })
+      },
+      waiting: [],
+      quitting: () => false,
+      now: () => NOW,
+      every: () => () => undefined
+    }).sweep()
+    expect(windows).not.toHaveBeenCalled()
+    expect(overlayPresentation).not.toHaveBeenCalled()
+  })
+
   it('waits as long as `advanced.unloadAfterMinutes` says', () => {
     const window = fakeWindow([fakeTab('a', { lastActiveAt: NOW - 45 * MINUTE })])
     unloader([window], { settings: { 'advanced.unloadAfterMinutes': 60 } }).sweep()

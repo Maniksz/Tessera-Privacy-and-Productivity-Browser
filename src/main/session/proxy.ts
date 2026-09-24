@@ -5,7 +5,6 @@ import {
   killSwitchVerdict,
   originKey,
   proxyRuleFor,
-  resolveTarget,
   ruleKind,
   type AppliedRule,
   type KillSwitchVerdict,
@@ -61,6 +60,14 @@ interface Answer {
   /** `resolveProxy`'s text, or `null` for a call that failed. */
   readonly text: string | null
   readonly at: number
+}
+
+/**
+ * `resolveTarget` of an address, from its origin key rather than a second parse: a WebSocket is asked
+ * about as the HTTP request it begins as, so `ws:` and `wss:` become `http:` and `https:`.
+ */
+function targetOf(key: string): string {
+  return `${key.replace(/^ws/, 'http')}/`
 }
 
 /** Resolves when `work` does or when `ms` have passed, whichever is first. Never rejects. */
@@ -137,8 +144,7 @@ export class ProxyGate implements KillSwitchGate {
     this.#asking.clear()
   }
 
-  verdict(url: string): KillSwitchVerdict {
-    const key = originKey(url)
+  verdict(url: string, key: string | null = originKey(url)): KillSwitchVerdict {
     const answer = key === null ? undefined : this.#answerFor(key)
     return killSwitchVerdict({
       pending: this.#pending !== null,
@@ -147,8 +153,8 @@ export class ProxyGate implements KillSwitchGate {
     })
   }
 
-  settle(url: string): Promise<void> {
-    return withDeadline(this.#settle(url), RESOLVE_DEADLINE_MS)
+  settle(url: string, key: string | null = originKey(url)): Promise<void> {
+    return withDeadline(this.#settle(key), RESOLVE_DEADLINE_MS)
   }
 
   /** Waits for any pending rule, never rejecting. What the main process's own fetches wait on. */
@@ -157,24 +163,22 @@ export class ProxyGate implements KillSwitchGate {
     while (this.#pending !== null) await this.#pending
   }
 
-  async #settle(url: string): Promise<void> {
+  async #settle(key: string | null): Promise<void> {
     await this.ready()
-    const key = originKey(url)
-    const target = resolveTarget(url)
-    if (this.#applied !== 'system' || key === null || target === null) return
+    if (this.#applied !== 'system' || key === null) return
     if (this.#answerFor(key) !== undefined) return
-    const asking = this.#asking.get(key) ?? this.#ask(key, target)
+    const asking = this.#asking.get(key) ?? this.#ask(key)
     await asking
   }
 
-  #ask(key: string, target: string): Promise<void> {
+  #ask(key: string): Promise<void> {
     const generation = this.#generation
     const store = (text: string | null): void => {
       if (generation !== this.#generation) return
       this.#answers.set(key, { text, at: this.#now() })
       this.#asking.delete(key)
     }
-    const asking = this.#target.resolveProxy(target).then(store, () => {
+    const asking = this.#target.resolveProxy(targetOf(key)).then(store, () => {
       store(null)
     })
     this.#asking.set(key, asking)
@@ -214,6 +218,8 @@ export function proxyGateFor(session: Session): ProxyGate {
   if (existing !== undefined) return existing
   const gate = new ProxyGate(session)
   gates.set(session, gate)
+  // Pruned here as well as in `liveGates`, so private windows opened and closed do not pile up refs.
+  known = known.filter((ref) => ref.deref() !== undefined)
   known.push(new WeakRef(session))
   if (installed !== null) void gate.apply(installed.rule)
   return gate
@@ -339,10 +345,11 @@ export async function networkFetch(url: string): Promise<Response> {
   const gate = proxyGateFor(electronSession.defaultSession)
   await gate.ready()
   const settings = installed?.getSettings()
-  if (settings !== undefined && killSwitchActive(settings) && originKey(url) !== null) {
-    if (gate.verdict(url) === 'unknown') await gate.settle(url)
-    if (gate.verdict(url) !== 'pass') {
-      throw new Error(`the kill switch refused ${originKey(url) ?? url}: no proxy confirmed`)
+  const key = originKey(url)
+  if (settings !== undefined && killSwitchActive(settings) && key !== null) {
+    if (gate.verdict(url, key) === 'unknown') await gate.settle(url, key)
+    if (gate.verdict(url, key) !== 'pass') {
+      throw new Error(`the kill switch refused ${key}: no proxy confirmed`)
     }
   }
   return net.fetch(url)

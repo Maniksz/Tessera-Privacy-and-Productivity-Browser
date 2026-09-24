@@ -26,6 +26,7 @@ import {
   mediaFindingListSchema,
   mediaManifestReportSchema
 } from '@shared/media/schema.js'
+import { instrumented } from './instrumented-source.js'
 
 /**
  * The wiring, and only the wiring.
@@ -41,6 +42,14 @@ import {
  *     is a property of *where* the hook is called and of nothing else;
  *   - that a refusal reaches the caller as a sentence rather than as an enumeration value.
  */
+
+/** The mutated files whose text the wiring checks below read; see `instrumented`. */
+const MEDIA_INSTRUMENTED = instrumented(
+  'src/main/media/MediaRegistry.ts',
+  'src/main/media/MediaService.ts',
+  'src/main/media/MediaSessions.ts'
+)
+const MENU_ACTIONS_INSTRUMENTED = instrumented('src/main/menu/menu-actions.ts')
 
 const T0 = 1_700_000_000_000
 
@@ -293,7 +302,7 @@ describe('which tab a web contents belongs to', () => {
     expect(tabIdForWebContents([closing], 11)).toBeNull()
   })
 
-  it('resolves tabs without reaching for Electron', () => {
+  it.skipIf(MEDIA_INSTRUMENTED)('resolves tabs without reaching for Electron', () => {
     /*
       The rule this protects, stated in `MediaRegistry`: the store is fed, it does not
       subscribe. A registry that called `webContents.fromId` itself would be a data
@@ -968,7 +977,7 @@ describe('letting findings go (media R4, R5)', () => {
     expect(two.list('tab-1').findings).toEqual([])
   })
 
-  it('is what clearing with cookies and panic call', () => {
+  it.skipIf(MENU_ACTIONS_INSTRUMENTED)('is what clearing with cookies and panic call', () => {
     const actions = source('src/main/menu/menu-actions.ts')
     expect(actions).toMatch(
       /forgetSession: \(session\) => \{[\s\S]*?wiring\.media\.forgetAll\(session\)/

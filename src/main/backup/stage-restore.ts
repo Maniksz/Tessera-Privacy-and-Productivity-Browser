@@ -1,4 +1,4 @@
-import { readFile, rename, rm } from 'node:fs/promises'
+import { rename, rm } from 'node:fs/promises'
 import type { InventoryPath } from '@shared/data/inventory.js'
 import {
   BACKUP_DOCUMENTS,
@@ -31,7 +31,7 @@ import { writeFileAtomically } from '../data/atomic-write.js'
 import type { DocumentCodec } from '../data/JsonStore.js'
 import { safetyCopyOf, stagedCopyOf } from '../data/quarantine.js'
 import { compareVersions } from '../updates/version.js'
-import { readableVersion } from './documents.js'
+import { readIfPresent, readableVersion } from './documents.js'
 import { BackupRefusedError } from './format.js'
 
 /**
@@ -92,15 +92,6 @@ const RESTORABLE_FILES: readonly InventoryPath[] = [...BACKUP_DOCUMENTS, ...VAUL
 /** The files one item puts in place, in the order they move: the vault's key before its document. */
 function filesOf(item: RestoreItem): readonly InventoryPath[] {
   return item === 'vault' ? ['passwordVaultKeyFile', 'passwordsFile'] : [item]
-}
-
-async function readIfPresent(path: string): Promise<Uint8Array | null> {
-  try {
-    return await readFile(path)
-  } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') return null
-    throw error
-  }
 }
 
 // --- reading the archive -------------------------------------------------------------------------
@@ -260,9 +251,9 @@ export async function stageRestore(
   deps: StagingDeps
 ): Promise<RestoreItem[]> {
   await rm(deps.path('restoreManifestFile'), { force: true })
-  for (const name of RESTORABLE_FILES) {
-    await rm(stagedCopyOf(deps.path(name)), { force: true })
-  }
+  await Promise.all(
+    RESTORABLE_FILES.map((name) => rm(stagedCopyOf(deps.path(name)), { force: true }))
+  )
 
   const items: RestoreItem[] = []
   for (const item of RESTORE_ITEMS.filter((candidate) => choice.items.includes(candidate))) {
@@ -293,15 +284,23 @@ export async function pendingRestore(path: RestoreDeps['path']): Promise<boolean
  */
 export type ApplyOutcome = 'none' | 'discarded' | 'applied' | 'kept'
 
+/** Removes one file, answering whether it was there. Any failure but its absence is let out. */
+async function removeIfPresent(file: string): Promise<boolean> {
+  try {
+    await rm(file)
+    return true
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return false
+    throw error
+  }
+}
+
 /** Removes every staged copy, answering whether there was one. */
 async function discardStaged(path: RestoreDeps['path']): Promise<boolean> {
-  let found = false
-  for (const name of RESTORABLE_FILES) {
-    const staged = stagedCopyOf(path(name))
-    if ((await readIfPresent(staged)) !== null) found = true
-    await rm(staged, { force: true })
-  }
-  return found
+  const removed = await Promise.all(
+    RESTORABLE_FILES.map((name) => removeIfPresent(stagedCopyOf(path(name))))
+  )
+  return removed.includes(true)
 }
 
 /**

@@ -45,11 +45,15 @@ export function tabSearchRows<T extends SearchableTab>(tabs: readonly T[], text:
     0
   )
 
-  // At most eight rows, so a scan of the tabs per row is cheaper than building an index to look in.
-  return ranked
-    .flatMap((row) => {
-      const key = mergeKeyOf(row.url)
-      return tabs.filter((tab) => mergeKeyOf(tab.url) === key)
-    })
-    .slice(0, MAX_RANKED_ROWS)
+  // Each tab's page is worked out once: a row's tabs are then a lookup, still in the order given.
+  const tabsByKey = new Map<string, T[]>()
+  for (const tab of tabs) {
+    const key = mergeKeyOf(tab.url)
+    const group = tabsByKey.get(key)
+    if (group === undefined) tabsByKey.set(key, [tab])
+    else group.push(tab)
+  }
+
+  // Every ranked row came from one of these tabs, so its key is always in the map.
+  return ranked.flatMap((row) => tabsByKey.get(mergeKeyOf(row.url))!).slice(0, MAX_RANKED_ROWS)
 }

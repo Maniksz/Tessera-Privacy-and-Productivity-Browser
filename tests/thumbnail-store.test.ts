@@ -23,6 +23,7 @@ import {
   type ThumbnailRequest,
   type ThumbnailSize
 } from '@shared/thumbnails/model.js'
+import { instrumented } from './instrumented-source.js'
 
 /**
  * The thumbnail store: when a picture is taken, what it is scaled to, who may take
@@ -1104,6 +1105,9 @@ describe('on disk', () => {
   })
 })
 
+/** Whether the mutation run reads an instrumented copy of the source checked below; see `instrumented`. */
+const INSTRUMENTED = instrumented('src/main/data/ThumbnailStore.ts')
+
 describe('the camera seam', () => {
   it('is satisfied by an Electron NativeImage, with no mock in sight', () => {
     /*
@@ -1117,23 +1121,26 @@ describe('the camera seam', () => {
     expect(seam).toBeNull()
   })
 
-  it('has no fallback to a camera that would photograph the wrong window', async () => {
-    /*
-      A fitness function, not a behaviour test. The alternative to the injected provider
-      is reaching for `webContents` from inside the store — which would tie a data
-      module to Electron, make every test start a browser process, and put the choice of
-      *which* view is photographed somewhere that cannot know whether that view still
-      shows the page it was asked about. An optional parameter with a fallback would
-      make the wrong version the one you get by forgetting. The type system already
-      refuses a missing provider; this refuses a default being added later.
-    */
-    const source = await readFile(join(process.cwd(), 'src/main/data/ThumbnailStore.ts'), 'utf8')
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1')
+  it.skipIf(INSTRUMENTED)(
+    'has no fallback to a camera that would photograph the wrong window',
+    async () => {
+      /*
+        A fitness function, not a behaviour test. The alternative to the injected provider
+        is reaching for `webContents` from inside the store — which would tie a data
+        module to Electron, make every test start a browser process, and put the choice of
+        *which* view is photographed somewhere that cannot know whether that view still
+        shows the page it was asked about. An optional parameter with a fallback would
+        make the wrong version the one you get by forgetting. The type system already
+        refuses a missing provider; this refuses a default being added later.
+      */
+      const source = await readFile(join(process.cwd(), 'src/main/data/ThumbnailStore.ts'), 'utf8')
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1')
 
-    expect(code, 'the camera is optional').not.toMatch(/capture\?\s*:/)
-    expect(code, 'the camera has a default').not.toMatch(/\?\?\s*[\w.]*[Cc]apture/)
-    expect(code, 'the store reaches for Electron').not.toMatch(/from\s+'electron'/)
-    expect(code, 'the store knows about web contents').not.toMatch(/webContents/)
-    expect(code, 'the store calls capturePage itself').not.toMatch(/capturePage/)
-  })
+      expect(code, 'the camera is optional').not.toMatch(/capture\?\s*:/)
+      expect(code, 'the camera has a default').not.toMatch(/\?\?\s*[\w.]*[Cc]apture/)
+      expect(code, 'the store reaches for Electron').not.toMatch(/from\s+'electron'/)
+      expect(code, 'the store knows about web contents').not.toMatch(/webContents/)
+      expect(code, 'the store calls capturePage itself').not.toMatch(/capturePage/)
+    }
+  )
 })

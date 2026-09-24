@@ -9,6 +9,7 @@ import { killSwitchActive, originKey, type KillSwitchVerdict } from '@shared/net
 import {
   HttpsExemptions,
   continueTokens,
+  hostKeyOf,
   httpsExemptionsFor,
   type ContinueGrant
 } from './https-exemptions.js'
@@ -59,6 +60,8 @@ export interface RequestContext {
   settings: SettingsSnapshot
   /** The view that made the request, which a continue token is bound to. `null` for none (a worker). */
   webContentsId: number | null
+  /** `originKey(url)` when the listener derived it already; the kill switch derives it otherwise. */
+  originKey?: string | null | undefined
 }
 
 export interface RequestStage {
@@ -153,10 +156,13 @@ const REDIRECT_HOSTS: readonly string[] = [
  * An interface so this file does not reach into Electron's proxy calls, and so a test can answer for it.
  */
 export interface KillSwitchGate {
-  /** The answer for this address now. Never waits; `unknown` means nothing has been asked yet. */
-  verdict(url: string): KillSwitchVerdict
+  /**
+   * The answer for this address now. Never waits; `unknown` means nothing has been asked yet. `key`, in
+   * both, is `originKey(url)` when the caller has it already, so the address is not parsed again.
+   */
+  verdict(url: string, key?: string): KillSwitchVerdict
   /** Settles once `verdict(url)` has an answer or its deadline has passed. Never rejects. */
-  settle(url: string): Promise<void>
+  settle(url: string, key?: string): Promise<void>
 }
 
 /**
@@ -177,10 +183,12 @@ export const NO_GATE: KillSwitchGate = { verdict: () => 'block', settle: () => P
 const killSwitchStage = (gate: KillSwitchGate): RequestStage => ({
   id: 'kill-switch',
   isEnabled: killSwitchActive,
-  evaluate: ({ url }) =>
-    originKey(url) === null || gate.verdict(url) === 'pass'
+  evaluate: ({ url, originKey: known }) => {
+    const key = known === undefined ? originKey(url) : known
+    return key === null || gate.verdict(url, key) === 'pass'
       ? { action: 'continue' }
       : { action: 'block', reason: 'kill-switch' }
+  }
 })
 
 /**
@@ -190,13 +198,10 @@ const killSwitchStage = (gate: KillSwitchGate): RequestStage => ({
  * after 750 ms. This one holds every resource type — a subresource, a subframe, a WebSocket to a host the
  * page has not touched — and nothing it holds is let through for having waited.
  */
-function killSwitchWait(
-  gate: KillSwitchGate,
-  url: string,
-  settings: SettingsSnapshot
-): Promise<void> | null {
-  if (!killSwitchActive(settings) || originKey(url) === null) return null
-  return gate.verdict(url) === 'unknown' ? gate.settle(url) : null
+function killSwitchWait(gate: KillSwitchGate, facts: RequestFacts): Promise<void> | null {
+  const { url, originKey: key } = facts
+  if (key === undefined || key === null) return null
+  return gate.verdict(url, key) === 'unknown' ? gate.settle(url, key) : null
 }
 
 const telemetryStage: RequestStage = {
@@ -299,7 +304,9 @@ const httpsUpgradeStage = (https: HttpsOnlyWiring): RequestStage => ({
   evaluate: (context) => {
     if (!context.url.startsWith('http://')) return { action: 'continue' }
 
-    const host = hostOf(context.url)
+    const parsed = parsedUrl(context.url)
+    if (parsed === null) return { action: 'continue' }
+    const host = hostOf(parsed)
     /*
       Loopback, `.localhost` and bare IP addresses have no meaningful certificate to upgrade to.
 
@@ -316,7 +323,7 @@ const httpsUpgradeStage = (https: HttpsOnlyWiring): RequestStage => ({
     }
 
     // A host the user chose to continue to, in this session — and only on its own pages (KTD3).
-    if (https.exemptions.exempts(context)) return { action: 'continue' }
+    if (https.exemptions.exempts(context, hostKeyOf(parsed))) return { action: 'continue' }
 
     /*
       Subresources are upgraded silently. A top-level navigation goes to the interstitial instead, because
@@ -348,33 +355,30 @@ const httpsUpgradeStage = (https: HttpsOnlyWiring): RequestStage => ({
   }
 })
 
-function hostOf(url: string): string | null {
+function parsedUrl(url: string): URL | null {
   try {
-    const { hostname } = new URL(url)
-    return hostname === '' ? null : hostname.toLowerCase()
+    return new URL(url)
   } catch {
     return null
   }
 }
 
+function hostOf(url: string | URL): string | null {
+  const parsed = typeof url === 'string' ? parsedUrl(url) : url
+  return parsed === null || parsed.hostname === '' ? null : parsed.hostname.toLowerCase()
+}
+
 /** Pulls an absolute http(s) destination out of a redirector's parameters. */
 function extractDestination(url: string): string | null {
   const candidates = ['url', 'u', 'target', 'dest', 'destination', 'redirect', 'r', 'to', 'q']
-  try {
-    const parsed = new URL(url)
-    for (const name of candidates) {
-      const value = parsed.searchParams.get(name)
-      if (value === null) continue
-      if (!/^https?:\/\//i.test(value)) continue
-      // Validate before handing it to the network stack.
-      try {
-        return new URL(value).toString()
-      } catch {
-        continue
-      }
-    }
-  } catch {
-    return null
+  const parsed = parsedUrl(url)
+  if (parsed === null) return null
+  for (const name of candidates) {
+    const value = parsed.searchParams.get(name)
+    if (value === null || !/^https?:\/\//i.test(value)) continue
+    // Validate before handing it to the network stack.
+    const destination = parsedUrl(value)
+    if (destination !== null) return destination.toString()
   }
   return null
 }
@@ -445,6 +449,8 @@ interface RequestFacts {
   readonly documentUrl: string | null
   readonly method: string
   readonly webContentsId: number | null
+  /** Derived once, while the kill switch is active: `undefined` when it was not, `null` if unguarded. */
+  readonly originKey: string | null | undefined
 }
 
 /**
@@ -547,14 +553,7 @@ export function installRequestPipeline(options: PipelineOptions): () => void {
     // Read here rather than at interception, so a request that waited for the lists is judged against
     // the settings as they are now — the same reason every stage takes them per request.
     const settings = getSettings()
-    const context: RequestContext = {
-      url: facts.url,
-      resourceType: facts.resourceType,
-      documentUrl: facts.documentUrl,
-      method: facts.method,
-      settings,
-      webContentsId: facts.webContentsId
-    }
+    const context: RequestContext = { ...facts, settings }
 
     for (const stage of stages) {
       if (!stage.isEnabled(settings)) continue
@@ -642,10 +641,11 @@ function intercept(
       resourceType: details.resourceType,
       documentUrl: details.frame?.url ?? null,
       method: details.method,
-      webContentsId: details.webContentsId ?? null
+      webContentsId: details.webContentsId ?? null,
+      originKey: killSwitchActive(wiring.getSettings()) ? originKey(details.url) : undefined
     }
 
-    const proxy = killSwitchWait(wiring.gate, facts.url, wiring.getSettings())
+    const proxy = killSwitchWait(wiring.gate, facts)
     const held = wiring.holdForCompile ? firstCompile : null
     const compile =
       held !== null && facts.resourceType === 'mainFrame' ? untilCompiled(held.compiled) : null

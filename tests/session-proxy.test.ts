@@ -475,6 +475,19 @@ describe('the kill switch in system mode (R22)', () => {
     expect(defaultSession.resolved).toContain('https://chat.example/')
   })
 
+  it('asks about a plain WebSocket as the HTTP request it begins as, port and all', async () => {
+    const { listener } = await system()
+    request(listener, 'ws://chat.example:81/s', 'webSocket')
+    request(listener, 'http://chat.example:81/page', 'script')
+    // One origin key each — `ws:` and `http:` may take different ways — but the same address asked about.
+    await vi.waitFor(() => {
+      expect(defaultSession.resolved).toEqual([
+        'http://chat.example:81/',
+        'http://chat.example:81/'
+      ])
+    })
+  })
+
   it('cancels a request whose resolveProxy never answers', async () => {
     vi.useFakeTimers()
     const { listener } = await system()

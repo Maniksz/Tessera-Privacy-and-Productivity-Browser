@@ -3,6 +3,7 @@ import type { Rect } from '@shared/split/layout.js'
 import { headerRectOf } from '@shared/split/tile-header.js'
 import { useI18n } from '../i18n.js'
 import { Icon } from '../../shared/Icon.js'
+import { TabFavicon } from './TabFavicon.js'
 
 /**
  * The header strip above each tile's page (U20, R34): favicon, title, and a mark when it is muted.
@@ -46,21 +47,7 @@ export function TileHeaders({
         data-tile-index={index}
         style={{ left: x, top: y, width, height }}
       >
-        <span className="tab__favicon" aria-hidden="true">
-          {tab.faviconUrl !== null && (
-            <img
-              // Keyed, not draggable, hidden on a miss: the same three reasons as in `TabBar`.
-              key={tab.faviconUrl}
-              className="tab__faviconImage"
-              src={tab.faviconUrl}
-              alt=""
-              draggable={false}
-              onError={(event) => {
-                event.currentTarget.hidden = true
-              }}
-            />
-          )}
-        </span>
+        <TabFavicon url={tab.faviconUrl} />
         <span className="tile-header__title">{tab.title || t('tab.untitled')}</span>
         {tab.muted && (
           <span className="tile-header__muted" role="img" aria-label={t('split.muted')}>

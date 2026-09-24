@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MAX_RANKED_ROWS, rankCandidates, type RankCandidate } from '@shared/search/rank.js'
+import { instrumented } from './instrumented-source.js'
 
 /**
  * The local ranker behind address-bar suggestions and the tab search (U17, KTD11).
@@ -483,6 +484,9 @@ describe('rankCandidates: determinism and odd addresses', () => {
   })
 })
 
+/** Whether the mutation run reads an instrumented copy of the source checked below; see `instrumented`. */
+const RANK_INSTRUMENTED = instrumented('src/shared/search/rank.ts')
+
 /**
  * The two fitness checks of KTD11.
  *
@@ -491,7 +495,7 @@ describe('rankCandidates: determinism and odd addresses', () => {
  * bundle just the same, and one that can reach the network breaks "nothing leaves the device" (R28)
  * just the same.
  */
-describe('rank.ts fitness', () => {
+describe.skipIf(RANK_INSTRUMENTED)('rank.ts fitness', () => {
   const ROOT = resolve(__dirname, '..')
   const ENTRY = join(ROOT, 'src/shared/search/rank.ts')
 

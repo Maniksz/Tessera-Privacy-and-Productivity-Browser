@@ -12,6 +12,7 @@ import {
   type FaviconEntry,
   type FaviconIndex
 } from '@shared/favicons/model.js'
+import { instrumented } from './instrumented-source.js'
 
 /**
  * The favicon store: the one request per site, what it refuses, and who may write.
@@ -957,25 +958,31 @@ describe('on disk', () => {
   })
 })
 
-describe('the retrieval seam', () => {
-  it('has no fallback to a fetcher that would bypass the session', async () => {
-    /*
-      A fitness function, not a behaviour test. Node's global retrieval function is
-      always in scope and ignores the browsing session entirely — no proxy, no DNS
-      settings, no request pipeline, no kill switch — so an optional parameter with a
-      global default would make the leaking version the one you get by forgetting.
-      The type system already refuses a missing fetcher; this refuses a default being
-      added later.
-    */
-    const source = await readFile(join(process.cwd(), 'src/main/data/FaviconStore.ts'), 'utf8')
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1')
+/** Whether the mutation run reads an instrumented copy of the source checked below; see `instrumented`. */
+const INSTRUMENTED = instrumented('src/main/data/FaviconStore.ts')
 
-    expect(code, 'the fetcher is optional').not.toMatch(/fetch\?\s*:/)
-    expect(code, 'the fetcher falls back to a global').not.toMatch(/\?\?\s*fetch\b/)
-    expect(code).not.toMatch(/globalThis\s*\.\s*fetch/)
-    // And it is reached through the injected field, never called as a bare global.
-    expect(code).not.toMatch(/[^.#\w]fetch\(/)
-  })
+describe('the retrieval seam', () => {
+  it.skipIf(INSTRUMENTED)(
+    'has no fallback to a fetcher that would bypass the session',
+    async () => {
+      /*
+        A fitness function, not a behaviour test. Node's global retrieval function is
+        always in scope and ignores the browsing session entirely — no proxy, no DNS
+        settings, no request pipeline, no kill switch — so an optional parameter with a
+        global default would make the leaking version the one you get by forgetting.
+        The type system already refuses a missing fetcher; this refuses a default being
+        added later.
+      */
+      const source = await readFile(join(process.cwd(), 'src/main/data/FaviconStore.ts'), 'utf8')
+      const code = source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"\\])\/\/[^\n]*/g, '$1')
+
+      expect(code, 'the fetcher is optional').not.toMatch(/fetch\?\s*:/)
+      expect(code, 'the fetcher falls back to a global').not.toMatch(/\?\?\s*fetch\b/)
+      expect(code).not.toMatch(/globalThis\s*\.\s*fetch/)
+      // And it is reached through the injected field, never called as a bare global.
+      expect(code).not.toMatch(/[^.#\w]fetch\(/)
+    }
+  )
 })
 
 describe('the file a site is stored in', () => {

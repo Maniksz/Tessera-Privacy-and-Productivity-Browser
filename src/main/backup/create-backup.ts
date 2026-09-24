@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises'
 import type { InventoryPath } from '@shared/data/inventory.js'
 import { BACKUP_DOCUMENTS, type VaultInBackup } from '@shared/backup/model.js'
 import type { BackupArchive } from '@shared/backup/schema.js'
@@ -10,7 +9,7 @@ import {
   type ScryptCost
 } from '../crypto/vault-key.js'
 import type { DocumentCodec } from '../data/JsonStore.js'
-import { DOCUMENT_VERSIONS, SETTINGS_DOCUMENT_VERSION } from './documents.js'
+import { DOCUMENT_VERSIONS, SETTINGS_DOCUMENT_VERSION, readIfPresent } from './documents.js'
 import { sealBackup } from './format.js'
 
 /**
@@ -50,16 +49,6 @@ export interface CollectedBackup {
   /** The version of every document inside, for the header. */
   readonly documents: Readonly<Record<string, number>>
   readonly vault: VaultInBackup
-}
-
-/** The bytes at `path`, or `null` when there is no such file. Any other failure is let out. */
-async function readIfPresent(path: string): Promise<Uint8Array | null> {
-  try {
-    return await readFile(path)
-  } catch (error) {
-    if ((error as { code?: string }).code === 'ENOENT') return null
-    throw error
-  }
 }
 
 /**
@@ -133,16 +122,23 @@ async function collectVault(sources: BackupSources): Promise<CollectedVault> {
 
 /** Reads every document of the backup column, and the vault when it may come. */
 export async function collectBackup(sources: BackupSources, now: number): Promise<CollectedBackup> {
+  const [decoded, { entry, vault }] = await Promise.all([
+    Promise.all(
+      BACKUP_DOCUMENTS.map(async (name) => {
+        const bytes = await readIfPresent(sources.path(name))
+        return bytes === null ? null : { name, document: await sources.codec.decode(bytes) }
+      })
+    ),
+    collectVault(sources)
+  ])
+  // Assembled in `BACKUP_DOCUMENTS` order, whatever order the reads finished in.
   const documents: Record<string, unknown> = {}
   const versions: Record<string, number> = {}
-  for (const name of BACKUP_DOCUMENTS) {
-    const bytes = await readIfPresent(sources.path(name))
-    if (bytes === null) continue
-    const document = await sources.codec.decode(bytes)
-    versions[name] = versionOf(name, document)
-    documents[name] = document
+  for (const read of decoded) {
+    if (read === null) continue
+    versions[read.name] = versionOf(read.name, read.document)
+    documents[read.name] = read.document
   }
-  const { entry, vault } = await collectVault(sources)
   if (entry.included) versions['passwordsFile'] = DOCUMENT_VERSIONS.passwordsFile
   return {
     archive: { format: 1, createdAt: now, documents, vault: entry },

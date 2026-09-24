@@ -1,4 +1,4 @@
-import { rankCandidates, type RankCandidate } from '../search/rank.js'
+import { bareAddressOf, rankCandidates, type RankCandidate } from '../search/rank.js'
 import { SEARCH_ENGINES, classifyOmniboxInput, type SearchEngineId } from '../url/omnibox.js'
 import {
   OMNIBOX_MAX_TEXT,
@@ -73,7 +73,7 @@ export function omniboxSourcesWanted(preferences: OmniboxPreferences): {
  */
 export function omniboxNeedle(text: string): string {
   const lowered = text.trim().toLowerCase()
-  const bare = lowered.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/^www\./, '')
+  const bare = bareAddressOf(lowered)
   return bare === '' ? lowered : bare
 }
 

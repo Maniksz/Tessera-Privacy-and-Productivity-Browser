@@ -183,8 +183,7 @@ export function arrangementIsProtected(
   arrangement: Arrangement,
   hiddenTabIds: readonly string[]
 ): boolean {
-  const hidden = new Set(hiddenTabIds)
-  return seatedTabs(arrangement.seats).some((tabId) => hidden.has(tabId))
+  return isProtectedBy(arrangement, new Set(hiddenTabIds))
 }
 
 /**
@@ -207,8 +206,9 @@ export function arrangementOfTab(
   tabId: string,
   window: WindowTabs
 ): Arrangement | undefined {
+  const sets = tabSetsOf(window)
   return arrangements.find(
-    (arrangement) => arrangement.seats.includes(tabId) && isUnobstructed(arrangement, window)
+    (arrangement) => arrangement.seats.includes(tabId) && isUnobstructed(arrangement, sets)
   )
 }
 
@@ -269,20 +269,21 @@ export function recordArrangement(
   draft: ArrangementDraft,
   window: WindowTabs
 ): Arrangement[] {
-  const seats = seatsWorthKeeping(draft.layoutId, draft.seats, new Set(window.liveTabIds))
+  const sets = tabSetsOf(window)
+  const seats = seatsWorthKeeping(draft.layoutId, draft.seats, sets.live)
   if (seats === null) return cloneArrangements(arrangements)
 
   const seated = new Set(seatedTabs(seats))
   let kept = arrangements.filter(
     (arrangement) =>
       !(
-        isUnobstructed(arrangement, window) &&
+        isUnobstructed(arrangement, sets) &&
         seatedTabs(arrangement.seats).some((tabId) => seated.has(tabId))
       )
   )
 
   while (kept.length >= MAX_ARRANGEMENTS) {
-    const victim = oldestEvictable(kept, window)
+    const victim = oldestEvictable(kept, sets)
     if (victim === undefined) return cloneArrangements(arrangements)
     kept = kept.filter((arrangement) => arrangement !== victim)
   }
@@ -401,10 +402,24 @@ export function cloneArrangements(arrangements: readonly Arrangement[]): Arrange
  * and answering them from one place is what stops the two from drifting into a state where
  * a recording can be destroyed but not used.
  */
-function isUnobstructed(arrangement: Arrangement, window: WindowTabs): boolean {
-  const live = new Set(window.liveTabIds)
-  if (!seatedTabs(arrangement.seats).every((tabId) => live.has(tabId))) return false
-  return !arrangementIsProtected(arrangement, window.hiddenTabIds)
+function isUnobstructed(arrangement: Arrangement, sets: WindowTabSets): boolean {
+  if (!seatedTabs(arrangement.seats).every((tabId) => sets.live.has(tabId))) return false
+  return !isProtectedBy(arrangement, sets.hidden)
+}
+
+/** `arrangementIsProtected` against a set built once by the caller. */
+function isProtectedBy(arrangement: Arrangement, hidden: ReadonlySet<string>): boolean {
+  return seatedTabs(arrangement.seats).some((tabId) => hidden.has(tabId))
+}
+
+/** A window's tab ids as sets, built once per public call rather than once per recording. */
+interface WindowTabSets {
+  live: ReadonlySet<string>
+  hidden: ReadonlySet<string>
+}
+
+function tabSetsOf(window: WindowTabs): WindowTabSets {
+  return { live: new Set(window.liveTabIds), hidden: new Set(window.hiddenTabIds) }
 }
 
 /**
@@ -420,10 +435,10 @@ function isUnobstructed(arrangement: Arrangement, window: WindowTabs): boolean {
  */
 function oldestEvictable(
   arrangements: readonly Arrangement[],
-  window: WindowTabs
+  sets: WindowTabSets
 ): Arrangement | undefined {
   return arrangements
-    .filter((arrangement) => isUnobstructed(arrangement, window))
+    .filter((arrangement) => isUnobstructed(arrangement, sets))
     .reduce<Arrangement | undefined>(
       (oldest, arrangement) =>
         oldest === undefined || arrangement.recordedAt < oldest.recordedAt ? arrangement : oldest,

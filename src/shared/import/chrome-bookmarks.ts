@@ -1,6 +1,7 @@
 import { MAX_IMPORT_LENGTH, type ImportReport, type ImportedBookmark } from '../bookmarks/import.js'
 import { bookmarkUrlOf } from '../bookmarks/model.js'
 import { chromeTimeToMs } from './epochs.js'
+import { textOf } from './text.js'
 
 /**
  * The `Bookmarks` file of a Chrome, Edge or Chromium profile, read into the tree the HTML importer
@@ -29,10 +30,6 @@ function objectOr(value: unknown): Json | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Json)
     : null
-}
-
-function textOf(value: unknown): string {
-  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
 }
 
 function childrenOf(node: Json): readonly unknown[] {

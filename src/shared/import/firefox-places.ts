@@ -1,6 +1,7 @@
 import type { ImportReport, ImportedBookmark } from '../bookmarks/import.js'
 import { bookmarkUrlOf } from '../bookmarks/model.js'
 import { firefoxTimeToMs } from './epochs.js'
+import { textOf } from './text.js'
 
 /**
  * Firefox's bookmarks, read from `moz_bookmarks` joined to `moz_places` in the same read-only copy of
@@ -42,10 +43,6 @@ const TAGS_GUID = 'tags________'
 function integerOf(value: unknown): number | null {
   const number = typeof value === 'bigint' ? Number(value) : value
   return typeof number === 'number' && Number.isSafeInteger(number) ? number : null
-}
-
-function textOf(value: unknown): string {
-  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
 }
 
 /** A row as SQLite returned it, or `null` when one of its numbers is not a whole number. */

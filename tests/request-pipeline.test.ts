@@ -969,6 +969,35 @@ describe('the kill-switch stage', () => {
     })
   })
 
+  it('derives the origin once per request and hands it to the gate with the address', async () => {
+    // `ProxyGate` would otherwise parse the address again on every call: before the wait and after it.
+    const calls: [string, string | undefined][] = []
+    const fake = gate({})
+    const listener = listen({
+      verdict: (url, key) => {
+        calls.push([url, key])
+        return fake.verdict(url)
+      },
+      settle: (url, key) => {
+        calls.push([url, key])
+        return fake.settle(url)
+      }
+    })
+    const answer = vi.fn()
+    const url = 'https://example.com/a?b'
+    listener({ url, resourceType: 'script', method: 'GET' }, answer)
+    fake.answer(url, 'pass')
+    await vi.waitFor(() => {
+      expect(answer).toHaveBeenCalledWith({})
+    })
+    // Asked, waited on, asked again — each time with the key the listener derived, never without one.
+    expect(calls).toEqual([
+      [url, 'https://example.com'],
+      [url, 'https://example.com'],
+      [url, 'https://example.com']
+    ])
+  })
+
   it('leaves tessera: and file: alone', () => {
     const fake = gate({})
     const listener = listen(fake)

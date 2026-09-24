@@ -129,13 +129,19 @@ async function withCopy<T>(
   const dir = await mkdtemp(join(options.tempRoot ?? tmpdir(), 'tessera-import-'))
   try {
     const target = join(dir, 'copy.sqlite')
-    await copy(file, target)
-    for (const suffix of ['-wal', '-shm']) {
-      await copy(file + suffix, target + suffix).catch((error: unknown) => {
-        // A database without a write-ahead log has neither file, and that is the usual case.
-        if (codeOf(error) !== 'ENOENT') throw error
-      })
-    }
+    // All three at once, but settled before anything is judged: the directory goes in `finally`, and
+    // a copy still writing into it then would race the removal. The database's own failure is the one
+    // reported when more than one fails, as it was when they ran one after the other.
+    const copies = await Promise.allSettled([
+      copy(file, target),
+      ...['-wal', '-shm'].map((suffix) =>
+        copy(file + suffix, target + suffix).catch((error: unknown) => {
+          // A database without a write-ahead log has neither file, and that is the usual case.
+          if (codeOf(error) !== 'ENOENT') throw error
+        })
+      )
+    ])
+    for (const result of copies) if (result.status === 'rejected') throw result.reason
     // Loaded here, not at startup: nothing else needs it, and a build without it refuses one import.
     const { DatabaseSync } = await import('node:sqlite')
     const db = new DatabaseSync(target, { readOnly: true, readBigInts: true })

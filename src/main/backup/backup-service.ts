@@ -74,10 +74,11 @@ export class BackupService {
   }
 
   async status(): Promise<BackupStatus> {
-    return {
-      vault: await vaultInBackup(this.#deps.sources),
-      pendingRestore: await pendingRestore(this.#deps.staging.path)
-    }
+    const [vault, pending] = await Promise.all([
+      vaultInBackup(this.#deps.sources),
+      pendingRestore(this.#deps.staging.path)
+    ])
+    return { vault, pendingRestore: pending }
   }
 
   async create(request: { passphrase: string }): Promise<CreateBackupOutcome> {

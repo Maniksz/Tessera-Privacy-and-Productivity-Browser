@@ -35,6 +35,7 @@ import {
   tabGroupColorVariable,
   type TabGroupColor
 } from '@shared/tabgroups/palette.js'
+import { instrumented } from './instrumented-source.js'
 
 /**
  * The tab-group rules.
@@ -74,6 +75,14 @@ function ids(groups: readonly TabGroup[]): string[] {
   return groups.map((entry) => entry.id)
 }
 
+/** Whether the mutation run reads an instrumented copy of the source checked below; see `instrumented`. */
+const INSTRUMENTED = instrumented(
+  'src/shared/tabgroups/model.ts',
+  'src/shared/tabgroups/palette.ts',
+  'src/shared/tabgroups/strip.ts',
+  'src/shared/tabgroups/schema.ts'
+)
+
 describe('what the tab strip is allowed to import', () => {
   /*
     This began as a stand-in and is now narrower, on purpose.
@@ -108,7 +117,7 @@ describe('what the tab strip is allowed to import', () => {
    */
   const ALLOWED_OUTSIDE = new Set(['../split/layout.js'])
 
-  it('keeps the renderer-facing files inside their own directory', () => {
+  it.skipIf(INSTRUMENTED)('keeps the renderer-facing files inside their own directory', () => {
     // A dependency here is a dependency in the UI bundle. Staying within the directory is stricter
     // than needed and cheap to keep, and it makes an accidental `@main/` import impossible.
     for (const name of RENDERER_FACING) {
@@ -121,7 +130,7 @@ describe('what the tab strip is allowed to import', () => {
     }
   })
 
-  it('names zod in the wire schema and nowhere else', () => {
+  it.skipIf(INSTRUMENTED)('names zod in the wire schema and nowhere else', () => {
     // Asserted in both directions. That `schema.ts` *does* use zod is the point of it existing
     // separately, and a test that only checked the absence would pass if the schema went away.
     for (const name of RENDERER_FACING) {

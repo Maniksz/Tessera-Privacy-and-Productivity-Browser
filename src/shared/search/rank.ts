@@ -182,7 +182,7 @@ function matchOf(candidate: RankCandidate, query: string, bareQuery: string): Ma
  * Only a scheme followed by `//` is removed, so `localhost:3000` keeps its host rather than losing it
  * as if `localhost:` were a scheme; `about:blank` stays whole for the same reason.
  */
-function bareAddressOf(lowercased: string): string {
+export function bareAddressOf(lowercased: string): string {
   return lowercased.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/^www\./, '')
 }
 

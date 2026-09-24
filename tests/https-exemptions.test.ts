@@ -323,6 +323,8 @@ describe('an exemption', () => {
     expect(hostKeyOf('http://bücher.example/')).toBe('xn--bcher-kva.example')
     expect(hostKeyOf('https://host.example/')).toBeNull()
     expect(hostKeyOf('not a url')).toBeNull()
+    // What the pipeline hands over, having parsed the address once already.
+    expect(hostKeyOf(new URL('http://HOST.example.:8080/a'))).toBe('host.example:8080')
 
     const exemptions = exempted('http://HOST.example./')
     expect(exemptMainFrame(exemptions, 'http://host.example/x')).toBe(true)

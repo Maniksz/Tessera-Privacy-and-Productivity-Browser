@@ -2,6 +2,7 @@ import type { LayoutId, Rect } from '@shared/split/layout.js'
 import { TILE_BOUND_KINDS, type OverlayPresentation } from '@shared/overlay/surface.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { effectiveZoomPercent } from '@shared/zoom/model.js'
+import { isTabHidden } from '@shared/tabgroups/model.js'
 import type { ArrangementBook } from '../data/ArrangementStore.js'
 import type { TabGroupBook } from '../data/TabGroupStore.js'
 import type { SplitController } from './SplitController.js'
@@ -219,7 +220,10 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
   const arrangements = new ArrangementController({
     book: internals.arrangements,
     liveTabIds: () => internals.tabIds(),
-    hiddenTabIds: () => internals.tabIds().filter((tabId) => groups.isHidden(tabId)),
+    hiddenTabIds: () => {
+      const snapshot = groups.groups()
+      return internals.tabIds().filter((tabId) => isTabHidden(snapshot, tabId))
+    },
     currentLayout: () => internals.split.layout,
     tileTabIds: () => internals.split.toState().tileTabIds,
     applyArrangement: (layoutId, seats, activatedTabId) => {

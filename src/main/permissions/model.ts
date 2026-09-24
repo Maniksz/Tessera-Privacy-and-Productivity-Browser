@@ -102,9 +102,11 @@ export function forgetOrigin(
   origin: string,
   topics?: readonly PermissionTopic[]
 ): SitePermission[] {
-  return sites.filter(
+  const kept = sites.filter(
     (site) => site.origin !== origin || (topics !== undefined && !topics.includes(site.topic))
   )
+  // The same array when nothing was removed, so a caller can tell a forget that changed nothing.
+  return kept.length === sites.length ? (sites as SitePermission[]) : kept
 }
 
 /**

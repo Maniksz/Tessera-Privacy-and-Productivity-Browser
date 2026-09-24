@@ -18,6 +18,7 @@ import { useI18n } from '../i18n.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { useTabDrag } from '../useTabDrag.js'
 import { Icon } from '../../shared/Icon.js'
+import { TabFavicon } from './TabFavicon.js'
 
 /**
  * Tab strip.
@@ -366,35 +367,7 @@ export function TabBar({
               {tab.loading ? (
                 <span className="tab__spinner" aria-hidden="true" />
               ) : (
-                <span className="tab__favicon" aria-hidden="true">
-                  {tab.faviconUrl !== null && (
-                    <img
-                      /*
-                        Keyed on the address so a refreshed icon gets a fresh element. Without that,
-                        an element hidden by the handler below would stay hidden when a working icon
-                        finally arrived — React reuses the node and never resets what was set on it.
-                      */
-                      key={tab.faviconUrl}
-                      className="tab__faviconImage"
-                      src={tab.faviconUrl}
-                      alt=""
-                      /*
-                        Not draggable, because the address carries the token that makes the icon
-                        cache answer at all. Dropped into a web page it would hand that page the key.
-                      */
-                      draggable={false}
-                      /*
-                        A cache miss answers 204, which fails to decode — by design, and the common
-                        case rather than an error, since most sites are seen before their icon has
-                        been fetched. Hiding the image lets the placeholder square underneath show
-                        instead of Chromium's broken-image glyph.
-                      */
-                      onError={(event) => {
-                        event.currentTarget.hidden = true
-                      }}
-                    />
-                  )}
-                </span>
+                <TabFavicon url={tab.faviconUrl} />
               )}
 
               <span className="tab__title">{tab.title || t('tab.untitled')}</span>

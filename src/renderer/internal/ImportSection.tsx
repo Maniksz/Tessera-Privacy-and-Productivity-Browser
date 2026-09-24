@@ -9,6 +9,7 @@ import {
   type ImportSource
 } from '@shared/import/model.js'
 import type { Translate } from '@renderer-shared/SettingsView.js'
+import { useAsyncStatus } from './useAsyncStatus.js'
 
 /**
  * „Importieren" — bookmarks and history from Chrome, Edge, Chromium and Firefox (U24, R39).
@@ -48,8 +49,7 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
   const [sources, setSources] = useState<readonly ImportSource[] | null>(null)
   const [chosen, setChosen] = useState('')
   const [preview, setPreview] = useState<HistoryImportCounts | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const { busy, message, setMessage, run } = useAsyncStatus(t)
   const section = useRef<HTMLElement>(null)
 
   useEffect(() => {
@@ -71,7 +71,7 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
     return () => {
       cancelled = true
     }
-  }, [host, t])
+  }, [host, t, setMessage])
 
   const source = sources?.find((candidate) => candidate.id === chosen) ?? null
 
@@ -79,14 +79,6 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
     t(REFUSALS[reason], {
       browser: source === null ? '' : IMPORT_BROWSER_NAMES[source.browser]
     })
-
-  const run = (work: () => Promise<string | null>): void => {
-    setBusy(true)
-    setMessage(null)
-    void work()
-      .then(setMessage, () => setMessage(t('backup.failed')))
-      .finally(() => setBusy(false))
-  }
 
   const importBookmarks = (id: string): void => {
     run(async () => {

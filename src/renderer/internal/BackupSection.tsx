@@ -14,6 +14,7 @@ import {
   type VaultInBackup
 } from '@shared/backup/model.js'
 import type { Translate } from '@renderer-shared/SettingsView.js'
+import { useAsyncStatus } from './useAsyncStatus.js'
 
 /**
  * „Sichern und Wiederherstellen" — the settings page's section for the encrypted backup (U23).
@@ -70,24 +71,13 @@ export function BackupSection({ host }: { host: BackupHost }): React.ReactNode {
   const [preview, setPreview] = useState<RestorePreview | null>(null)
   const [items, setItems] = useState<ReadonlySet<RestoreItem>>(new Set())
   const [confirmed, setConfirmed] = useState<ReadonlySet<string>>(new Set())
-  const [message, setMessage] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
 
   const refresh = (): void => {
     void host.status().then(setStatus)
   }
   useEffect(refresh, [host])
 
-  const run = (work: () => Promise<string | null>): void => {
-    setBusy(true)
-    setMessage(null)
-    void work()
-      .then(setMessage, () => setMessage(t('backup.failed')))
-      .finally(() => {
-        setBusy(false)
-        refresh()
-      })
-  }
+  const { busy, message, run } = useAsyncStatus(t, refresh)
 
   const create = (): void => {
     run(async () => {

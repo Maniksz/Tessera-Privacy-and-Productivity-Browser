@@ -98,7 +98,7 @@ export class Panic {
     await step('stopping the stores', () => Promise.all(stores.map((store) => store.abandon())))
     await step('emptying the caches', async () => {
       for (const cache of caches) cache.seal()
-      for (const cache of caches) await cache.clear()
+      await Promise.all(caches.map((cache) => cache.clear()))
       await Promise.all(caches.map((cache) => cache.discardCopies()))
     })
     await step('closing the windows', closeWindows)

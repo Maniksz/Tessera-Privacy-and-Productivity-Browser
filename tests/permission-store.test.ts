@@ -161,6 +161,13 @@ describe('forgetOrigin', () => {
       entry({ origin: 'https://other.example', topic: 'geolocation' })
     ])
   })
+
+  it('hands back the very same list when it removed nothing', () => {
+    // So a forget of a site with no answers can be told apart from one that changed the file.
+    const sites = [entry(), entry({ origin: 'https://other.example' })]
+    expect(forgetOrigin(sites, 'https://unknown.example')).toBe(sites)
+    expect(forgetOrigin(sites, 'https://example.com', ['geolocation'])).toBe(sites)
+  })
 })
 
 describe('repairSitePermissions', () => {
@@ -334,6 +341,20 @@ describe('PermissionStore', () => {
     stop()
     store.rulesFor('normal').remember('https://example.com', 'microphone', 'allow')
     expect(seen).toEqual([1])
+  })
+
+  it('writes nothing and tells nobody when forgetting a site it has no answers for', async () => {
+    const store = await open()
+    store.rulesFor('normal').remember('https://example.com', 'camera', 'allow')
+    const seen: number[] = []
+    const stop = store.onChange((sites) => seen.push(sites.length))
+    expect(store.forget('https://unknown.example')).toBe(0)
+    expect(store.forget('https://example.com', ['geolocation'])).toBe(0)
+    expect(seen).toEqual([])
+    expect(store.forget('https://example.com')).toBe(1)
+    expect(seen).toEqual([0])
+    stop()
+    await store.flush()
   })
 
   it('honours the entry cap', async () => {

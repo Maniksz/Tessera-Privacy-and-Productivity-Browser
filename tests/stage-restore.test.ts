@@ -713,6 +713,16 @@ describe('applying at the next start', () => {
     expect(await listing(b)).toEqual(['bookmarksFile', 'settingsFile'])
   })
 
+  it('keeps a staging without its manifest when a staged copy cannot be removed', async () => {
+    const b = await stagedProfile()
+    await rm(b.path('restoreManifestFile'))
+    // Not a file at all: nothing the discard may take away without looking, so the start keeps it.
+    await rm(stagedCopyOf(b.path('historyFile')), { force: true })
+    await mkdir(stagedCopyOf(b.path('historyFile')))
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await applyStagedRestore(b.staging)).toBe('kept')
+  })
+
   it('applies a staging a crashed run left behind, at the next start', async () => {
     const b = await stagedProfile()
     // Nothing between the staging and this start: the run that staged it simply never quit cleanly.

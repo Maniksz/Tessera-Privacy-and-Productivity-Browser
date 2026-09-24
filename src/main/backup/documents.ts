@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import type { BackupDocument, BackupRefusal } from '@shared/backup/model.js'
 import type { BackupHeader } from '@shared/backup/schema.js'
 import { BOOKMARK_MIGRATIONS } from '../data/BookmarkStore.js'
@@ -60,4 +61,14 @@ export function admitBackup(header: BackupHeader, appVersion: string): BackupRef
     ([name, version]) => !readableVersion(name, version)
   )
   return newer ? 'newer' : null
+}
+
+/** The bytes at `path`, or `null` when there is no such file. Any other failure is let out. */
+export async function readIfPresent(path: string): Promise<Uint8Array | null> {
+  try {
+    return await readFile(path)
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ENOENT') return null
+    throw error
+  }
 }

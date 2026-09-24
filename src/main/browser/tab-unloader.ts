@@ -179,6 +179,7 @@ export class TabUnloader {
   sweep(): void {
     if (this.#options.quitting()) return
     const settings = unloadSettingsOf(this.#options.settings.snapshot())
+    if (!settings.enabled) return
     const now = this.#now()
     const waiting = this.#options.waiting
     for (const window of this.#options.windows()) {
