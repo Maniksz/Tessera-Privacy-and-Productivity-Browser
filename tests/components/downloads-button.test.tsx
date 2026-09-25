@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   DOWNLOADS_PANEL_KIND,
@@ -244,10 +244,10 @@ describe('where the summary comes from', () => {
     await act(async () => {})
     expect(screen.queryByRole('button', { name: /^Downloads/ })).toBeNull()
 
-    act(() => listeners.get('downloads:summaryChanged')?.(summary({ marker: 'failed' })))
+    void act(() => listeners.get('downloads:summaryChanged')?.(summary({ marker: 'failed' })))
     expect(theButton().getAttribute('aria-label')).toBe('Downloads: Failed')
 
-    act(() => listeners.get('downloads:summaryChanged')?.(HIDDEN))
+    void act(() => listeners.get('downloads:summaryChanged')?.(HIDDEN))
     expect(screen.queryByRole('button', { name: /^Downloads/ })).toBeNull()
   })
 

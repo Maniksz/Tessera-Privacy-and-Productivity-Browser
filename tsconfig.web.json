@@ -15,13 +15,20 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    "jsxImportSource": "preact",
     "types": [],
     "tsBuildInfoFile": "node_modules/.tmp/tsconfig.web.tsbuildinfo",
     "baseUrl": ".",
     "paths": {
       "@shared/*": ["src/shared/*"],
       "@renderer/*": ["src/renderer/src/*"],
-      "@renderer-shared/*": ["src/renderer/shared/*"]
+      "@renderer-shared/*": ["src/renderer/shared/*"],
+      // The renderer is written against React's API and runs on Preact: `react` is `preact/compat` here,
+      // in `@preact/preset-vite` for the build and in `vitest.config.ts` for the tests. See the comment
+      // on the alias there for why the source keeps saying `react`.
+      "react": ["node_modules/preact/compat"],
+      "react-dom": ["node_modules/preact/compat"],
+      "react-dom/client": ["node_modules/preact/compat/client"]
     }
   }
 }

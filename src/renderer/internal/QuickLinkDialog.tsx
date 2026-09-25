@@ -1,4 +1,5 @@
-import { useEffect, useRef, type SyntheticEvent } from 'react'
+import { useEffect, useRef } from 'react'
+import type { TargetedEvent } from 'preact'
 import type { QuickLinkKind } from '@shared/quicklinks/model.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 
@@ -80,7 +81,7 @@ export function QuickLinkDialog({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onCancel])
 
-  const submit = (event: SyntheticEvent): void => {
+  const submit = (event: TargetedEvent): void => {
     event.preventDefault()
     if (!canSubmit) return
     void onSubmit(state)
@@ -121,12 +122,12 @@ export function QuickLinkDialog({
                 className="dialog__input"
                 value={state.url}
                 inputMode="url"
-                spellCheck={false}
+                spellcheck={false}
                 autoComplete="off"
                 placeholder="example.com"
                 aria-invalid={state.url !== '' && !urlUsable}
                 aria-describedby="dialog-url-hint"
-                onChange={(event) => onChange({ ...state, url: event.target.value })}
+                onChange={(event) => onChange({ ...state, url: event.currentTarget.value })}
               />
               <span className="dialog__hint" id="dialog-url-hint">
                 {state.url === ''
@@ -141,13 +142,13 @@ export function QuickLinkDialog({
           <label className="dialog__field">
             <span className="dialog__label">{t('start.dialog.name')}</span>
             <input
-              ref={isFolder ? firstFieldRef : undefined}
+              ref={isFolder ? firstFieldRef : null}
               className="dialog__input"
               value={state.title}
               maxLength={80}
               autoComplete="off"
               placeholder={isFolder ? '' : previewTitle(state.url)}
-              onChange={(event) => onChange({ ...state, title: event.target.value })}
+              onChange={(event) => onChange({ ...state, title: event.currentTarget.value })}
             />
             {!isFolder && <span className="dialog__hint">{t('start.dialog.nameHint')}</span>}
           </label>

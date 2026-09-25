@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import type { TargetedKeyboardEvent } from 'preact'
 import type { PermissionRequestPresentation } from '@shared/overlay/surface.js'
 import type {
   PermissionAnswer,
@@ -135,7 +136,7 @@ export function PermissionSurface({
     ...(dialogRef.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])
   ]
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
       /*

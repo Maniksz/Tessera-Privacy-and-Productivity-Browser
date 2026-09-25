@@ -34,7 +34,20 @@ const alias = {
   '@main': resolve(projectRoot, 'src/main'),
   '@renderer': resolve(projectRoot, 'src/renderer/src'),
   '@renderer-internal': resolve(projectRoot, 'src/renderer/internal'),
-  '@renderer-shared': resolve(projectRoot, 'src/renderer/shared')
+  '@renderer-shared': resolve(projectRoot, 'src/renderer/shared'),
+  /*
+    The renderer runs on Preact, and says `react`.
+
+    `preact/compat` is React's API over Preact's much smaller core — about 190 kB of React fewer in every
+    renderer, which is every internal tab (`@preact/preset-vite` does the same aliasing for the build).
+    The source keeps importing `react` rather than `preact/compat` for one reason: the React Compiler's
+    lint rules know `useRef` and `useState` only by that module name, and imported from anywhere else
+    they are anonymous custom hooks — `ref.current = x` becomes "mutating a hook's result" and the
+    checks that rely on knowing a state setter quietly stop checking.
+  */
+  'react-dom/client': 'preact/compat/client',
+  'react-dom': 'preact/compat',
+  react: 'preact/compat'
 }
 
 // A hanging test is a failing test; without this a bad `await` stalls CI.
@@ -68,11 +81,11 @@ export default defineConfig({
         /*
           The automatic JSX runtime, so a component test needs no `import React`.
 
-          The renderer build gets this from `@vitejs/plugin-react` in `electron.vite.config.ts`;
+          The renderer build gets this from `@preact/preset-vite` in `electron.vite.config.ts`;
           this file is a separate configuration and had no JSX handling at all, because until now
           no test rendered anything.
         */
-        esbuild: { jsx: 'automatic' },
+        esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
         resolve: { alias },
         test: {
           name: 'components',

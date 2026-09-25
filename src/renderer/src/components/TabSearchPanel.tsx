@@ -1,10 +1,12 @@
-import { useEffect, useId, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useState } from 'react'
+import type { TargetedKeyboardEvent } from 'preact'
 import type { TabState } from '@shared/model.js'
 import { tabSearchRows } from '@shared/search/tab-search.js'
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import { Icon } from '../../shared/Icon.js'
 import { TabFavicon } from './TabFavicon.js'
+import { focusOnMount } from '@renderer-shared/focus-on-mount.js'
 
 /**
  * The tab search: this window's tabs, found by title or address (U22, R31).
@@ -60,7 +62,7 @@ export function TabSearchPanel({ tabs, onClose }: TabSearchPanelProps): React.Re
     onClose()
   }
 
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
     switch (event.key) {
       case 'ArrowDown':
       case 'ArrowUp': {
@@ -106,17 +108,17 @@ export function TabSearchPanel({ tabs, onClose }: TabSearchPanelProps): React.Re
               Focused on appearance: the panel exists because somebody pressed the key to type into it,
               so a second click to reach the field would be a step they already took.
             */
-            autoFocus
+            ref={focusOnMount}
             aria-label={t('tabsearch.title')}
             aria-expanded={rows.length > 0}
             aria-controls={listId}
             aria-autocomplete="list"
             {...(rows.length > 0 ? { 'aria-activedescendant': optionId(current) } : {})}
             placeholder={t('tabsearch.placeholder')}
-            spellCheck={false}
+            spellcheck={false}
             value={text}
             onChange={(event) => {
-              setText(event.target.value)
+              setText(event.currentTarget.value)
               setSelected(0)
             }}
             onKeyDown={onKeyDown}

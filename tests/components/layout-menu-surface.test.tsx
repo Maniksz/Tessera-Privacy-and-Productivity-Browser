@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LayoutMenuSurface } from '@renderer/surfaces/LayoutMenuSurface.js'
 import type { LayoutMenuPresentation } from '@shared/overlay/surface.js'

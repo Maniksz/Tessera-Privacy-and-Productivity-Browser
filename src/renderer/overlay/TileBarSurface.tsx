@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { TargetedKeyboardEvent } from 'preact'
 import type { TileBarPresentation } from '@shared/overlay/surface.js'
 import { TILE_BAR_POINTER_AWAY } from '@shared/split/tile-bar.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
@@ -95,7 +96,7 @@ export function TileBarSurface({
     void invoke('tiles:pointerAt', { tileIndex, y: TILE_BAR_POINTER_AWAY })
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
       /*
@@ -410,9 +411,9 @@ export function TileBarSurface({
           type="text"
           className="tilebar__input"
           aria-label={t('tileBar.address', { index: tileIndex + 1 })}
-          spellCheck={false}
+          spellcheck={false}
           value={address}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => setDraft(event.currentTarget.value)}
         />
       </form>
 

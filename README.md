@@ -190,8 +190,9 @@ Main- und Renderer-Bundle dürfen wachsen, wenn jede Einheit ihren Zuwachs in kB
 notiert; das steht in [STATUS.md](docs/STATUS.md#roadmap-herbst-2026). Gemessen am Build vom
 24.09.2026 (`out/`), nicht geschätzt.
 
-React liegt jetzt in einem geteilten Chunk, wird also einmal kompiliert statt zweimal
-pro Fenster. Build-Ziele sind auf Chromium 150 und Node 24 gepinnt — was Electron 43
+Das Framework liegt in einem geteilten Chunk, wird also einmal kompiliert statt zweimal
+pro Fenster. Seit 25.09.2026 ist es Preact statt React: 20,3 kB statt 192,3 kB, und das
+Renderer-JS insgesamt sank von 438,2 auf 260,8 kB. Gemessen wurden beide Builds auf dieselbe Weise. Build-Ziele sind auf Chromium 150 und Node 24 gepinnt — was Electron 43
 mitbringt, verifiziert am ausgelieferten Framework statt angenommen. Ein
 Architekturtest hält zod aus jedem Modul heraus, das der Renderer zur Laufzeit
 importiert, und `pnpm run metrics` schlägt bei Überschreiten der Größenbudgets fehl.

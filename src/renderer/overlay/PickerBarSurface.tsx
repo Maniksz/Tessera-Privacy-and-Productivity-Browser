@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { TargetedKeyboardEvent } from 'preact'
 import type { PickerBarPresentation } from '@shared/overlay/surface.js'
 import type { PickerBarAction } from '@shared/overlay/picker-bar.js'
 import { interpolate } from '@shared/i18n/locale.js'
@@ -117,7 +118,7 @@ export function PickerBarSurface({
     return t('matches', { count: matches })
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
       // Owned here, and stopped here; see the docblock.

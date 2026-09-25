@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 import { build, type BuildEnvironmentOptions, type Plugin } from 'vite'
-import react from '@vitejs/plugin-react'
+import preact from '@preact/preset-vite'
 
 // `process.cwd()` rather than `import.meta.dirname`: the config is bundled to
 // either CJS or ESM depending on how Vite loads it, and only one of the two has
@@ -176,7 +176,7 @@ export default defineConfig({
 
   renderer: {
     root: resolve(projectRoot, 'src/renderer'),
-    plugins: [react(), directDynamicImports()],
+    plugins: [preact(), directDynamicImports()],
     define: {
       __TESSERA_VERSION__: JSON.stringify(packageJson.version),
       __TESSERA_LICENSE__: JSON.stringify(packageJson.license)
@@ -231,19 +231,17 @@ export default defineConfig({
         },
         output: {
           /**
-           * React goes into its own chunk shared by the chrome UI and the start
+           * Preact goes into its own chunk shared by the chrome UI and the start
            * page.
            *
-           * Without this, both entries inline their own copy: the same ~140 kB is
+           * Without this, both entries inline their own copy and the same code is
            * parsed and compiled twice per window, once for the toolbar and again
            * for the start page. A shared chunk is compiled once and reused from
            * V8's code cache — the kind of saving that is invisible on a fast
            * desktop and clearly felt on an older laptop.
            */
           manualChunks: (id: string) => {
-            if (id.includes('node_modules/react') || id.includes('node_modules/scheduler')) {
-              return 'vendor-react'
-            }
+            if (id.includes('node_modules/preact/')) return 'vendor-preact'
             return undefined
           }
         }

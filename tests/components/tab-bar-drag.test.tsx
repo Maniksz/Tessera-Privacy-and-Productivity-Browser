@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TabBar } from '@renderer/components/TabBar.js'
 import type { ArrangementSummary } from '@shared/arrangements/screen.js'
@@ -359,7 +359,7 @@ describe('the insertion marker', () => {
 
     dragTo(tabElement('X'), 160)
     expect(tabElement('Y').className).toContain('tab--drop')
-    act(() => presented?.({ presentation: null }))
+    void act(() => presented?.({ presentation: null }))
 
     expect(document.querySelectorAll('.tab--dropbefore, .tab--dropafter')).toHaveLength(0)
     release(160)

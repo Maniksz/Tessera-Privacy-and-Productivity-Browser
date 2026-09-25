@@ -350,12 +350,12 @@ export function UserRulesEditor({
             refusedAt.length > 0 ? 'userrules-hint userrules-refused' : 'userrules-hint'
           }
           aria-invalid={refusedAt.length > 0}
-          spellCheck={false}
+          spellcheck={false}
           wrap="off"
           rows={Math.min(24, Math.max(8, lines.length + 1))}
           onScroll={(event) => follow(event.currentTarget)}
           onChange={(event) => {
-            setDraft(event.target.value)
+            setDraft(event.currentTarget.value)
             // The verdict belongs to the text that produced it. Left up while the text changes, it would
             // be a refusal of something the user has already corrected — and dropped rather than merely
             // hidden, so typing the old text back does not bring back an answer about a different save.

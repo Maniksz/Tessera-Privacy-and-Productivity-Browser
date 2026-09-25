@@ -1,4 +1,5 @@
-import { useState, type KeyboardEvent, type MouseEvent } from 'react'
+import { useState } from 'react'
+import type { TargetedKeyboardEvent, TargetedMouseEvent } from 'preact'
 import { cardImageSequence, type QuickLinkCard } from '@shared/quicklinks/cards.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
 import { Icon } from '../shared/Icon.js'
@@ -52,7 +53,7 @@ export function QuickLinkTile({
     ? t('start.folderLabel', { name: link.title, count: childCount })
     : t('start.tileLabel', { name: link.title, url: link.url })
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     const modifier = event.ctrlKey || event.metaKey
 
     if (event.key === 'Enter' || event.key === ' ') {
@@ -76,7 +77,7 @@ export function QuickLinkTile({
     }
   }
 
-  const onAuxClick = (event: MouseEvent): void => {
+  const onAuxClick = (event: TargetedMouseEvent<HTMLElement>): void => {
     // Middle click opens in a new tab, as it does everywhere else in the browser.
     if (event.button === 1 && !isFolder) {
       event.preventDefault()

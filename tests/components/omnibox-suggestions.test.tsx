@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Omnibox } from '@renderer/components/Omnibox.js'
 import { OverlaySurface } from '@renderer/surfaces/OverlaySurface.js'
@@ -48,7 +48,7 @@ function installBridge(): { calls: Call[]; present: (next: OverlayState) => void
   return {
     calls,
     present: (next) => {
-      act(() => {
+      void act(() => {
         for (const listener of [...listeners]) listener({ presentation: next })
       })
     }

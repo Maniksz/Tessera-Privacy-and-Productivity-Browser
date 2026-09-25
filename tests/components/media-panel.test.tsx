@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
+import { choose } from './choose.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MediaPanel, type MediaPort } from '@renderer/components/MediaPanel.js'
 import { mediaMessage, refusalSentence } from '@shared/media/messages.js'
@@ -171,7 +172,7 @@ describe('the media panel', () => {
     expect(world.downloads[0]).toEqual({ findingId: 'media-1', variantId: null })
 
     const select = await screen.findByRole('combobox')
-    fireEvent.change(select, { target: { value: 'v0' } })
+    choose(select, 'v0')
     fireEvent.click(screen.getByText(mediaMessage('en', 'media.panel.download')))
     await waitFor(() => expect(world.downloads).toHaveLength(2))
     expect(world.downloads[1]).toEqual({ findingId: 'media-1', variantId: 'v0' })

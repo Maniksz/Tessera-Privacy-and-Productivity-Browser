@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { OverlaySurface } from '../../src/renderer/src/surfaces/OverlaySurface.js'
 import type { AutofillSuggestPresentation, OverlayState } from '@shared/overlay/surface.js'
@@ -58,7 +58,7 @@ function installBridge(): Harness {
   return {
     calls,
     present: (state) => {
-      act(() => {
+      void act(() => {
         listeners.get('overlay:presented')?.({ presentation: state })
       })
     }

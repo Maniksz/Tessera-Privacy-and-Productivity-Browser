@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FindBarSurface } from '../../src/renderer/overlay/FindBarSurface.js'
 import type { FindBarPresentation } from '@shared/overlay/surface.js'

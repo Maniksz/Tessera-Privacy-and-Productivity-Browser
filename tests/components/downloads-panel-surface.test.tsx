@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/preact'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DownloadsPanelSurface } from '@renderer/surfaces/DownloadsPanelSurface.js'
 import { OverlaySurface } from '@renderer/surfaces/OverlaySurface.js'
@@ -498,7 +498,7 @@ describe('the panel on the layer', () => {
   it('is fetched the first time it is presented, then closes on Escape', async () => {
     const { calls, present } = installBridge()
     render(<OverlaySurface />)
-    act(() => present(panel([download('a')])))
+    void act(() => present(panel([download('a')])))
 
     expect(await screen.findByRole('dialog', { name: t('downloads.title') })).toBeTruthy()
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -508,7 +508,7 @@ describe('the panel on the layer', () => {
   it('closes on a click outside it, and not on a click inside it', async () => {
     const { calls, present } = installBridge()
     const { container } = render(<OverlaySurface />)
-    act(() => present(panel([download('a')])))
+    void act(() => present(panel([download('a')])))
     const dialog = await screen.findByRole('dialog', { name: t('downloads.title') })
 
     fireEvent.pointerDown(dialog)
@@ -522,7 +522,7 @@ describe('the panel on the layer', () => {
   it('keeps the master-password prompt working behind the same boundary', async () => {
     const { present } = installBridge()
     render(<OverlaySurface />)
-    act(() =>
+    void act(() =>
       present({
         kind: 'master-password',
         requestId: 'p1',

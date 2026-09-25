@@ -9,6 +9,7 @@ import {
   interstitialTokenOf,
   withoutToken
 } from '@shared/privacy/https-token.js'
+import { focusOnMount } from '@renderer-shared/focus-on-mount.js'
 
 /**
  * `tessera://https-only`: where HTTPS-only mode sends a top-level `http://` navigation (R7, KTD3).
@@ -79,7 +80,7 @@ export function HttpsOnlyPage(): React.ReactNode {
           <button
             type="button"
             className="https-only__button https-only__button--primary"
-            autoFocus
+            ref={focusOnMount}
             onClick={() => {
               location.replace(httpsVersionOf(target))
             }}

@@ -285,7 +285,7 @@ export function BookmarksPage(): React.ReactNode {
           value={query}
           placeholder={tp('bookmarks.searchPlaceholder')}
           aria-label={tp('bookmarks.searchPlaceholder')}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => setQuery(event.currentTarget.value)}
         />
         <button type="button" className="bookmarks__action" disabled={readOnly} onClick={addFolder}>
           {tp('bookmarks.addFolder')}
@@ -492,7 +492,7 @@ export function BookmarksPage(): React.ReactNode {
             <input
               type="text"
               value={editing.title}
-              onChange={(event) => setEditing({ ...editing, title: event.target.value })}
+              onChange={(event) => setEditing({ ...editing, title: event.currentTarget.value })}
             />
           </label>
           {findBookmark(nodes, editing.id)?.kind === 'bookmark' && (
@@ -501,7 +501,7 @@ export function BookmarksPage(): React.ReactNode {
               <input
                 type="text"
                 value={editing.url}
-                onChange={(event) => setEditing({ ...editing, url: event.target.value })}
+                onChange={(event) => setEditing({ ...editing, url: event.currentTarget.value })}
               />
             </label>
           )}

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TileBarSurface } from '../../src/renderer/overlay/TileBarSurface.js'
 import type { TileBarPresentation } from '@shared/overlay/surface.js'

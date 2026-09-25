@@ -148,7 +148,7 @@ export function ImportSection({ host }: { host: ImportHost }): React.ReactNode {
               className="field__select"
               value={chosen}
               onChange={(event) => {
-                setChosen(event.target.value)
+                setChosen(event.currentTarget.value)
                 setPreview(null)
                 setMessage(null)
               }}

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { App } from '@renderer/App.js'
 import { TabSearchPanel } from '@renderer/components/TabSearchPanel.js'
@@ -223,7 +223,7 @@ describe('the tab search panel', () => {
 
 describe('the tab search inside the window', () => {
   async function openSearch(bridge: Bridge): Promise<HTMLElement> {
-    act(() => {
+    void act(() => {
       bridge.emit('shortcut:triggered', { action: 'searchTabs' })
     })
     return screen.findByRole('combobox')
@@ -232,7 +232,7 @@ describe('the tab search inside the window', () => {
   it('opens from the shortcut the menu item sends, over suspended content views', async () => {
     const bridge = installBridge()
     render(<App />)
-    act(() => {
+    void act(() => {
       bridge.emit('tabs:changed', { tabs: TABS, activeTabId: 'mail' })
     })
     await openSearch(bridge)
@@ -245,7 +245,7 @@ describe('the tab search inside the window', () => {
   it('finds a tab the strip hides in a folded group, and asks for exactly that tab', async () => {
     const bridge = installBridge()
     render(<App />)
-    act(() => {
+    void act(() => {
       bridge.emit('tabs:changed', { tabs: TABS, activeTabId: 'mail' })
       bridge.emit('tabgroups:changed', {
         groups: [group({ id: 'later', name: 'Later', tabIds: ['news'], collapsed: true })]
@@ -271,7 +271,7 @@ describe('the tab search inside the window', () => {
   it('leaves the text field alone for the window Escape, which would otherwise leave a layout', async () => {
     const bridge = installBridge()
     render(<App />)
-    act(() => {
+    void act(() => {
       bridge.emit('tabs:changed', { tabs: TABS, activeTabId: 'mail' })
     })
     const field = await openSearch(bridge)

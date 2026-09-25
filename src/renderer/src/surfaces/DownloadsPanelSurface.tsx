@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { TargetedFocusEvent, TargetedKeyboardEvent } from 'preact'
 import {
   canOpenDownload,
   downloadFraction,
@@ -198,8 +199,8 @@ export function DownloadsPanelSurface({
   }, [presentation])
 
   /** Remembers what the keyboard is on, so an update that removes it knows where it was. */
-  const onFocus = (event: React.FocusEvent<HTMLDivElement>): void => {
-    const target = event.target
+  const onFocus = (event: TargetedFocusEvent<HTMLDivElement>): void => {
+    const target = event.target as HTMLElement
     const row = target.closest<HTMLElement>(ROW)
     const id = row?.dataset.downloadId
     if (row === null || id === undefined) {
@@ -212,7 +213,7 @@ export function DownloadsPanelSurface({
     focusMark.current = { id, action, index }
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     const panel = panelRef.current
     if (panel === null) return
     const active = document.activeElement

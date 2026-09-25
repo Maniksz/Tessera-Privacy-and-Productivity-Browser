@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TabBar } from '@renderer/components/TabBar.js'
 import { edgeScrollStep } from '@renderer/useTabDrag.js'
@@ -172,7 +172,7 @@ describe('renaming a group', () => {
     installBridge()
     renderBar([tab('t1')], [group({ id: 'g1', tabIds: ['t1'], name: 'Work' })])
 
-    fireEvent.doubleClick(screen.getByRole('button', { name: /Collapse group Work/i }))
+    fireEvent.dblClick(screen.getByRole('button', { name: /Collapse group Work/i }))
     const input = screen.getByRole('textbox', { name: /Rename group/i })
     expect((input as HTMLInputElement).value).toBe('Work')
   })
@@ -181,7 +181,7 @@ describe('renaming a group', () => {
     const calls = installBridge()
     renderBar([tab('t1')], [group({ id: 'g1', tabIds: ['t1'], name: 'Work' })])
 
-    fireEvent.doubleClick(screen.getByRole('button', { name: /Collapse group Work/i }))
+    fireEvent.dblClick(screen.getByRole('button', { name: /Collapse group Work/i }))
     const input = screen.getByRole('textbox', { name: /Rename group/i })
     fireEvent.change(input, { target: { value: 'Reading' } })
     fireEvent.keyDown(input, { key: 'Enter' })
@@ -197,7 +197,7 @@ describe('renaming a group', () => {
     const calls = installBridge()
     renderBar([tab('t1')], [group({ id: 'g1', tabIds: ['t1'], name: 'Work' })])
 
-    fireEvent.doubleClick(screen.getByRole('button', { name: /Collapse group Work/i }))
+    fireEvent.dblClick(screen.getByRole('button', { name: /Collapse group Work/i }))
     const input = screen.getByRole('textbox', { name: /Rename group/i })
     fireEvent.change(input, { target: { value: 'Discarded' } })
     fireEvent.keyDown(input, { key: 'Escape' })
@@ -212,7 +212,7 @@ describe('renaming a group', () => {
     const calls = installBridge()
     renderBar([tab('t1')], [group({ id: 'g1', tabIds: ['t1'], name: 'Work' })])
 
-    fireEvent.doubleClick(screen.getByRole('button', { name: /Collapse group Work/i }))
+    fireEvent.dblClick(screen.getByRole('button', { name: /Collapse group Work/i }))
     const input = screen.getByRole('textbox', { name: /Rename group/i })
     fireEvent.change(input, { target: { value: '   ' } })
     fireEvent.keyDown(input, { key: 'Enter' })

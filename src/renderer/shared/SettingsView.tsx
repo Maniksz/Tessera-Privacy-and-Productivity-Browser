@@ -284,7 +284,7 @@ export function SettingsView({
             type="checkbox"
             checked={value === true}
             {...description}
-            onChange={(event) => void write(descriptor.key, event.target.checked)}
+            onChange={(event) => void write(descriptor.key, event.currentTarget.checked)}
           />
         )
 
@@ -295,7 +295,7 @@ export function SettingsView({
             className="field__select"
             value={typeof value === 'string' ? value : ''}
             {...description}
-            onChange={(event) => void write(descriptor.key, event.target.value)}
+            onChange={(event) => void write(descriptor.key, event.currentTarget.value)}
           >
             {(descriptor.choices ?? []).map((choice) => (
               <option key={choice} value={choice}>
@@ -322,7 +322,7 @@ export function SettingsView({
             step={descriptor.integer === true ? 1 : 'any'}
             {...description}
             onChange={(event) => {
-              const parsed = Number(event.target.value)
+              const parsed = Number(event.currentTarget.value)
               if (Number.isNaN(parsed)) return
               void write(descriptor.key, parsed)
             }}
@@ -337,7 +337,7 @@ export function SettingsView({
             type="text"
             value={typeof value === 'string' ? value : ''}
             {...description}
-            onChange={(event) => void write(descriptor.key, event.target.value)}
+            onChange={(event) => void write(descriptor.key, event.currentTarget.value)}
           />
         )
 
@@ -350,7 +350,7 @@ export function SettingsView({
             value={Array.isArray(value) ? value.join('\n') : ''}
             {...description}
             onChange={(event) => {
-              const lines = event.target.value
+              const lines = event.currentTarget.value
                 .split('\n')
                 .map((line) => line.trim())
                 .filter((line) => line !== '')
@@ -383,7 +383,7 @@ export function SettingsView({
           value={query}
           placeholder={t('settings.searchPlaceholder')}
           aria-label={t('settings.searchPlaceholder')}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => setQuery(event.currentTarget.value)}
         />
       </header>
 

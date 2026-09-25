@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { TargetedEvent, TargetedKeyboardEvent } from 'preact'
 import type { SecurityState, TabState } from '@shared/model.js'
 import type { SettingsSnapshot } from '@shared/settings/definitions.js'
 import { omniboxDisplayValue } from '@shared/url/omnibox.js'
@@ -138,17 +139,17 @@ export function Omnibox({
     setValue(currentUrl)
   }
 
-  const submit = (event: SyntheticEvent): void => {
+  const submit = (event: TargetedEvent): void => {
     event.preventDefault()
     if (value.trim() === '') return
     void invoke('nav:navigate', { input: value })
     finish()
   }
 
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLInputElement>): void => {
     // The composition owns these keys until it ends; Enter there commits text, it never picks a row.
     // `Process` is how Chromium names a key an IME has taken, for the moment before `isComposing` is set.
-    if (event.nativeEvent.isComposing || event.key === 'Process') return
+    if (event.isComposing || event.key === 'Process') return
     const list = suggestions
     if (list !== null && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault()
@@ -239,18 +240,18 @@ export function Omnibox({
         value={value}
         placeholder={t('omnibox.placeholder')}
         aria-label={t('omnibox.placeholder')}
-        spellCheck={false}
+        spellcheck={false}
         autoComplete="off"
         onChange={(event) => {
-          setValue(event.target.value)
+          setValue(event.currentTarget.value)
           setEditing(true)
           // What is on screen now describes the previous text; it is not walked until the answer arrives.
           setSuggestions(null)
-          suggest(event.target.value, 0)
+          suggest(event.currentTarget.value, 0)
         }}
         onFocus={(event) => {
           setEditing(true)
-          event.target.select()
+          event.currentTarget.select()
         }}
         onBlur={() => setEditing(false)}
         onKeyDown={onKeyDown}

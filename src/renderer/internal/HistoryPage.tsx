@@ -138,7 +138,7 @@ export function HistoryPage(): React.ReactNode {
           value={query}
           placeholder={t('history.searchPlaceholder')}
           aria-label={t('history.searchPlaceholder')}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => setQuery(event.currentTarget.value)}
         />
         <button
           type="button"

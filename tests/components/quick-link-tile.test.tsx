@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { QuickLinkTile } from '@renderer-internal/QuickLinkTile.js'
 import type { QuickLinkCard } from '@shared/quicklinks/cards.js'

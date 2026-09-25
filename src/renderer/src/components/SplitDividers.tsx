@@ -1,4 +1,5 @@
-import { useRef, type PointerEvent } from 'react'
+import { useRef } from 'react'
+import type { TargetedPointerEvent } from 'preact'
 import type { SplitState } from '@shared/model.js'
 import { DEFAULT_FRACTIONS, TILE_GUTTER, dividersFor } from '@shared/split/layout.js'
 import { invoke } from '../bridge.js'
@@ -51,14 +52,14 @@ export function SplitDividers({ split, contentTop }: SplitDividersProps): React.
   const dividers = dividersFor(split.layout, split.fractions)
   if (dividers.length === 0) return null
 
-  const onPointerDown = (event: PointerEvent<HTMLDivElement>, id: string): void => {
+  const onPointerDown = (event: TargetedPointerEvent<HTMLDivElement>, id: string): void => {
     event.preventDefault()
     dragging.current = id
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
   const onPointerMove = (
-    event: PointerEvent<HTMLDivElement>,
+    event: TargetedPointerEvent<HTMLDivElement>,
     orientation: 'vertical' | 'horizontal'
   ): void => {
     const id = dragging.current
@@ -77,7 +78,7 @@ export function SplitDividers({ split, contentTop }: SplitDividersProps): React.
     void invoke('split:setFractions', { fractions: { [id]: fraction } })
   }
 
-  const onPointerUp = (event: PointerEvent<HTMLDivElement>): void => {
+  const onPointerUp = (event: TargetedPointerEvent<HTMLDivElement>): void => {
     dragging.current = null
     event.currentTarget.releasePointerCapture(event.pointerId)
   }
@@ -132,7 +133,7 @@ export function SplitDividers({ split, contentTop }: SplitDividersProps): React.
             onPointerMove={(event) => onPointerMove(event, divider.orientation)}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            onDoubleClick={() => onDoubleClick(divider.id)}
+            onDblClick={() => onDoubleClick(divider.id)}
             onKeyDown={(event) => {
               // Keyboard resizing, because every control has to be reachable
               // without a pointer (spec 7).

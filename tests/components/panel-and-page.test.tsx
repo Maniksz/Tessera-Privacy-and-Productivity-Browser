@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ExtensionsPanel } from '@renderer/components/ExtensionsPanel.js'
 import { I18nProvider } from '@renderer/i18n.js'
@@ -300,7 +300,7 @@ function renderPanel(node: React.ReactNode): ReturnType<typeof render> {
  * rendered the wrong kind of input, or showed a stale value would fail, and not so literal that an
  * attribute React happens to order differently makes the comparison brittle.
  */
-function controlsOf(container: HTMLElement): string[] {
+function controlsOf(container: Element): string[] {
   // Descriptor fields only: the backup and import sections' fields are the page's own, not settings.
   const fields = [...container.querySelectorAll('.field')].filter(
     (field) =>
@@ -709,6 +709,14 @@ describe('a refused call is shown rather than swallowed', () => {
 
     render(<ExtensionsPage />)
     await waitFor(() => expect(screen.getByText('Test extension')).toBeTruthy())
+    /*
+      Settled first: the list is read again once the catalogue arrives, because the host is keyed on
+      `t`, and that read starts by clearing the error. An effect runs a frame after its commit, so a
+      click before the second read would have its report wiped by it.
+    */
+    await waitFor(() =>
+      expect(internal.channels().filter((channel) => channel === 'extensions:list')).toHaveLength(2)
+    )
     fireEvent.click(screen.getByText('Load unpacked folder…'))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('no manifest.json'))
   })

@@ -1,4 +1,5 @@
 import { useLayoutEffect, type ComponentType, type ReactNode } from 'react'
+import { render } from 'preact'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { catalogs } from '@shared/i18n/catalog.js'
 import type { Locale } from '@shared/i18n/locale.js'
@@ -28,6 +29,11 @@ interface FakeCore {
   locale: Locale
   calls: string[]
   emit: (channel: string, payload: unknown) => void
+  /**
+   * Whether anything subscribes to the channel yet. A subscription made in an effect is made after the
+   * first frame, not with it, so a test that emits right after that frame waits for this first.
+   */
+  listens: (channel: string) => boolean
   bridge: unknown
 }
 
@@ -39,6 +45,7 @@ function fakeCore(initial: Locale, answers: Record<string, unknown> = {}): FakeC
     emit: (channel, payload) => {
       for (const listener of listeners.get(channel) ?? []) listener(payload)
     },
+    listens: (channel) => (listeners.get(channel)?.length ?? 0) > 0,
     bridge: undefined
   }
   core.bridge = {
@@ -165,6 +172,12 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  /*
+    Unmounted, not only removed. Preact runs a commit's effects after the next frame, so a tree that is
+    merely taken out of the document still subscribes from them — in the next test, to that test's core.
+    An unmounted tree's pending effects are dropped.
+  */
+  for (const root of document.body.children) render(null, root)
   install('tessera', inert)
   install('tesseraInternal', inert)
   for (const module of MOCKED) vi.doUnmock(module)
@@ -209,6 +222,7 @@ describe('the chrome UI', () => {
     await import('@renderer/main.js')
     await vi.waitFor(() => expect(root.textContent).toBe(catalogs.de['menu.window']), FIRST_RENDER)
 
+    await vi.waitFor(() => expect(core.listens('settings:changed')).toBe(true))
     core.locale = 'en'
     core.emit('settings:changed', { changed: { 'appearance.uiLanguage': 'en' }, snapshot: {} })
 
@@ -315,6 +329,7 @@ describe('a privileged internal page', () => {
       FIRST_RENDER
     )
 
+    await vi.waitFor(() => expect(core.listens('locale:changed')).toBe(true))
     core.locale = 'en'
     core.emit('locale:changed', { locale: 'en' })
 

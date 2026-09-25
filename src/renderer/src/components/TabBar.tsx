@@ -1,14 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type MouseEvent,
-  type WheelEvent
-} from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, TargetedMouseEvent, TargetedWheelEvent } from 'preact'
 import type { TabState } from '@shared/model.js'
 import type { ArrangementSummary } from '@shared/arrangements/screen.js'
 import { stripEntryOf, stripItems, type SplitStripItem } from '@shared/strip/model.js'
@@ -22,6 +13,7 @@ import type { MessageKey } from '@shared/i18n/catalog.js'
 import { useTabDrag, type StripSpot, type TabDrag } from '../useTabDrag.js'
 import { Icon } from '../../shared/Icon.js'
 import { TabFavicon } from './TabFavicon.js'
+import { focusOnMount } from '@renderer-shared/focus-on-mount.js'
 
 /**
  * Tab strip.
@@ -191,12 +183,12 @@ function GroupChip({
           rename it, so not taking focus would mean a second click to do what they already asked
           for — the case where autofocus is right rather than the case where it steals attention.
         */
-        autoFocus
+        ref={focusOnMount}
         aria-label={t('tabgroup.rename')}
         value={draft}
         maxLength={MAX_TAB_GROUP_NAME_LENGTH}
         style={groupColorStyle(group.color)}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => setDraft(event.currentTarget.value)}
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === 'Enter') commit()
@@ -226,7 +218,7 @@ function GroupChip({
       onClick={() =>
         void invoke('tabgroups:setCollapsed', { id: group.id, collapsed: !group.collapsed })
       }
-      onDoubleClick={() => setDraft(group.name)}
+      onDblClick={() => setDraft(group.name)}
       /*
         The group's own menu — its colour, and ungrouping it — opened by the core like a tab's. The
         chip is the one control a folded group has, so without this a folded group could only be
@@ -489,14 +481,14 @@ export function TabBar({
     tilt wheel. A mostly-sideways gesture — a trackpad, a tilt wheel — is Chromium's already, and a strip
     that fits has nowhere to go, so both are left alone.
   */
-  const onWheel = (event: WheelEvent<HTMLDivElement>): void => {
+  const onWheel = (event: TargetedWheelEvent<HTMLDivElement>): void => {
     const strip = event.currentTarget
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
     if (strip.scrollWidth <= strip.clientWidth) return
     strip.scrollLeft += event.deltaY
   }
 
-  const onAuxClick = (event: MouseEvent, tabId: string): void => {
+  const onAuxClick = (event: TargetedMouseEvent<HTMLElement>, tabId: string): void => {
     // Middle-click closes (spec 1).
     if (event.button === 1) {
       event.preventDefault()

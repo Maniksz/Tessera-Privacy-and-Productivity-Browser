@@ -669,7 +669,11 @@ describe('bundle weight', () => {
     const budgets: Array<{ match: RegExp; maxKb: number; note: string }> = [
       { match: /^index-.*\.js$/, maxKb: 60, note: 'chrome UI' },
       { match: /^overlay-.*\.js$/, maxKb: 20, note: 'overlay surface, one per window' },
-      { match: /^vendor-react-.*\.js$/, maxKb: 240, note: 'React, shared between entries' },
+      {
+        match: /^vendor-preact-.*\.js$/,
+        maxKb: 24,
+        note: 'Preact with compat, shared between entries'
+      },
       { match: /\.css$/, maxKb: 24, note: 'stylesheet' },
       /*
         Raised from 40 kB once, and only the catalogue chunk is near it.
@@ -3655,5 +3659,35 @@ describe('backup and restore (U23)', () => {
     const staging = readFileSync(join(ROOT, 'src/main/backup/stage-restore.ts'), 'utf8')
     expect(importsOf(staging).filter((spec) => spec === 'node:path' || spec === 'path')).toEqual([])
     expect(codeOnly(staging)).not.toMatch(/\bjoin\(|\bresolve\(/)
+  })
+})
+
+describe('the renderer on Preact', () => {
+  /**
+   * The React props Preact takes and does nothing with.
+   *
+   * The renderer is written against React's API and runs on `preact/compat`, which covers it — `onFocus`
+   * bubbles, `onChange` on a field is `input`, `onDoubleClick` is `dblclick` — with one gap that fails
+   * silently: `autoFocus`. React focused such an element itself when it was inserted; Preact only sets the
+   * `autofocus` attribute, which Chromium honours for the first element a document loads with and not for
+   * a field that appears on a double-click. The field comes up without the keys and nothing reports it.
+   * `focusOnMount` is the replacement.
+   */
+  it('focuses on mount through a ref, never through `autoFocus`', async () => {
+    const offenders = (await collect('src/renderer'))
+      .filter((file) => /\bautoFocus\b/.test(codeOnly(file.text)))
+      .map((file) => file.relative)
+    expect(offenders).toEqual([])
+  })
+
+  /**
+   * One Preact, reached as `react`. A module importing `preact/compat` by name works, and costs the React
+   * Compiler's lint rules their knowledge of the hooks it uses — see the alias in `vitest.config.ts`.
+   */
+  it('imports the React API as `react`, not as `preact/compat`', async () => {
+    const offenders = (await collect('src/renderer'))
+      .filter((file) => importsOf(file.text).some((spec) => spec.startsWith('preact/compat')))
+      .map((file) => file.relative)
+    expect(offenders).toEqual([])
   })
 })

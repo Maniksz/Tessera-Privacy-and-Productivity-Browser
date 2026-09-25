@@ -230,7 +230,7 @@ export function MediaPanel({
                             onChange={(event) =>
                               setChoices((current) => ({
                                 ...current,
-                                [finding.id]: event.target.value
+                                [finding.id]: event.currentTarget.value
                               }))
                             }
                           >

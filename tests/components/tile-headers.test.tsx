@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TileHeaders } from '@renderer/components/TileHeaders.js'
 import { useTileRects } from '@renderer/useTileRects.js'
@@ -223,7 +223,7 @@ describe('where the renderer puts the headers', () => {
 
     // And a resize keeps them where the core puts the views.
     SIZE.width = 1000
-    act(() => observers.forEach((callback) => callback()))
+    void act(() => observers.forEach((callback) => callback()))
     expect(renderedViews()).toEqual(core(split('1x2', ['a', 'b']), true))
     expect(renderedViews()[1]!.width).toBe(1000 / 2 - 4)
     SIZE.width = 1200

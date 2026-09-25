@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { PasswordsPage } from '@renderer-internal/PasswordsPage.js'
 import { catalogs } from '@shared/i18n/catalog.js'

@@ -18,7 +18,7 @@ insbesondere dort, wo eine naheliegende Lösung still versagt hätte.
 │ Rolle: chrome            │   │ Rolle: content                │
 │ volle Vertragsoberfläche │   │ Web-Seite: keine Brücke       │
 │ Tab-Leiste, Toolbar      │   │ tessera://: enge Liste     │
-│ React, sandboxed         │   │ eigener Prozess pro Tab       │
+│ Preact, sandboxed        │   │ eigener Prozess pro Tab       │
 └──────────────────────────┘   └───────────────────────────────┘
 
 Ein Preload für beide (src/preload/index.ts). Die Rolle kommt aus
@@ -463,7 +463,7 @@ architektonisch relevant sind:
 
 ## Startseite und der interne Kanal
 
-Die Startseite ist eine echte React-Anwendung, die über `tessera://start`
+Die Startseite ist eine echte Preact-Anwendung, die über `tessera://start`
 ausgeliefert wird. Damit sie Quick Links verwalten kann, braucht sie einen Kanal in
 den Kern — und das ist die einzige Stelle, an der Inhalt, der in einer Content-View
 läuft, überhaupt mit dem Kern spricht.
@@ -554,9 +554,26 @@ Trennung zur Lüge wird — zwei pro Form, je eine in jede Richtung: gewinnt das
 ein Feld, das das Schema nicht kennt, oder umgekehrt, bricht die Typprüfung.
 
 React lag außerdem zweimal im Bundle, einmal pro HTML-Einstieg. Eine
-`manualChunks`-Regel legt es in einen geteilten `vendor-react`-Chunk, den beide
+`manualChunks`-Regel legt es in einen geteilten Chunk, den beide
 Einstiege nutzen — einmal kompiliert statt zweimal pro Fenster, und die zweite Seite
 wird aus V8s Code-Cache bedient.
+
+Seit 25.09.2026 läuft der Renderer auf Preact statt React: `vendor-preact` hat 20,3 kB statt
+192,3 kB für `vendor-react`, und das Renderer-JS insgesamt sank von 438,2 auf 260,8 kB (145,1 auf
+92,5 kB gzip). Das zählt vor allem bei den internen Seiten, denn jeder `tessera://`-Tab ist ein
+eigener Renderer und lädt das Framework neu. Der Quelltext importiert weiter `react`:
+`@preact/preset-vite`, `vitest.config.ts` und die `paths` der beiden Web-tsconfigs leiten auf
+`preact/compat` um. Das hat einen Grund: Die Compiler-Regeln von `eslint-plugin-react-hooks`
+erkennen `useRef` und `useState` nur unter diesem Modulnamen. Nur die Ereignistypen kommen
+direkt aus `preact` (`TargetedKeyboardEvent` usw.), weil die von `compat` als veraltet markiert
+sind.
+
+Drei Unterschiede zu React tragen Code:
+- `autoFocus` fokussiert unter Preact nichts. An seiner Stelle steht
+  `ref={focusOnMount}` (`renderer/shared/focus-on-mount.ts`).
+- `useEffect` läuft erst nach dem nächsten Frame.
+- `fireEvent.change` auf einem `<select>` erreicht in Tests den Handler nicht. Dafür gibt es
+  `choose` in `tests/components/choose.ts`.
 
 Build-Ziele sind auf Chromium 150 und Node 24 gepinnt, verifiziert am ausgelieferten
 Framework. Ein älteres Ziel würde Polyfills und Hilfsfunktionen hinzufügen, die bei

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { TabDropSurface } from '../../src/renderer/src/surfaces/TabDropSurface.js'
 import type { TabDropPresentation } from '@shared/overlay/surface.js'

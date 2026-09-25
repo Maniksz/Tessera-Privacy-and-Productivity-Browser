@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Toolbar } from '@renderer/components/Toolbar.js'
 import type { DownloadButtonSummary } from '@shared/downloads/summary.js'

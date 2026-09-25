@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MediaButton,
@@ -57,7 +57,7 @@ function installBridge(byTab: Record<string, readonly MediaFinding[]>): void {
 }
 
 function push(list: MediaFindingList): void {
-  act(() => listeners.get('media:changed')?.(list))
+  void act(() => listeners.get('media:changed')?.(list))
 }
 
 function Counted({ tabId }: { tabId: string | undefined }): React.ReactNode {

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PickerBarSurface } from '../../src/renderer/overlay/PickerBarSurface.js'
 import { OverlaySurface } from '../../src/renderer/src/surfaces/OverlaySurface.js'

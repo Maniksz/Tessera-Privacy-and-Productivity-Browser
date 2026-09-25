@@ -1,4 +1,4 @@
-import type { PointerEvent } from 'react'
+import type { TargetedPointerEvent } from 'preact'
 import {
   OMNIBOX_LIST_PADDING,
   OMNIBOX_ROW_HEIGHT,
@@ -40,7 +40,7 @@ export function OmniboxSuggestionsSurface({
   const { t } = useI18n()
   const { lead, rows, selected, text } = presentation
 
-  const press = (index: number) => (event: PointerEvent) => {
+  const press = (index: number) => (event: TargetedPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
     onChoose(index)

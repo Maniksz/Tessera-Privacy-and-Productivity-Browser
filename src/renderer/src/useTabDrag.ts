@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { TargetedPointerEvent } from 'preact'
 import type { StripDropSide, StripDropSubject, StripDropTarget } from '@shared/strip/drop.js'
 import { DRAG_THRESHOLD } from '@renderer-shared/drag-threshold.js'
 import { invoke, subscribe } from './bridge.js'
@@ -139,7 +140,7 @@ export interface TabDrag {
   fromTile: boolean
   /** Where it would land in the strip, or null while it is over the tiles. */
   spot: StripSpot | null
-  begin(event: ReactPointerEvent<HTMLElement>, subject: StripDropSubject): void
+  begin(event: TargetedPointerEvent<HTMLElement>, subject: StripDropSubject): void
 }
 
 export function useTabDrag(stripRef: React.RefObject<HTMLElement | null>): TabDrag {

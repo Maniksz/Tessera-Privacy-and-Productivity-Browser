@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BookmarksPage } from '@renderer-internal/BookmarksPage.js'
 import { BOOKMARK_BAR_ID, type Bookmark } from '@shared/bookmarks/model.js'

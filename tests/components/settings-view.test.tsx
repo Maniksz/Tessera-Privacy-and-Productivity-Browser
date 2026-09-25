@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
+import { choose } from './choose.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SettingsView, type SettingsHost } from '@renderer-shared/SettingsView.js'
 import type { SettingDescriptor } from '@shared/settings/control.js'
@@ -452,7 +453,7 @@ describe('the controls the descriptors produce', () => {
     expect(screen.getByRole('option', { name: 'Nichts am Proxy vorbei' })).toBeTruthy()
     expect(screen.queryByText('disable_non_proxied_udp')).toBeNull()
 
-    fireEvent.change(select, { target: { value: 'disable_non_proxied_udp' } })
+    choose(select, 'disable_non_proxied_udp')
     await waitFor(() =>
       expect(calls.set).toEqual([
         { key: 'network.webrtcIpPolicy', value: 'disable_non_proxied_udp' }
@@ -646,18 +647,18 @@ describe('the system proxy under the kill switch (U13)', () => {
     const { host, calls } = hostWith({ descriptors: [mode], systemProxyDirect: true })
     render(<SettingsView host={host} settings={{ 'network.killSwitch': true }} />)
     const select = await screen.findByLabelText('Proxy')
-    fireEvent.change(select, { target: { value: 'system' } })
+    choose(select, 'system')
     await waitFor(() => expect(screen.getByText('settings.systemProxyDirect')).toBeTruthy())
     expect(calls.probes).toBe(1)
     // Switching away takes the warning with it.
-    fireEvent.change(select, { target: { value: 'direct' } })
+    choose(select, 'direct')
     await waitFor(() => expect(screen.queryByText('settings.systemProxyDirect')).toBeNull())
   })
 
   it('stays quiet when the system names a proxy', async () => {
     const { host, calls } = hostWith({ descriptors: [mode], systemProxyDirect: false })
     render(<SettingsView host={host} settings={{ 'network.killSwitch': true }} />)
-    fireEvent.change(await screen.findByLabelText('Proxy'), { target: { value: 'system' } })
+    choose(await screen.findByLabelText('Proxy'), 'system')
     await waitFor(() => expect(calls.probes).toBe(1))
     expect(screen.queryByText('settings.systemProxyDirect')).toBeNull()
   })
@@ -665,7 +666,7 @@ describe('the system proxy under the kill switch (U13)', () => {
   it('does not ask with the kill switch off, where a direct way is allowed', async () => {
     const { host, calls } = hostWith({ descriptors: [mode], systemProxyDirect: true })
     render(<SettingsView host={host} settings={{ 'network.killSwitch': false }} />)
-    fireEvent.change(await screen.findByLabelText('Proxy'), { target: { value: 'system' } })
+    choose(await screen.findByLabelText('Proxy'), 'system')
     await waitFor(() => expect(calls.set).toHaveLength(1))
     expect(calls.probes).toBe(0)
     expect(screen.queryByText('settings.systemProxyDirect')).toBeNull()

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { TargetedKeyboardEvent } from 'preact'
 import type { FindBarPresentation } from '@shared/overlay/surface.js'
 import { findWording, type FindWording } from '@shared/find/status.js'
 import type { MessageKey } from '@shared/i18n/catalog.js'
@@ -98,7 +99,7 @@ export function FindBarSurface({
     void invoke('find:step', { tabId, forward })
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
       // Owned here, and stopped here; see the docblock.
@@ -144,10 +145,10 @@ export function FindBarSurface({
         type="text"
         className="findbar__input"
         aria-label={t('find.field', { index: tileIndex + 1 })}
-        spellCheck={false}
+        spellcheck={false}
         value={draft}
         onChange={(event) => {
-          const query = event.target.value
+          const query = event.currentTarget.value
           setDraft(query)
           /*
             Sent on every change rather than on Return, because a find bar that only searched when

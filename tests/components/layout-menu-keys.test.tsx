@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { LayoutMenuSurface } from '@renderer/surfaces/LayoutMenuSurface.js'
 import { LAYOUT_IDS } from '@shared/split/layout.js'

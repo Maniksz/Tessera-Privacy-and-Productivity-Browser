@@ -153,7 +153,7 @@ export function BackupSection({ host }: { host: BackupHost }): React.ReactNode {
             autoComplete="new-password"
             aria-describedby="backup-hint"
             value={passphrase}
-            onChange={(event) => setPassphrase(event.target.value)}
+            onChange={(event) => setPassphrase(event.currentTarget.value)}
           />
           <input
             className="field__text"
@@ -163,7 +163,7 @@ export function BackupSection({ host }: { host: BackupHost }): React.ReactNode {
             placeholder={t('backup.repeat')}
             aria-invalid={mismatch}
             value={repeat}
-            onChange={(event) => setRepeat(event.target.value)}
+            onChange={(event) => setRepeat(event.currentTarget.value)}
           />
           {mismatch && <span className="field__note">{t('backup.mismatch')}</span>}
           <button type="button" className="dialog__button" disabled={!canCreate} onClick={create}>
@@ -185,7 +185,7 @@ export function BackupSection({ host }: { host: BackupHost }): React.ReactNode {
             type="password"
             autoComplete="off"
             value={restorePassphrase}
-            onChange={(event) => setRestorePassphrase(event.target.value)}
+            onChange={(event) => setRestorePassphrase(event.currentTarget.value)}
           />
           <button
             type="button"

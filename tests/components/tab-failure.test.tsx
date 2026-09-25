@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { TabFailure, TileFailures } from '@renderer/components/TabFailure.js'
 import type { TabFailure as Failure } from '@shared/browser/tab-failure.js'

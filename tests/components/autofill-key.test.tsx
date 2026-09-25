@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AutofillKey, useAutofillKeyState } from '@renderer/components/AutofillKey.js'
 import type { AutofillKeyState } from '@shared/passwords/model.js'
@@ -125,7 +125,7 @@ describe('where the state comes from', () => {
     render(<Harness page="tab-1" />)
     await screen.findByRole('button', { name: /2 for this site/ })
 
-    act(() => {
+    void act(() => {
       listeners.get('passwords:autofillStateChanged')?.(LOCKED)
     })
 

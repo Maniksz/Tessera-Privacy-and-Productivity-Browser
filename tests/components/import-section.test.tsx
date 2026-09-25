@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
+import { choose } from './choose.js'
 import { afterEach, describe, expect, it } from 'vitest'
 import { catalogs, type MessageKey } from '@shared/i18n/catalog.js'
 import { MAX_HISTORY_ENTRIES } from '@shared/history/model.js'
@@ -146,7 +147,7 @@ describe('the import section', () => {
     })
     fireEvent.click(history)
     await screen.findByText('import.historyPreview:1000,3,2')
-    fireEvent.change(screen.getByLabelText('import.source'), { target: { value: 'firefox:p' } })
+    choose(screen.getByLabelText('import.source'), 'firefox:p')
     expect(history.disabled).toBe(true)
     expect(screen.queryByText('import.historyPreview:1000,3,2')).toBeNull()
   })
@@ -163,7 +164,7 @@ describe('the import section', () => {
     }
     render(<ImportSection host={importing} />)
     fireEvent.click(await screen.findByRole('button', { name: 'import.history' }))
-    fireEvent.change(screen.getByLabelText('import.source'), { target: { value: 'edge:Default' } })
+    choose(screen.getByLabelText('import.source'), 'edge:Default')
     answer({ outcome: 'preview', counts: { added: 7, merged: 0, dropped: 0, skipped: 0 } })
     await waitFor(() =>
       expect(

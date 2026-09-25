@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TabBar } from '@renderer/components/TabBar.js'
 import type { ArrangementSummary } from '@shared/arrangements/screen.js'
@@ -58,7 +58,7 @@ function installBridge(): Bridge {
   return {
     calls,
     emit: (channel, payload) => {
-      act(() => listeners.get(channel)?.forEach((listener) => listener(payload)))
+      void act(() => listeners.get(channel)?.forEach((listener) => listener(payload)))
     }
   }
 }

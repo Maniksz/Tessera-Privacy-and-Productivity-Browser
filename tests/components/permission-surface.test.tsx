@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PermissionSurface } from '../../src/renderer/src/surfaces/PermissionSurface.js'
 import type { PermissionRequestPresentation } from '@shared/overlay/surface.js'
@@ -66,7 +66,7 @@ function answers(calls: readonly Call[]): unknown[] {
 }
 
 function wait(ms: number): void {
-  act(() => {
+  void act(() => {
     vi.advanceTimersByTime(ms)
   })
 }
@@ -148,7 +148,7 @@ describe('a click right after the window regains focus', () => {
     render(<PermissionSurface presentation={presentation()} />)
     wait(600)
 
-    act(() => {
+    void act(() => {
       window.dispatchEvent(new Event('focus'))
     })
     allowOnce()
@@ -163,7 +163,7 @@ describe('a click right after the window regains focus', () => {
     const calls = installBridge()
     render(<PermissionSurface presentation={presentation()} />)
     wait(400)
-    act(() => {
+    void act(() => {
       window.dispatchEvent(new Event('focus'))
     })
     // 600 ms after the dialogue appeared, but only 200 ms after the focus.

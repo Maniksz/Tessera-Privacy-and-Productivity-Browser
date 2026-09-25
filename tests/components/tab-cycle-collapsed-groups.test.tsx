@@ -1,4 +1,4 @@
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { App } from '@renderer/App.js'
 import type { TabGroup } from '@shared/tabgroups/model.js'
@@ -107,7 +107,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a collapsed group in the strip', () => 
     const bridge = installBridge()
     render(<App />)
 
-    act(() => {
+    void act(() => {
       bridge.emit('tabs:changed', {
         tabs: [tab('t1'), tab('t2'), tab('t3')],
         activeTabId: 't1'
@@ -117,7 +117,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a collapsed group in the strip', () => 
       })
     })
 
-    act(() => {
+    void act(() => {
       bridge.emit('shortcut:triggered', { action: 'nextTab' })
     })
 
@@ -129,7 +129,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a collapsed group in the strip', () => 
     const bridge = installBridge()
     render(<App />)
 
-    act(() => {
+    void act(() => {
       bridge.emit('tabs:changed', {
         tabs: [tab('t1'), tab('t2'), tab('t3')],
         activeTabId: 't1'
@@ -139,7 +139,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a collapsed group in the strip', () => 
       })
     })
 
-    act(() => {
+    void act(() => {
       bridge.emit('shortcut:triggered', { action: 'previousTab' })
     })
 
@@ -151,7 +151,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a collapsed group in the strip', () => 
     const bridge = installBridge()
     render(<App />)
 
-    act(() => {
+    void act(() => {
       bridge.emit('tabs:changed', {
         tabs: [tab('t1'), tab('t2'), tab('t3')],
         activeTabId: 't1'
@@ -161,7 +161,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a collapsed group in the strip', () => 
       })
     })
 
-    act(() => {
+    void act(() => {
       bridge.emit('shortcut:triggered', { action: 'nextTab' })
     })
 
@@ -186,7 +186,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a tiled view in the strip', () => {
   }
 
   function showing(bridge: ReturnType<typeof installBridge>, activeTabId: string): void {
-    act(() => {
+    void act(() => {
       bridge.emit('tabs:changed', { tabs, activeTabId })
       bridge.emit('arrangements:changed', { arrangements: [view] })
     })
@@ -194,7 +194,7 @@ describe('Ctrl+Tab / Ctrl+Shift+Tab with a tiled view in the strip', () => {
 
   function press(bridge: ReturnType<typeof installBridge>, action: string): unknown {
     bridge.calls.length = 0
-    act(() => {
+    void act(() => {
       bridge.emit('shortcut:triggered', { action })
     })
     return bridge.calls.find((call) => call.channel === 'tabs:activate')?.payload

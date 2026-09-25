@@ -3,6 +3,7 @@ import { MAX_WORKSPACE_NAME, workspaceName, type WorkspaceMenu } from '@shared/w
 import { invoke } from '../bridge.js'
 import { useI18n } from '../i18n.js'
 import { LayoutIcon } from '../components/LayoutIcon.js'
+import { focusOnMount } from '@renderer-shared/focus-on-mount.js'
 
 /**
  * The layout menu's workspaces (U21): the saved list, and "Save as…" with its name field.
@@ -128,12 +129,12 @@ export function WorkspacesMenu({ onResize }: { onResize: () => void }): React.Re
         >
           <input
             // The field is what the entry was pressed for, so it takes the keys at once.
-            autoFocus
+            ref={focusOnMount}
             aria-label={t('workspaces.name')}
             placeholder={t('workspaces.name')}
             maxLength={MAX_WORKSPACE_NAME}
             value={draft.name}
-            onChange={(event) => setDraft({ name: event.target.value, asking: false })}
+            onChange={(event) => setDraft({ name: event.currentTarget.value, asking: false })}
           />
           <button type="submit" disabled={workspaceName(draft.name) === null}>
             {t('bookmarks.save')}

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Omnibox } from '@renderer/components/Omnibox.js'
 import type { SecurityState, TabState } from '@shared/model.js'

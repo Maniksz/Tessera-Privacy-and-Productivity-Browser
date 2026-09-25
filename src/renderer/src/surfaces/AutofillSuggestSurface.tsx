@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { TargetedKeyboardEvent } from 'preact'
 import type {
   AutofillSuggestContent,
   AutofillSuggestEntry,
@@ -165,7 +166,7 @@ export function AutofillSuggestSurface({
     onChoose({ requestId, entryId: entry.id })
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
       /*

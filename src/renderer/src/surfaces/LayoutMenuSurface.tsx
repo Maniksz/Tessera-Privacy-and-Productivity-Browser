@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { TargetedKeyboardEvent } from 'preact'
 import { LAYOUT_IDS, TILE_COUNT, type LayoutId } from '@shared/split/layout.js'
 import type { LayoutMenuPresentation } from '@shared/overlay/surface.js'
 import { anchorSurface, type Rect } from '@shared/ui/anchor.js'
@@ -99,7 +100,7 @@ export function LayoutMenuSurface({
     return action === undefined ? '' : shortcutKey(platform, action, overrides)
   }
 
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+  const onKeyDown = (event: TargetedKeyboardEvent<HTMLDivElement>): void => {
     if (event.key === 'Escape') {
       event.preventDefault()
       void invoke('overlay:dismiss')

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/preact'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CONTINUE_DELAY_MS, HttpsOnlyPage } from '@renderer-internal/HttpsOnlyPage.js'
 import { BACK_URL, continueUrl, interstitialUrl } from '@shared/privacy/https-token.js'
@@ -103,11 +103,11 @@ describe('the ways off it', () => {
     fireEvent.click(proceed)
     expect(replace).not.toHaveBeenCalled()
 
-    act(() => {
+    void act(() => {
       vi.advanceTimersByTime(CONTINUE_DELAY_MS - 1)
     })
     expect(proceed.disabled).toBe(true)
-    act(() => {
+    void act(() => {
       vi.advanceTimersByTime(1)
     })
     expect(proceed.disabled).toBe(false)

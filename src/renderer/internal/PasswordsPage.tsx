@@ -452,7 +452,7 @@ export function PasswordsPage(): React.ReactNode {
           value={query}
           placeholder={t('passwords.searchPlaceholder')}
           aria-label={t('passwords.searchPlaceholder')}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => setQuery(event.currentTarget.value)}
         />
         <button type="button" className="passwords__add" onClick={() => setAdding((open) => !open)}>
           {t('passwords.add')}
@@ -691,7 +691,7 @@ export function PasswordsPage(): React.ReactNode {
               type="url"
               value={draftSite}
               placeholder={t('passwords.sitePlaceholder')}
-              onChange={(event) => setDraftSite(event.target.value)}
+              onChange={(event) => setDraftSite(event.currentTarget.value)}
             />
           </label>
           <label className="passwords__field">
@@ -699,7 +699,7 @@ export function PasswordsPage(): React.ReactNode {
             <input
               type="text"
               value={draftUsername}
-              onChange={(event) => setDraftUsername(event.target.value)}
+              onChange={(event) => setDraftUsername(event.currentTarget.value)}
             />
           </label>
           <label className="passwords__field">
@@ -714,7 +714,7 @@ export function PasswordsPage(): React.ReactNode {
             <input
               type="password"
               value={draftNew}
-              onChange={(event) => setDraftNew(event.target.value)}
+              onChange={(event) => setDraftNew(event.currentTarget.value)}
             />
           </label>
           <div className="passwords__formActions">
@@ -781,7 +781,7 @@ export function PasswordsPage(): React.ReactNode {
                     type="password"
                     aria-label={t('passwords.newPassword')}
                     value={draftPassword}
-                    onChange={(event) => setDraftPassword(event.target.value)}
+                    onChange={(event) => setDraftPassword(event.currentTarget.value)}
                   />
                   <button type="button" onClick={() => saveEdit(entry)}>
                     {t('passwords.saveChanges')}
