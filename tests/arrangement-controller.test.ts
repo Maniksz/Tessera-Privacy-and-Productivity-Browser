@@ -972,6 +972,41 @@ describe('the restart (KTD3)', () => {
     await h.cleanup()
   })
 
+  it('brings a view back whole when the window comes back showing one of its tabs alone', async () => {
+    // The layout was not restored and every tab is a member, so the plan seated the first one on its
+    // own rather than show nothing. A member alone is a view shown a pane at a time (KTD10): the next
+    // settle could neither adopt nor create for it, and the view would never come back by itself.
+    const h = await harness({ live: ['t1', 't2'], layout: '1x1', tiles: ['t1'] })
+    const id = h.book.create(
+      { layoutId: '1x2', seats: ['t1', 't2'] },
+      { liveTabIds: ['t1', 't2'], hiddenTabIds: [] }
+    )
+
+    h.controller.settleRestored(null)
+
+    expect(h.applied()).toEqual([{ layoutId: '1x2', seats: ['t1', 't2'], activatedTabId: 't1' }])
+    expect(h.controller.liveId).toBe(id)
+
+    await h.cleanup()
+  })
+
+  it('leaves a lone member alone when its view may not come back', async () => {
+    // A fold hides the other member: showing it would be the page a fold exists to keep off screen.
+    const h = await harness({ live: ['t1', 't2'], layout: '1x1', tiles: ['t1'] })
+    h.book.create(
+      { layoutId: '1x2', seats: ['t1', 't2'] },
+      { liveTabIds: ['t1', 't2'], hiddenTabIds: [] }
+    )
+    h.setHidden(['t2'])
+
+    h.controller.settleRestored(null)
+
+    expect(h.applied()).toEqual([])
+    expect(h.controller.liveId).toBeNull()
+
+    await h.cleanup()
+  })
+
   it('names nothing while the window comes back showing a single page', async () => {
     const h = await harness({ live: ['t1', 't2', 't3'], layout: '1x1', tiles: ['t3'] })
     const id = h.book.create(
@@ -1116,6 +1151,36 @@ describe('dissolving one by its id before its tabs close (KTD13, R5)', () => {
 
     expect(h.controller.dissolve('a1')).toEqual(['t1', 't2'])
     expect(h.book.list().map((arrangement) => arrangement.id)).toEqual(['a2'])
+
+    await h.cleanup()
+  })
+
+  it('keeps its tabs out of every automatic choice until each has closed or been brought forward', async () => {
+    // Close All asks each tab next, and a loaded page goes only once its view is destroyed: until then
+    // it is still in the strip, and a pane that took it would show a page on its way out (KTD10).
+    const h = await withOneOnScreen()
+    h.controller.dissolve('a2')
+
+    expect(['t3', 't4'].map((tabId) => h.controller.isMember(tabId))).toEqual([true, true])
+    h.controller.tabClosed('t3')
+    expect(h.controller.isMember('t3')).toBe(false)
+    // Its own question brings a page forward (`activateTab`): from then on it is an ordinary tab.
+    h.controller.restoreFor('t4')
+    expect(h.controller.isMember('t4')).toBe(false)
+    expect(h.applied()).toEqual([])
+
+    await h.cleanup()
+  })
+
+  it('lets go of a closing tab the settle finds on screen, which only a user can have put there', async () => {
+    const h = await withOneOnScreen()
+    h.controller.dissolve('a2')
+    // Dropped into the pane while its page was still going, then kept by its "Stay".
+    h.showing('1x1', ['t3'])
+
+    h.controller.keep()
+
+    expect([h.controller.isMember('t3'), h.controller.isMember('t4')]).toEqual([false, true])
 
     await h.cleanup()
   })

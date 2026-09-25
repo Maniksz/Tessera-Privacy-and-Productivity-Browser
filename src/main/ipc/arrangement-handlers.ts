@@ -178,8 +178,10 @@ function end(window: ArrangementWindow, id: string): void {
  * The view on screen leaves one empty pane behind when it is put away, and none of its closes vacates
  * a pane, so nothing would fill it. Once every close has been asked for it is the single pane whose
  * page has gone, and the window's rule for that decides what it shows (`afterTabClosed`, KTD10): the
- * first loose tab, else another view. A page still asking may be that tab — it is an ordinary one now,
- * and its question brings it forward anyway.
+ * first loose tab, else another view. Never one of the view's own pages still on its way out — a
+ * loaded page goes only once its view is destroyed, so they are in the strip for a while yet, and each
+ * would take the pane in turn as the one before it went. `dissolve` keeps them out of that choice
+ * until each has gone or been brought forward, as a page that asks is by its own question.
  */
 function closeAll(window: ArrangementWindow, id: string): void {
   const wasOnScreen = window.arrangements.liveId === id

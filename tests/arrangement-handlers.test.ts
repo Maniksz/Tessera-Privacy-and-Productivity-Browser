@@ -60,6 +60,13 @@ interface Harness {
   asks: Set<string>
   /** Tabs whose page is answered "Stay" when it asks. */
   refuses: Set<string>
+  /**
+   * Tabs whose page takes its time going: the close is asked for, and the tab is still in the strip
+   * until `settle` lets it go — a loaded page, whose close `CloseContract` finishes on `destroyed`.
+   */
+  defers: Set<string>
+  /** The deferred close of this tab finishes now (`#finishClose`). */
+  settle: (tabId: string) => void
   /** Every tab that has really closed, in order. */
   closed: () => string[]
   order: () => string[]
@@ -103,6 +110,8 @@ async function harness(tabs: string[]): Promise<Harness> {
   const startPages = new Set<string>()
   const asks = new Set<string>()
   const refuses = new Set<string>()
+  const defers = new Set<string>()
+  const pending = new Set<string>()
   const closed: string[] = []
   const mutedTabs = new Map<string, boolean>()
   const questions: ReturnType<Harness['questions']> = []
@@ -157,9 +166,13 @@ async function harness(tabs: string[]): Promise<Harness> {
     `activateTab`), and its question is up while the window is in whatever state that left.
   */
   const closeTab = (tabId: string): void => {
-    if (!order.includes(tabId)) return
+    if (!order.includes(tabId) || pending.has(tabId)) return
+    const letGo = (): void => {
+      if (defers.has(tabId)) pending.add(tabId)
+      else finish(tabId)
+    }
     if (!asks.has(tabId) && !refuses.has(tabId)) {
-      finish(tabId)
+      letGo()
       return
     }
     activate(tabId)
@@ -169,7 +182,7 @@ async function harness(tabs: string[]): Promise<Harness> {
       entries: seams.arrangements.summaries().map((summary) => summary.id),
       tiles: [...split.toState().tileTabIds]
     })
-    if (!refuses.has(tabId)) finish(tabId)
+    if (!refuses.has(tabId)) letGo()
   }
 
   const overlayStub: unknown = { dismissKind: () => {} }
@@ -270,6 +283,11 @@ async function harness(tabs: string[]): Promise<Harness> {
     },
     asks,
     refuses,
+    defers,
+    settle: (tabId) => {
+      if (!pending.delete(tabId)) throw new Error(`${tabId} is not closing`)
+      finish(tabId)
+    },
     closed: () => closed,
     order: () => order,
     muted: (tabId) => mutedTabs.get(tabId) === true,
@@ -609,6 +627,62 @@ describe('arrangements:close — closing every tab of an entry (R5, KTD13)', () 
     // The one layout change is the view being put away, before the first close; none follows it.
     expect(h.layoutChanges().slice(layoutsBefore)).toEqual(['1x1'])
     expect(h.closed()).toEqual(['b1', 'b2'])
+  })
+
+  it('seats no member while its page is still going, and shows a loose tab through the whole close', async () => {
+    // Loaded pages close when their view is destroyed, so every member is still in the strip — first,
+    // ahead of the loose tab — when the empty pane is filled. None of them may take it.
+    const h = await harness(['b1', 'b2', 'b3', 'x'])
+    h.show('1x3', ['b1', 'b2', 'b3'])
+    h.round()
+    const [b] = h.window.arrangements.summaries().map((summary) => summary.id)
+    for (const tabId of ['b1', 'b2', 'b3']) h.defers.add(tabId)
+    const { call } = register(h.window)
+
+    call('arrangements:close', { id: b })
+
+    expect(h.split.toState().tileTabIds).toEqual(['x'])
+    for (const tabId of ['b1', 'b2', 'b3']) h.settle(tabId)
+    h.round()
+
+    expect(h.closed()).toEqual(['b1', 'b2', 'b3'])
+    expect(h.screens()).toEqual([['x'], ['x'], ['x']])
+    expect(entries(h)).toEqual([])
+  })
+
+  it('fills the pane a page that asked and left behind with a loose tab, not a page still going', async () => {
+    // The asker is brought forward for its question and leaves once answered; the pane it leaves is
+    // the one place a successor is chosen while the others are still closing.
+    const h = await harness(['b1', 'b2', 'b3', 'x'])
+    h.show('1x3', ['b1', 'b2', 'b3'])
+    h.round()
+    const [b] = h.window.arrangements.summaries().map((summary) => summary.id)
+    h.asks.add('b1')
+    for (const tabId of ['b1', 'b2', 'b3']) h.defers.add(tabId)
+    const { call } = register(h.window)
+
+    call('arrangements:close', { id: b })
+    expect(h.split.toState().tileTabIds).toEqual(['b1'])
+    for (const tabId of ['b1', 'b2', 'b3']) h.settle(tabId)
+
+    expect(h.screens()).toEqual([['x'], ['x'], ['x']])
+  })
+
+  it('lets a page that stayed be chosen again, like any ordinary tab', async () => {
+    const h = await harness(['b1', 'b2', 'x'])
+    h.show('1x2', ['b1', 'b2'])
+    h.round()
+    const [b] = h.window.arrangements.summaries().map((summary) => summary.id)
+    h.refuses.add('b1')
+    h.defers.add('b2')
+    const { call } = register(h.window)
+
+    call('arrangements:close', { id: b })
+    h.settle('b2')
+    h.activate('x')
+    h.window.closeTab('x')
+
+    expect(h.split.toState().tileTabIds).toEqual(['b1'])
   })
 
   it('does nothing for an unknown id', async () => {

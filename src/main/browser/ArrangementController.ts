@@ -174,6 +174,19 @@ export class ArrangementController {
    * never be written down. Held, the change is an update under the id the window already knows.
    */
   #liveId: string | null = null
+  /**
+   * The tabs of a view Close All has dissolved whose close has not finished yet (KTD13).
+   *
+   * A loaded page goes only once its view is destroyed, so for a while after `dissolve` it is in the
+   * strip, in no entry and in no pane — exactly what the single view's successor rule looks for. The
+   * pane the view left empty would take the first of them, its close would empty the pane again and
+   * the next would take it, each page on screen for a moment on its way out. So `isMember` goes on
+   * answering yes for each until it has gone (`tabClosed`) or been brought forward: `restoreFor`,
+   * which every activation of a tab in no tile runs — its own "Leave this page?" included, so a page
+   * that stays is an ordinary tab from that moment on, as R5 says — or any settle that finds it on
+   * screen, where nothing automatic can have put it.
+   */
+  readonly #leaving = new Set<string>()
 
   constructor(host: ArrangementHost) {
     this.#host = host
@@ -223,6 +236,8 @@ export class ArrangementController {
     const seats = this.#host.tileTabIds()
     const held = this.#host.book.list()
     const shown = seatedTabs(seats)
+    // On screen, a closing tab got there because someone put it there: an ordinary tab now.
+    for (const tabId of shown) this.#leaving.delete(tabId)
     if (shown.length < MIN_ARRANGED_TILES) {
       this.#liveId = null
       return
@@ -294,6 +309,7 @@ export class ArrangementController {
    * the model — a boolean threaded back would be a second, coarser account of the same decision.
    */
   restoreFor(tabId: string): void {
+    this.#leaving.delete(tabId)
     const arrangement = this.#host.book.arrangementOfTab(tabId, this.#windowTabs())
     if (arrangement === undefined) return
     this.#bringBack(arrangement, tabId)
@@ -308,9 +324,12 @@ export class ArrangementController {
    * a tab of another window is never among the candidates, so asking about it costs nothing, and
    * leaving `WindowTabs` out keeps the answer a plain fact about the book — `hasTab`, which reads the
    * book in place rather than copying every arrangement to ask about one tab.
+   *
+   * A tab of a view Close All has just dissolved is still one until it has gone, or until something
+   * brings it forward (`#leaving`): no automatic path should choose a page that is closing.
    */
   isMember(tabId: string): boolean {
-    return this.#host.book.hasTab(tabId)
+    return this.#host.book.hasTab(tabId) || this.#leaving.has(tabId)
   }
 
   /**
@@ -321,6 +340,7 @@ export class ArrangementController {
    * try to update an arrangement that is no longer there.
    */
   tabClosed(tabId: string): void {
+    this.#leaving.delete(tabId)
     this.#host.book.removeTab(tabId)
     if (this.#live(this.#host.book.list()) === undefined) this.#liveId = null
   }
@@ -352,17 +372,29 @@ export class ArrangementController {
    * for one tiled view (R15). `savedId` is the session slot's `arrangementId`, `null` for a slot an
    * older build wrote. Which arrangement is on screen, and which ones stand in its way and are
    * forgotten, is `settleRestoredScreen`.
+   *
+   * A window that comes back showing one member alone gets its view back whole (KTD10). That is what
+   * a plan with no layout restored gives a window whose every tab is a member: the first one takes
+   * the pane rather than leave it blank (`withFirstTileFilled`). Left alone, the next settle could do
+   * nothing with it — one page is no tiled view, and a new one over its tabs is refused while the old
+   * one holds them — so the strip would show an entry whose view never came back by itself. Through
+   * `restoreFor`, so a view that may not come back — a fold hiding one of its tabs — stays as it is.
    */
   settleRestored(savedId: string | null): void {
+    const seats = this.#host.tileTabIds()
     const settled = settleRestoredScreen(
       this.#host.book.list(),
       this.#host.currentLayout(),
-      this.#host.tileTabIds(),
+      seats,
       savedId,
       this.#windowTabs()
     )
     for (const id of settled.forget) this.#host.book.forget(id)
     this.#liveId = settled.liveId
+
+    const shown = seatedTabs(seats)
+    const alone = shown.length === 1 ? shown[0] : undefined
+    if (alone !== undefined && this.#host.book.hasTab(alone)) this.restoreFor(alone)
   }
 
   /**
@@ -436,13 +468,18 @@ export class ArrangementController {
    * The pane left empty is the caller's to fill once the tabs are gone. Nothing for an id this window
    * does not hold whole (R16); one a fold hides is dissolved like any other, as `endArrangement` ends
    * one, because closing puts nothing on screen.
+   *
+   * Its tabs stay out of every automatic choice until each has closed (`#leaving`): the first one to
+   * be asked is often not the first to go.
    */
   dissolve(id: string): string[] {
     if (id === this.#liveId) this.putAway()
     const arrangement = this.#heldWhole(id)
     if (arrangement === undefined) return []
     this.#host.book.forget(id)
-    return seatedTabs(arrangement.seats)
+    const members = seatedTabs(arrangement.seats)
+    for (const tabId of members) this.#leaving.add(tabId)
+    return members
   }
 
   /**

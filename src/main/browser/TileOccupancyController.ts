@@ -121,7 +121,9 @@ export interface TileOccupancyHost {
    * The question every automatic seat now asks before it chooses a page, and deliberately about the
    * view rather than about anything a view might be grouped with: `window-seams.ts` answers it from
    * the book of arrangements alone. A member standing alone in a pane would be a page on screen
-   * whose entry in the strip claims it for a tiling that is not there (KTD10).
+   * whose entry in the strip claims it for a tiling that is not there (KTD10). A page of a view Close
+   * All has dissolved still counts until it has gone (`ArrangementController.isMember`), so a pane
+   * never takes a page that is on its way out.
    */
   isArrangementMember(tabId: string): boolean
   /**
