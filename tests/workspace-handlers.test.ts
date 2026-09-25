@@ -12,6 +12,7 @@ import {
   type WorkspaceHandle,
   type WorkspaceWindow
 } from '@main/ipc/workspace-handlers.js'
+import { reconcileArrangements } from '@shared/arrangements/model.js'
 import type { LayoutId } from '@shared/split/layout.js'
 import { workspaceInvokeContract } from '@shared/workspaces/schema.js'
 
@@ -39,7 +40,21 @@ class FakeWindow implements WorkspaceWindow {
   readonly split: SplitController
   readonly occupancy: TileOccupancyController
   readonly hidden = new Set<string>()
-  readonly groups = { isHidden: (tabId: string): boolean => this.hidden.has(tabId) }
+  /** Which group each grouped tab is in, by the group's id; a tab of none is absent. */
+  readonly groupOf = new Map<string, string>()
+  readonly groups = {
+    isHidden: (tabId: string): boolean => this.hidden.has(tabId),
+    groups: (): Array<{ id: string; tabIds: string[] }> => {
+      const ids = [...new Set(this.groupOf.values())]
+      return ids.map((id) => ({
+        id,
+        tabIds: [...this.groupOf].filter(([, group]) => group === id).map(([tabId]) => tabId)
+      }))
+    },
+    addTab: (groupId: string, tabId: string): void => {
+      this.groupOf.set(tabId, groupId)
+    }
+  }
   readonly closed: string[] = []
   readonly dismissed: string[] = []
   /** The tiles as they stood each time the visible tiled view was put away. */
@@ -383,6 +398,61 @@ describe('opening', () => {
     expect(target.split.tileOfTab(member)).toBeNull()
     expect(target.tileUrls()).toEqual(['https://a.example/', 'https://b.example/'])
     expect(target.created).toHaveLength(2)
+  })
+
+  /*
+    A workspace becomes a tiled view at the next settle, and a view is wholly in one group or in
+    none (R10): one that reaches across a group boundary is dropped at the next start
+    (`reconcileArrangements`), which loses the workspace's view silently (R15, R16). The first open
+    tab it takes decides which, and nothing is regrouped to get there: a tab of another group, or of
+    none, is not taken — its address gets a new tab, which opens in the view's group.
+  */
+  const survivesRestart = (target: FakeWindow): boolean => {
+    const seats = target.split.toState().tileTabIds
+    const view = { id: 'v', layoutId: target.split.layout, seats, recordedAt: 1, activeTile: 0 }
+    const held = [{ ...view, fractions: {}, tileAudio: [] }]
+    const memberSets = target.groups.groups().map((group) => group.tabIds)
+    return reconcileArrangements(held, memberSets).length === 1
+  }
+
+  it('puts the new tabs in the group of the first open tab it takes, and takes no loose one (R10)', async () => {
+    const id = await saved('1x3', ['https://a.example/', 'https://b.example/', 'https://c/'])
+    const target = new FakeWindow()
+    window = target
+    const grouped = target.open('https://a.example/')
+    target.groupOf.set(grouped, 'sport')
+    const loose = target.open('https://b.example/')
+
+    await call('workspaces:open', { id })
+
+    const seats = target.split.toState().tileTabIds
+    expect(seats[0]).toBe(grouped)
+    expect(target.split.tileOfTab(loose)).toBeNull()
+    expect(target.groupOf.has(loose)).toBe(false)
+    expect(seats.map((tabId) => target.groupOf.get(tabId ?? ''))).toEqual([
+      'sport',
+      'sport',
+      'sport'
+    ])
+    expect(survivesRestart(target)).toBe(true)
+  })
+
+  it('takes no tab out of its group when the first open tab it takes is in none (R10)', async () => {
+    const id = await saved('1x2', ['https://a.example/', 'https://b.example/'])
+    const target = new FakeWindow()
+    window = target
+    const loose = target.open('https://a.example/')
+    const grouped = target.open('https://b.example/')
+    target.groupOf.set(grouped, 'sport')
+
+    await call('workspaces:open', { id })
+
+    expect(target.split.tabIdAt(0)).toBe(loose)
+    expect(target.split.tileOfTab(grouped)).toBeNull()
+    expect(target.groupOf.get(grouped)).toBe('sport')
+    expect([...target.groupOf.keys()]).toEqual([grouped])
+    expect(target.tileUrls()).toEqual(['https://a.example/', 'https://b.example/'])
+    expect(survivesRestart(target)).toBe(true)
   })
 
   it('opens in a private window, which may open and not save', async () => {

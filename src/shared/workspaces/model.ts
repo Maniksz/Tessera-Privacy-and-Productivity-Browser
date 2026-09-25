@@ -171,6 +171,30 @@ export function planOpening(
 }
 
 /**
+ * `planOpening` for tabs in groups: which tab each seat gets, and the group the new tabs open in.
+ *
+ * The workspace becomes one tiled view at the next settle, and a view is wholly in one group or in
+ * none (R10) — one that reaches across a group boundary is dropped at the next start, and the
+ * workspace's view with it (R15, R16). The first open tab the plan takes decides which: only tabs
+ * of its group, or only tabs of none, may be taken, and every new tab opens in that group. So
+ * nothing is regrouped to open a workspace: a tab of another group state is not taken, and its
+ * address gets a new tab like any address no open tab shows. `groupId` is `null` for no group,
+ * which is also the answer when no open tab is taken at all.
+ */
+export function planOpeningInOneGroup(
+  seats: ReadonlyArray<string | null>,
+  tabs: ReadonlyArray<{ id: string; url: string; groupId: string | null }>
+): { plan: SeatPlan[]; groupId: string | null } {
+  const first = planOpening(seats, tabs).find(
+    (seat): seat is { tabId: string } => seat !== null && 'tabId' in seat
+  )
+  const groupId =
+    first === undefined ? null : (tabs.find((tab) => tab.id === first.tabId)?.groupId ?? null)
+  const alike = tabs.filter((tab) => tab.groupId === groupId)
+  return { plan: planOpening(seats, alike), groupId }
+}
+
+/**
  * A loaded document made consistent: a name tidied and cut to length (a quantity is healed, not a
  * reason to lose the workspace), dropped only when nothing is left of it; one seat per tile; the
  * layout's own dividers; and the first of two with one id or one name kept. Unknown fields stay.

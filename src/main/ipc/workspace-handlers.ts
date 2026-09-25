@@ -3,7 +3,7 @@ import type { InvokeHandlerArg, InvokeResponse } from '@shared/ipc/contract.js'
 import type { LayoutId } from '@shared/split/layout.js'
 import {
   fractionsOf,
-  planOpening,
+  planOpeningInOneGroup,
   seatsFor,
   workspaceName,
   type WORKSPACE_CHANNELS
@@ -40,6 +40,13 @@ import type { WorkspaceStore } from '../data/WorkspaceStore.js'
  * entry as well, because the settle after it can neither adopt a view for a seating that mixes a
  * member with other tabs nor create one over a tab another view holds.
  *
+ * ## It regroups nothing
+ *
+ * The seating becomes one tiled view, which is wholly in one group or in none (R10); a view across
+ * a group boundary is dropped at the next start (R15). The first open tab taken decides which, only
+ * tabs of the same group state are taken beside it, and the new tabs open in its group — so no tab
+ * the user grouped, or left loose, changes group for a workspace (`planOpeningInOneGroup`).
+ *
  * ## Private windows open and never save
  *
  * A private window's pages must not reach a file, so `save` answers `private` and the list says so, which
@@ -69,8 +76,15 @@ export interface WorkspaceWindow {
     toState(): { fractions: Readonly<Record<string, number>>; tileTabIds: Array<string | null> }
   }
   readonly tabs: ReadonlyArray<{ readonly id: string; toState(): { url: string } }>
-  /** Whether a collapsed group hides a tab, which may then not be put in a tile. */
-  readonly groups: { isHidden(tabId: string): boolean }
+  /**
+   * Whether a collapsed group hides a tab, which may then not be put in a tile; the groups, to keep
+   * the workspace's view in one group or none; and a new tab put in the view's group (R10).
+   */
+  readonly groups: {
+    isHidden(tabId: string): boolean
+    groups(): ReadonlyArray<{ readonly id: string; readonly tabIds: readonly string[] }>
+    addTab(groupId: string, tabId: string): void
+  }
   /**
    * The window's tiled views. Opening a workspace puts the visible one away first (U2), as bringing
    * another tiled view back does: its entry stays in the strip, unchanged, and none of its panes is
@@ -126,13 +140,21 @@ export function registerWorkspaceHandlers(deps: WorkspaceHandlerDeps): void {
     if (workspace === undefined || window === undefined) return { outcome: 'missing' }
 
     window.arrangements.putAway()
+    const groups = window.groups.groups()
     const candidates = window.tabs
       .filter((tab) => !window.groups.isHidden(tab.id) && !window.arrangements.isMember(tab.id))
-      .map((tab) => ({ id: tab.id, url: tab.toState().url }))
-    const seats = planOpening(workspace.seats, candidates).map((seat) => {
+      .map((tab) => ({
+        id: tab.id,
+        url: tab.toState().url,
+        groupId: groups.find((group) => group.tabIds.includes(tab.id))?.id ?? null
+      }))
+    const { plan, groupId } = planOpeningInOneGroup(workspace.seats, candidates)
+    const seats = plan.map((seat) => {
       if (seat === null) return null
       if ('tabId' in seat) return seat.tabId
-      return window.createTab({ url: seat.url, background: true, tileIndex: null }).id
+      const opened = window.createTab({ url: seat.url, background: true, tileIndex: null }).id
+      if (groupId !== null) window.groups.addTab(groupId, opened)
+      return opened
     })
     // Cleared first, so the layout change orphans nothing; see "Opening closes nothing" above.
     for (const [index, tabId] of window.split.toState().tileTabIds.entries()) {

@@ -89,7 +89,10 @@ export interface WindowInternals {
    */
   activateTab(tabId: string): void
   setActiveTile(tileIndex: number): void
-  /** Opens a start-page tab for an empty tile, marked as a filler. */
+  /**
+   * Opens a start-page tab for an empty tile, marked as a filler, seated there before it returns:
+   * the seam reads it off that tile to give it the view's group (see `openFiller` below).
+   */
   openFiller(tileIndex: number): void
   applyLayout(layout: LayoutId, options: LayoutChangeOptions): void
 
@@ -288,9 +291,10 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     isStartPage: (tabId) => isStartPage(internals, tabId),
     isHiddenByCollapse: (tabId) => groups.isHidden(tabId),
     /*
-      Answered from the book alone, so the question carries nothing about groups to the occupancy
-      controller (KTD4). Whether a folded view may come back is `restore`'s to decide, which is why
-      the strip-order walk below needs no group edge either.
+      Answered from the book, and until each has gone from the pages of a view Close All has just
+      dissolved (`ArrangementController.isMember`), so the question carries nothing about groups to
+      the occupancy controller (KTD4). Whether a folded view may come back is `restore`'s to decide,
+      which is why the strip-order walk below needs no group edge either.
     */
     isArrangementMember: (tabId) => arrangements.isMember(tabId),
     restoreFirstArrangement: () => restoreFirstArrangement(internals, arrangements),
@@ -298,7 +302,7 @@ export function createWindowSeams(internals: WindowInternals): WindowSeams {
     assignTabToTile: (tabId, tileIndex) => internals.assignTabToTile(tabId, tileIndex),
     closeTab: (tabId) => internals.closeTab(tabId),
     setActiveTile: (tileIndex) => internals.setActiveTile(tileIndex),
-    openFiller: (tileIndex) => internals.openFiller(tileIndex),
+    openFiller: (tileIndex) => openFiller(internals, groups, tileIndex),
     applyLayout: (layout, options) => internals.applyLayout(layout, options),
     putAway: () => arrangements.putAway(),
     endTiling: () => arrangements.endTiling()
@@ -491,10 +495,7 @@ function releaseTiles(
  *      are in — the view it joins, or the page an edge drop has just made a view with — the dropped
  *      tab is put in too, or taken out of its own group when they are in none. Through the groups'
  *      own `addTab` and `removeTab`, so the strip settles in one pass. A drop that leaves a single page
- *      on screen makes no view and changes no group.
- *
- * Read off the screen rather than the book, because the book learns of the new seating only at the
- * next settle. The view's group is its first other page's, which R10 makes every page's.
+ *      on screen makes no view and changes no group. See `joinGroupOfView`.
  */
 function dropTab(
   internals: WindowInternals,
@@ -513,14 +514,53 @@ function dropTab(
   }
 
   seams.occupancy.applyDrop(tabId, zone)
+  joinGroupOfView(internals, seams.groups, tabId)
+}
 
+/**
+ * A start page for an empty tile of a layout the user chose, in the group of the view it fills
+ * (R10, R15).
+ *
+ * The window opens the tab; this gives it the view's group, which neither the window nor the
+ * occupancy controller may know about. Without it a grouped view grown from `1x2` to `2x2` held two
+ * start pages in no group: the strip drew them as loose tabs beside the group, and the next start
+ * dropped the whole view, because `reconcileArrangements` removes one that reaches across a group
+ * boundary. Choosing the layout is the user's act on the view, so it is the grouping act too (R3).
+ *
+ * The new tab is read off the tile it was opened into rather than returned by the window, which
+ * keeps `openFiller` the one-way request every harness of `WindowInternals` already answers.
+ */
+function openFiller(
+  internals: WindowInternals,
+  groups: TabGroupController,
+  tileIndex: number
+): void {
+  internals.openFiller(tileIndex)
+  const filler = internals.split.tabIdAt(tileIndex)
+  if (filler !== null) joinGroupOfView(internals, groups, filler)
+}
+
+/**
+ * Gives a tab that has just taken a tile the group of the other pages on screen: theirs, or none
+ * when they are in none (R10, R12). Through the groups' own `addTab` and `removeTab`, so the strip
+ * settles in one pass. A tab alone on screen makes no view and changes no group, and one already in
+ * the right group is left alone — nothing is written and nothing is published.
+ *
+ * Read off the screen rather than the book, because the book learns of the new seating only at the
+ * next settle. The view's group is its first other page's, which R10 makes every page's.
+ */
+function joinGroupOfView(
+  internals: WindowInternals,
+  groups: TabGroupController,
+  tabId: string
+): void {
   const beside = seatedTabs(internals.split.toState().tileTabIds).filter((id) => id !== tabId)
   if (beside.length === 0) return
-  const groups = seams.groups.groups()
-  const target = groupOfTab(groups, beside[0]!)
-  if (target?.id === groupOfTab(groups, tabId)?.id) return
-  if (target === undefined) seams.groups.removeTab(tabId)
-  else seams.groups.addTab(target.id, tabId)
+  const snapshot = groups.groups()
+  const target = groupOfTab(snapshot, beside[0]!)
+  if (target?.id === groupOfTab(snapshot, tabId)?.id) return
+  if (target === undefined) groups.removeTab(tabId)
+  else groups.addTab(target.id, tabId)
 }
 
 /**

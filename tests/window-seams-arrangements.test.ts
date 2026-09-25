@@ -17,7 +17,9 @@ import type { BrowsingMode } from '@main/data/HistoryStore.js'
 import { defaultSettings } from '@shared/settings/definitions.js'
 import type { LayoutId, Rect } from '@shared/split/layout.js'
 import { dropZonesFor, type DropZone } from '@shared/split/dropzones.js'
+import { reconcileArrangements } from '@shared/arrangements/model.js'
 import { windowCloseForgetsArrangements } from '@shared/arrangements/screen.js'
+import { stripEntries, stripItems } from '@shared/strip/model.js'
 import { groupOfTab } from '@shared/tabgroups/model.js'
 import { HOME_URL } from '@shared/url/omnibox.js'
 import type { LayoutChangeOptions } from '@main/browser/TileOccupancyController.js'
@@ -1302,6 +1304,49 @@ describe('tab groups and tiled views (U8)', () => {
       ['Later', ['b1', 'b2']],
       ['Sport', ['a1', 'a2']]
     ])
+  })
+
+  it('opens the start pages of a grouped view grown by a chosen layout in its group (R10, R15)', async () => {
+    /*
+      The fillers used to open in no group. The strip then drew them as loose tabs beside the
+      view's group, and the next start dropped the whole view: `reconcileArrangements` removes a
+      view that reaches across a group boundary, so a grown grouped view did not survive a restart.
+    */
+    const h = await harness({ tabs: ['a1', 'a2'], layout: '1x2' })
+    h.seat(['a1', 'a2'])
+    h.round()
+    const a = h.seams.arrangements.liveId
+    h.seams.groups.create({ tabIds: ['a1'], name: 'Sport' })
+
+    h.seams.occupancy.chooseLayout('2x2')
+    h.round()
+
+    const seats = h.split.toState().tileTabIds
+    const fillers = seats.slice(2)
+    expect(fillers).toEqual([expect.any(String), expect.any(String)])
+    expect(fillers.map((tabId) => groupOf(h, tabId ?? ''))).toEqual(['Sport', 'Sport'])
+    const entries = stripEntries(
+      stripItems(
+        h.seams.groups.displayOrder(),
+        h.seams.groups.groups(),
+        h.seams.arrangements.summaries()
+      )
+    )
+    expect(entries).toMatchObject([{ kind: 'split', tabIds: seats, group: { name: 'Sport' } }])
+    const memberSets = h.seams.groups.groups().map((group) => group.tabIds)
+    expect(reconcileArrangements(h.book.list(), memberSets).map((held) => held.id)).toEqual([a])
+  })
+
+  it('opens the start pages of an ungrouped view grown by a chosen layout in no group (R1)', async () => {
+    const h = await harness({ tabs: ['a1', 'a2', 'w1'], layout: '1x2' })
+    h.seat(['a1', 'a2'])
+    h.round()
+    h.seams.groups.create({ tabIds: ['w1'], name: 'Arbeit' })
+
+    h.seams.occupancy.chooseLayout('2x2')
+    h.round()
+
+    expect(h.seams.groups.groups().map((group) => group.tabIds)).toEqual([['w1']])
   })
 })
 
